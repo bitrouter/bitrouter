@@ -1,7 +1,8 @@
 {
   "schemaVersion": 1,
-  "migration": "This policy was migrated from a same-scenario evaluation.",
+  "migration": "This v2 policy adds context and guarded trajectory bands, a bounded recovery window, and a long-context-qualified balanced tier.",
   "crossAgentQuality": "unvalidated",
   "strongModel": "openai-codex:gpt-5.6-sol",
+  "balancedModel": "bitrouter:moonshotai/kimi-k3",
   "economyModel": "bitrouter:deepseek/deepseek-v4-pro"
 }

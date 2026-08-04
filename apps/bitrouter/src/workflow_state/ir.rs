@@ -52,6 +52,7 @@ impl fmt::Display for WorkflowStateKind {
 #[serde(rename_all = "snake_case")]
 pub enum RouteRisk {
     Normal,
+    Context,
     Guarded,
 }
 
@@ -147,13 +148,19 @@ impl RouteProjection {
         ) else {
             return None;
         };
-        if namespace_version != "agent_trace/v1" {
+        let schema_version = match namespace_version {
+            "agent_trace/v1" => 1,
+            "agent_trace/v2" => 2,
+            _ => return None,
+        };
+        let risk = parse_route_risk(risk)?;
+        if schema_version == 1 && risk == RouteRisk::Context {
             return None;
         }
         Some(Self {
-            schema_version: 1,
+            schema_version,
             state_kind: parse_workflow_state_kind(state)?,
-            risk: parse_route_risk(risk)?,
+            risk,
         })
     }
 
@@ -192,6 +199,7 @@ fn parse_workflow_state_kind(value: &str) -> Option<WorkflowStateKind> {
 fn parse_route_risk(value: &str) -> Option<RouteRisk> {
     match value {
         "normal" => Some(RouteRisk::Normal),
+        "context" => Some(RouteRisk::Context),
         "guarded" => Some(RouteRisk::Guarded),
         _ => None,
     }
@@ -361,6 +369,44 @@ impl WorkflowStateIR {
     }
 
     pub fn route_projection(&self) -> RouteProjection {
+        let hard_guarded_state = matches!(
+            self.state_kind,
+            WorkflowStateKind::Unknown
+                | WorkflowStateKind::Debug
+                | WorkflowStateKind::Recovery
+                | WorkflowStateKind::Finalization
+        );
+        let hard_guarded_constraint = matches!(
+            self.capability_constraints.expected_redo_penalty,
+            RequirementLevel::High
+        ) || matches!(
+            self.capability_constraints.output_precision,
+            RequirementLevel::High
+        );
+        let risk = if self.recovery_signal == RecoverySignal::LikelyRecovery
+            || hard_guarded_state
+            || hard_guarded_constraint
+        {
+            RouteRisk::Guarded
+        } else if matches!(
+            self.capability_constraints.context_pressure,
+            RequirementLevel::High
+        ) {
+            RouteRisk::Context
+        } else {
+            RouteRisk::Normal
+        };
+
+        RouteProjection {
+            schema_version: 2,
+            state_kind: self.state_kind.clone(),
+            risk,
+        }
+    }
+
+    /// Exact v1 projection used only to keep published v1 locks routable while
+    /// their routes are migrated to v2.
+    pub fn compatibility_route_projection_v1(&self) -> RouteProjection {
         let guarded_state = matches!(
             self.state_kind,
             WorkflowStateKind::Unknown
@@ -514,12 +560,12 @@ mod tests {
             ir.recovery_signal = RecoverySignal::None;
             ir.capability_constraints = CapabilityConstraints::default();
 
-            assert_eq!(ir.route_projection().key(), "agent_trace/v1|edit|normal");
+            assert_eq!(ir.route_projection().key(), "agent_trace/v2|edit|normal");
         }
     }
 
     #[test]
-    fn route_projection_parser_accepts_only_canonical_v1_keys() {
+    fn route_projection_parser_accepts_canonical_v1_and_v2_keys() {
         let projection = RouteProjection::parse_key("agent_trace/v1|tool_followup|normal")
             .expect("canonical agent trace projection");
         assert_eq!(projection.key(), "agent_trace/v1|tool_followup|normal");
@@ -529,7 +575,8 @@ mod tests {
 
         for key in [
             "codex|responses|tool_followup|-|-|exec_command",
-            "agent_trace/v2|tool_followup|normal",
+            "agent_trace/v3|tool_followup|normal",
+            "agent_trace/v1|tool_followup|context",
             "agent_trace/v1|not_a_state|normal",
             "agent_trace/v1|tool_followup|not_a_risk",
             "agent_trace/v1|tool_followup|normal|extra",
@@ -546,7 +593,7 @@ mod tests {
         baseline.state_kind = WorkflowStateKind::Edit;
         baseline.recovery_signal = RecoverySignal::None;
         baseline.capability_constraints = CapabilityConstraints::default();
-        let expected = "agent_trace/v1|edit|normal";
+        let expected = "agent_trace/v2|edit|normal";
 
         let mut changed = baseline.clone();
         changed.harness_id = HarnessId::ClaudeCode;
@@ -572,22 +619,22 @@ mod tests {
     #[test]
     fn route_projection_keys_normal_and_guarded_risk() {
         let cases = [
-            (WorkflowStateKind::Edit, "agent_trace/v1|edit|normal"),
-            (WorkflowStateKind::Test, "agent_trace/v1|test|normal"),
+            (WorkflowStateKind::Edit, "agent_trace/v2|edit|normal"),
+            (WorkflowStateKind::Test, "agent_trace/v2|test|normal"),
             (
                 WorkflowStateKind::ToolFollowup,
-                "agent_trace/v1|tool_followup|normal",
+                "agent_trace/v2|tool_followup|normal",
             ),
-            (WorkflowStateKind::Unknown, "agent_trace/v1|unknown|guarded"),
-            (WorkflowStateKind::Debug, "agent_trace/v1|debug|guarded"),
-            (WorkflowStateKind::Review, "agent_trace/v1|review|guarded"),
+            (WorkflowStateKind::Unknown, "agent_trace/v2|unknown|guarded"),
+            (WorkflowStateKind::Debug, "agent_trace/v2|debug|guarded"),
+            (WorkflowStateKind::Review, "agent_trace/v2|review|normal"),
             (
                 WorkflowStateKind::Recovery,
-                "agent_trace/v1|recovery|guarded",
+                "agent_trace/v2|recovery|guarded",
             ),
             (
                 WorkflowStateKind::Finalization,
-                "agent_trace/v1|finalization|guarded",
+                "agent_trace/v2|finalization|guarded",
             ),
         ];
 
@@ -606,6 +653,7 @@ mod tests {
             (
                 RecoverySignal::LikelyRecovery,
                 CapabilityConstraints::default(),
+                "agent_trace/v2|edit|guarded",
             ),
             (
                 RecoverySignal::None,
@@ -613,6 +661,7 @@ mod tests {
                     context_pressure: RequirementLevel::High,
                     ..CapabilityConstraints::default()
                 },
+                "agent_trace/v2|edit|context",
             ),
             (
                 RecoverySignal::None,
@@ -620,6 +669,7 @@ mod tests {
                     expected_redo_penalty: RequirementLevel::High,
                     ..CapabilityConstraints::default()
                 },
+                "agent_trace/v2|edit|guarded",
             ),
             (
                 RecoverySignal::None,
@@ -627,15 +677,61 @@ mod tests {
                     output_precision: RequirementLevel::High,
                     ..CapabilityConstraints::default()
                 },
+                "agent_trace/v2|edit|guarded",
             ),
         ];
 
-        for (recovery_signal, capability_constraints) in cases {
+        for (recovery_signal, capability_constraints, expected) in cases {
             let mut ir = sample_ir();
             ir.state_kind = WorkflowStateKind::Edit;
             ir.recovery_signal = recovery_signal;
             ir.capability_constraints = capability_constraints;
-            assert_eq!(ir.route_projection().key(), "agent_trace/v1|edit|guarded");
+            assert_eq!(ir.route_projection().key(), expected);
         }
+    }
+
+    #[test]
+    fn route_projection_v2_splits_context_from_hard_guardrails() {
+        let mut review = sample_ir();
+        review.state_kind = WorkflowStateKind::Review;
+        review.recovery_signal = RecoverySignal::None;
+        review.capability_constraints = CapabilityConstraints::default();
+        assert_eq!(
+            review.route_projection().key(),
+            "agent_trace/v2|review|normal"
+        );
+
+        let mut long_context_edit = review.clone();
+        long_context_edit.state_kind = WorkflowStateKind::Edit;
+        long_context_edit.capability_constraints.context_pressure = RequirementLevel::High;
+        assert_eq!(
+            long_context_edit.route_projection().key(),
+            "agent_trace/v2|edit|context"
+        );
+
+        long_context_edit
+            .capability_constraints
+            .expected_redo_penalty = RequirementLevel::High;
+        assert_eq!(
+            long_context_edit.route_projection().key(),
+            "agent_trace/v2|edit|guarded"
+        );
+    }
+
+    #[test]
+    fn route_projection_keeps_an_exact_v1_compatibility_key() {
+        let mut review = sample_ir();
+        review.state_kind = WorkflowStateKind::Review;
+        review.recovery_signal = RecoverySignal::None;
+        review.capability_constraints = CapabilityConstraints::default();
+        assert_eq!(
+            review.compatibility_route_projection_v1().key(),
+            "agent_trace/v1|review|guarded"
+        );
+
+        let parsed = RouteProjection::parse_key("agent_trace/v2|edit|context")
+            .expect("canonical v2 context projection");
+        assert_eq!(parsed.risk, RouteRisk::Context);
+        assert!(RouteProjection::parse_key("agent_trace/v1|edit|context").is_none());
     }
 }

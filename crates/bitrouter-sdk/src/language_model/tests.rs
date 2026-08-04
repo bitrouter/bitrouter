@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -952,6 +953,84 @@ async fn mixed_retryable_upstream_failures_become_service_unavailable() {
         pipeline.execute(request()).await.unwrap_err(),
         BitrouterError::UpstreamUnavailable
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn fallback_backoff_waits_before_each_retryable_next_candidate() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider", "c-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 502,
+                message: "overloaded once".into(),
+            }),
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 502,
+                message: "overloaded twice".into(),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![],
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |builder| {
+            builder.fallback_backoff([Duration::from_secs(2), Duration::from_secs(4)]);
+        },
+    );
+
+    let request = tokio::spawn(async move { pipeline.execute(request()).await });
+    tokio::task::yield_now().await;
+    assert!(
+        !request.is_finished(),
+        "first fallback must wait two seconds"
+    );
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !request.is_finished(),
+        "second fallback must wait four seconds"
+    );
+
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert!(request.await.expect("task joins").is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn fallback_backoff_repeats_last_delay_when_chain_is_longer() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider", "c-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamTimeout),
+            MockResponse::Error(BitrouterError::UpstreamTimeout),
+            MockResponse::Generate(GenerateResult {
+                content: vec![],
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |builder| {
+            builder.fallback_backoff([Duration::from_secs(3)]);
+        },
+    );
+
+    let request = tokio::spawn(async move { pipeline.execute(request()).await });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(3)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !request.is_finished(),
+        "the capped delay repeats on later hops"
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    assert!(request.await.expect("task joins").is_ok());
 }
 
 #[tokio::test]

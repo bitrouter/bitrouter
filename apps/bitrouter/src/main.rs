@@ -491,6 +491,36 @@ enum ConfigAction {
     },
 }
 
+fn parse_unit_interval_ppm(value: &str) -> std::result::Result<u32, String> {
+    let value = value.trim();
+    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
+    if !matches!(whole, "0" | "1")
+        || fractional.len() > 6
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+        || (whole == "1" && fractional.bytes().any(|byte| byte != b'0'))
+    {
+        return Err(format!(
+            "expected a decimal between 0 and 1 with at most six fractional digits, got {value}"
+        ));
+    }
+    let fractional_value = if fractional.is_empty() {
+        0
+    } else {
+        fractional
+            .parse::<u32>()
+            .map_err(|error| format!("expected a decimal between 0 and 1, got {value}: {error}"))?
+    };
+    let scale = 10_u32.pow(
+        u32::try_from(6_usize.saturating_sub(fractional.len()))
+            .map_err(|error| format!("could not scale unit interval {value}: {error}"))?,
+    );
+    Ok(if whole == "1" {
+        1_000_000
+    } else {
+        fractional_value.saturating_mul(scale)
+    })
+}
+
 #[derive(Subcommand)]
 enum WorkflowStateAction {
     /// Convert a Harbor run directory into benchmark outcome JSONL.
@@ -555,6 +585,31 @@ enum WorkflowStateAction {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Estimate policy cost coverage and savings without changing live routing.
+    PolicyOracle {
+        /// Protocol-native daemon workflow trace JSONL from the baseline run.
+        #[arg(long)]
+        traces: PathBuf,
+        /// Request-settled usage JSONL for the same baseline run.
+        #[arg(long)]
+        cloud_usage: PathBuf,
+        /// Policy lock containing the candidate routes to replay.
+        #[arg(long)]
+        policy_lock: PathBuf,
+        /// Named policy within the lock.
+        #[arg(long)]
+        policy: String,
+        /// Candidate effective cost divided by baseline cost, including any
+        /// expected token, retry, or turn inflation (for example 0.24).
+        #[arg(long = "effective-cost-factor", value_parser = parse_unit_interval_ppm)]
+        effective_cost_factor_ppm: u32,
+        /// Desired end-to-end savings fraction. Repeat for multiple targets.
+        #[arg(long = "target-savings", required = true, value_parser = parse_unit_interval_ppm)]
+        target_savings_ppm: Vec<u32>,
+        /// Output JSON report path.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Reconcile selected metering rows against request-scoped receipts.
     ReconcileMetering {
         /// Database URL for the daemon metering DB.
@@ -575,6 +630,8 @@ enum WorkflowStateAction {
         #[arg(long = "request-id", required = true)]
         request_ids: Vec<String>,
         /// Frozen price as provider:model=uncached,cache_read,cache_write,output.
+        /// Repeat a provider/model pair for alternative schedules; settlement
+        /// accepts only one distinct candidate that reconstructs the receipt.
         #[arg(long = "price")]
         prices: Vec<String>,
         /// Maximum durable receipt fetches per request.
@@ -1161,8 +1218,31 @@ enum AcpCmd {
     Sessions,
 }
 
+const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn main() {
+    let worker = std::thread::Builder::new()
+        .name("bitrouter-main".to_owned())
+        .stack_size(CLI_MAIN_STACK_SIZE)
+        .spawn(async_main);
+
+    match worker {
+        Ok(handle) => {
+            if handle.join().is_err() {
+                // The panic hook already rendered the original failure. Match
+                // Rust's normal main-thread panic exit status without hiding it.
+                std::process::exit(101);
+            }
+        }
+        Err(error) => {
+            eprintln!("error: failed to start BitRouter CLI runtime: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() {
+async fn async_main() {
     // Parse once here so the global `--json` / `--human` flags are available to
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
@@ -1178,11 +1258,10 @@ async fn main() {
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     // Box the dispatch future onto the heap. `run` is a large `async fn` whose
     // state machine inlines the biggest per-command futures (the onboarding
-    // wizard, `spawn`, …), and `#[tokio::main]` polls it on the main thread —
-    // whose stack is only ~1 MiB on Windows. Keeping that state off the stack
-    // leaves headroom for the deep synchronous call chains (rustls/reqwest on
-    // the `cloud` path) that would otherwise overflow the main-thread stack on
-    // Windows (macOS/Linux's 8 MiB default hides it).
+    // wizard, `spawn`, …). Before `async_main` moved to its dedicated stack,
+    // `#[tokio::main]` polled that state on Windows' ~1 MiB native main thread.
+    // Keeping it off the dedicated stack still leaves more headroom for deep
+    // synchronous call chains such as rustls/reqwest on the `cloud` path.
     match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
@@ -1685,6 +1764,52 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             println!(
                 "✓ wrote {} reliability events to {}",
                 report.event_count,
+                output.display()
+            );
+            Ok(())
+        }
+        WorkflowStateAction::PolicyOracle {
+            traces,
+            cloud_usage,
+            policy_lock,
+            policy,
+            effective_cost_factor_ppm,
+            target_savings_ppm,
+            output,
+        } => {
+            use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive};
+            use bitrouter::workflow_state::counterfactual::analyze_policy_counterfactual;
+
+            let traces = TraceArchive::read_jsonl(&traces)
+                .with_context(|| format!("read workflow traces {}", traces.display()))?;
+            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
+                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
+            let lock = bitrouter::policy_lock::load(&policy_lock)
+                .await
+                .with_context(|| format!("load policy lock {}", policy_lock.display()))?;
+            let definition = lock.document.policies.get(&policy).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "policy {policy} does not exist in {}",
+                    policy_lock.display()
+                )
+            })?;
+            let report = analyze_policy_counterfactual(
+                &traces,
+                &usage,
+                definition,
+                effective_cost_factor_ppm,
+                &target_savings_ppm,
+            )
+            .context("analyze policy counterfactual")?;
+            let encoded = serde_json::to_vec_pretty(&report)
+                .context("serialize policy counterfactual report")?;
+            std::fs::write(&output, encoded)
+                .with_context(|| format!("write policy oracle report {}", output.display()))?;
+            println!(
+                "✓ analyzed {} requests: {:.1}% cost coverage, {:.1}% projected savings -> {}",
+                report.trace_count,
+                f64::from(report.cost_weighted_coverage_ppm) / 10_000.0,
+                f64::from(report.projected_savings_ppm) / 10_000.0,
                 output.display()
             );
             Ok(())
@@ -4069,6 +4194,45 @@ mod tests {
             Some(Command::WorkflowState {
                 action: WorkflowStateAction::Bundle { outcomes: None, .. }
             })
+        ));
+    }
+
+    #[test]
+    fn policy_oracle_accepts_human_readable_cost_assumptions() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "policy-oracle",
+            "--traces",
+            "traces.jsonl",
+            "--cloud-usage",
+            "usage.jsonl",
+            "--policy-lock",
+            "policy-lock.yaml",
+            "--policy",
+            "auto",
+            "--effective-cost-factor",
+            "0.24",
+            "--target-savings",
+            "0.30",
+            "--target-savings",
+            "0.40",
+            "--output",
+            "oracle.json",
+        ])
+        .expect("parse policy counterfactual oracle");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::WorkflowState {
+                action: WorkflowStateAction::PolicyOracle {
+                    effective_cost_factor_ppm: 240_000,
+                    target_savings_ppm,
+                    ..
+                }
+            }) if target_savings_ppm == vec![300_000, 400_000]
         ));
     }
 

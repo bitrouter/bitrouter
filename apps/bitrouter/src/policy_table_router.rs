@@ -127,13 +127,21 @@ impl PolicyTable {
         }))
     }
 
-    /// The tier a fingerprint maps to (or `default_tier`), before any guardrail
-    /// or escalation. `None` when unmapped and no default tier is set.
-    fn tier_for_fingerprint(&self, fingerprint: &str) -> Option<&str> {
-        self.fingerprints
-            .get(fingerprint)
-            .or(self.default_tier.as_ref())
-            .map(String::as_str)
+    /// Resolve a v2 workflow key, then its exact v1 compatibility projection,
+    /// then the default. The returned key is the key that actually selected
+    /// the tier, except that defaults deliberately retain the v2 learning key.
+    fn tier_for_workflow<'table, 'key>(
+        &'table self,
+        primary: &'key str,
+        compatibility_v1: &'key str,
+    ) -> Option<(&'table str, &'key str)> {
+        if let Some(tier) = self.fingerprints.get(primary) {
+            return Some((tier.as_str(), primary));
+        }
+        if let Some(tier) = self.fingerprints.get(compatibility_v1) {
+            return Some((tier.as_str(), compatibility_v1));
+        }
+        self.default_tier.as_deref().map(|tier| (tier, primary))
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -306,10 +314,10 @@ impl PolicyTableRouter {
         let online =
             OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker);
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
-        let request_key = online.routing_key().to_string();
+        let primary_request_key = online.routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
-            request_key,
+            request_key: primary_request_key.clone(),
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
@@ -333,9 +341,13 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some(raw_static_tier) = self.table.tier_for_fingerprint(&decision.request_key) else {
+        let Some((raw_static_tier, matched_request_key)) = self
+            .table
+            .tier_for_workflow(&primary_request_key, online.compatibility_routing_key_v1())
+        else {
             return decision;
         };
+        decision.request_key = matched_request_key.to_string();
         decision.static_tier = Some(raw_static_tier.to_string());
         decision.static_model = self
             .table
@@ -1111,6 +1123,48 @@ mod tests {
             ),
             "vendor/cheap"
         );
+    }
+
+    #[test]
+    fn v1_policy_routes_remain_active_as_compatibility_fallbacks() {
+        let router = router();
+        let mut prompt = prompt("inbound");
+        prompt.messages = read_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn v2_policy_route_wins_over_a_v1_compatibility_route() {
+        let mut cfg = config();
+        cfg.fingerprints.insert(
+            "agent_trace/v2|tool_followup|normal".to_string(),
+            "flagship".to_string(),
+        );
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = read_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_trace/v2|tool_followup|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+    }
+
+    #[test]
+    fn default_policy_route_records_the_v2_learning_key() {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let prompt = prompt("inbound");
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
     #[test]

@@ -110,7 +110,8 @@ Adaptive routing uses generic `agent_trace` projections. Native runtime adapters
 add diagnostics only, not policy keys, and private BitRouter headers are not
 needed. `agent_trace` is the active and default strategy;
 `key_strategy: legacy_fingerprint` is rejected and must be migrated to
-canonical `agent_trace/v1|<state>|<risk>` routes. Existing `workflow_state`
+canonical `agent_trace/v2|<state>|<risk>` routes. Existing v1 locks remain
+compatible through exact projection fallback. Existing `workflow_state`
 lock configuration is readable for compatibility, while canonical lock output
 uses `agent_trace`. `adequacy.explore_opening: true` enables exploration for
 source-neutral opening projections. The removed

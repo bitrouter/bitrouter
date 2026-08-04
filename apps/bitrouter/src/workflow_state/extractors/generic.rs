@@ -1,5 +1,5 @@
 use bitrouter_sdk::language_model::types::{
-    Content, Message, Prompt, Role, ToolResultContentPart, ToolResultOutput,
+    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
 
 use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
@@ -10,6 +10,8 @@ use crate::workflow_state::ir::{
 use crate::workflow_state::session::resolve_session_signal;
 
 pub struct GenericPromptExtractor;
+
+const GUARDED_TOOL_TRAJECTORY_ASSISTANT_TURNS: usize = 8;
 
 impl WorkflowStateExtractor for GenericPromptExtractor {
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
@@ -71,13 +73,13 @@ impl WorkflowStateExtractor for GenericPromptExtractor {
         if recovery_signal == RecoverySignal::LikelyRecovery {
             evidence.push(Evidence {
                 kind: "recovery_marker".to_string(),
-                value: "recent content contains error marker".to_string(),
-                confidence: 0.75,
-                level: EvidenceLevel::Inferred,
+                value: "recent observation reports execution failure".to_string(),
+                confidence: 0.9,
+                level: EvidenceLevel::Observed,
             });
         }
 
-        WorkflowStateIR {
+        let mut ir = WorkflowStateIR {
             harness_id: input.harness_hint.clone().unwrap_or(HarnessId::Generic),
             protocol: input.protocol_hint.clone(),
             state_kind,
@@ -92,7 +94,50 @@ impl WorkflowStateExtractor for GenericPromptExtractor {
             identity: Default::default(),
             confidence: 0.7,
             evidence,
-        }
+        };
+        apply_trajectory_pressure(prompt, &mut ir);
+        ir
+    }
+}
+
+pub(crate) fn apply_trajectory_pressure(prompt: &Prompt, ir: &mut WorkflowStateIR) {
+    let observed_structured_action = prompt
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(|content| {
+            matches!(
+                content,
+                Content::ToolCall { .. } | Content::ToolResult { .. }
+            )
+        });
+    let observed_native_action = ir
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "terminus_2_action_format");
+    if !observed_structured_action && !observed_native_action {
+        return;
+    }
+    let assistant_turns = prompt
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .count();
+    if assistant_turns < GUARDED_TOOL_TRAJECTORY_ASSISTANT_TURNS {
+        return;
+    }
+    ir.capability_constraints.expected_redo_penalty = RequirementLevel::High;
+    if !ir
+        .evidence
+        .iter()
+        .any(|evidence| evidence.kind == "trajectory_pressure")
+    {
+        ir.evidence.push(Evidence {
+            kind: "trajectory_pressure".to_string(),
+            value: format!("assistant_turns:{assistant_turns}"),
+            confidence: 0.9,
+            level: EvidenceLevel::Observed,
+        });
     }
 }
 
@@ -281,46 +326,124 @@ fn content_size(content: &Content) -> usize {
 }
 
 fn recovery_signal(prompt: &Prompt) -> RecoverySignal {
-    let recent_text = prompt
+    const RECOVERY_OBSERVATION_WINDOW: usize = 3;
+    let structured_failure = prompt
         .messages
         .iter()
         .rev()
-        .take(4)
-        .flat_map(message_text)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_ascii_lowercase();
-    let markers = [
-        "error:",
-        "failed",
-        "traceback",
-        "exit code 1",
-        "command not found",
-        "no such file or directory",
-        "nonzero",
-        "panic",
-        "exception",
-    ];
-    if markers.iter().any(|marker| recent_text.contains(marker)) {
+        .flat_map(|message| &message.content)
+        .filter_map(|content| match content {
+            Content::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .take(RECOVERY_OBSERVATION_WINDOW)
+        .any(tool_result_reports_failure);
+    let transcript_failure = recent_terminal_outputs(prompt, RECOVERY_OBSERVATION_WINDOW)
+        .into_iter()
+        .any(plain_output_reports_failure);
+    if structured_failure || transcript_failure {
         RecoverySignal::LikelyRecovery
     } else {
         RecoverySignal::None
     }
 }
 
-fn message_text(message: &Message) -> Vec<String> {
-    message.content.iter().filter_map(content_text).collect()
+fn tool_result_reports_failure(output: &ToolResultOutput) -> bool {
+    match output {
+        ToolResultOutput::ErrorText { .. }
+        | ToolResultOutput::ErrorJson { .. }
+        | ToolResultOutput::ExecutionDenied { .. } => true,
+        ToolResultOutput::Text { value } => plain_output_reports_failure(value),
+        ToolResultOutput::Json { value } => plain_output_reports_failure(&value.to_string()),
+        ToolResultOutput::Content { value } => value
+            .iter()
+            .filter_map(tool_part_text)
+            .any(|text| plain_output_reports_failure(&text)),
+    }
 }
 
-fn content_text(content: &Content) -> Option<String> {
-    match content {
-        Content::Text { text, .. } | Content::Reasoning { text, .. } => Some(text.clone()),
-        Content::ToolCall {
-            name, arguments, ..
-        } => Some(format!("{name} {arguments}")),
-        Content::ToolResult { output, .. } => Some(tool_result_text(output)),
-        _ => None,
+fn recent_terminal_outputs(prompt: &Prompt, maximum: usize) -> Vec<&str> {
+    let mut outputs = Vec::new();
+    for (index, message) in prompt.messages.iter().enumerate().rev() {
+        if outputs.len() >= maximum {
+            break;
+        }
+        if message.role != Role::User
+            || !prompt.messages[..index]
+                .iter()
+                .any(|prior| prior.role == Role::Assistant)
+        {
+            continue;
+        }
+        if let Some(output) = terminal_output(message) {
+            outputs.push(output);
+        }
     }
+    outputs
+}
+
+fn terminal_output(message: &bitrouter_sdk::language_model::types::Message) -> Option<&str> {
+    const MARKER: &str = "New Terminal Output:";
+    let mut plain_result = None;
+    for content in message.content.iter().rev() {
+        let Content::Text { text, .. } = content else {
+            continue;
+        };
+        if let Some((_, output)) = text.rsplit_once(MARKER) {
+            return Some(output);
+        }
+        plain_result.get_or_insert(text.as_str());
+    }
+    plain_result
+}
+
+fn plain_output_reports_failure(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || is_shell_echo_line(line) {
+            return false;
+        }
+        let lower = line.to_ascii_lowercase();
+        explicit_nonzero_exit(&lower)
+            || lower.starts_with("error:")
+            || lower.starts_with("traceback (most recent call last):")
+            || (lower.starts_with("thread '") && lower.contains(" panicked at "))
+            || lower.ends_with(": command not found")
+            || lower.ends_with(": no such file or directory")
+            || lower.starts_with("failed ")
+            || lower.starts_with("failed:")
+    })
+}
+
+fn explicit_nonzero_exit(line: &str) -> bool {
+    [
+        "process exited with code",
+        "command exited with code",
+        "exit code",
+        "exit_code",
+    ]
+    .into_iter()
+    .filter_map(|marker| line.find(marker).map(|index| &line[index + marker.len()..]))
+    .any(|suffix| {
+        let suffix = suffix.trim_start_matches([' ', '\t', ':', '=', '"', '\'']);
+        let number = suffix
+            .chars()
+            .take_while(|character| character.is_ascii_digit() || *character == '-')
+            .collect::<String>();
+        number.parse::<i64>().is_ok_and(|code| code != 0)
+    })
+}
+
+fn is_shell_echo_line(line: &str) -> bool {
+    if line.starts_with('>') {
+        return true;
+    }
+    ["# ", "$ "].into_iter().any(|delimiter| {
+        line.find(delimiter).is_some_and(|index| {
+            let prefix = &line[..index];
+            prefix.contains('@') && prefix.contains(':')
+        })
+    })
 }
 
 fn tool_result_text(output: &ToolResultOutput) -> String {
@@ -355,7 +478,8 @@ mod tests {
     };
 
     use crate::workflow_state::ir::{
-        ContextSizeBucket, ProtocolKind, RecoverySignal, ToolDensity, WorkflowStateKind,
+        ContextSizeBucket, ProtocolKind, RecoverySignal, RequirementLevel, ToolDensity,
+        WorkflowStateKind,
     };
 
     fn prompt(messages: Vec<Message>, tools: Vec<Tool>) -> Prompt {
@@ -401,6 +525,21 @@ mod tests {
                 call_id: "call_bash".to_string(),
                 tool_name: Some("bash".to_string()),
                 output: ToolResultOutput::Text {
+                    value: text.to_string(),
+                },
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        }
+    }
+
+    fn tool_error_result(text: &str) -> Message {
+        Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult {
+                call_id: "call_bash".to_string(),
+                tool_name: Some("bash".to_string()),
+                output: ToolResultOutput::ErrorText {
                     value: text.to_string(),
                 },
                 dynamic: false,
@@ -527,6 +666,98 @@ mod tests {
     }
 
     #[test]
+    fn generic_keeps_recovery_guard_through_two_successful_tool_observations() {
+        let prompt = prompt(
+            vec![
+                user("run tests"),
+                assistant_calls("bash"),
+                tool_error_result("operation could not complete"),
+                assistant_calls("bash"),
+                tool_result("first repair command completed"),
+                assistant_calls("bash"),
+                tool_result("second repair command completed"),
+                assistant_calls("bash"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+        assert_eq!(ir.state_kind, WorkflowStateKind::Recovery);
+    }
+
+    #[test]
+    fn generic_keeps_recovery_guard_through_two_successful_terminal_observations() {
+        let prompt = prompt(
+            vec![
+                user("run tests"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nerror: test command failed"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nfirst repair command completed"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nsecond repair command completed"),
+                assistant_calls("bash"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+        assert_eq!(ir.state_kind, WorkflowStateKind::Recovery);
+    }
+
+    #[test]
+    fn generic_releases_structured_recovery_after_three_successful_observations() {
+        let prompt = prompt(
+            vec![
+                user("run tests"),
+                assistant_calls("bash"),
+                tool_error_result("operation could not complete"),
+                assistant_calls("bash"),
+                tool_result("first repair command completed"),
+                assistant_calls("bash"),
+                tool_result("second repair command completed"),
+                assistant_calls("bash"),
+                tool_result("third repair command completed"),
+                assistant_calls("bash"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::None);
+        assert_eq!(ir.state_kind, WorkflowStateKind::ToolFollowup);
+    }
+
+    #[test]
+    fn generic_releases_terminal_recovery_after_three_successful_observations() {
+        let prompt = prompt(
+            vec![
+                user("run tests"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nerror: test command failed"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nfirst repair command completed"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nsecond repair command completed"),
+                assistant_calls("bash"),
+                user("New Terminal Output:\nthird repair command completed"),
+                assistant_calls("bash"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::None);
+        assert_eq!(ir.state_kind, WorkflowStateKind::ToolFollowup);
+    }
+
+    #[test]
     fn generic_splits_command_not_found_tool_followup_into_recovery_state() {
         let prompt = prompt(
             vec![
@@ -543,10 +774,147 @@ mod tests {
     }
 
     #[test]
+    fn generic_does_not_treat_task_or_echoed_source_words_as_recovery() {
+        let prompt = prompt(
+            vec![
+                user("fix the failed certificate verification"),
+                assistant_calls("bash"),
+                user(
+                    "New Terminal Output:\n\
+root@box:/app# cat > check.py <<'PY'\n\
+> print(\"Certificate verification failed\")\n\
+> PY\n\
+root@box:/app# python check.py\n\
+Certificate verification successful\n\
+root@box:/app#",
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::None);
+        assert_eq!(ir.state_kind, WorkflowStateKind::ToolFollowup);
+    }
+
+    #[test]
+    fn generic_trusts_typed_tool_error_without_keyword_guessing() {
+        let prompt = prompt(
+            vec![
+                user("run the command"),
+                assistant_calls("bash"),
+                tool_error_result("operation could not complete"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+        assert_eq!(ir.state_kind, WorkflowStateKind::Recovery);
+    }
+
+    #[test]
+    fn generic_uses_explicit_nonzero_exit_status_from_plain_tool_output() {
+        let prompt = prompt(
+            vec![
+                user("run the command"),
+                assistant_calls("bash"),
+                tool_result("Process exited with code 2\nFinal output:\ninvalid input"),
+            ],
+            Vec::new(),
+        );
+
+        let ir = extract(&prompt);
+
+        assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+        assert_eq!(ir.state_kind, WorkflowStateKind::Recovery);
+    }
+
+    #[test]
     fn generic_buckets_context_size() {
         let large = "x".repeat(80_000);
         let prompt = prompt(vec![user(&large)], Vec::new());
         let ir = extract(&prompt);
         assert_eq!(ir.context_size, ContextSizeBucket::Large);
+    }
+
+    #[test]
+    fn generic_guards_a_long_tool_trajectory_as_high_redo_risk() {
+        let mut messages = vec![user("finish the task")];
+        for turn in 0..8 {
+            messages.push(assistant_calls("bash"));
+            messages.push(tool_result(&format!("step {turn} completed")));
+        }
+        let prompt = prompt(messages, Vec::new());
+
+        let ir = extract(&prompt);
+
+        assert_eq!(
+            ir.capability_constraints.expected_redo_penalty,
+            RequirementLevel::High
+        );
+        assert_eq!(
+            ir.route_projection().key(),
+            "agent_trace/v2|tool_followup|guarded"
+        );
+        assert!(ir.evidence.iter().any(|evidence| {
+            evidence.kind == "trajectory_pressure" && evidence.value == "assistant_turns:8"
+        }));
+    }
+
+    #[test]
+    fn generic_does_not_guard_a_long_conversation_without_agent_actions() {
+        let mut messages = vec![user("talk through the design")];
+        for turn in 0..8 {
+            messages.push(Message::text(Role::Assistant, format!("answer {turn}")));
+            messages.push(user(&format!("follow-up {turn}")));
+        }
+        let prompt = prompt(messages, Vec::new());
+
+        let ir = extract(&prompt);
+
+        assert_eq!(
+            ir.capability_constraints.expected_redo_penalty,
+            RequirementLevel::Medium
+        );
+        assert_eq!(
+            ir.route_projection().key(),
+            "agent_trace/v2|planning|normal"
+        );
+        assert!(
+            ir.evidence
+                .iter()
+                .all(|evidence| evidence.kind != "trajectory_pressure")
+        );
+    }
+
+    #[test]
+    fn generic_does_not_treat_a_declared_but_unused_tool_as_an_agent_trajectory() {
+        let mut messages = vec![user("talk through the design")];
+        for turn in 0..8 {
+            messages.push(Message::text(Role::Assistant, format!("answer {turn}")));
+            messages.push(user(&format!("follow-up {turn}")));
+        }
+        let declared_tool = Tool::Function {
+            name: "search".to_string(),
+            description: None,
+            parameters: serde_json::json!({"type": "object"}),
+            strict: None,
+            provider_metadata: ProviderMetadata::new(),
+        };
+        let prompt = prompt(messages, vec![declared_tool]);
+
+        let ir = extract(&prompt);
+
+        assert_eq!(
+            ir.capability_constraints.expected_redo_penalty,
+            RequirementLevel::Medium
+        );
+        assert_eq!(
+            ir.route_projection().key(),
+            "agent_trace/v2|planning|normal"
+        );
     }
 }

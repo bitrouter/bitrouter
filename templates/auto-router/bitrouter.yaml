@@ -11,6 +11,8 @@ providers:
     models:
       - id: deepseek/deepseek-v4-pro
         provider_model_id: deepseek/deepseek-v4-pro
+      - id: moonshotai/kimi-k3
+        provider_model_id: moonshotai/kimi-k3
 inherit_defaults: true
 policy:
   path: "./policy-lock.yaml"

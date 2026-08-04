@@ -168,6 +168,16 @@
         "timeouts": {
           "description": "Global upstream timeout defaults. A provider may override any field\nunder `providers.<id>.timeouts:`.",
           "$ref": "#/$defs/TimeoutConfig"
+        },
+        "fallback_backoff_ms": {
+          "description": "Optional delay schedule before advancing through a retryable fallback\nchain, in milliseconds. The first value applies before the second\ncandidate, the second before the third, and the last value repeats when\nthe chain is longer than the schedule. Empty (the default) preserves\nimmediate fallback.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "default": []
         }
       }
     },

@@ -148,6 +148,20 @@ The result envelope:
 }
 ```
 
+Retryable route candidates advance immediately unless an operator opts into an
+upstream fallback delay schedule:
+
+```yaml
+upstream:
+  fallback_backoff_ms: [1000, 2000, 4000, 8000, 16000, 30000]
+```
+
+The first value applies before the second candidate, the second before the
+third, and the final value repeats if the configured chain is longer. The
+schedule applies only after an error the fallback policy classifies as
+retryable; it does not retry non-retryable 4xx responses and does not change
+route selection. An empty or omitted schedule preserves the existing behavior.
+
 ---
 
 ## Routing / introspection
@@ -460,6 +474,7 @@ bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
+bitrouter workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
 bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
@@ -469,6 +484,19 @@ bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JS
 credential file. The latter resolves static keys and refreshable OAuth without
 putting a bearer in the environment. Price specs use
 `provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
+Repeat the same provider/model pair when a gateway may have applied one of
+several frozen schedules. A computed receipt is accepted only when exactly one
+distinct candidate reconstructs its final micro-USD charge; no match or an
+ambiguous rounding collision remains `unknown`.
+
+`policy-oracle` performs an immutable cost-only replay of a candidate lock over
+baseline traces and exact request settlement. `--effective-cost-factor` is the
+candidate-to-baseline cost ratio after expected token, retry, and turn
+inflation. The report includes cost-weighted route coverage, projected savings,
+ranked eligible requests, the highest-cost routes still left on the default
+tier, and the minimum covered requests needed for each repeated
+`--target-savings`. It is an upper-bound prioritization report, not a quality
+claim or a claim that the live trajectory will remain unchanged.
 
 `bundle` is fail-closed: every non-empty trace set needs an exact request-ID
 usage join and computed auditable charge; supplied policy decisions and outcomes

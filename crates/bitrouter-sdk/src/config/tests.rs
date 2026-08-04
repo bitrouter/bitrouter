@@ -1196,6 +1196,26 @@ providers:
 }
 
 #[test]
+fn parses_opt_in_fallback_backoff_schedule() {
+    let cfg = parse(
+        r#"
+upstream:
+  fallback_backoff_ms: [1000, 2000, 4000, 8000]
+"#,
+    )
+    .expect("parse");
+
+    assert_eq!(
+        cfg.upstream.fallback_backoff_ms,
+        vec![1000, 2000, 4000, 8000]
+    );
+    assert!(
+        Config::default().upstream.fallback_backoff_ms.is_empty(),
+        "existing deployments must retain immediate fallback by default"
+    );
+}
+
+#[test]
 fn mcp_upstream_protocol_defaults_to_latest() {
     // Absent `mcp:` and present-but-silent `mcp:` must agree, and both must
     // leave upstream dialing on the pre-upgrade version.

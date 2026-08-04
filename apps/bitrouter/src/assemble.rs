@@ -500,6 +500,14 @@ pub async fn build_app_with_path(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            lm.fallback_backoff(
+                config
+                    .upstream
+                    .fallback_backoff_ms
+                    .iter()
+                    .copied()
+                    .map(std::time::Duration::from_millis),
+            );
             lm.model_selector(policy_runtime_for_selector);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion

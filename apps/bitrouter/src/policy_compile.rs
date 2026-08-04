@@ -511,9 +511,20 @@ fn eval_recommendation(
                     .is_none_or(|baseline_rate| evidence.pass_rate_ppm() >= baseline_rate)
         })
         .max_by(|(left_tier, left), (right_tier, right)| {
-            left.independent_tasks
-                .len()
-                .cmp(&right.independent_tasks.len())
+            let cost_order = if left.independent_tasks == right.independent_tasks {
+                match (left.cost_micro_usd.mean(), right.cost_micro_usd.mean()) {
+                    (Some(left_cost), Some(right_cost)) => right_cost.cmp(&left_cost),
+                    _ => std::cmp::Ordering::Equal,
+                }
+            } else {
+                std::cmp::Ordering::Equal
+            };
+            cost_order
+                .then_with(|| {
+                    left.independent_tasks
+                        .len()
+                        .cmp(&right.independent_tasks.len())
+                })
                 .then_with(|| left.pass_rate_ppm().cmp(&right.pass_rate_ppm()))
                 .then_with(|| right_tier.cmp(left_tier))
         })
@@ -702,14 +713,14 @@ mod tests {
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{
         EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity,
-        EvaluatorKind, evidence_digest,
+        EvaluatorKind, MetricUnit, MetricValue, evidence_digest,
     };
     use crate::policy_lock::{
         CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
         deterministic_yaml,
     };
 
-    const EDIT_KEY: &str = "agent_trace/v1|edit|normal";
+    const EDIT_KEY: &str = "agent_trace/v2|edit|normal";
 
     fn policy(route: Option<&str>) -> PolicyDefinition {
         PolicyDefinition {
@@ -1108,6 +1119,97 @@ mod tests {
                 .as_ref()
                 .map(|q| q.candidate_pass_rate_ppm),
             Some(1_000_000)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qualified_eval_candidates_prefer_lower_observed_cost() -> anyhow::Result<()> {
+        let mut current = v1(None);
+        current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?
+            .tiers
+            .insert("balanced".into(), "vendor:balanced".into());
+        let records = [("balanced", "task-shared", 600), ("economy", "task-shared", 300)]
+            .into_iter()
+            .map(|(tier, task, cost)| -> anyhow::Result<EvalEvidenceRecord> {
+                let evidence = Vec::new();
+                let evidence_digest = evidence_digest(&evidence)?;
+                let subject = EvalSubject {
+                    schema_version: 1,
+                    eval_id: format!("eval-{tier}"),
+                    scope: EvalScope::Task,
+                    subject_id: task.into(),
+                    policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                    preset: Some("auto".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: vec![EvalDecisionRef {
+                        decision_id: format!("decision-{tier}"),
+                        policy: "auto".into(),
+                        request_key: EDIT_KEY.into(),
+                        selected_tier: tier.into(),
+                        baseline_tier: Some("strong".into()),
+                        policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                    }],
+                    requested_dimensions: BTreeSet::from([
+                        "quality.pass".into(),
+                        "cost.usd_micros".into(),
+                    ]),
+                    evidence,
+                    evidence_digest: evidence_digest.clone(),
+                    observed_at: "2026-07-30T00:00:00Z".into(),
+                };
+                let result = EvaluationResult {
+                    schema_version: 1,
+                    eval_id: subject.eval_id.clone(),
+                    evidence_digest,
+                    evaluator: EvaluatorIdentity {
+                        authority_id: "task-native".into(),
+                        evaluator_id: "suite".into(),
+                        kind: EvaluatorKind::TaskNative,
+                        version: "1".into(),
+                        config_digest: "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                    },
+                    verdict: EvalVerdict::Pass,
+                    metrics: BTreeMap::from([(
+                        "cost.usd_micros".into(),
+                        MetricValue::new(cost, MetricUnit::MicroUsd),
+                    )]),
+                    hard_violations: Vec::new(),
+                    confidence_ppm: Some(1_000_000),
+                    evidence_refs: Vec::new(),
+                    decision_credit: BTreeMap::new(),
+                    idempotency_key: format!("result-{tier}"),
+                    submitted_at: "2026-07-30T00:01:00Z".into(),
+                };
+                Ok(EvalEvidenceRecord {
+                    result_id: format!("result-{tier}"),
+                    content_digest: format!("content-{tier}"),
+                    subject,
+                    result,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let eval = EvalEvidenceSnapshot {
+            evidence_root:
+                "sha256:2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            frozen_at: "2026-07-30T00:02:00Z".into(),
+            records,
+        };
+
+        let compiled = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &snapshot(false, None),
+            eval: Some(&eval),
+        })?;
+
+        assert_eq!(
+            compiled.document.policies["auto"].routes[EDIT_KEY],
+            "economy"
         );
         Ok(())
     }

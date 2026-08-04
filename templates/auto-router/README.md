@@ -1,9 +1,10 @@
 # Adaptive `@auto` routing
 
-This starter policy uses GPT-5.6 as the strong route and DeepSeek V4 Pro as
-the economy route. It is agent- and workflow-independent: ordinary `edit`,
-`test`, and `tool_followup` projections use economy; guarded and unmatched
-projections use strong.
+This starter policy uses GPT-5.6 as the strong route, Kimi K3 as the balanced
+route, and DeepSeek V4 Pro as the economy route. It is agent- and
+workflow-independent: ordinary `edit`, `test`, and `tool_followup` projections
+use economy; read-only `review` and long-context execution projections use
+balanced; guarded and unmatched projections use strong.
 
 Start BitRouter from this directory:
 
@@ -21,20 +22,49 @@ Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
 cost routing variant. Physical model ids remain passthrough, so an explicit
 `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v2 lock uses the generic `agent_trace` key strategy. It contains effective
-routing plus a certificate for every explicit route, but no activation/freeze switch. Runtime adapters can
-enrich diagnostics from native request shapes, but do not supply policy keys.
-No private BitRouter headers are required. The strong/economy tool capability
-guardrails remain in the lock, so a request only uses economy when its route
-and capability constraints permit it.
+The v2 lock uses generic `agent_trace/v2|<state>|<risk>` keys. The `context`
+risk band is separate from hard `guarded` recovery/redo/precision risk. Runtime
+adapters enrich diagnostics from native request shapes but do not supply policy
+keys. No private BitRouter headers are required. Published `agent_trace/v1`
+locks remain routable through an exact compatibility fallback; new default
+decisions and learning evidence use v2.
 
-This policy was migrated from a same-scenario evaluation. Cross-agent quality
-has not been validated; evaluate it against your own traffic before broadening
-the economy routes. The three starter routes are migrated learned routes, so
-their certificates are compiler-owned with `legacy_adequacy_v1` source metadata
-and admitted evidence can promote or demote them. Routes explicitly authored as
-operator-owned remain pinned: conflicting evidence is reported rather than
-overriding the operator's route.
+The v2 request projection also bounds model-induced loops without keeping a
+source-specific session budget. A visible agent trajectory with eight prior
+assistant action turns raises expected redo risk to `guarded`, and an observed
+execution failure remains guarded through the next two execution observations.
+Both signals are reconstructed from inbound message history. Ordinary long
+conversations without agent actions are unaffected; protocols that hide prior
+turns retain explicit visibility-gap evidence instead of inventing state.
+
+The eight starter routes are compiler-owned experiments informed by settled
+trace analysis, model protocol canaries, and synthetic long-context action
+qualification. Cross-agent quality has not been validated; evaluate the policy
+against your own traffic before broad rollout.
+Admitted evidence can promote or demote compiler-owned routes. Routes explicitly
+authored as operator-owned remain pinned: conflicting evidence is reported
+rather than overriding the operator's route.
+
+Before a live experiment, estimate the maximum useful surface from settled
+baseline traffic. The effective cost factor includes expected token, retry, and
+turn inflation, not just provider list price:
+
+```bash
+bitrouter workflow-state policy-oracle \
+  --traces traces.jsonl \
+  --cloud-usage usage.jsonl \
+  --policy-lock policy-lock.yaml \
+  --policy auto \
+  --effective-cost-factor 0.24 \
+  --target-savings 0.30 \
+  --target-savings 0.40 \
+  --output oracle.json
+```
+
+The oracle is a cost-only upper-bound replay. It ranks eligible requests and
+routes by baseline cost, and separately surfaces the costly routes still left
+on the default tier. It does not assume the remainder of a live agent trajectory
+will stay unchanged.
 
 The daemon creates redacted request subjects automatically. External evaluators
 submit results through `bitrouter eval result submit` or `POST /v1/evals/results`.
