@@ -111,6 +111,8 @@ bitrouter cloud login --scope "inference:invoke usage:read keys:read keys:write 
 
 When the credentials file is present, the local `bitrouter` daemon auto-adds the `bitrouter` provider to the in-memory zero-config providers map (see `apps/bitrouter/src/cloud/mod.rs::enable_in_zero_config`). Every model the account is entitled to becomes routable as `bitrouter:<model-id>` against `http://localhost:4356` — no `bitrouter.yaml` changes, no `BITROUTER_API_KEY` env var.
 
+Inference credential precedence is explicit: when a target carries a key populated from `BITROUTER_API_KEY` (or an explicit config/override), that key is authoritative and the daemon does not read, refresh, or send requests for the stored OAuth credential. The stored login is the inference fallback only when the target has no key. Management commands under `bitrouter cloud …` continue to use the stored account login independently; their identity does not override provider inference auth.
+
 ```python
 client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
 client.chat.completions.create(

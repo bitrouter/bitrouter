@@ -166,6 +166,8 @@ Per-provider OAuth tokens (github-copilot today) live under `$XDG_DATA_HOME/bitr
 
 If `bitrouter cloud whoami` shows an expired token and the refresh exchange fails (network outage, server-side revocation), the fix is to re-run `bitrouter cloud login`. Re-login is idempotent — it overwrites the existing credentials file in place.
 
+If provider inference attempts OAuth refresh even though `BITROUTER_API_KEY` is set, first verify the daemon process inherited the variable and is running a build where explicit target keys take precedence. Restart after changing the variable. A correctly inherited explicit key bypasses `account-credentials.json` entirely; `bitrouter cloud whoami` still reports the separate management-login identity and is not an inference-auth check.
+
 ## Clean reset
 
 ```bash
