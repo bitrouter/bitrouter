@@ -905,7 +905,7 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn serialize_data(data: Vec<Value>) -> Result<String> {
+pub(crate) fn serialize_data(data: Vec<Value>) -> Result<String> {
     let value = sort_value(json!({ "data": data }));
     let mut out = serde_json::to_string_pretty(&value).context("formatting dist JSON")?;
     out.push('\n');
@@ -1522,7 +1522,7 @@ fn valid_provider_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
-fn valid_slug(value: &str, allow_dot_underscore: bool) -> bool {
+pub(crate) fn valid_slug(value: &str, allow_dot_underscore: bool) -> bool {
     if value.is_empty() {
         return false;
     }
@@ -1548,7 +1548,7 @@ fn valid_region_code(value: &str) -> bool {
     value.len() == 2 && value.chars().all(|c| c.is_ascii_uppercase())
 }
 
-fn valid_yyyy_mm_dd(value: &str) -> bool {
+pub(crate) fn valid_yyyy_mm_dd(value: &str) -> bool {
     value.len() == 10
         && value.as_bytes()[4] == b'-'
         && value.as_bytes()[7] == b'-'
@@ -1768,6 +1768,76 @@ fn render_model_append(model: &ProviderModel) -> String {
 
 fn dist_dir(root: &Path) -> PathBuf {
     root.join("dist").join("registry")
+}
+
+/// A flattened, read-only view of the registry for cross-checking the *other*
+/// catalogs in this repo against it (today: `recipes/`). It carries only what a
+/// cross-check needs — whether a provider is routable, and the model ids it
+/// serves under both their canonical and provider-local spelling.
+pub(crate) struct Catalog {
+    pub(crate) providers: BTreeMap<String, CatalogProvider>,
+    pub(crate) canonical_models: HashSet<String>,
+}
+
+pub(crate) struct CatalogProvider {
+    /// `status: active` — the only status the router serves.
+    pub(crate) active: bool,
+    /// What a user must supply before this provider works: `api_key`,
+    /// `base_url`, `local_oauth`, or `local_pkce`. Read off the registry rather
+    /// than guessed from the provider name, because the env-var convention has
+    /// real exceptions (`GEMINI_API_KEY`, shared OpenCode keys).
+    pub(crate) requires: Vec<&'static str>,
+    /// Provider-local model id (`provider_model_id`) → canonical `<org>/<model>`.
+    models: BTreeMap<String, String>,
+    /// Canonical ids this provider serves, for callers that reference a model
+    /// by its canonical spelling rather than the provider-local one.
+    canonical: BTreeMap<String, String>,
+}
+
+impl CatalogProvider {
+    /// Whether this provider serves `model_id`, spelled either way.
+    pub(crate) fn serves(&self, model_id: &str) -> bool {
+        self.canonical(model_id).is_some()
+    }
+
+    /// The canonical `<org>/<model>` id for a model this provider serves,
+    /// accepting either the provider-local id or the canonical id itself.
+    pub(crate) fn canonical(&self, model_id: &str) -> Option<String> {
+        self.models
+            .get(model_id)
+            .or_else(|| self.canonical.get(model_id))
+            .cloned()
+    }
+}
+
+pub(crate) fn catalog(root: &Path) -> Result<Catalog> {
+    let loaded = load_registry(root)?;
+    let canonical_models = loaded.models().map(|model| model.id.clone()).collect();
+    let mut providers = BTreeMap::new();
+    for provider in &loaded.providers {
+        let mut models = BTreeMap::new();
+        let mut canonical = BTreeMap::new();
+        for model in &provider.data.models {
+            models.insert(model.provider_model_id.clone(), model.id.clone());
+            canonical.insert(model.id.clone(), model.id.clone());
+        }
+        providers.insert(
+            provider.data.name.clone(),
+            CatalogProvider {
+                active: provider.data.status == ProviderStatus::Active,
+                requires: resolved_required_config(&provider.data)
+                    .iter()
+                    .map(RequiredConfig::as_str)
+                    .collect(),
+                models,
+                canonical,
+            },
+        );
+    }
+    Ok(Catalog {
+        providers,
+        canonical_models,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2042,6 +2112,17 @@ enum RequiredConfig {
     BaseUrl,
     LocalOauth,
     LocalPkce,
+}
+
+impl RequiredConfig {
+    fn as_str(&self) -> &'static str {
+        match self {
+            RequiredConfig::ApiKey => "api_key",
+            RequiredConfig::BaseUrl => "base_url",
+            RequiredConfig::LocalOauth => "local_oauth",
+            RequiredConfig::LocalPkce => "local_pkce",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]

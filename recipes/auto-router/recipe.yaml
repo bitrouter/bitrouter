@@ -1,0 +1,13 @@
+slug: auto-router
+status: draft
+template: auto-router
+title:
+  en: Adaptive @auto routing for agent workflows
+  zh: 面向 Agent 工作流的自适应 @auto 路由
+description:
+  en: Uses native request history to keep guarded work on GPT-5.6 and route qualified mechanical work through balanced or economy tiers, without task IDs or private routing headers.
+  zh: 仅从原生请求历史推导工作流状态；受保护步骤使用 GPT-5.6，符合条件的机械性步骤进入均衡或经济档位，不依赖任务 ID 或私有路由 Header。
+workflow: agentic
+harness: [generic]
+objectives: [cost, accuracy]
+updated_at: 2026-08-04
