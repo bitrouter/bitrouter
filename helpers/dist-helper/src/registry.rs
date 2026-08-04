@@ -3412,8 +3412,16 @@ api_base: https://api.acme.test/v1
     #[test]
     fn built_registry_includes_qwen3_8_max() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let models: Value = serde_json::from_str(&artifacts.models).expect("valid models JSON");
+        let artifacts = build_artifacts(&root);
+        assert!(artifacts.is_ok(), "builds repository registry");
+        let Ok(artifacts) = artifacts else {
+            return;
+        };
+        let models = serde_json::from_str::<Value>(&artifacts.models);
+        assert!(models.is_ok(), "valid models JSON");
+        let Ok(models) = models else {
+            return;
+        };
         let model_data = models["data"].as_array();
         assert!(model_data.is_some(), "model data array");
         let Some(model_data) = model_data else {
@@ -3433,6 +3441,10 @@ api_base: https://api.acme.test/v1
         };
         assert_eq!(qwen["name"], "Qwen: Qwen3.8 Max");
         assert_eq!(
+            qwen["description"],
+            "2.4T-parameter multimodal MoE flagship for coding, professional work, and long-horizon agentic workflows."
+        );
+        assert_eq!(
             qwen["input_modalities"],
             serde_json::json!(["text", "image", "video"])
         );
@@ -3449,27 +3461,40 @@ api_base: https://api.acme.test/v1
             return;
         };
         let expected = [
-            ("alibaba", "qwen3.8-max", Some((2.0, 0.25, 2.5, 6.0))),
+            (
+                "alibaba",
+                "qwen3.8-max",
+                Some((2.0, 0.25, 2.5, 6.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
+            ),
             (
                 "alibaba_cn",
                 "qwen3.8-max",
                 Some((1.667, 0.167, 2.083, 5.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
             ),
             (
                 "openrouter",
                 "qwen/qwen3.8-max",
                 Some((2.0, 0.25, 2.5, 6.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
             ),
-            ("opencode-go", "qwen3.8-max", None),
+            (
+                "opencode-go",
+                "qwen3.8-max",
+                None,
+                serde_json::json!("openai"),
+            ),
         ];
         assert_eq!(mappings.len(), expected.len());
-        for (provider, provider_model_id, pricing) in expected {
+        for (provider, provider_model_id, pricing, api_protocol) in expected {
             let mapping = mappings.iter().find(|item| item["provider"] == provider);
             assert!(mapping.is_some(), "{provider} mapping");
             let Some(mapping) = mapping else {
                 continue;
             };
             assert_eq!(mapping["provider_model_id"], provider_model_id);
+            assert_eq!(mapping["api_protocol"], api_protocol);
             if let Some((input, cache_read, cache_write, output)) = pricing {
                 assert_eq!(mapping["pricing"]["input_tokens"]["no_cache"], input);
                 assert_eq!(mapping["pricing"]["input_tokens"]["cache_read"], cache_read);
