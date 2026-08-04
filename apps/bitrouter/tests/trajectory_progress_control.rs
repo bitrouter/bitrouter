@@ -531,6 +531,77 @@ fn fixture_requests(raw: &str) -> anyhow::Result<Vec<FixtureRequest>> {
         .map_err(Into::into)
 }
 
+fn released_complete_requests(protocol: InboundProtocol) -> anyhow::Result<Vec<FixtureRequest>> {
+    let mut requests = fixture_requests(protocol.fixture())?;
+    let followup = requests
+        .get_mut(2)
+        .ok_or_else(|| anyhow::anyhow!("complete fixture has no follow-up request"))?;
+    let observations = match protocol {
+        InboundProtocol::Chat => followup.body["messages"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("chat fixture has no message array"))?,
+        InboundProtocol::Messages => followup.body["messages"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("Messages fixture has no message array"))?,
+        InboundProtocol::Responses => followup.body["input"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("Responses fixture has no input array"))?,
+    };
+    for call_id in ["call-3", "call-4"] {
+        match protocol {
+            InboundProtocol::Chat => {
+                observations.push(json!({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "inspect", "arguments": "{}"}
+                    }]
+                }));
+                observations.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": "ok"
+                }));
+            }
+            InboundProtocol::Messages => {
+                observations.push(json!({
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": "inspect",
+                        "input": {}
+                    }]
+                }));
+                observations.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": "ok"
+                    }]
+                }));
+            }
+            InboundProtocol::Responses => {
+                observations.push(json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": "inspect",
+                    "arguments": "{}"
+                }));
+                observations.push(json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": "ok"
+                }));
+            }
+        }
+    }
+    Ok(requests)
+}
+
 async fn post_fixture(
     server: &TestServer,
     protocol: InboundProtocol,
@@ -1188,7 +1259,7 @@ async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> a
 
     for (protocol, owner) in cases {
         let bearer = add_owner(&assembled.db, owner).await?;
-        let requests = fixture_requests(protocol.fixture())?;
+        let requests = released_complete_requests(protocol)?;
         let mut response_ids = Vec::new();
         for request in &requests {
             // This matrix intentionally uses a Chat-only upstream. A reserved
@@ -1863,7 +1934,7 @@ async fn file_database_restart_preserves_episode_and_hold() -> anyhow::Result<()
     let first_app = harness.assemble().await?;
     let first_server = server(&first_app);
     let bearer = add_owner(&first_app.db, "restart-owner").await?;
-    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    let requests = released_complete_requests(InboundProtocol::Chat)?;
     for request in &requests[..2] {
         post_fixture(&first_server, InboundProtocol::Chat, &bearer, request, None).await?;
     }
@@ -1947,7 +2018,7 @@ async fn auto_template_recovery_at_strong_activates_hold_for_next_normal_route()
     let assembled = harness.assemble().await?;
     let server = server(&assembled);
     let bearer = add_owner(&assembled.db, "template-hold-owner").await?;
-    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    let requests = released_complete_requests(InboundProtocol::Chat)?;
     for request in &requests {
         post_fixture(&server, InboundProtocol::Chat, &bearer, request, None).await?;
     }
@@ -1999,7 +2070,7 @@ async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_follo
     let server = server(&assembled);
     let owner = "alternate-protected-owner";
     let bearer = add_owner(&assembled.db, owner).await?;
-    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    let requests = released_complete_requests(InboundProtocol::Chat)?;
     for request in &requests {
         post_fixture(&server, InboundProtocol::Chat, &bearer, request, None).await?;
     }

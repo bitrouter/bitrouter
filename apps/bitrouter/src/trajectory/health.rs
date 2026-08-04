@@ -255,6 +255,11 @@ pub(crate) fn reduce_prefix(
                     completeness = merge_completeness(completeness, HistoryCompleteness::Unknown);
                 }
 
+                let previous_was_recovery = previous_projection
+                    .as_deref()
+                    .and_then(RouteProjection::parse_key)
+                    .is_some_and(|projection| projection.state_kind == WorkflowStateKind::Recovery);
+
                 same_projection_streak = update_streak(
                     &mut previous_projection,
                     projection.map(String::as_str),
@@ -292,7 +297,9 @@ pub(crate) fn reduce_prefix(
                     None => 0,
                 };
                 if parsed_workflow_state == Some(WorkflowStateKind::Recovery) {
-                    recovery_count = checked_increment(recovery_count, "recovery count")?;
+                    if !previous_was_recovery {
+                        recovery_count = checked_increment(recovery_count, "recovery count")?;
+                    }
                     requests_since_recovery = Some(0);
                 } else if let Some(count) = requests_since_recovery {
                     requests_since_recovery =
@@ -627,7 +634,7 @@ mod tests {
                 same_projection_streak: 2,
                 same_selected_tier_streak: 1,
                 consecutive_unprotected_requests: 1,
-                recovery_count: 2,
+                recovery_count: 1,
                 requests_since_recovery: Some(0),
                 context_growth_ppm: Some(1_500_000),
                 total_tokens: None,
@@ -765,6 +772,28 @@ mod tests {
 
         assert_eq!(snapshot.health.recovery_count, 1);
         assert_eq!(snapshot.health.requests_since_recovery, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn consecutive_recovery_projections_count_one_recovery_edge() -> anyhow::Result<()> {
+        let events = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "low")?,
+            start(3, "r2", 20, "complete", "canonical_prefix")?,
+            intent(4, "r2", "recovery", "high")?,
+            start(5, "r3", 30, "complete", "canonical_prefix")?,
+            intent(6, "r3", "recovery", "high")?,
+            start(7, "r4", 40, "complete", "canonical_prefix")?,
+            intent(8, "r4", "recovery", "high")?,
+            start(9, "r5", 50, "complete", "canonical_prefix")?,
+            intent(10, "r5", "review", "low")?,
+        ];
+
+        let snapshot = reduce(&events, &BTreeSet::from(["high".to_owned()]))?;
+
+        assert_eq!(snapshot.health.recovery_count, 1);
+        assert_eq!(snapshot.health.requests_since_recovery, Some(1));
         Ok(())
     }
 
