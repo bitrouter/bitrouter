@@ -3,7 +3,15 @@
 //!
 //! Two credential sources are tried in order:
 //!
-//! 1. **OAuth access token** persisted by `bitrouter cloud login`
+//! 1. **Inline `brk_…` API key** carried on the [`RoutingTarget`]. The
+//!    `bitrouter` entry in `bitrouter-providers` advertises
+//!    `auth.env = "BITROUTER_API_KEY"`, so
+//!    `bitrouter_providers::apply_builtin_defaults` populates
+//!    `RoutingTarget::api_key` from the process environment at config
+//!    assembly time. Applied as `Authorization: Bearer <api_key>`. An
+//!    explicit target key is authoritative and bypasses stored account
+//!    credentials completely.
+//! 2. **OAuth access token** persisted by `bitrouter cloud login`
 //!    ([`crate::auth::credentials::CredentialsStore`]). When the stored
 //!    access token is within
 //!    [`crate::auth::credentials::REFRESH_WINDOW`] of expiry the store's
@@ -14,13 +22,8 @@
 //!    through a single-flight [`tokio::sync::Mutex`] so only one refresh
 //!    POST happens at a time — RFC 6749 §6 lets the AS invalidate the
 //!    older refresh token once a new one is minted, so two concurrent
-//!    refreshes can silently log the user out.
-//! 2. **Inline `brk_…` API key** carried on the [`RoutingTarget`]. The
-//!    `bitrouter` entry in `bitrouter-providers` advertises
-//!    `auth.env = "BITROUTER_API_KEY"`, so
-//!    `bitrouter_providers::apply_builtin_defaults` populates
-//!    `RoutingTarget::api_key` from the process environment at config
-//!    assembly time. Applied as `Authorization: Bearer <api_key>`.
+//!    refreshes can silently log the user out. This source is consulted
+//!    only when the target has no explicit API key.
 //!
 //! When neither source resolves the applier returns
 //! [`BitrouterError::Upstream`] with status `401` and an onboarding hint
@@ -242,24 +245,22 @@ impl BitrouterCloudAuthApplier {
     }
 
     async fn resolve_auth(&self, target: &RoutingTarget) -> Result<ResolvedCloudAuth> {
+        let key = target.effective_api_key();
+        if !key.is_empty() {
+            return Ok(ResolvedCloudAuth {
+                bearer: key.to_string(),
+                continuation_authority: Some(CredentialAuthority::derive(
+                    "bitrouter-cloud/inline-api-key",
+                    key,
+                )),
+            });
+        }
         if let Some(auth) = self.resolve_stored_auth().await? {
             return Ok(auth);
         }
-        // Fall back to the inline api_key (filled from BITROUTER_API_KEY by
-        // apply_builtin_defaults, or set explicitly in bitrouter.yaml).
-        let key = target.effective_api_key();
-        if key.is_empty() {
-            return Err(BitrouterError::Upstream {
-                status: 401,
-                message: onboarding_hint().to_string(),
-            });
-        }
-        Ok(ResolvedCloudAuth {
-            bearer: key.to_string(),
-            continuation_authority: Some(CredentialAuthority::derive(
-                "bitrouter-cloud/inline-api-key",
-                key,
-            )),
+        Err(BitrouterError::Upstream {
+            status: 401,
+            message: onboarding_hint().to_string(),
         })
     }
 }
@@ -470,7 +471,7 @@ mod tests {
             .unwrap();
 
         let applier = BitrouterCloudAuthApplier::new(&path).unwrap();
-        let target = target_with_api_key("brk_inline.must-not-win");
+        let target = target_with_api_key("");
         let out = applier.apply(empty_request(), &target).await.unwrap();
 
         assert_eq!(bearer(&out).as_deref(), Some("Bearer brk_stored.secret"));
@@ -617,7 +618,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_credential_takes_precedence_over_inline_api_key() {
+    async fn inline_api_key_bypasses_stored_oauth_refresh() {
         let server = MockServer::start().await;
         let uri = server.uri();
         Mock::given(method("GET"))
@@ -629,13 +630,22 @@ mod tests {
             })))
             .mount(&server)
             .await;
+        Mock::given(method("POST"))
+            .and(wm_path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "invalid_grant",
+                "error_description": "refresh token rejected",
+            })))
+            .mount(&server)
+            .await;
         let path = tmp_creds_path("precedence");
         let mut store = CredentialsStore::load(&path).unwrap();
         store
             .save(Credentials {
-                access_token: "oauth-wins".into(),
+                access_token: "stale-oauth".into(),
                 refresh_token: Some("rt".into()),
-                expires_at: Utc::now() + ChronoDuration::seconds(3600),
+                expires_at: Utc::now() + ChronoDuration::seconds(10),
                 refresh_token_expires_at: None,
                 token_type: "Bearer".into(),
                 scope: "inference:invoke".into(),
@@ -646,10 +656,10 @@ mod tests {
             })
             .unwrap();
         let applier = BitrouterCloudAuthApplier::new(&path).unwrap();
-        // Inline key set but OAuth wins.
-        let target = target_with_api_key("brk_should_be_ignored");
+        let target = target_with_api_key("brk_inline.must-win");
         let out = applier.apply(empty_request(), &target).await.unwrap();
-        assert_eq!(bearer(&out).as_deref(), Some("Bearer oauth-wins"));
+        assert_eq!(bearer(&out).as_deref(), Some("Bearer brk_inline.must-win"));
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
