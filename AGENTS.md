@@ -62,7 +62,9 @@ design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
    rebuild and commit the catalog (`cargo run -p dist-helper -- recipes build`);
    `cargo run -p dist-helper -- check` fails if it is stale. Only
    `status: published` recipes reach `dist/`, and a recipe cannot be published
-   without a measured `evaluation` block — see `recipes/README.md`.
+   without a measured `evaluation` block. A recipe references its deployable
+   artifact under `templates/`; never copy the config or policy lock into the
+   recipe directory. See `recipes/README.md`.
 
 ## Contributing
 

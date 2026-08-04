@@ -1678,11 +1678,13 @@ dependencies = [
  "anyhow",
  "bitrouter-sdk",
  "clap",
+ "hex",
  "reqwest",
  "schemars 1.2.1",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
 ]
 

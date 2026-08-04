@@ -1,129 +1,124 @@
 # BitRouter Recipes
 
-Ready-made **policy specs** for common agentic workflows — a starting routing
-configuration you can drop into a loop so it routes well before you tune it
-yourself.
+Recipes are the measured, discoverable publication layer for reusable routing
+templates. A template under [`templates/`](../templates/) owns the deployable
+`bitrouter.yaml` and `policy-lock.yaml`; a recipe adds editorial metadata,
+evaluation provenance, and the limitations needed to interpret its result.
 
-Each recipe targets a workflow (a harness plus a task type) and ships the
-`bitrouter.yaml` that routes its calls, tools, and agents across the
-cost / latency / accuracy objectives BitRouter optimizes for — plus the
-**measured** result of running that config against a baseline.
+This split keeps one runtime source of truth. The recipe catalog embeds the
+exact template artifacts in `dist/recipes/index.json`, so users can still copy a
+complete configuration from the gallery without this repository maintaining two
+copies that can drift.
 
-Recipes are the source of truth for the recipe gallery on
-[bitrouter.ai/recipes](https://bitrouter.ai/recipes). The site reads the built
-catalog `dist/recipes/index.json` straight from this repo, so a merged recipe
-reaches the site without a docs change.
+The gallery at [bitrouter.ai/recipes](https://bitrouter.ai/recipes) consumes the
+committed catalog directly. A merged published recipe reaches the site without a
+separate docs change.
 
 ## Anatomy
 
-One directory per recipe; the directory name **is** the slug.
+One directory per recipe; the directory name is the slug.
 
-```
+```text
 recipes/<slug>/
-  recipe.yaml        # editorial metadata + the measured evaluation
-  bitrouter.yaml     # the drop-in policy spec — verbatim, copy-pasteable
-  policy-lock.yaml   # optional: the sibling policy lock, when the recipe uses one
-  README.md          # long-form body — rendered as the recipe's page
-  README.zh.md       # optional Chinese body; the site falls back to English
+  recipe.yaml        # template reference, editorial metadata, evaluation
+  README.md          # evidence, limitations, and adoption guidance
+  README.zh.md       # optional Chinese body
+
+templates/<template>/
+  bitrouter.yaml     # deployable configuration; runtime source of truth
+  policy-lock.yaml   # deterministic serving policy
+  README.md          # runtime and tuning instructions
 ```
 
-Everything derivable from `bitrouter.yaml` is **derived, never restated** in
-`recipe.yaml`: the providers it configures, the models it routes to, and the
-environment variables it interpolates are all extracted by the builder. A
-hand-maintained second copy would only drift.
-
-### `recipe.yaml`
+`recipe.yaml` names the template rather than copying its files:
 
 ```yaml
-slug: claude-code-cost-cut         # must equal the directory name
-status: published                  # draft | published — only published ships
+slug: auto-router
+status: published                 # draft | published
+template: auto-router             # templates/auto-router/
 title:
-  en: Claude Code, half the spend
-  zh: Claude Code：成本减半
+  en: Adaptive @auto routing for agent workflows
+  zh: 面向 Agent 工作流的自适应 @auto 路由
 description:
-  en: Routes the read-heavy majority of a Claude Code loop to an open-weights
-    model and keeps the frontier model for edits.
-  zh: 将 Claude Code 循环中以读取为主的调用路由到开源权重模型，编辑仍走前沿模型。
-workflow: coding                   # the task type this recipe routes
-harness: [claude-code]             # harnesses it is written for
-objectives: [cost]                 # cost | latency | accuracy — what it optimizes
-updated_at: 2026-07-25
+  en: Uses native request history to route qualified mechanical work.
+  zh: 使用原生请求历史路由符合条件的机械性工作。
+workflow: agentic
+harness: [generic]                # applicability, not a decision key
+objectives: [cost, accuracy]      # cost | latency | accuracy
+updated_at: 2026-08-04
 
-evaluation:                        # required once `status: published`
-  eval: terminal-bench-2.1
-  harness: claude-code             # must be one of `harness:` above
-  config: max
-  measured_by: bitrouter           # `bitrouter`, or a third-party source name
-  as_of: 2026-07-25
-  runs: 3
+evaluation:                       # required once status is published
+  eval: terminal-bench-2.1-short13
+  harness: terminus-2             # evidence provenance, not recipe identity
+  config: frozen-auto-r3-paired-lineages
+  measured_by: bitrouter
+  source_url: https://github.com/bitrouter/bitrouter/pull/768
+  as_of: 2026-08-04
+  runs: 2                         # accepted independent runs
+  artifacts:                      # exact bytes used by the accepted runs
+    config_sha256: sha256:...
+    policy_lock_sha256: sha256:...
   baseline:
-    label: claude-opus-5, no routing
-    accuracy: 86.5
-    cost_per_task: 1.20
-    time_per_task: 4.6
+    label: Fixed strong-model control
+    accuracy: 80.7692
+    cost_per_task: 0.429854
   recipe:
-    accuracy: 88.0
-    cost_per_task: 0.74
-    time_per_task: 4.3
+    label: Frozen @auto policy
+    accuracy: 84.6154
+    cost_per_task: 0.359071653846
 ```
 
-## Measured numbers, not claims
+## Stored measurements, computed claims
 
-A recipe exists to make a comparative claim — *cheaper*, *faster*, or *more
-accurate than what you run today*. So the catalog stores **measurements, not
-claims**: `baseline` and `recipe` each carry the raw metrics, and the delta the
-site renders ("38% cheaper") is computed from them at build time. A stored
-percentage can drift from the numbers it came from; a computed one cannot.
+The catalog stores baseline and recipe measurements. It computes accuracy
+movement in points and cost/time movement in percent at build time. A percentage
+cannot disagree with the raw values because contributors never enter one.
 
-What the validator enforces:
+Both sides must report the same metrics. A published recipe requires an
+evaluation with a date, accepted-run count, evaluator identity, reproducible
+source, and SHA-256 digests for the exact config and policy lock. The builder
+rejects publication if either template file has changed since measurement.
+Third-party measurements require an HTTPS citation. Rejected attempts,
+operational failures, pricing basis, and scope limitations belong in the recipe
+body; they must not be silently folded into or deleted from accepted effect
+measurements.
 
-- **`published` requires an `evaluation`.** A recipe is evaluated before it is
-  released. Work in progress lives at `status: draft`, which is validated like
-  any other recipe but is **excluded from `dist/recipes/index.json`**, so it
-  never reaches the site.
-- **Baseline and recipe must report the same metrics.** A delta between metrics
-  that were not both measured is not a delta.
-- **Provenance is mandatory**, for the same reason it is in
-  [`registry/`](../registry/README.md): a raw score means nothing on its own.
-  `eval` + `harness` + `config` pin a run so it is reproducible, `runs` says how
-  many times it was repeated, `as_of` dates it, and `measured_by` — with a
-  required `source_url` when it is not `bitrouter` — keeps a cited third-party
-  number from being mistaken for one we ran.
+The current metrics are:
 
-The metrics are `accuracy` (percent of tasks passed, `0..=100`),
-`cost_per_task` (USD), and `time_per_task` (minutes) — the same three the
-registry records for Terminal-Bench 2.1.
+- `accuracy`: percent of tasks passed (`0..=100`);
+- `cost_per_task`: USD per task, with the pricing basis explained in the body;
+- `time_per_task`: minutes per task.
 
-## What the validator checks
+## Validation
 
 ```sh
-cargo run -p dist-helper -- recipes validate   # source checks
-cargo run -p dist-helper -- recipes build      # regenerate dist/recipes
+cargo run -p dist-helper -- recipes validate
+cargo run -p dist-helper -- recipes build
 ```
 
-Beyond the schema and the evaluation rules above:
+The validator enforces:
 
-- **The shipped `bitrouter.yaml` really is a config BitRouter accepts.** It is
-  parsed through the same `bitrouter_sdk::config` loader the daemon uses, with
-  **no environment variables set** — so a recipe can never merge in a shape that
-  fails on the user's first `bitrouter start`.
-- **Every provider it configures exists in the registry**, and every model
-  endpoint it routes to is one that provider actually serves. A recipe pointing
-  at a withdrawn provider or a model id that moved fails CI here.
-- **Translations are advisory, for now.** The gallery renders on the site's
-  English-only marketing routes, so a published recipe without `zh`
-  title/description — or without `README.zh.md` — reports an advisory rather
-  than failing. A *blank* `zh` value is still an error. This hardens to a hard
-  requirement the day those routes are localized.
+- the named template exists and its `bitrouter.yaml` parses through the same
+  config loader used by BitRouter, with no ambient environment values;
+- the template's provider and model declarations exist and are active in the
+  registry;
+- every tier referenced by the current v2 policy lock resolves to a model the
+  configured provider or registry serves;
+- every preset-bound policy exists in the sibling lock;
+- published evaluation digests match the named template byte for byte;
+- only `published` recipes reach `dist/`, and publication requires measured
+  evidence;
+- the evaluation harness records where evidence came from. It does not become a
+  route key or force a generic recipe to claim harness-specific logic;
+- translations are advisory while the gallery routes remain English-first; a
+  present but blank translation is always invalid.
 
-`dist/recipes/` is generated; never hand-edit it. Commit it alongside your
-source changes — `cargo run -p dist-helper -- check` fails when it is stale.
+The generated `dist/recipes/` directory must be committed with source changes.
+`cargo run -p dist-helper -- check` fails when it is stale.
 
 ## Contributing
 
-Open a PR with the recipe directory and the rebuilt `dist/recipes/`. Land it as
-`status: draft` while the numbers are unmeasured, and flip it to `published` in
-the PR that adds the `evaluation` block.
-
-Want a recipe for your workflow but don't want to write it yourself? Open an
-issue or email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai).
+Add or update the runtime artifact under `templates/` first. Then add a recipe
+as `draft` while its result is unmeasured. Publish only when the exact template
+has accepted comparative evidence and the body records limitations and rejected
+attempts honestly.

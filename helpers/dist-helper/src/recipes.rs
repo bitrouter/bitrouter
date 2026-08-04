@@ -1,12 +1,12 @@
 //! Workflow recipes: `recipes/<slug>/` source → committed
 //! `dist/recipes/index.json`.
 //!
-//! A recipe is a drop-in `bitrouter.yaml` for one workflow, plus the measured
+//! A recipe publishes one reusable routing template together with the measured
 //! result of running it against a baseline. Two rules shape everything here:
 //!
 //! 1. **Anything derivable from the config is derived, never restated.** The
 //!    providers, models, and environment variables a recipe needs are extracted
-//!    from its `bitrouter.yaml`, so metadata cannot drift from the config it
+//!    from its named template, so metadata cannot drift from the config it
 //!    describes.
 //! 2. **Measurements are stored; claims are computed.** `baseline` and `recipe`
 //!    carry raw metrics and the deltas the site renders are derived at build
@@ -26,12 +26,14 @@ use anyhow::{Context, Result, bail};
 use bitrouter_sdk::config::Config;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::registry::{Catalog, serialize_data, valid_slug, valid_yyyy_mm_dd};
 
 /// Where a recipe's source directory is browsable — recorded per entry so the
 /// site can link "view source" without hardcoding the repo layout.
 const SOURCE_BASE: &str = "https://github.com/bitrouter/bitrouter/tree/main/recipes";
+const TEMPLATE_BASE: &str = "https://github.com/bitrouter/bitrouter/tree/main/templates";
 
 pub fn validate(root: &Path) -> Result<()> {
     let loaded = load_recipes(root)?;
@@ -101,9 +103,14 @@ struct LoadedRecipe {
     meta: RecipeFile,
     config_raw: String,
     config: Config,
-    policy_lock: Option<String>,
+    policy_lock: Option<LoadedPolicyLock>,
     body_en: String,
     body_zh: Option<String>,
+}
+
+struct LoadedPolicyLock {
+    raw: String,
+    document: RecipePolicyLock,
 }
 
 fn load_recipes(root: &Path) -> Result<Vec<LoadedRecipe>> {
@@ -119,12 +126,12 @@ fn load_recipes(root: &Path) -> Result<Vec<LoadedRecipe>> {
 
     let mut out = Vec::with_capacity(dirs.len());
     for path in dirs {
-        out.push(load_recipe(&path)?);
+        out.push(load_recipe(root, &path)?);
     }
     Ok(out)
 }
 
-fn load_recipe(dir: &Path) -> Result<LoadedRecipe> {
+fn load_recipe(root: &Path, dir: &Path) -> Result<LoadedRecipe> {
     let dir_slug = dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -137,7 +144,8 @@ fn load_recipe(dir: &Path) -> Result<LoadedRecipe> {
     let meta: RecipeFile = serde_saphyr::from_str(&meta_raw)
         .with_context(|| format!("parsing {}", meta_path.display()))?;
 
-    let config_path = dir.join("bitrouter.yaml");
+    let template_dir = root.join("templates").join(&meta.template);
+    let config_path = template_dir.join("bitrouter.yaml");
     let config_raw = fs::read_to_string(&config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
     // Parsed through the loader the daemon itself uses, with **no** environment
@@ -156,7 +164,7 @@ fn load_recipe(dir: &Path) -> Result<LoadedRecipe> {
         meta,
         config_raw,
         config,
-        policy_lock: read_optional(&dir.join("policy-lock.yaml"))?,
+        policy_lock: load_policy_lock(&template_dir.join("policy-lock.yaml"))?,
         body_en,
         body_zh: read_optional(&dir.join("README.zh.md"))?,
     })
@@ -168,6 +176,15 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
     }
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(Some(raw))
+}
+
+fn load_policy_lock(path: &Path) -> Result<Option<LoadedPolicyLock>> {
+    let Some(raw) = read_optional(path)? else {
+        return Ok(None);
+    };
+    let document =
+        serde_saphyr::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(Some(LoadedPolicyLock { raw, document }))
 }
 
 // --- validation --------------------------------------------------------------
@@ -210,6 +227,12 @@ fn validate_recipe(
         issues.push(format!(
             "recipes/{slug}: recipe.yaml slug '{}' does not match the directory name",
             meta.slug
+        ));
+    }
+    if !valid_slug(&meta.template, false) {
+        issues.push(format!(
+            "recipes/{slug}: template '{}' is not a lowercase kebab-case slug",
+            meta.template
         ));
     }
     if !valid_slug(&meta.workflow, false) {
@@ -268,7 +291,10 @@ fn validate_recipe(
     }
 
     match &meta.evaluation {
-        Some(evaluation) => validate_evaluation(slug, meta, evaluation, issues),
+        Some(evaluation) => {
+            validate_evaluation(slug, evaluation, issues);
+            validate_evaluation_artifacts(recipe, evaluation, issues);
+        }
         None if published => issues.push(format!(
             "recipes/{slug}: status is published but no evaluation block is present - a recipe is measured before it is released"
         )),
@@ -278,20 +304,43 @@ fn validate_recipe(
     validate_config(recipe, catalog, issues);
 }
 
-fn validate_evaluation(
-    slug: &str,
-    meta: &RecipeFile,
+fn validate_evaluation_artifacts(
+    recipe: &LoadedRecipe,
     evaluation: &Evaluation,
     issues: &mut Vec<String>,
 ) {
+    let slug = &recipe.dir_slug;
+    let config_sha256 = content_sha256(&recipe.config_raw);
+    if evaluation.artifacts.config_sha256 != config_sha256 {
+        issues.push(format!(
+            "recipes/{slug}: evaluation.artifacts.config_sha256 is '{}', but the current template is '{config_sha256}'",
+            evaluation.artifacts.config_sha256
+        ));
+    }
+
+    match &recipe.policy_lock {
+        Some(lock) => {
+            let policy_lock_sha256 = content_sha256(&lock.raw);
+            if evaluation.artifacts.policy_lock_sha256 != policy_lock_sha256 {
+                issues.push(format!(
+                    "recipes/{slug}: evaluation.artifacts.policy_lock_sha256 is '{}', but the current template is '{policy_lock_sha256}'",
+                    evaluation.artifacts.policy_lock_sha256
+                ));
+            }
+        }
+        None => issues.push(format!(
+            "recipes/{slug}: evaluation binds policy_lock_sha256 but the template has no policy-lock.yaml"
+        )),
+    }
+}
+
+fn content_sha256(raw: &str) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(raw.as_bytes())))
+}
+
+fn validate_evaluation(slug: &str, evaluation: &Evaluation, issues: &mut Vec<String>) {
     if evaluation.eval.trim().is_empty() {
         issues.push(format!("recipes/{slug}: evaluation.eval is empty"));
-    }
-    if !meta.harness.contains(&evaluation.harness) {
-        issues.push(format!(
-            "recipes/{slug}: evaluation.harness '{}' is not one of the recipe's harnesses",
-            evaluation.harness
-        ));
     }
     if evaluation.measured_by.trim().is_empty() {
         issues.push(format!("recipes/{slug}: evaluation.measured_by is empty"));
@@ -392,6 +441,19 @@ fn validate_config(recipe: &LoadedRecipe, catalog: &Catalog, issues: &mut Vec<St
         }
     }
 
+    for (provider_name, provider_config) in &recipe.config.providers {
+        for model in &provider_config.models {
+            let service_id = model.provider_model_id.as_deref().unwrap_or(&model.id);
+            match catalog.providers.get(provider_name.as_str()) {
+                Some(provider) if !provider.serves(service_id) => issues.push(format!(
+                    "recipes/{slug}: template model '{}' routes to '{}' at provider '{provider_name}', which does not serve it",
+                    model.id, service_id
+                )),
+                _ => {}
+            }
+        }
+    }
+
     for (model, virtual_model) in &recipe.config.models {
         for endpoint in &virtual_model.endpoints {
             match catalog.providers.get(endpoint.provider.as_str()) {
@@ -414,6 +476,39 @@ fn validate_config(recipe: &LoadedRecipe, catalog: &Catalog, issues: &mut Vec<St
         if resolve_target(target, recipe, catalog).is_none() {
             issues.push(format!(
                 "recipes/{slug}: policy_table tier '{tier}' routes to '{target}', which is neither a model defined in this config nor a model in the registry"
+            ));
+        }
+    }
+
+    if let Some(lock) = &recipe.policy_lock {
+        if lock.document.lockfile_version != 2 {
+            issues.push(format!(
+                "recipes/{slug}: template policy lock is version {}, expected current version 2",
+                lock.document.lockfile_version
+            ));
+        }
+        for (policy_name, policy) in &lock.document.policies {
+            for (tier, target) in &policy.tiers {
+                if resolve_target(target, recipe, catalog).is_none() {
+                    issues.push(format!(
+                        "recipes/{slug}: policy '{policy_name}' tier '{tier}' routes to '{target}', which is not served by the template or registry"
+                    ));
+                }
+            }
+        }
+    }
+
+    for (preset_name, preset) in &recipe.config.presets {
+        let Some(policy_name) = &preset.policy else {
+            continue;
+        };
+        let policy_exists = recipe
+            .policy_lock
+            .as_ref()
+            .is_some_and(|lock| lock.document.policies.contains_key(policy_name));
+        if !policy_exists {
+            issues.push(format!(
+                "recipes/{slug}: template preset '{preset_name}' references missing policy '{policy_name}' in policy-lock.yaml"
             ));
         }
     }
@@ -451,35 +546,56 @@ fn dist_value(recipe: &LoadedRecipe, catalog: &Catalog) -> Value {
     let meta = &recipe.meta;
     let slug = &recipe.dir_slug;
 
-    let mut entry = json!({
-        "slug": slug,
-        "title": localized_value(&meta.title),
-        "description": localized_value(&meta.description),
-        "workflow": meta.workflow,
-        "harness": meta.harness,
-        "objectives": meta.objectives.iter().map(Objective::as_str).collect::<Vec<_>>(),
-        "updated_at": meta.updated_at,
-        "providers": provider_requirements(recipe, catalog),
-        "models": routed_models(recipe, catalog),
-        "env": env_vars(&recipe.config_raw),
-        "config": recipe.config_raw,
-        "body": {
-            "en": recipe.body_en,
-        },
-        "source_url": format!("{SOURCE_BASE}/{slug}"),
-    });
-
-    let object = entry.as_object_mut().expect("json! built an object");
-    if let Some(policy_lock) = &recipe.policy_lock {
-        object.insert("policy_lock".to_string(), json!(policy_lock));
-    }
+    let mut body = serde_json::Map::new();
+    body.insert("en".to_string(), json!(recipe.body_en));
     if let Some(zh) = &recipe.body_zh {
-        object["body"]["zh"] = json!(zh);
+        body.insert("zh".to_string(), json!(zh));
+    }
+
+    let mut object = serde_json::Map::from_iter([
+        ("slug".to_string(), json!(slug)),
+        ("template".to_string(), json!(meta.template)),
+        (
+            "template_url".to_string(),
+            json!(format!("{TEMPLATE_BASE}/{}", meta.template)),
+        ),
+        ("title".to_string(), localized_value(&meta.title)),
+        (
+            "description".to_string(),
+            localized_value(&meta.description),
+        ),
+        ("workflow".to_string(), json!(meta.workflow)),
+        ("harness".to_string(), json!(meta.harness)),
+        (
+            "objectives".to_string(),
+            json!(
+                meta.objectives
+                    .iter()
+                    .map(Objective::as_str)
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("updated_at".to_string(), json!(meta.updated_at)),
+        (
+            "providers".to_string(),
+            json!(provider_requirements(recipe, catalog)),
+        ),
+        ("models".to_string(), json!(routed_models(recipe, catalog))),
+        ("env".to_string(), json!(env_vars(&recipe.config_raw))),
+        ("config".to_string(), json!(recipe.config_raw)),
+        ("body".to_string(), Value::Object(body)),
+        (
+            "source_url".to_string(),
+            json!(format!("{SOURCE_BASE}/{slug}")),
+        ),
+    ]);
+    if let Some(policy_lock) = &recipe.policy_lock {
+        object.insert("policy_lock".to_string(), json!(policy_lock.raw));
     }
     if let Some(evaluation) = &meta.evaluation {
         object.insert("evaluation".to_string(), evaluation_value(evaluation));
     }
-    entry
+    Value::Object(object)
 }
 
 fn localized_value(text: &Localized) -> Value {
@@ -490,29 +606,40 @@ fn localized_value(text: &Localized) -> Value {
 }
 
 fn evaluation_value(evaluation: &Evaluation) -> Value {
-    let mut value = json!({
-        "eval": evaluation.eval,
-        "harness": evaluation.harness,
-        "measured_by": evaluation.measured_by,
-        "as_of": evaluation.as_of,
-        "runs": evaluation.runs,
-        "baseline": measurement_value(&evaluation.baseline),
-        "recipe": measurement_value(&evaluation.recipe),
-        "delta": delta_value(&evaluation.baseline, &evaluation.recipe),
-    });
-    let object = value.as_object_mut().expect("json! built an object");
+    let mut object = serde_json::Map::from_iter([
+        ("eval".to_string(), json!(evaluation.eval)),
+        ("harness".to_string(), json!(evaluation.harness)),
+        ("measured_by".to_string(), json!(evaluation.measured_by)),
+        ("as_of".to_string(), json!(evaluation.as_of)),
+        ("runs".to_string(), json!(evaluation.runs)),
+        (
+            "artifacts".to_string(),
+            json!({
+                "config_sha256": evaluation.artifacts.config_sha256,
+                "policy_lock_sha256": evaluation.artifacts.policy_lock_sha256,
+            }),
+        ),
+        (
+            "baseline".to_string(),
+            measurement_value(&evaluation.baseline),
+        ),
+        ("recipe".to_string(), measurement_value(&evaluation.recipe)),
+        (
+            "delta".to_string(),
+            delta_value(&evaluation.baseline, &evaluation.recipe),
+        ),
+    ]);
     if let Some(config) = &evaluation.config {
         object.insert("config".to_string(), json!(config));
     }
     if let Some(source_url) = &evaluation.source_url {
         object.insert("source_url".to_string(), json!(source_url));
     }
-    value
+    Value::Object(object)
 }
 
 fn measurement_value(measurement: &Measurement) -> Value {
-    let mut value = json!({});
-    let object = value.as_object_mut().expect("json! built an object");
+    let mut object = serde_json::Map::new();
     if let Some(label) = &measurement.label {
         object.insert("label".to_string(), json!(label));
     }
@@ -525,7 +652,7 @@ fn measurement_value(measurement: &Measurement) -> Value {
             object.insert(field.to_string(), json!(metric));
         }
     }
-    value
+    Value::Object(object)
 }
 
 /// The comparison the site renders, computed from the two measurements rather
@@ -533,8 +660,7 @@ fn measurement_value(measurement: &Measurement) -> Value {
 /// gained 1.5 points, not 1.7%); cost and time move in *percent*, which is how
 /// a saving is actually quoted.
 fn delta_value(baseline: &Measurement, recipe: &Measurement) -> Value {
-    let mut value = json!({});
-    let object = value.as_object_mut().expect("json! built an object");
+    let mut object = serde_json::Map::new();
     if let (Some(before), Some(after)) = (baseline.accuracy, recipe.accuracy) {
         object.insert("accuracy_points".to_string(), json!(round1(after - before)));
     }
@@ -559,7 +685,7 @@ fn delta_value(baseline: &Measurement, recipe: &Measurement) -> Value {
             );
         }
     }
-    value
+    Value::Object(object)
 }
 
 fn round1(value: f64) -> f64 {
@@ -593,6 +719,17 @@ fn provider_requirements(recipe: &LoadedRecipe, catalog: &Catalog) -> Value {
 /// model pages it depends on without re-parsing the YAML.
 fn routed_models(recipe: &LoadedRecipe, catalog: &Catalog) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
+    for (provider_name, provider_config) in &recipe.config.providers {
+        for model in &provider_config.models {
+            let service_id = model.provider_model_id.as_deref().unwrap_or(&model.id);
+            let canonical = catalog
+                .providers
+                .get(provider_name.as_str())
+                .and_then(|provider| provider.canonical(service_id))
+                .unwrap_or_else(|| model.id.clone());
+            out.insert(canonical);
+        }
+    }
     for virtual_model in recipe.config.models.values() {
         for endpoint in &virtual_model.endpoints {
             let canonical = catalog
@@ -605,6 +742,15 @@ fn routed_models(recipe: &LoadedRecipe, catalog: &Catalog) -> BTreeSet<String> {
     }
     for target in recipe.config.policy_table.tiers.values() {
         out.insert(resolve_target(target, recipe, catalog).unwrap_or_else(|| target.clone()));
+    }
+    if let Some(lock) = &recipe.policy_lock {
+        for policy in lock.document.policies.values() {
+            for target in policy.tiers.values() {
+                out.insert(
+                    resolve_target(target, recipe, catalog).unwrap_or_else(|| target.clone()),
+                );
+            }
+        }
     }
     out
 }
@@ -647,6 +793,8 @@ struct RecipeFile {
     status: RecipeStatus,
     title: Localized,
     description: Localized,
+    /// Deployable artifact bundle under `templates/<template>/`.
+    template: String,
     /// The task type this recipe routes (e.g. `coding`, `code-review`).
     workflow: String,
     /// Harnesses the recipe is written for.
@@ -656,6 +804,20 @@ struct RecipeFile {
     /// Required once `status: published` — see [`Evaluation`].
     #[serde(default)]
     evaluation: Option<Evaluation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecipePolicyLock {
+    #[serde(rename = "lockfileVersion")]
+    lockfile_version: u32,
+    #[serde(default)]
+    policies: std::collections::BTreeMap<String, RecipePolicy>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RecipePolicy {
+    tiers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -704,7 +866,8 @@ struct Localized {
 struct Evaluation {
     /// The evaluation the numbers come from (e.g. `terminal-bench-2.1`).
     eval: String,
-    /// Harness the run used — must be one of the recipe's own `harness` list.
+    /// Harness the run used. This is evidence provenance, not a routing key or
+    /// a claim that the recipe is harness-specific.
     harness: String,
     /// Reasoning-effort / configuration label the run used.
     #[serde(default)]
@@ -718,10 +881,20 @@ struct Evaluation {
     as_of: String,
     /// How many times the evaluation was repeated.
     runs: u32,
+    /// Exact deployable inputs used by the accepted runs. Publication fails if
+    /// either digest differs from the recipe's current named template.
+    artifacts: EvaluationArtifacts,
     /// What the recipe is compared against.
     baseline: Measurement,
     /// The same evaluation with the recipe's config applied.
     recipe: Measurement,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationArtifacts {
+    config_sha256: String,
+    policy_lock_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -761,7 +934,28 @@ impl Measurement {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    fn test_root(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "bitrouter-recipes-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents.trim_start()).unwrap();
+    }
 
     fn measurement(accuracy: Option<f64>, cost: Option<f64>, time: Option<f64>) -> Measurement {
         Measurement {
@@ -770,6 +964,163 @@ mod tests {
             cost_per_task: cost,
             time_per_task: time,
         }
+    }
+
+    fn artifacts() -> EvaluationArtifacts {
+        EvaluationArtifacts {
+            config_sha256:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            policy_lock_sha256:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        }
+    }
+
+    #[test]
+    fn content_digest_uses_sha256_over_exact_bytes() {
+        assert_eq!(
+            content_sha256("abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn recipe_loads_deployable_artifacts_from_its_template() {
+        let root = test_root("template-source");
+        write(
+            &root,
+            "recipes/auto-router/recipe.yaml",
+            r#"
+slug: auto-router
+status: draft
+title: { en: Auto router }
+description: { en: Generic adaptive routing }
+workflow: agentic
+harness: [generic]
+objectives: [cost]
+updated_at: 2026-08-04
+template: auto-router
+"#,
+        );
+        write(&root, "recipes/auto-router/README.md", "Recipe body\n");
+        write(
+            &root,
+            "templates/auto-router/bitrouter.yaml",
+            "inherit_defaults: true\n",
+        );
+        write(
+            &root,
+            "templates/auto-router/policy-lock.yaml",
+            "lockfileVersion: 2\npolicies: {}\n",
+        );
+
+        let result = load_recipes(&root);
+        fs::remove_dir_all(&root).unwrap();
+        let loaded = result.expect("recipe should load its named template");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].config_raw, "inherit_defaults: true\n");
+        assert_eq!(
+            loaded[0].policy_lock.as_ref().map(|lock| lock.raw.as_str()),
+            Some("lockfileVersion: 2\npolicies: {}\n")
+        );
+    }
+
+    #[test]
+    fn routed_models_include_provider_models_selected_by_the_policy_lock() {
+        let config_raw = include_str!("../../../templates/auto-router/bitrouter.yaml");
+        let policy_lock = include_str!("../../../templates/auto-router/policy-lock.yaml");
+        let config = bitrouter_sdk::config::parse_with(config_raw, |_| None)
+            .expect("current auto-router config parses");
+        let recipe = LoadedRecipe {
+            dir_slug: "auto-router".into(),
+            meta: RecipeFile {
+                slug: "auto-router".into(),
+                status: RecipeStatus::Published,
+                title: Localized {
+                    en: "Auto router".into(),
+                    zh: None,
+                },
+                description: Localized {
+                    en: "Generic adaptive routing".into(),
+                    zh: None,
+                },
+                template: "auto-router".into(),
+                workflow: "agentic".into(),
+                harness: vec!["generic".into()],
+                objectives: vec![Objective::Cost],
+                updated_at: "2026-08-04".into(),
+                evaluation: None,
+            },
+            config_raw: config_raw.into(),
+            config,
+            policy_lock: Some(LoadedPolicyLock {
+                raw: policy_lock.into(),
+                document: serde_saphyr::from_str(policy_lock)
+                    .expect("current auto-router lock parses"),
+            }),
+            body_en: String::new(),
+            body_zh: None,
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog = crate::registry::catalog(&root).expect("current registry loads");
+
+        assert_eq!(
+            routed_models(&recipe, &catalog),
+            BTreeSet::from([
+                "deepseek/deepseek-v4-pro".to_string(),
+                "moonshotai/kimi-k3".to_string(),
+                "openai/gpt-5.6-sol".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn template_preset_policy_must_exist_in_the_sibling_lock() {
+        let config_raw = r#"
+presets:
+  auto:
+    model: openai/gpt-5.6-sol
+    policy: auto
+"#;
+        let policy_lock = "lockfileVersion: 2\npolicies: {}\n";
+        let recipe = LoadedRecipe {
+            dir_slug: "auto-router".into(),
+            meta: RecipeFile {
+                slug: "auto-router".into(),
+                status: RecipeStatus::Draft,
+                title: Localized {
+                    en: "Auto router".into(),
+                    zh: None,
+                },
+                description: Localized {
+                    en: "Generic adaptive routing".into(),
+                    zh: None,
+                },
+                template: "auto-router".into(),
+                workflow: "agentic".into(),
+                harness: vec!["generic".into()],
+                objectives: vec![Objective::Cost],
+                updated_at: "2026-08-04".into(),
+                evaluation: None,
+            },
+            config_raw: config_raw.into(),
+            config: bitrouter_sdk::config::parse_with(config_raw, |_| None)
+                .expect("fixture config parses"),
+            policy_lock: Some(LoadedPolicyLock {
+                raw: policy_lock.into(),
+                document: serde_saphyr::from_str(policy_lock).expect("fixture lock parses"),
+            }),
+            body_en: String::new(),
+            body_zh: None,
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog = crate::registry::catalog(&root).expect("current registry loads");
+        let mut issues = Vec::new();
+
+        validate_config(&recipe, &catalog, &mut issues);
+
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("preset 'auto' references missing policy 'auto'"));
     }
 
     #[test]
@@ -794,23 +1145,6 @@ mod tests {
 
     #[test]
     fn metrics_mismatch_is_an_issue() {
-        let meta = RecipeFile {
-            slug: "x".into(),
-            status: RecipeStatus::Published,
-            title: Localized {
-                en: "x".into(),
-                zh: Some("x".into()),
-            },
-            description: Localized {
-                en: "x".into(),
-                zh: Some("x".into()),
-            },
-            workflow: "coding".into(),
-            harness: vec!["claude-code".into()],
-            objectives: vec![Objective::Cost],
-            updated_at: "2026-07-25".into(),
-            evaluation: None,
-        };
         let evaluation = Evaluation {
             eval: "terminal-bench-2.1".into(),
             harness: "claude-code".into(),
@@ -819,34 +1153,18 @@ mod tests {
             source_url: None,
             as_of: "2026-07-25".into(),
             runs: 3,
+            artifacts: artifacts(),
             baseline: measurement(Some(80.0), Some(1.0), None),
             recipe: measurement(Some(82.0), None, None),
         };
         let mut issues = Vec::new();
-        validate_evaluation("x", &meta, &evaluation, &mut issues);
+        validate_evaluation("x", &evaluation, &mut issues);
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert!(issues[0].contains("cost_per_task on only one of baseline / recipe"));
     }
 
     #[test]
     fn third_party_measurement_requires_a_citation() {
-        let meta = RecipeFile {
-            slug: "x".into(),
-            status: RecipeStatus::Published,
-            title: Localized {
-                en: "x".into(),
-                zh: None,
-            },
-            description: Localized {
-                en: "x".into(),
-                zh: None,
-            },
-            workflow: "coding".into(),
-            harness: vec!["codex".into()],
-            objectives: vec![Objective::Cost],
-            updated_at: "2026-07-25".into(),
-            evaluation: None,
-        };
         let evaluation = Evaluation {
             eval: "terminal-bench-2.1".into(),
             harness: "codex".into(),
@@ -855,13 +1173,118 @@ mod tests {
             source_url: None,
             as_of: "2026-07-25".into(),
             runs: 1,
+            artifacts: artifacts(),
             baseline: measurement(None, Some(1.0), None),
             recipe: measurement(None, Some(0.5), None),
         };
         let mut issues = Vec::new();
-        validate_evaluation("x", &meta, &evaluation, &mut issues);
+        validate_evaluation("x", &evaluation, &mut issues);
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert!(issues[0].contains("source_url is required"));
+    }
+
+    #[test]
+    fn evaluation_harness_is_evidence_not_a_routing_identity() {
+        let evaluation = Evaluation {
+            eval: "terminal-bench-2.1-short13".into(),
+            harness: "terminus-2".into(),
+            config: Some("frozen-r3".into()),
+            measured_by: "bitrouter".into(),
+            source_url: Some("https://github.com/bitrouter/bitrouter/pull/768".into()),
+            as_of: "2026-08-04".into(),
+            runs: 2,
+            artifacts: artifacts(),
+            baseline: measurement(Some(80.77), Some(0.429854), None),
+            recipe: measurement(Some(84.62), Some(0.359072), None),
+        };
+        let mut issues = Vec::new();
+
+        validate_evaluation("auto-router", &evaluation, &mut issues);
+
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn evaluation_provenance_names_the_exact_template_artifacts() {
+        let raw = r#"
+eval: terminal-bench-2.1-short13
+harness: terminus-2
+measured_by: bitrouter
+as_of: 2026-08-04
+runs: 2
+artifacts:
+  config_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  policy_lock_sha256: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+baseline: { cost_per_task: 1.0 }
+recipe: { cost_per_task: 0.8 }
+"#;
+
+        let result = serde_saphyr::from_str::<Evaluation>(raw);
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn published_measurement_must_match_the_current_template_bytes() {
+        let config_raw = include_str!("../../../templates/auto-router/bitrouter.yaml");
+        let policy_lock = include_str!("../../../templates/auto-router/policy-lock.yaml");
+        let evaluation = Evaluation {
+            eval: "terminal-bench-2.1-short13".into(),
+            harness: "terminus-2".into(),
+            config: Some("frozen-r3".into()),
+            measured_by: "bitrouter".into(),
+            source_url: Some("https://github.com/bitrouter/bitrouter/pull/768".into()),
+            as_of: "2026-08-04".into(),
+            runs: 2,
+            artifacts: artifacts(),
+            baseline: measurement(Some(80.77), Some(0.429854), None),
+            recipe: measurement(Some(84.62), Some(0.359072), None),
+        };
+        let recipe = LoadedRecipe {
+            dir_slug: "auto-router".into(),
+            meta: RecipeFile {
+                slug: "auto-router".into(),
+                status: RecipeStatus::Published,
+                title: Localized {
+                    en: "Auto router".into(),
+                    zh: Some("自动路由".into()),
+                },
+                description: Localized {
+                    en: "Generic adaptive routing".into(),
+                    zh: Some("通用自适应路由".into()),
+                },
+                template: "auto-router".into(),
+                workflow: "agentic".into(),
+                harness: vec!["generic".into()],
+                objectives: vec![Objective::Cost],
+                updated_at: "2026-08-04".into(),
+                evaluation: Some(evaluation),
+            },
+            config_raw: config_raw.into(),
+            config: bitrouter_sdk::config::parse_with(config_raw, |_| None)
+                .expect("current auto-router config parses"),
+            policy_lock: Some(LoadedPolicyLock {
+                raw: policy_lock.into(),
+                document: serde_saphyr::from_str(policy_lock)
+                    .expect("current auto-router lock parses"),
+            }),
+            body_en: String::new(),
+            body_zh: Some(String::new()),
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog = crate::registry::catalog(&root).expect("current registry loads");
+        let mut issues = Vec::new();
+        let mut advisories = Vec::new();
+
+        validate_recipe(&recipe, &catalog, &mut issues, &mut advisories);
+
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert!(issues.iter().any(|issue| issue.contains("config_sha256")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("policy_lock_sha256"))
+        );
     }
 
     #[test]

@@ -190,7 +190,11 @@ BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localh
 
 ## Recipes
 
-Ready-made **policy specs** for common agentic workflows — a starting point that routes well out of the box, before you tune it for your own loop. Each recipe ships the drop-in `bitrouter.yaml` plus the measured result of running it against a baseline, so the claim on the box is a number you can check: `codex-cost-cut` is **−32.8% cost at −1.1 pp accuracy** on Terminal-Bench 2.1.
+Measured publication records for reusable routing templates. Runtime artifacts
+remain under [`templates/`](templates/); each recipe links one exact template to
+comparative evidence, provenance, rejected attempts, and scope limitations. The
+catalog derives its copyable config, policy lock, providers, and models from the
+template, so the gallery cannot drift from what users deploy.
 
 Browse them at [bitrouter.ai/recipes](https://bitrouter.ai/recipes); the source lives in [`recipes/`](recipes/), and [`recipes/README.md`](recipes/README.md) is the contract for contributing one.
 
