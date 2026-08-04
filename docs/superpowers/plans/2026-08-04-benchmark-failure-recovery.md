@@ -4,7 +4,7 @@
 
 **Goal:** Make BitRouter distinguish first-party routing failures from third-party provider failures, stop repeatedly selecting a known-bad route shape, and reject an unsafe benchmark before scored identities start—without using task content, task IDs, rewards, or benchmark labels as routing inputs.
 
-**Architecture:** First add end-to-end request correlation and credential-scoped provider-attempt receipts to BitRouter Cloud, then scope Cloud health by a content-free request-shape key so a tiny sentinel cannot certify a complex tools/history route. In OSS, unify Cloud credential resolution, give OAuth failures typed public semantics, and wire the existing reliability ledger into a policy safety clamp that falls back to the certified baseline by model plus request shape. A reusable provider-check matrix exercises the same protocol capabilities before a benchmark begins.
+**Architecture:** First eliminate the confirmed authentication failure by making OAuth refresh rotation atomic across Cloud replicas, serializing refresh across OSS processes that share one credential file, and requiring preflight to use the exact credential source used by scored daemons. Then add end-to-end request correlation and credential-scoped provider-attempt receipts, scope Cloud health by a content-free request-shape key, and activate the OSS reliability safety clamp. A reusable provider-check matrix exercises both credential usability and protocol capabilities before a benchmark begins.
 
 **Tech Stack:** Rust, Tokio, Axum, Reqwest, SeaORM, SQLite/PostgreSQL, Clap, BitRouter language-model pipeline hooks, Harbor Terminus-2.
 
@@ -13,6 +13,7 @@
 - Routing and health keys may contain only model, provider, credential class, endpoint origin, protocol, streaming flag, tool-presence flags, history class, and coarse input-size bucket. They must not contain prompt text, task/run/trial/case IDs, session IDs, rewards, verifier output, or hashes derived from any of those values.
 - Frozen and adaptive policy modes use the same reliability safety plane. Policy learning remains disabled at request time; reliability is operational safety, not learning.
 - A stored OAuth credential that exists but cannot refresh must never silently fall through to an inline API key. The operator must explicitly select the inline source or remove/re-authenticate the stored credential, preserving billing and Responses continuation authority.
+- OAuth refresh rotation must be safe across Cloud replicas and independent OSS processes. A benign concurrent refresh loser must not revoke the successor family, and copied rotating credentials must not be treated as an isolated benchmark credential source.
 - Public errors and receipts must never contain bearer tokens, refresh tokens, raw upstream bodies, prompt/tool arguments, or full request payloads.
 - Preserve the existing 128-byte request-ID bound and credential-scoped receipt authorization.
 - Base Cloud implementation on `bitrouter-cloud` `main` after PR #603, because that PR already supplies atomic actual-hop admission, exact half-open leases, auditable route snapshots, and billing fences.
@@ -31,15 +32,86 @@ The replicated short run `pr766-replicated-short13-20260804T073418Z` at OSS comm
 - All 52 gateway failures were on BitRouter Cloud routes: 34 `moonshotai/kimi-k3`, 18 `deepseek/deepseek-v4-pro`.
 - OpenAI Codex had 159 successes and 15 intermittent timeouts; this is a degraded third-party route, not a total outage.
 - 17 runtime-invalid cases: 16 Harbor `AgentTimeoutError`s and one setup `RuntimeError` caused by a remote LiteLLM cost-map TLS/read failure followed by missing `tmux`.
-- Final settlement failed closed with OAuth `invalid_grant`; 52 receipts stayed pending and no local database rows were mutated.
-- Revision-2 tiny sentinels passed 12/12 and real Terminus canaries passed 3/3, but every realistic Kimi/DeepSeek Responses-shaped request failed. Tiny sentinels were 9–90 input tokens; scored cheap requests carried multi-turn/tool history and 5.4–42 KiB canonical payloads.
+- The 52 Cloud-route failures were recorded locally from `2026-08-04T09:04:25Z` through `10:27:14Z`. Railway production logs contain 47 matching `POST /oauth/token` responses from `bitrouter-cloud-sdk/1.0.0-alpha.27`; every one returned HTTP 400 with the 70-byte canonical `invalid_grant` / `refresh token rejected` body. Forty-six local failures start within two seconds of one of those refresh responses and 47 within five seconds.
+- The remaining five unmatched requests lasted about 30 seconds and also never reached inference ingress. Railway does not prove whether they timed out during metadata/refresh transport or another pre-inference auth step, so their exact sub-cause remains unassigned.
+- The same Railway source made exactly three successful authorization-server metadata reads and zero `/v1/responses` or `/v1/chat/completions` calls during the scored failure window. Kimi and DeepSeek therefore received none of these 52 requests.
+- At `07:50:04Z`, before the accepted revision-2 provider gate, four concurrent SDK refreshes raced: one returned 200 and the next three returned the same 400 `invalid_grant`. Current Cloud `rotateRefresh` mints a successor before atomically consuming the prior token; every loser of that consume race calls `revokeRefreshFamily`, revoking the winner's family. This behavior is still present on Cloud `origin/main` `44dd1a59`.
+- Revision-2 sentinels later passed, but Railway shows successful provider-gate inference under a credential context different from the scored refresh path. The gate therefore proved provider availability, not scored credential usability. Real Terminus canaries exercised the strong route and likewise did not validate the later cheap-route auth source.
+- Final settlement independently failed closed with the same OAuth `invalid_grant`; 52 receipts stayed pending and no local database rows were mutated.
 - The public Cloud catalog currently reports one online platform candidate for `moonshotai/kimi-k3` and eight for `deepseek/deepseek-v4-pro`.
-- Cloud already wires provider fallback, circuit breaking, and per-hop persistence, with a default chain cap of five. Therefore a terminal 502 means either the executable chain had insufficient candidates, every admitted candidate failed, or the failure occurred outside an observed provider hop.
-- Cloud does not return its pipeline request ID as a stable response header, and its settlement endpoint does not expose actual provider-attempt outcomes. The current evidence cannot honestly distinguish those three cases or attribute the failures to a specific third-party provider.
-- OSS loads stored account credentials before inline `BITROUTER_API_KEY`; refresh failure is wrapped as `BitrouterError::Upstream { status: 401, ... }`, which renders as 502 `upstream_bad_gateway`. This is a confirmed first-party error-taxonomy defect, but it does **not** explain the benchmark's 52 scored 502s: exact-daemon Kimi/DeepSeek sentinels succeeded through the inference path while only the later settlement refresh returned `invalid_grant`.
+- Cloud already wires provider fallback, circuit breaking, and per-hop persistence, but none of those mechanisms ran for these 52 requests because authentication failed before inference ingress.
+- Cloud still does not return its pipeline request ID as a stable response header, and its settlement endpoint does not expose actual provider-attempt outcomes. That remains a hardening gap for future genuine provider failures, not the blocker that prevented attribution in this incident.
+- OSS loads stored account credentials before inline `BITROUTER_API_KEY`; refresh failure is wrapped as `BitrouterError::Upstream { status: 401, ... }`, which renders as 502 `upstream_bad_gateway`. Railway now confirms that this first-party auth/error-taxonomy path explains at least the 47 directly correlated failures and the absence of all 52 requests from inference ingress.
 - OSS contains a persisted `ProviderReliabilityLedger`, but production assembly never observes hop outcomes into it and never consults it during model selection. All three scored databases contained zero `adequacy_reliability_events` despite 67 provider failures.
 
-The repair therefore has two first-party tracks: recover the missing Cloud evidence and capability-safe fallback behavior, then activate the OSS safety clamp. Vendor remediation begins only after Cloud attempt receipts identify the failing provider/model/protocol/request-shape tuple.
+The repair now starts with the auth incident: fix atomic refresh rotation, credential-source isolation, cross-process refresh coordination, typed errors, and same-context preflight. Request correlation, capability-safe fallback, and the OSS reliability clamp remain required hardening, but Kimi/DeepSeek vendor remediation is not justified by this run because their inference endpoints were never called.
+
+---
+
+### Task 0: Repair OAuth Rotation and Credential-Context Admission
+
+**Files:**
+
+- Modify (Cloud): `console/src/lib/credentials/oauth-tokens.ts`
+- Modify (Cloud): `console/src/lib/credentials/oauth-tokens.test.ts`
+- Modify (Cloud): `console/src/app/oauth/token/route.test.ts`
+- Modify (OSS): `crates/bitrouter-cloud-sdk/src/provider/applier.rs`
+- Modify (OSS): `crates/bitrouter-cloud-sdk/src/auth/credentials.rs`
+- Modify (OSS): `crates/bitrouter-cloud-sdk/tests/oauth_device_flow.rs`
+- Modify (OSS): `skills/bitrouter/references/harness-terminus-2.md`
+- Modify (OSS): `skills/bitrouter/references/diagnose.md`
+
+**Interfaces:**
+
+- Produces one atomic Cloud refresh result: one concurrent caller rotates successfully; losers receive typed `invalid_grant`; the winning successor family remains live.
+- Produces cross-process refresh serialization for independent OSS resolver instances sharing one canonical credential path.
+- Produces a content-free credential-context record containing source kind, authorization-server origin, namespace/subject binding presence, and a one-way authority identifier; it never contains either token.
+- Requires benchmark preflight and scored daemons to present the same credential-context record. A mismatch rejects the run before any scored identity starts.
+
+- [ ] **Step 1: Add a four-way Cloud refresh race regression test**
+
+Mint one token family, issue four concurrent refresh requests with the same refresh token, and assert exactly one success plus three `invalid_grant` responses. Fetch the family rows after the race and assert exactly one unconsumed, unrevoked successor exists and the family is not revoked. Repeat with a delayed stale replay and assert it cannot invalidate the live successor.
+
+- [ ] **Step 2: Make rotation one database transaction**
+
+Move lookup, secret verification, consume claim, successor insert, and `rotated_to` linkage into one database transaction. Lock or atomically claim the presented row before minting the successor. A caller that observes an already-consumed row returns `RefreshInvalidError` without calling `revokeRefreshFamily`; explicit compromise/admin revocation remains a separate operation. Roll back the consume if successor minting fails.
+
+- [ ] **Step 3: Run the Cloud auth suite**
+
+Run:
+
+```bash
+bun test console/src/lib/credentials/oauth-tokens.test.ts \
+  console/src/app/oauth/token/route.test.ts
+```
+
+Expected: the four-way race is deterministic, leaves one usable successor, and never logs or returns a token in diagnostics.
+
+- [ ] **Step 4: Add an OSS cross-process refresh regression**
+
+Construct two independent `BitrouterCloudAuthApplier` instances pointing at the same credential file and release them concurrently against a rotating Wiremock endpoint. Assert one network refresh, two usable bearer results, one atomic credential-file update, and no stale-token retry. The test must use separate resolver instances so the existing in-memory `tokio::Mutex` cannot make it pass accidentally.
+
+- [ ] **Step 5: Serialize refresh by canonical credential path**
+
+Acquire an OS-visible credential refresh lock, re-read the file after acquiring it, refresh only if the re-read token is still near expiry, and atomically persist the rotation before releasing the lock. Keep the current in-process mutex only as a fast path. If distinct files contain the same rotating token, rely on the repaired Cloud transaction for safety and report the stale copy as reauthentication required.
+
+- [ ] **Step 6: Freeze and verify the exact credential context**
+
+Run `cloud whoami --check` and the provider matrix under the exact environment used to launch each daemon. Record only the source kind and authority identifier. For automated benchmarks, explicitly select `inline` for a frozen static API key or `stored` for one live OAuth authority; never let an ambient default credential silently shadow the declared source. Reject copied OAuth stores and any preflight/scored source mismatch before allocating identities.
+
+- [ ] **Step 7: Commit and deploy the incident fix first**
+
+```bash
+git add console/src/lib/credentials/oauth-tokens.ts \
+  console/src/lib/credentials/oauth-tokens.test.ts \
+  console/src/app/oauth/token/route.test.ts
+git commit -m "fix(auth): make refresh rotation atomic"
+
+git add crates/bitrouter-cloud-sdk skills/bitrouter/references
+git commit -m "fix(auth): serialize cloud token refresh"
+```
+
+Deploy Cloud first, verify the four-way production-safe canary against fresh disposable credentials, then deploy the OSS resolver and rerun the same-context credential gate. Do not rerun scored cases until both sides pass.
 
 ---
 
@@ -282,6 +354,7 @@ Open a Cloud PR based on PR #603's merged head and link it from PR #766.
 - Produces a typed refresh error rather than an `anyhow` string.
 - Produces one `CloudCredentialResolver` used by inference, management, settlement reconciliation, and `cloud whoami --check`.
 - Adds explicit environment selector `BITROUTER_CLOUD_CREDENTIAL_SOURCE=auto|stored|inline`; `auto` preserves stored-first behavior but fails closed if an existing stored credential is unusable.
+- Produces the same content-free credential-context record defined in Task 0 so preflight, inference, and settlement can prove that they resolved the same authority without exposing a token.
 
 ```rust
 pub enum RefreshError {
@@ -317,11 +390,12 @@ Cover these exact cases:
 2. valid stored OAuth + inline key under `auto` resolves stored;
 3. stored OAuth `invalid_grant` + inline key under `auto` returns reauthentication required and does not fall through;
 4. source `inline` ignores the stored file and resolves inline;
-5. source `stored` with no file returns not signed in.
+5. source `stored` with no file returns not signed in;
+6. two independent resolvers sharing one credential path use Task 0's OS-visible lock, re-read after the lock, and perform exactly one refresh.
 
 - [ ] **Step 4: Implement `CloudCredentialResolver` and reuse it**
 
-Move metadata caching, refresh single-flight, persistence, source selection, and continuation-authority derivation behind the resolver. Replace `BitrouterCloudAuthApplier::resolve_stored_auth`, `ManagementClient`'s duplicate path, and `settlement_bearer_from_credentials` with the shared resolver.
+Move metadata caching, Task 0's cross-process refresh serialization, persistence, source selection, credential-context reporting, and continuation-authority derivation behind the resolver. Replace `BitrouterCloudAuthApplier::resolve_stored_auth`, `ManagementClient`'s duplicate path, and `settlement_bearer_from_credentials` with the shared resolver.
 
 - [ ] **Step 5: Map terminal OAuth failures to typed inference errors**
 
@@ -329,7 +403,7 @@ Map `invalid_grant`, expired refresh token, and missing stored refresh token to 
 
 - [ ] **Step 6: Add `bitrouter cloud whoami --check`**
 
-Change `CloudAction::Whoami` to `Whoami { check: bool }`. Without `--check`, retain the current offline behavior byte-for-byte. With `--check`, run the shared resolver and print only source, usable status, whether refresh was attempted, access-token expiry, and a remediation action such as `run bitrouter cloud login`; never print a token.
+Change `CloudAction::Whoami` to `Whoami { check: bool }`. Without `--check`, retain the current offline behavior byte-for-byte. With `--check`, run the shared resolver and print only source, usable status, whether refresh was attempted, access-token expiry, the content-free authority identifier, and a remediation action such as `run bitrouter cloud login`; never print a token.
 
 - [ ] **Step 7: Update CLI and skill documentation in lockstep**
 
@@ -347,7 +421,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Expected: all pass; a terminal stored OAuth failure is classified as `upstream_auth_required` and never uses the inline key under `auto`.
+Expected: all pass; a terminal stored OAuth failure is classified as `upstream_auth_required`, never uses the inline key under `auto`, and concurrent independent resolvers perform one safe refresh.
 
 - [ ] **Step 9: Commit the OSS auth fix**
 
@@ -508,7 +582,7 @@ Run a local mock daemon where one model passes plain requests but fails tool-res
 
 - [ ] **Step 6: Update CLI and Terminus skill documentation**
 
-Require this sequence before any scored identities start:
+Require this sequence before any scored identities start, under the exact environment that will launch the daemon:
 
 ```bash
 bitrouter cloud whoami --check
@@ -522,7 +596,7 @@ bitrouter providers check \
   --jsonl artifacts/provider-check.jsonl
 ```
 
-Document that the command incurs real provider traffic/cost and that a failed gate invalidates the run before identity launch.
+Document that the command incurs real provider traffic/cost and that a failed gate invalidates the run before identity launch. Persist the `whoami --check` credential-context record and require the daemon to report the same source kind and authority identifier. A provider response obtained with a different inline/stored credential context does not satisfy the gate.
 
 - [ ] **Step 7: Run provider-check and docs verification**
 
@@ -559,16 +633,16 @@ Update PR #766 with the exact matrix artifact digest and gate result.
 
 **Interfaces:**
 
-- Consumes Cloud provider-attempt receipts from Task 1, shape-scoped health from Task 2, typed credential health from Task 3, OSS safety decisions from Task 4, and the matrix gate from Task 5.
+- Consumes atomic refresh behavior and credential-context admission from Task 0, Cloud provider-attempt receipts from Task 1, shape-scoped health from Task 2, typed credential health from Task 3, OSS safety decisions from Task 4, and the matrix gate from Task 5.
 - Produces one of three explicit dispositions per failing tuple: first-party adapter/routing fix, third-party quarantine/escalation, or healthy/re-admitted.
 
 - [ ] **Step 1: Land and deploy Cloud in dependency order**
 
-First land Cloud PR #603, then Tasks 1–2. Record the deployed commit and registry content digest. Verify a failed synthetic request can be retrieved by the same `x-bitrouter-request-id` and returns a complete ordered attempt list.
+First deploy Task 0's Cloud atomic-refresh fix and verify it with fresh disposable credentials, then deploy the OSS Task 0/Task 3 resolver changes. Record both deployed commits and image digests. Only after the auth incident is closed, land Cloud PR #603 and Tasks 1–2; verify a failed synthetic inference request can be retrieved by the same `x-bitrouter-request-id` and returns a complete ordered attempt list.
 
 - [ ] **Step 2: Audit the two benchmark model chains**
 
-For `moonshotai/kimi-k3` and `deepseek/deepseek-v4-pro`, run every Task 5 shape and inspect attempts. Record exact executable candidate count after credential/capability filters, actual attempted providers, outbound protocols, and content-free error classes.
+For `moonshotai/kimi-k3` and `deepseek/deepseek-v4-pro`, first prove the matrix uses the admitted scored credential context, then run every Task 5 shape and inspect attempts. Record exact executable candidate count after credential/capability filters, actual attempted providers, outbound protocols, and content-free error classes. Treat vendor diagnosis as a new post-auth test; do not carry the prior run's 52 auth failures forward as provider evidence.
 
 - [ ] **Step 3: Apply the first-party or third-party disposition**
 
@@ -587,13 +661,14 @@ For OpenAI Codex, retain the route because it succeeded 159 times, but classify 
 
 Require all of the following:
 
-1. `bitrouter cloud whoami --check` reports usable credentials;
-2. every mandatory model/shape/bucket row passes at concurrency four;
-3. failed fixture requests expose complete Cloud attempt receipts;
-4. injected transient failures create non-zero OSS reliability events and clamp only the matching shape to the certified baseline;
-5. Kimi and DeepSeek each have either a passing executable fallback chain or are removed from the policy;
-6. Harbor runner tools and offline cost map pass before identities are allocated;
-7. frozen config, source commit, registry digest, auth-source class, timeouts, case list, and checksums are recorded.
+1. a four-way refresh canary yields one success, three typed losers, and one live unrevoked successor family;
+2. `bitrouter cloud whoami --check` reports usable credentials and its credential-context record exactly matches every scored daemon;
+3. every mandatory model/shape/bucket row passes at concurrency four;
+4. failed fixture requests expose complete Cloud attempt receipts;
+5. injected transient failures create non-zero OSS reliability events and clamp only the matching shape to the certified baseline;
+6. Kimi and DeepSeek each have either a passing executable fallback chain or are removed from the policy;
+7. Harbor runner tools and offline cost map pass before identities are allocated;
+8. frozen config, source commit, registry digest, auth-source class, authority identifier, timeouts, case list, and checksums are recorded.
 
 - [ ] **Step 6: Re-run the 13-by-3 benchmark only after acceptance**
 
@@ -609,6 +684,9 @@ Report old versus new gateway/timeout counts, provider-attempt distributions, re
 
 This program is complete only when:
 
+- four concurrent refreshes leave exactly one usable, unrevoked successor family;
+- independent OSS processes sharing one credential file perform one serialized refresh and re-read the rotated token;
+- preflight, inference, and settlement prove the same content-free credential context;
 - a local request ID resolves to its Cloud request and ordered provider attempts;
 - terminal OAuth refresh failures are typed as auth/reauthentication failures rather than generic gateway failures;
 - a shallow sentinel cannot close a complex tools/history circuit;
