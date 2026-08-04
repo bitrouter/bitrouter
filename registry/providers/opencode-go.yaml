@@ -38,6 +38,9 @@ models:
     provider_model_id: qwen3.7-plus
   - id: qwen/qwen3.7-max
     provider_model_id: qwen3.7-max
+  # Live catalog: https://opencode.ai/zen/go/v1/models
+  - id: qwen/qwen3.8-max
+    provider_model_id: qwen3.8-max
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
   - id: z-ai/glm-5.1

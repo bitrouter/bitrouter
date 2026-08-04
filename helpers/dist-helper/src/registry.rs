@@ -1072,7 +1072,7 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     for modality in &model.input_modalities {
-        if !matches!(modality.as_str(), "text" | "image" | "audio") {
+        if !matches!(modality.as_str(), "text" | "image" | "audio" | "video") {
             issues.push(format!(
                 "registry/models: model '{}' has invalid input modality '{}'",
                 model.id, modality
@@ -3407,6 +3407,106 @@ api_base: https://api.acme.test/v1
             openrouter.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
             Some(0.18)
         );
+    }
+
+    #[test]
+    fn built_registry_includes_qwen3_8_max() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root);
+        assert!(artifacts.is_ok(), "builds repository registry");
+        let Ok(artifacts) = artifacts else {
+            return;
+        };
+        let models = serde_json::from_str::<Value>(&artifacts.models);
+        assert!(models.is_ok(), "valid models JSON");
+        let Ok(models) = models else {
+            return;
+        };
+        let model_data = models["data"].as_array();
+        assert!(model_data.is_some(), "model data array");
+        let Some(model_data) = model_data else {
+            return;
+        };
+        assert!(
+            model_data
+                .iter()
+                .all(|model| model["id"] != "qwen/qwen3.8-max-preview")
+        );
+        let qwen = model_data
+            .iter()
+            .find(|model| model["id"] == "qwen/qwen3.8-max");
+        assert!(qwen.is_some(), "Qwen3.8 Max canonical model");
+        let Some(qwen) = qwen else {
+            return;
+        };
+        assert_eq!(qwen["name"], "Qwen: Qwen3.8 Max");
+        assert_eq!(
+            qwen["description"],
+            "2.4T-parameter multimodal MoE flagship for coding, professional work, and long-horizon agentic workflows."
+        );
+        assert_eq!(
+            qwen["input_modalities"],
+            serde_json::json!(["text", "image", "video"])
+        );
+        assert_eq!(qwen["output_modalities"], serde_json::json!(["text"]));
+        assert_eq!(qwen["max_input_tokens"], 1_000_000);
+        assert_eq!(qwen["max_output_tokens"], 131_072);
+        assert_eq!(qwen["release_date"], "2026-08-03");
+        assert_eq!(qwen["open_weights"], false);
+        assert_eq!(qwen["family"], "qwen3.8");
+
+        let mappings = qwen["providers"].as_array();
+        assert!(mappings.is_some(), "provider mappings");
+        let Some(mappings) = mappings else {
+            return;
+        };
+        let expected = [
+            (
+                "alibaba",
+                "qwen3.8-max",
+                Some((2.0, 0.25, 2.5, 6.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
+            ),
+            (
+                "alibaba_cn",
+                "qwen3.8-max",
+                Some((1.667, 0.167, 2.083, 5.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
+            ),
+            (
+                "openrouter",
+                "qwen/qwen3.8-max",
+                Some((2.0, 0.25, 2.5, 6.0)),
+                serde_json::json!(["openai", "responses", "anthropic"]),
+            ),
+            (
+                "opencode-go",
+                "qwen3.8-max",
+                None,
+                serde_json::json!("openai"),
+            ),
+        ];
+        assert_eq!(mappings.len(), expected.len());
+        for (provider, provider_model_id, pricing, api_protocol) in expected {
+            let mapping = mappings.iter().find(|item| item["provider"] == provider);
+            assert!(mapping.is_some(), "{provider} mapping");
+            let Some(mapping) = mapping else {
+                continue;
+            };
+            assert_eq!(mapping["provider_model_id"], provider_model_id);
+            assert_eq!(mapping["api_protocol"], api_protocol);
+            if let Some((input, cache_read, cache_write, output)) = pricing {
+                assert_eq!(mapping["pricing"]["input_tokens"]["no_cache"], input);
+                assert_eq!(mapping["pricing"]["input_tokens"]["cache_read"], cache_read);
+                assert_eq!(
+                    mapping["pricing"]["input_tokens"]["cache_write"],
+                    cache_write
+                );
+                assert_eq!(mapping["pricing"]["output_tokens"]["text"], output);
+            } else {
+                assert!(mapping.get("pricing").is_none());
+            }
+        }
     }
 
     #[test]

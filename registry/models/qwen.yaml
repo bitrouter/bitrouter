@@ -74,6 +74,21 @@
   release_date: 2026-06-10
   open_weights: false
   family: qwen3.7
+# Official model: https://www.qwencloud.com/models/qwen3.8-max
+- id: qwen/qwen3.8-max
+  name: 'Qwen: Qwen3.8 Max'
+  description: 2.4T-parameter multimodal MoE flagship for coding, professional work, and long-horizon agentic workflows.
+  input_modalities:
+  - text
+  - image
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-08-03
+  open_weights: false
+  family: qwen3.8
 - id: qwen/qwen3.6-flash
   name: 'Qwen: Qwen3.6 Flash'
   input_modalities:
