@@ -2030,8 +2030,11 @@ impl ModelSelector for PolicyRuntime {
                     "trajectory correlation requires an inbound protocol",
                 )
             })?;
-            let captured_at =
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let captured_at = trajectory_request_started_at(ctx).map_err(|error| {
+                bitrouter_sdk::BitrouterError::internal(format!(
+                    "trajectory request timestamp failed: {error}"
+                ))
+            })?;
             let input_model = ctx.model().to_string();
             let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
             let projection =
@@ -2147,6 +2150,22 @@ impl ModelSelector for PolicyRuntime {
     }
 }
 
+fn trajectory_request_started_at(ctx: &PipelineContext) -> Result<String> {
+    trajectory_request_started_at_elapsed(chrono::Utc::now(), ctx.request_duration_ms())
+}
+
+fn trajectory_request_started_at_elapsed(
+    observed_at: chrono::DateTime<chrono::Utc>,
+    elapsed_ms: u64,
+) -> Result<String> {
+    let elapsed_ms =
+        i64::try_from(elapsed_ms).context("pipeline request duration exceeds timestamp range")?;
+    let started_at = observed_at
+        .checked_sub_signed(chrono::TimeDelta::milliseconds(elapsed_ms))
+        .ok_or_else(|| anyhow::anyhow!("pipeline request start exceeds timestamp range"))?;
+    Ok(started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyRuntimeStatus {
     pub path: Option<PathBuf>,
@@ -2158,6 +2177,17 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trajectory_request_start_uses_pipeline_elapsed_time() -> anyhow::Result<()> {
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-08-06T10:00:00.050Z")?
+            .with_timezone(&chrono::Utc);
+
+        let started_at = trajectory_request_started_at_elapsed(observed_at, 25)?;
+
+        assert_eq!(started_at, "2026-08-06T10:00:00.025Z");
+        Ok(())
+    }
 
     fn definition() -> PolicyDefinition {
         PolicyDefinition {
