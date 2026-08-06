@@ -167,6 +167,7 @@ impl HttpHarness {
             "sqlite://{}?mode=rwc",
             home.path().join("trajectory.db").display()
         );
+        let database_url_yaml = serde_json::to_string(&database_url)?;
         let (providers_yaml, preset_model) =
             if upstream_protocol == InboundProtocol::Responses && shared_responses_authority {
                 (
@@ -225,7 +226,7 @@ server:
   listen: "127.0.0.1:0"
   skip_auth: false
 database:
-  url: "{database_url}"
+  url: {database_url_yaml}
 trajectory:
   enabled: true
   retention_days: 30
