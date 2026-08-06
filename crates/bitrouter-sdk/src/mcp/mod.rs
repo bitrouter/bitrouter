@@ -44,6 +44,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HookDecision;
 
+pub mod skills;
 pub mod transport;
 
 #[cfg(feature = "mcp")]

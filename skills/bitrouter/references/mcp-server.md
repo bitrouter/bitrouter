@@ -9,6 +9,49 @@ BitRouter ships a built-in MCP server (`bitrouter mcp serve`) that exposes BitRo
 
 ---
 
+## Skills over MCP (SEP-2640)
+
+BitRouter is a skills **server** and **gateway**. It is not a skills *host*: it
+never decides what enters a model's context and never honours a skill's
+`allowed-tools`. It is not an *installer* either — BitRouter reads the
+installed-skills directory, and something else populates it (`npx skills add`,
+or the Claude Code / Codex plugin marketplaces). Handle transport, not
+distribution.
+
+**As a server** (`mcp serve --backend skills`) it publishes the skills installed
+under the current directory as `skill://<name>/SKILL.md`, answering
+`skills/list`, `skills/get`, `resources/list`, and `resources/read`. Each entry
+carries every file of the skill with a `sha256:` digest.
+
+**As a gateway** (`POST /mcp`) it merges the skills of every upstream marked
+`aggregate: true`. Upstream URIs are namespaced under the member's configured
+server name, because two upstreams may legitimately publish the same URI:
+
+```text
+upstream   skill://refunds/SKILL.md        (server "acme")
+gateway    skill://acme/refunds/SKILL.md
+```
+
+Reads of an aggregated skill route back to that member alone — a skill served
+by one upstream can never cause a read against another.
+
+Two limits worth knowing before you rely on this:
+
+- **The gateway is not a security boundary.** SEP-2640 digests are unsigned and
+  come from the same server as the content, and any intermediary can rewrite
+  both together. BitRouter *is* such an intermediary. A digest match proves the
+  listing and the bytes agree, nothing more.
+- **Remote catalogs are daemon-scoped, not caller-scoped.** An upstream's
+  credentials come from `bitrouter.yaml` and are shared by every caller of the
+  daemon, so a remote server cannot serve different skills to different users
+  through BitRouter. Private per-user catalogs are not supported yet.
+
+Only `skill://` URIs are aggregated. An upstream serving skills under another
+scheme is reachable on its direct route (`POST /mcp/{server}`), and the
+aggregate reports those entries as skipped under `_bitrouterErrors`.
+
+---
+
 ## Commands
 
 ### `bitrouter mcp serve`
@@ -18,7 +61,7 @@ Starts the origin MCP server.
 | Flag | Default | Description |
 |---|---|---|
 | `--transport` | `stdio` | `stdio` or `http` |
-| `--backend` | *(derived)* | `local`, `cloud`, `fleet`, or `skills`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). `skills` is the **origin AgentSkills server** — just `skills_search`/`skills_get` over the installed-skills root of the current directory; it is the `bitrouter_skills` server the TUI injects into every launched harness. Both `fleet` and `skills` are **stdio-only** |
+| `--backend` | *(derived)* | `local`, `cloud`, `fleet`, or `skills`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). `skills` is the **origin AgentSkills server** over the installed-skills root of the current directory, serving two surfaces: the `skills_search`/`skills_get` **tools** (callable by any MCP client today) and SEP-2640's `skills/list`/`skills/get` **methods** plus `resources/list`/`resources/read` over skill files. It is the `bitrouter_skills` server the TUI injects into every launched harness. Both `fleet` and `skills` are **stdio-only** |
 | `--allow-writes` | off | (`fleet` only) grant the orchestrator write autonomy: `apply_subagent`/`merge_subagent` may integrate into the base repo. Off = writes are human-gated |
 | `--budget-usd` | *(unlimited)* | (`fleet` only) spend ceiling in USD. `spawn_subagent`/`prompt_subagent` refuse once **today's machine-wide spend** reaches it (a circuit breaker, TUI_SPEC §5); `fleet_cost` reports `budget_usd`/`remaining_usd`. Not scoped to one session — other spend today counts; a new UTC day is the fresh window. Ignored (with a note) off `--backend fleet` |
 | `--local-url` | `http://127.0.0.1:4356` | Root URL of the local BitRouter daemon |
@@ -46,7 +89,9 @@ bitrouter mcp serve --backend fleet            # writes human-gated
 bitrouter mcp serve --backend fleet --allow-writes
 bitrouter mcp serve --backend fleet --budget-usd 20   # refuse spawns past $20 today
 
-# stdio — origin AgentSkills server (skills_search/skills_get over ./skills installs)
+# stdio — origin AgentSkills server over ./skills installs.
+# Serves both the tool surface (skills_search/skills_get) and the SEP-2640
+# method surface (skills/list, skills/get, resources/list, resources/read).
 bitrouter mcp serve --backend skills
 ```
 

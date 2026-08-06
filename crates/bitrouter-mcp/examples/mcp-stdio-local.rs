@@ -5,12 +5,95 @@
 
 use std::sync::Arc;
 
+use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
+use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
+use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult, SkillEntry, SkillResource};
 use rmcp::model::{
-    CacheScope, ListToolsResult, PaginatedRequestParams, ResultType, ServerCapabilities,
-    ServerInfo, Tool,
+    CacheScope, CustomRequest, CustomResult, ListToolsResult, PaginatedRequestParams, ResultType,
+    ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
+
+/// A fixed one-skill catalog, so the roundtrip tests exercise the SEP-2640
+/// surface without needing skills installed on the machine running them.
+struct FixtureCatalog;
+
+impl FixtureCatalog {
+    const SKILL_MD: &'static str = "skill://git-workflow/SKILL.md";
+    const GUIDE: &'static str = "skill://git-workflow/references/GUIDE.md";
+
+    fn entry() -> SkillEntry {
+        let mut frontmatter = serde_json::Map::new();
+        frontmatter.insert("name".into(), "git-workflow".into());
+        frontmatter.insert(
+            "description".into(),
+            "Follow the team's Git conventions".into(),
+        );
+        SkillEntry {
+            uri: Self::SKILL_MD.into(),
+            frontmatter,
+            resources: Some(vec![
+                SkillResource {
+                    uri: Self::SKILL_MD.into(),
+                    digest:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .into(),
+                },
+                SkillResource {
+                    uri: Self::GUIDE.into(),
+                    digest:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .into(),
+                },
+            ]),
+            extra: serde_json::Map::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SkillCatalog for FixtureCatalog {
+    async fn list(&self) -> Result<ListSkillsResult, ToolError> {
+        Ok(ListSkillsResult {
+            skills: vec![Self::entry()],
+        })
+    }
+
+    async fn get(&self, uri: &str) -> Result<GetSkillResult, ToolError> {
+        if uri == Self::SKILL_MD {
+            Ok(GetSkillResult {
+                skill: Self::entry(),
+            })
+        } else {
+            Err(ToolError::new(format!("no installed skill at '{uri}'")))
+        }
+    }
+
+    async fn read(&self, uri: &str) -> Result<SkillFile, ToolError> {
+        let body = match uri {
+            Self::SKILL_MD => "# Git workflow",
+            Self::GUIDE => "# Guide",
+            _ => {
+                return Err(ToolError::new(format!(
+                    "'{uri}' is not a file of any installed skill"
+                )));
+            }
+        };
+        Ok(SkillFile {
+            uri: uri.to_string(),
+            mime_type: Some("text/markdown".into()),
+            body: SkillFileBody::Text(body.to_string()),
+        })
+    }
+}
+
+async fn serve_skills() -> anyhow::Result<()> {
+    let server = BitrouterMcp::builder()
+        .skill_catalog(Arc::new(FixtureCatalog))
+        .build();
+    bitrouter_mcp::server::serve_stdio(server, None).await
+}
 
 #[derive(Clone, Copy)]
 enum PaginationScenario {
@@ -77,6 +160,61 @@ async fn serve_paginated(scenario: PaginationScenario) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
+struct PaginatedSkillsServer;
+
+impl ServerHandler for PaginatedSkillsServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::default())
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        if request.method != "skills/list" {
+            return Err(ErrorData::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            ));
+        }
+        let cursor = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("cursor"))
+            .and_then(|cursor| cursor.as_str());
+        let (name, next_cursor, ttl_ms, cache_scope) = match cursor {
+            None => ("first", Some("next"), 60_000, "public"),
+            Some("next") => ("second", None, 1_000, "private"),
+            Some(other) => {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown test cursor: {other}"),
+                    None,
+                ));
+            }
+        };
+        Ok(CustomResult::new(serde_json::json!({
+            "skills": [{
+                "uri": format!("skill://{name}/SKILL.md"),
+                "frontmatter": {"name": name, "description": "fixture"}
+            }],
+            "nextCursor": next_cursor,
+            "ttlMs": ttl_ms,
+            "cacheScope": cache_scope
+        })))
+    }
+}
+
+async fn serve_paginated_skills() -> anyhow::Result<()> {
+    let service = PaginatedSkillsServer
+        .serve(rmcp::transport::stdio())
+        .await?;
+    service.waiting().await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let scenario = std::env::args().nth(1);
@@ -84,6 +222,8 @@ async fn main() -> anyhow::Result<()> {
         Some("private") => return serve_paginated(PaginationScenario::Private).await,
         Some("zero-ttl") => return serve_paginated(PaginationScenario::ZeroTtl).await,
         Some("shorter-ttl") => return serve_paginated(PaginationScenario::ShorterTtl).await,
+        Some("skills-pages") => return serve_paginated_skills().await,
+        Some("skills") => return serve_skills().await,
         Some(other) => anyhow::bail!("unknown pagination scenario: {other}"),
         None => {}
     }

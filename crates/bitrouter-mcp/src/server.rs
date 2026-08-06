@@ -24,8 +24,12 @@ use crate::capabilities::escalation::EscalationState;
 use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
 use crate::capabilities::human::{HumanBridge, HumanHandleArgs, NotifyArgs};
 use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
+use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
 use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
 use crate::error::ToolError;
+use bitrouter_sdk::mcp::skills::{
+    GetSkillParams, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
+};
 
 /// Extract the caller's bearer from MCP request extensions. The streamable-HTTP
 /// transport injects `http::request::Parts`; returns an empty `CallerAuth` over
@@ -116,6 +120,11 @@ struct Caps {
     cost: Option<Arc<dyn CostQuery>>,
     routing: Option<Arc<dyn RoutingQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
+    /// The SEP-2640 skills surface (`skills/list` / `skills/get` plus
+    /// `resources/*` over skill files). Contributes no tools — it is served as
+    /// JSON-RPC methods and resources — so it stays a plain field rather than
+    /// a [`CapSpec`] entry.
+    skill_catalog: Option<Arc<dyn SkillCatalog>>,
     human: Option<Arc<dyn HumanBridge>>,
     /// The live-subagent cap the app enforces, sourced from the app (not
     /// hardcoded here) so the instruction string can't drift from the real
@@ -635,6 +644,7 @@ impl BitrouterMcp {
     port_accessor!(cost, dyn CostQuery, "cost capability");
     port_accessor!(routing, dyn RoutingQuery, "routing capability");
     port_accessor!(skills, dyn SkillsQuery, "skills capability");
+    port_accessor!(skill_catalog, dyn SkillCatalog, "skills catalog");
     port_accessor!(human, dyn HumanBridge, "human bridge");
 
     /// Record the connecting client's escalation capability + capture the
@@ -733,6 +743,17 @@ impl Builder {
         self
     }
 
+    /// Wire the SEP-2640 skills surface: `skills/list`, `skills/get`, and
+    /// `resources/list` + `resources/read` over skill files.
+    ///
+    /// Independent of [`Self::skills`]. That one is a pair of *tools*, which
+    /// every MCP client can call today; this one is the *method* form SEP-aware
+    /// hosts will consume. Wiring both is the intended configuration.
+    pub fn skill_catalog(mut self, catalog: Arc<dyn SkillCatalog>) -> Self {
+        self.caps.skill_catalog = Some(catalog);
+        self
+    }
+
     /// Wire the human-escalation capability (`notify_human`/`request_attach`/
     /// `request_review`).
     pub fn human(mut self, human: Arc<dyn HumanBridge>) -> Self {
@@ -785,10 +806,43 @@ impl Builder {
 /// profile. Five minutes keeps a re-dial cheap without pinning a stale list.
 const TOOLS_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 
+/// Map a [`ToolError`] from the skills surface onto the JSON-RPC code SEP-2640
+/// mandates.
+///
+/// `-32602` (Invalid params) is "the same code `resources/read` uses for
+/// unknown resources" per the SEP, and covers every failure this surface has:
+/// the URI does not name a skill, or does not name a file of one.
+fn skills_error(e: ToolError) -> McpError {
+    McpError::new(rmcp::model::ErrorCode::INVALID_PARAMS, e.0, None)
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BitrouterMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        // Resources and the skills extension are declared only when a catalog
+        // is wired. Unlike the gateway — which cannot know its upstreams'
+        // capabilities when it answers `initialize` (see the optimistic
+        // declaration in `bitrouter-sdk`'s `mcp_invoke`) — the origin server
+        // knows its own catalog at build time, so it can declare honestly.
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        if self.caps.skill_catalog.is_some() {
+            capabilities.resources = Some(rmcp::model::ResourcesCapability::default());
+            capabilities.extensions = Some(
+                [(
+                    SKILLS_EXTENSION_ID.to_string(),
+                    // `directoryRead` is deliberately absent (it defaults to
+                    // `false`): a skill entry's `resources` already enumerates
+                    // every file of the skill, so a host holding the entry can
+                    // filter it by prefix instead of walking directories.
+                    // Declaring the optional method would oblige us to serve it
+                    // for a navigation need that is already met.
+                    serde_json::Map::new(),
+                )]
+                .into_iter()
+                .collect(),
+            );
+        }
+        ServerInfo::new(capabilities)
             // Without this the identity defaults to `Implementation::from_build_env()`,
             // which resolves against *rmcp's* build environment — every client
             // asking who we are (via `server/discover`, `initialize`, or the
@@ -832,6 +886,124 @@ impl ServerHandler for BitrouterMcp {
             ttl_ms: draft.then_some(TOOLS_LIST_TTL_MS),
             cache_scope: draft.then_some(rmcp::model::CacheScope::Public),
         })
+    }
+
+    /// SEP-2640's `skills/list` and `skills/get`. Both are mandatory for a
+    /// server declaring the extension, so both are answered whenever a catalog
+    /// is wired — and neither exists when one is not.
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, McpError> {
+        let method = request.method.as_str();
+        if !matches!(method, SKILLS_LIST_METHOD | SKILLS_GET_METHOD) {
+            return Err(McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method.clone(),
+                None,
+            ));
+        }
+        // No catalog wired means this server does not implement the extension
+        // at all, which is "method not found" rather than a bad request.
+        let catalog = self.caps.skill_catalog.as_ref().ok_or_else(|| {
+            McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method.clone(),
+                None,
+            )
+        })?;
+        let value = match method {
+            SKILLS_LIST_METHOD => {
+                let result = catalog.list().await.map_err(skills_error)?;
+                serde_json::to_value(result)
+            }
+            // `skills/get` — anything else was rejected above.
+            _ => {
+                let params: GetSkillParams = request
+                    .params_as()
+                    .map_err(|e| {
+                        McpError::new(
+                            rmcp::model::ErrorCode::INVALID_PARAMS,
+                            format!("skills/get params: {e}"),
+                            None,
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        McpError::new(
+                            rmcp::model::ErrorCode::INVALID_PARAMS,
+                            "skills/get requires params.uri".to_string(),
+                            None,
+                        )
+                    })?;
+                let result = catalog.get(&params.uri).await.map_err(skills_error)?;
+                serde_json::to_value(result)
+            }
+        }
+        .map_err(|e| {
+            McpError::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("{method} serialise: {e}"),
+                None,
+            )
+        })?;
+        Ok(rmcp::model::CustomResult::new(value))
+    }
+
+    /// Every file of every skill, so a generic MCP client can discover the
+    /// skill namespace without knowing about SEP-2640 at all.
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, McpError> {
+        let catalog = self.skill_catalog()?;
+        let listed = catalog.list().await.map_err(skills_error)?;
+        let resources = listed
+            .skills
+            .iter()
+            .filter_map(|skill| skill.resources.as_ref())
+            .flatten()
+            .map(|resource| {
+                let name = resource
+                    .uri
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(resource.uri.as_str());
+                rmcp::model::Resource::new(resource.uri.clone(), name.to_string())
+            })
+            .collect();
+        Ok(rmcp::model::ListResourcesResult::with_all_items(resources))
+    }
+
+    /// Read one skill file. Resolution is by lookup against the catalog's own
+    /// enumeration, so `resources/read` and a skill entry's `resources` cannot
+    /// disagree — which SEP-2640 requires, since a host must treat a read of an
+    /// unlisted file as a verification failure.
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
+        let catalog = self.skill_catalog()?;
+        let file = catalog.read(&request.uri).await.map_err(skills_error)?;
+        let contents = match file.body {
+            SkillFileBody::Text(text) => rmcp::model::ResourceContents::TextResourceContents {
+                uri: file.uri,
+                mime_type: file.mime_type,
+                text,
+                meta: None,
+            },
+            SkillFileBody::Blob(blob) => rmcp::model::ResourceContents::BlobResourceContents {
+                uri: file.uri,
+                mime_type: file.mime_type,
+                blob,
+                meta: None,
+            },
+        };
+        Ok(rmcp::model::ReadResourceResponse::Complete(
+            rmcp::model::ReadResourceResult::new(vec![contents]),
+        ))
     }
 }
 
@@ -1247,6 +1419,73 @@ mod tests {
         }
     }
 
+    /// A one-skill catalog: `skill://demo/SKILL.md` plus one supporting file.
+    struct StubCatalog;
+
+    impl StubCatalog {
+        fn entry() -> bitrouter_sdk::mcp::skills::SkillEntry {
+            let frontmatter = match serde_json::json!({
+                "name": "demo",
+                "description": "A demo skill",
+            }) {
+                serde_json::Value::Object(map) => map,
+                _ => serde_json::Map::new(),
+            };
+            bitrouter_sdk::mcp::skills::SkillEntry {
+                uri: "skill://demo/SKILL.md".into(),
+                frontmatter,
+                resources: Some(vec![
+                    bitrouter_sdk::mcp::skills::SkillResource {
+                        uri: "skill://demo/SKILL.md".into(),
+                        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    },
+                    bitrouter_sdk::mcp::skills::SkillResource {
+                        uri: "skill://demo/refs/GUIDE.md".into(),
+                        digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                    },
+                ]),
+                extra: serde_json::Map::new(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SkillCatalog for StubCatalog {
+        async fn list(&self) -> Result<bitrouter_sdk::mcp::skills::ListSkillsResult, ToolError> {
+            Ok(bitrouter_sdk::mcp::skills::ListSkillsResult {
+                skills: vec![Self::entry()],
+            })
+        }
+        async fn get(
+            &self,
+            uri: &str,
+        ) -> Result<bitrouter_sdk::mcp::skills::GetSkillResult, ToolError> {
+            if uri == "skill://demo/SKILL.md" {
+                Ok(bitrouter_sdk::mcp::skills::GetSkillResult {
+                    skill: Self::entry(),
+                })
+            } else {
+                Err(ToolError::new(format!("no installed skill at '{uri}'")))
+            }
+        }
+        async fn read(
+            &self,
+            uri: &str,
+        ) -> Result<crate::capabilities::skill_catalog::SkillFile, ToolError> {
+            if uri == "skill://demo/SKILL.md" {
+                Ok(crate::capabilities::skill_catalog::SkillFile {
+                    uri: uri.to_string(),
+                    mime_type: Some("text/markdown".into()),
+                    body: SkillFileBody::Text("# Demo".into()),
+                })
+            } else {
+                Err(ToolError::new(format!(
+                    "'{uri}' is not a file of any installed skill"
+                )))
+            }
+        }
+    }
+
     struct StubHuman;
     #[async_trait::async_trait]
     impl HumanBridge for StubHuman {
@@ -1270,6 +1509,54 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// The origin server knows its own catalog at build time, so unlike the
+    /// gateway it declares the extension only when it can actually serve it.
+    #[test]
+    fn skills_extension_is_declared_only_when_a_catalog_is_wired() {
+        let without = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .build();
+        let caps = without.get_info().capabilities;
+        assert!(caps.extensions.is_none(), "no catalog, no extension");
+        assert!(caps.resources.is_none(), "no catalog, no resources");
+
+        let with = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .skill_catalog(Arc::new(StubCatalog))
+            .build();
+        let caps = with.get_info().capabilities;
+        let extensions = caps.extensions.expect("extension declared");
+        assert!(extensions.contains_key("io.modelcontextprotocol/skills"));
+        // Skills ride on `resources/read`, so the resources capability must
+        // come with them.
+        assert!(caps.resources.is_some(), "resources declared alongside");
+        // `directoryRead` is not claimed: an entry's `resources` already
+        // enumerates every file, so the optional method has nothing to add.
+        let settings = &extensions["io.modelcontextprotocol/skills"];
+        assert!(
+            settings.get("directoryRead").is_none(),
+            "directoryRead defaults to false and is not claimed: {settings:?}"
+        );
+    }
+
+    /// Wiring the SEP surface must not disturb the tool surface — the two are
+    /// independent, and the tool form is what clients can use today.
+    #[test]
+    fn skill_catalog_adds_no_tools_and_leaves_skills_tools_alone() {
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .skills(Arc::new(StubSkills))
+            .skill_catalog(Arc::new(StubCatalog))
+            .build();
+        let names = tool_names(&server);
+        assert!(names.contains(&"skills_search".to_string()));
+        assert!(names.contains(&"skills_get".to_string()));
+        assert!(
+            !names.iter().any(|n| n.contains("catalog")),
+            "the catalog is served as methods, not tools: {names:?}"
+        );
     }
 
     #[test]

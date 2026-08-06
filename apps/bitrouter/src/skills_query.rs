@@ -3,13 +3,14 @@
 //!
 //! Implements `bitrouter-mcp`'s
 //! [`SkillsQuery`] port over
-//! the installed-skills root, using `bitrouter_skills`' discovery. Read-only.
+//! the installed-skills root, using [`crate::skills::format`]'s discovery.
+//! Read-only.
 
 use std::path::PathBuf;
 
+use crate::skills::format::discover_all_skills;
 use bitrouter_mcp::capabilities::skills::SkillsQuery;
 use bitrouter_mcp::error::ToolError;
-use bitrouter_skills::frontmatter::discover_all_skills;
 
 /// Searches and fetches installed skills under a root directory.
 /// `discover_all_skills` searches `root`, `root/skills`, and

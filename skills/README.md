@@ -54,37 +54,30 @@ snapshots, candidate compilation, and publication.
 
 ## Install
 
-All three skills are installable directly from this repository; select the benchmark
-skill explicitly because the source now exposes more than one `SKILL.md`.
+All three skills are installable directly from this repository; select a
+specific skill explicitly because the source exposes more than one `SKILL.md`.
+
+BitRouter does not install skills — it *serves* them. Use the generic skills
+CLI, a plugin marketplace, or copy the directory.
 
 ```bash
-# BitRouter's own installer (subdir-aware via the registry hub)
-bitrouter skills add bitrouter
-
 # Generic skills CLI — discovers skills/ automatically
 npx skills add bitrouter/bitrouter
-
-# Claude Code (manual)
-cp -r skills/bitrouter ~/.claude/skills/
-
-# Reproducible Terminal-Bench runner skill (BitRouter installer)
-bitrouter skills add bitrouter/bitrouter --skill run-bitrouter-benchmark
-
-# Reproducible Terminal-Bench runner skill (generic skills CLI)
 npx skills add bitrouter/bitrouter --skill run-bitrouter-benchmark
-
-# Reproducible Terminal-Bench runner skill (Claude Code manual)
-cp -r skills/run-bitrouter-benchmark ~/.claude/skills/
-
-# Generic Eval Exchange evaluator skill (BitRouter installer)
-bitrouter skills add bitrouter/bitrouter --skill evaluating-bitrouter-routes
-
-# Generic Eval Exchange evaluator skill (generic skills CLI)
 npx skills add bitrouter/bitrouter --skill evaluating-bitrouter-routes
 
-# Generic Eval Exchange evaluator skill (Claude Code manual)
-cp -r skills/evaluating-bitrouter-routes ~/.claude/skills/
+# Claude Code / Codex — add this repo as a plugin marketplace, which ships
+# skills/ verbatim (see .claude-plugin/ and .agents/plugins/).
+
+# Manual
+cp -r skills/bitrouter                    ~/.claude/skills/
+cp -r skills/run-bitrouter-benchmark      ~/.claude/skills/
+cp -r skills/evaluating-bitrouter-routes  ~/.claude/skills/
 ```
+
+Once installed, `bitrouter mcp serve --backend skills` serves them to any MCP
+client over SEP-2640 (`skills/list`, `skills/get`, `resources/read`), and
+`bitrouter skills list` shows what is installed.
 
 ## Editing conventions
 

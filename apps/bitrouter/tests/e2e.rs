@@ -993,6 +993,31 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     assert_eq!(json["id"], 1);
     assert_eq!(json["result"]["protocolVersion"], "2025-06-18");
     assert!(json["result"]["capabilities"]["tools"].is_object());
+    // `resources` must be advertised: SEP-2640 skills are read through
+    // `resources/read`, and a compliant client will not issue one against a
+    // gateway that claims no resources capability.
+    assert!(
+        json["result"]["capabilities"]["resources"].is_object(),
+        "resources capability is advertised: {}",
+        json["result"]["capabilities"]
+    );
+    // The skills extension is declared optimistically — upstream capabilities
+    // are discovered lazily, so the gateway cannot know at handshake time
+    // whether any member serves skills.
+    assert!(
+        json["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/skills"].is_object(),
+        "skills extension is declared: {}",
+        json["result"]["capabilities"]
+    );
+    // `directoryRead` stays unclaimed: a client must not call the optional
+    // method against a gateway that cannot know if its members implement it.
+    assert!(
+        json["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/skills"]
+            ["directoryRead"]
+            .is_null(),
+        "directoryRead is not claimed: {}",
+        json["result"]["capabilities"]
+    );
     assert_eq!(
         json["result"]["serverInfo"]["name"],
         "bitrouter-mcp-gateway"
