@@ -34,9 +34,9 @@ pub struct ScopeArgs {
 pub struct InitArgs {
     /// Skill name written into the generated frontmatter.
     pub name: String,
-    /// Output path for the SKILL.md.
-    #[arg(long, short = 'o', default_value = "SKILL.md")]
-    pub output: PathBuf,
+    /// Output path for the SKILL.md (default: <NAME>/SKILL.md).
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
 }
 
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
@@ -47,7 +47,10 @@ pub fn run(action: SkillsAction, output: &crate::output::Output) -> Result<()> {
             Ok(())
         }
         SkillsAction::Init(args) => {
-            output.emit(&commands::skills_init(&args.name, &args.output)?)?;
+            let target = args
+                .output
+                .unwrap_or_else(|| PathBuf::from(&args.name).join("SKILL.md"));
+            output.emit(&commands::skills_init(&args.name, &target)?)?;
             Ok(())
         }
     }

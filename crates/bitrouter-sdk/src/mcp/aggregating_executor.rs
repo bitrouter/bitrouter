@@ -66,6 +66,11 @@ fn matches_template_prefix(uri: &str, template: &str) -> bool {
     !literal.is_empty() && uri.starts_with(literal)
 }
 
+struct OwnerMatches<'m> {
+    owners: Vec<&'m AggregateMember>,
+    failures: Vec<String>,
+}
+
 /// Fan-out wrapper over an inner [`Executor`]. Passes [`McpTarget::Direct`]
 /// straight through to the inner; handles [`McpTarget::Aggregate`] by issuing
 /// per-member direct calls and merging the results.
@@ -299,7 +304,7 @@ impl<E: Executor> AggregatingExecutor<E> {
             .iter()
             .find_map(|m| strip_label(&m.server_name, uri).map(|rest| (m, rest)))
             .ok_or_else(|| {
-                BitrouterError::NotFound(format!(
+                BitrouterError::bad_request(format!(
                     "mcp aggregate skills/get: '{uri}' names no configured member. Aggregated \
                      skill URIs are '{SKILL_SCHEME}<server>/<skill-path>/SKILL.md'."
                 ))
@@ -307,7 +312,7 @@ impl<E: Executor> AggregatingExecutor<E> {
 
         let mut sub_req = Self::direct_request(request, member);
         if let Some(params) = sub_req.params.as_object_mut() {
-            params.insert("uri".to_string(), upstream_uri.into());
+            params.insert("uri".to_string(), upstream_uri.clone().into());
         }
         let response = self
             .inner
@@ -324,16 +329,46 @@ impl<E: Executor> AggregatingExecutor<E> {
                     member.server_name
                 ),
             })?;
+        let returned_uri = entry
+            .get("uri")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| BitrouterError::Upstream {
+                status: 502,
+                message: format!(
+                    "mcp aggregate skills/get: '{}' returned a skill without a string uri",
+                    member.server_name
+                ),
+            })?;
+        if returned_uri != upstream_uri {
+            return Err(BitrouterError::Upstream {
+                status: 502,
+                message: format!(
+                    "mcp aggregate skills/get: '{}' returned '{returned_uri}' when \
+                     '{upstream_uri}' was requested",
+                    member.server_name
+                ),
+            });
+        }
         let namespaced = namespace_entry(&member.server_name, entry).ok_or_else(|| {
             BitrouterError::Upstream {
                 status: 502,
                 message: format!(
-                    "mcp aggregate skills/get: '{}' returned a skill whose uri is missing or \
-                     not '{SKILL_SCHEME}'-schemed; it cannot be namespaced",
+                    "mcp aggregate skills/get: '{}' returned a malformed skill entry that \
+                     cannot be namespaced under '{SKILL_SCHEME}'",
                     member.server_name
                 ),
             }
         })?;
+        if namespaced.get("uri").and_then(|value| value.as_str()) != Some(uri) {
+            return Err(BitrouterError::Upstream {
+                status: 502,
+                message: format!(
+                    "mcp aggregate skills/get: '{}' returned a skill that does not map back to \
+                     '{uri}'",
+                    member.server_name
+                ),
+            });
+        }
         Ok(McpResponse {
             request_id: request.request_id.clone(),
             result: serde_json::json!({ "skill": namespaced }),
@@ -430,10 +465,10 @@ impl<E: Executor> AggregatingExecutor<E> {
         }
         // Tier 2 — an upstream's own URI, which we never rewrote. Forward it
         // exactly as the client sent it.
-        let owners = self.index_owners(members, request, uri).await;
+        let owners = self.index_owners(members, request, uri).await?;
         match owners.as_slice() {
             [only] => Ok((only, uri.to_string())),
-            [] => Err(BitrouterError::NotFound(format!(
+            [] => Err(BitrouterError::bad_request(format!(
                 "mcp aggregate resources/read: no configured member enumerates '{uri}'. \
                  The aggregate endpoint serves the resources its members publish; \
                  read this one from its server's direct route (POST /mcp/{{server}})."
@@ -465,34 +500,57 @@ impl<E: Executor> AggregatingExecutor<E> {
         members: &'m [AggregateMember],
         request: &McpRequest,
         uri: &str,
-    ) -> Vec<&'m AggregateMember> {
+    ) -> Result<Vec<&'m AggregateMember>> {
         let exact = self
             .owners_matching(members, request, "resources/list", "resources", |entry| {
                 entry.get("uri").and_then(|v| v.as_str()) == Some(uri)
             })
             .await;
-        if !exact.is_empty() {
-            return exact;
+        if !exact.failures.is_empty() {
+            return Err(BitrouterError::Upstream {
+                status: 502,
+                message: format!(
+                    "mcp aggregate resources/read: ownership of '{uri}' is indeterminate; \
+                     resources/list failed for {}",
+                    exact.failures.join(", ")
+                ),
+            });
         }
-        self.owners_matching(
-            members,
-            request,
-            "resources/templates/list",
-            "resourceTemplates",
-            |entry| {
-                entry
-                    .get("uriTemplate")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|t| matches_template_prefix(uri, t))
-            },
-        )
-        .await
+        if !exact.owners.is_empty() {
+            return Ok(exact.owners);
+        }
+        let templates = self
+            .owners_matching(
+                members,
+                request,
+                "resources/templates/list",
+                "resourceTemplates",
+                |entry| {
+                    entry
+                        .get("uriTemplate")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|t| matches_template_prefix(uri, t))
+                },
+            )
+            .await;
+        if !templates.failures.is_empty() {
+            return Err(BitrouterError::Upstream {
+                status: 502,
+                message: format!(
+                    "mcp aggregate resources/read: ownership of '{uri}' is indeterminate; \
+                     resources/templates/list failed for {}",
+                    templates.failures.join(", ")
+                ),
+            });
+        }
+        Ok(templates.owners)
     }
 
     /// Members whose `method` enumeration contains an entry satisfying
-    /// `predicate`. A member whose enumeration fails contributes nothing and
-    /// is logged: failing closed can only ever narrow the candidate set, never
-    /// misroute.
+    /// `predicate`, plus every member whose enumeration was indeterminate.
+    /// Callers must reject an ownership decision while failures are present:
+    /// dropping a failed member could turn a real collision into an apparent
+    /// unique owner and silently misroute the read.
     async fn owners_matching<'m>(
         &self,
         members: &'m [AggregateMember],
@@ -500,7 +558,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         method: &str,
         list_key: &str,
         predicate: impl Fn(&serde_json::Value) -> bool,
-    ) -> Vec<&'m AggregateMember> {
+    ) -> OwnerMatches<'m> {
         let calls = members.iter().map(|member| {
             let mut sub_req = Self::direct_request(request, member);
             sub_req.method = method.to_string();
@@ -509,28 +567,26 @@ impl<E: Executor> AggregatingExecutor<E> {
             async move { (member, self.inner.execute(&target, &sub_req).await) }
         });
         let mut owners = Vec::new();
+        let mut failures = Vec::new();
         for (member, outcome) in futures::future::join_all(calls).await {
             match outcome {
                 Ok(resp) => {
-                    let matched = resp
-                        .result
-                        .get(list_key)
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|entries| entries.iter().any(&predicate));
+                    let Some(entries) = resp.result.get(list_key).and_then(|v| v.as_array()) else {
+                        failures.push(format!(
+                            "{} (missing or non-array '{list_key}')",
+                            member.server_name
+                        ));
+                        continue;
+                    };
+                    let matched = entries.iter().any(&predicate);
                     if matched {
                         owners.push(member);
                     }
                 }
-                Err(e) => tracing::warn!(
-                    server = %member.server_name,
-                    method,
-                    error = %e,
-                    "mcp aggregate: member enumeration failed; \
-                     it cannot own the requested resource",
-                ),
+                Err(e) => failures.push(format!("{} ({e})", member.server_name)),
             }
         }
-        owners
+        OwnerMatches { owners, failures }
     }
 
     async fn dispatch_aggregate(
@@ -906,10 +962,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resources_read_unlisted_uri_points_at_the_direct_route() {
+    async fn resources_read_does_not_guess_when_enumeration_fails() {
+        let inner = CannedExecutor::new()
+            .with_err(
+                "a:resources/list",
+                BitrouterError::Upstream {
+                    status: 502,
+                    message: "list unavailable".into(),
+                },
+            )
+            .with("b:resources/list", listing(&["x://shared"]))
+            .with("b", serde_json::json!({"contents": ["must not dispatch"]}));
+        let exec = AggregatingExecutor::new(Arc::new(inner));
+        let target = McpTarget::Aggregate {
+            members: vec![member("a"), member("b")],
+        };
+
+        let err = exec
+            .execute(
+                &target,
+                &agg_req("resources/read", serde_json::json!({ "uri": "x://shared" })),
+            )
+            .await
+            .expect_err("ownership is indeterminate while one member cannot enumerate");
+        assert_eq!(err.status(), 502);
+        assert!(err.to_string().contains("indeterminate"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resources_read_unlisted_uri_is_invalid_params() {
         let inner = CannedExecutor::new()
             .with("a:resources/list", listing(&["x://other"]))
-            .with("a:resources/templates/list", serde_json::json!({}));
+            .with(
+                "a:resources/templates/list",
+                serde_json::json!({"resourceTemplates": []}),
+            );
         let exec = AggregatingExecutor::new(Arc::new(inner));
         let target = McpTarget::Aggregate {
             members: vec![member("a")],
@@ -921,7 +1008,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(err.status(), 404);
+        assert_eq!(err.status(), 400);
         assert!(
             err.to_string().contains("/mcp/"),
             "names the direct route: {err}"
@@ -933,7 +1020,10 @@ mod tests {
         let inner = CannedExecutor::new()
             .with("a:resources/list", listing(&[]))
             .with("b:resources/list", listing(&[]))
-            .with("a:resources/templates/list", serde_json::json!({}))
+            .with(
+                "a:resources/templates/list",
+                serde_json::json!({"resourceTemplates": []}),
+            )
             .with(
                 "b:resources/templates/list",
                 serde_json::json!({"resourceTemplates": [{"uriTemplate": "db://rows/{id}"}]}),
@@ -1145,10 +1235,10 @@ mod tests {
                 "uri": uri,
                 "frontmatter": {"name": name, "description": "d"},
                 "resources": [
-                    {"uri": uri, "digest": "sha256:aa"},
+                    {"uri": uri, "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                     {"uri": format!("{}/examples/email.md",
                         uri.strip_suffix("/SKILL.md").unwrap_or(uri)),
-                     "digest": "sha256:bb"}
+                     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
                 ]
             }]
         })
@@ -1204,8 +1294,14 @@ mod tests {
                 );
             }
             // ...and digests did not, because they are over content bytes.
-            assert_eq!(resources[0]["digest"], "sha256:aa");
-            assert_eq!(resources[1]["digest"], "sha256:bb");
+            assert_eq!(
+                resources[0]["digest"],
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            );
+            assert_eq!(
+                resources[1]["digest"],
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            );
         }
     }
 
@@ -1273,7 +1369,7 @@ mod tests {
             serde_json::json!({"skill": {
                 "uri": "skill://refunds/SKILL.md",
                 "frontmatter": {"name": "refunds", "description": "d"},
-                "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aa"}]
+                "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
             }}),
         );
         let exec = AggregatingExecutor::new(Arc::new(inner));
@@ -1295,11 +1391,45 @@ mod tests {
             resp.result["skill"]["resources"][0]["uri"],
             "skill://acme/refunds/SKILL.md"
         );
-        assert_eq!(resp.result["skill"]["resources"][0]["digest"], "sha256:aa");
+        assert_eq!(
+            resp.result["skill"]["resources"][0]["digest"],
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     #[tokio::test]
-    async fn skills_get_with_an_unknown_label_is_404() {
+    async fn skills_get_rejects_a_different_skill_than_the_one_requested() {
+        let inner = CannedExecutor::new().with(
+            "acme:skills/get",
+            serde_json::json!({"skill": {
+                "uri": "skill://bar/SKILL.md",
+                "frontmatter": {"name": "bar", "description": "d"},
+                "resources": [{
+                    "uri": "skill://bar/SKILL.md",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }]
+            }}),
+        );
+        let exec = AggregatingExecutor::new(Arc::new(inner));
+        let target = McpTarget::Aggregate {
+            members: vec![member("acme")],
+        };
+
+        let err = exec
+            .execute(
+                &target,
+                &agg_req(
+                    "skills/get",
+                    serde_json::json!({"uri": "skill://acme/foo/SKILL.md"}),
+                ),
+            )
+            .await
+            .expect_err("an upstream must not substitute a different skill");
+        assert_eq!(err.status(), 502);
+    }
+
+    #[tokio::test]
+    async fn skills_get_with_an_unknown_label_is_invalid_params() {
         let inner = CannedExecutor::new();
         let exec = AggregatingExecutor::new(Arc::new(inner));
         let target = McpTarget::Aggregate {
@@ -1315,7 +1445,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(err.status(), 404);
+        assert_eq!(err.status(), 400);
     }
 
     #[tokio::test]

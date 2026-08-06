@@ -10,28 +10,23 @@
 //!
 //! ## URI derivation
 //!
-//! SEP-2640 requires the final `<skill-path>` segment of a skill's URI to equal
-//! its frontmatter `name`. That does **not** hold for the installed directory
-//! name, and BitRouter cannot make it hold: it no longer installs skills, so it
-//! does not control how this directory is laid out. Whatever populated it —
-//! `npx skills add`, a plugin marketplace, a human with `mkdir` — chose the
-//! directory name, and nothing obliges that name to match the frontmatter.
+//! A published skill must satisfy the Agent Skills format: its directory name
+//! equals `frontmatter.name`, and the name/description obey the format bounds.
+//! Invalid on-disk entries are skipped rather than repaired into a shape whose
+//! `SKILL.md` would still fail host verification.
 //!
-//! The URI is therefore derived from the frontmatter name, never the directory:
-//!
-//! | Case | URI |
-//! |---|---|
-//! | directory name == frontmatter name | `skill://<name>/SKILL.md` |
-//! | they differ | `skill://<dir>/<name>/SKILL.md` |
-//!
-//! Both satisfy the invariant — in the second form `<dir>` is the
-//! "server-chosen organizational prefix" the SEP permits — and the second form
-//! also keeps two skills that share a frontmatter name distinguishable.
+//! Project-local `.claude/skills/<name>` entries use the compact
+//! `skill://<name>/SKILL.md` form. A same-named bundled entry under
+//! `skills/<name>` uses `skill://skills/<name>/SKILL.md`; `skills` is the
+//! server-chosen organizational prefix SEP-2640 permits. This keeps two valid
+//! skills from distinct conventional roots addressable without weakening the
+//! directory/name invariant.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::skills::format::{SkillFrontmatter, discover_all_skills};
+use crate::skills::format::{SkillFrontmatter, discover_all_skills, is_safe_installed_path};
+use crate::skills::{is_valid_skill_description, is_valid_skill_name};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
@@ -69,12 +64,19 @@ impl InstalledSkillCatalog {
             let Some(skill_dir) = skill_md.parent() else {
                 continue;
             };
-            let uri = match skill_uri(skill_dir, &fm) {
+            if !is_safe_installed_path(root, &skill_md) {
+                tracing::warn!(
+                    path = %skill_md.display(),
+                    "skills catalog: path escapes the configured root or traverses a symlink; skipped",
+                );
+                continue;
+            }
+            let uri = match skill_uri(root, skill_dir, &fm) {
                 Some(uri) => uri,
                 None => {
                     tracing::warn!(
                         path = %skill_md.display(),
-                        "skills catalog: skill directory has no usable name; skipped",
+                        "skills catalog: skill does not satisfy Agent Skills name, directory, or description rules; skipped",
                     );
                     continue;
                 }
@@ -178,18 +180,20 @@ impl SkillCatalog for InstalledSkillCatalog {
 
 /// The on-disk path for `wanted`, if it is one of `entry`'s enumerated files.
 ///
-/// Rebuilds each resource's path the same way [`enumerate_resources`] built its
-/// URI — by joining the file's skill-relative suffix onto the skill directory
-/// — so the two cannot disagree.
+/// Re-enumerates the skill and derives each candidate URI with the same
+/// segment encoder as [`enumerate_resources`], so an encoded URI is never
+/// decoded into an ambiguous or traversal-capable path.
 fn resource_path(root: &Path, entry: &SkillEntry, wanted: &str) -> Option<PathBuf> {
     let resources = entry.resources.as_ref()?;
     if !resources.iter().any(|r| r.uri == wanted) {
         return None;
     }
-    let base = entry.uri.strip_suffix("SKILL.md")?;
-    let relative = wanted.strip_prefix(base)?;
     let skill_dir = skill_dir_for(root, entry)?;
-    Some(skill_dir.join(relative))
+    let mut files = Vec::new();
+    collect_files(&skill_dir, &mut files).ok()?;
+    files.into_iter().find(|path| {
+        resource_uri_for_path(&skill_dir, &entry.uri, path).is_ok_and(|uri| uri == wanted)
+    })
 }
 
 /// The directory holding `entry`'s `SKILL.md`, found by re-running discovery
@@ -197,8 +201,12 @@ fn resource_path(root: &Path, entry: &SkillEntry, wanted: &str) -> Option<PathBu
 /// is not invertible to a path.
 fn skill_dir_for(root: &Path, entry: &SkillEntry) -> Option<PathBuf> {
     discover_all_skills(root).into_iter().find_map(|(md, fm)| {
+        if !is_safe_installed_path(root, &md) {
+            return None;
+        }
         let dir = md.parent()?;
-        (skill_uri(dir, &fm).as_deref() == Some(entry.uri.as_str())).then(|| dir.to_path_buf())
+        (skill_uri(root, dir, &fm).as_deref() == Some(entry.uri.as_str()))
+            .then(|| dir.to_path_buf())
     })
 }
 
@@ -222,35 +230,39 @@ fn mime_type_for(path: &Path) -> &'static str {
 ///
 /// Returns `None` when the directory has no usable final component, which
 /// would leave nothing to build a path from.
-fn skill_uri(skill_dir: &Path, fm: &SkillFrontmatter) -> Option<String> {
+fn skill_uri(root: &Path, skill_dir: &Path, fm: &SkillFrontmatter) -> Option<String> {
     let dir_name = skill_dir.file_name()?.to_str()?;
-    if dir_name == fm.name {
-        Some(format!("{SKILL_SCHEME}{}/SKILL.md", fm.name))
-    } else {
-        Some(format!("{SKILL_SCHEME}{dir_name}/{}/SKILL.md", fm.name))
+    if dir_name != fm.name
+        || !is_valid_skill_name(&fm.name)
+        || !is_valid_skill_description(&fm.description)
+    {
+        return None;
     }
+
+    let relative = skill_dir.strip_prefix(root).ok()?;
+    let prefix = if relative.as_os_str().is_empty() {
+        "root-direct/"
+    } else if relative == Path::new(".claude/skills") {
+        "claude-root/"
+    } else if relative.starts_with(Path::new(".claude/skills")) {
+        ""
+    } else if relative == Path::new("skills") {
+        "skills-root/"
+    } else if relative.starts_with(Path::new("skills")) {
+        "skills/"
+    } else {
+        "root/"
+    };
+    Some(format!("{SKILL_SCHEME}{prefix}{}/SKILL.md", fm.name))
 }
 
 /// Render parsed frontmatter back to the JSON object the SEP calls for.
 ///
-/// The SEP wants the frontmatter "verbatim", but `SkillFrontmatter` only
-/// models `name`, `description`, and a freeform `metadata` map, so anything
-/// else the author wrote is already lost upstream of here. Emitting the three
-/// modelled fields keeps the required ones (`name`, `description`) exact; see
-/// the module-level note in the spec about widening this later.
+/// `SkillFrontmatter::raw` is captured from the same YAML block as the typed
+/// fields, so standard optional fields, unknown future fields, and meaningful
+/// empty objects survive unchanged as JSON content.
 fn frontmatter_to_json(fm: &SkillFrontmatter) -> serde_json::Map<String, serde_json::Value> {
-    let mut map = serde_json::Map::new();
-    map.insert("name".to_string(), fm.name.clone().into());
-    map.insert("description".to_string(), fm.description.clone().into());
-    if !fm.metadata.is_empty() {
-        let metadata: serde_json::Map<String, serde_json::Value> = fm
-            .metadata
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        map.insert("metadata".to_string(), metadata.into());
-    }
-    map
+    fm.raw.clone()
 }
 
 /// Every file in `skill_dir`, paired with the digest of its bytes.
@@ -262,10 +274,8 @@ fn frontmatter_to_json(fm: &SkillFrontmatter) -> serde_json::Map<String, serde_j
 ///
 /// Symlinks are skipped rather than followed: a link inside a skill directory
 /// can point anywhere, and serving its target would place bytes from outside
-/// the skill under the skill's URI space. `install.rs` already skips them when
-/// installing, so an installed skill has none.
+/// the skill under the skill's URI space.
 fn enumerate_resources(skill_dir: &Path, skill_uri: &str) -> std::io::Result<Vec<SkillResource>> {
-    let base = skill_uri.strip_suffix("SKILL.md").unwrap_or(skill_uri);
     let mut files = Vec::new();
     collect_files(skill_dir, &mut files)?;
     // Deterministic order: the listing and its digests must not depend on
@@ -273,20 +283,70 @@ fn enumerate_resources(skill_dir: &Path, skill_uri: &str) -> std::io::Result<Vec
     files.sort();
     let mut resources = Vec::with_capacity(files.len());
     for path in files {
-        let Ok(relative) = path.strip_prefix(skill_dir) else {
-            continue;
-        };
-        let Some(relative) = relative.to_str() else {
-            continue;
-        };
-        // Resource URIs use `/` regardless of host path separator.
-        let relative = relative.replace('\\', "/");
         resources.push(SkillResource {
-            uri: format!("{base}{relative}"),
+            uri: resource_uri_for_path(skill_dir, skill_uri, &path)?,
             digest: digest_file(&path)?,
         });
     }
     Ok(resources)
+}
+
+/// Convert one skill-relative filesystem path to its canonical resource URI.
+///
+/// Encoding happens per path segment and uses only RFC 3986 unreserved bytes
+/// verbatim. This prevents a filename containing `#`, `?`, `%`, whitespace, or
+/// Unicode from changing URI structure. An OS path that is not UTF-8 rejects
+/// the whole skill instead of silently producing an incomplete manifest.
+fn resource_uri_for_path(
+    skill_dir: &Path,
+    skill_uri: &str,
+    path: &Path,
+) -> std::io::Result<String> {
+    let relative = path.strip_prefix(skill_dir).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "skill resource is outside its skill directory",
+        )
+    })?;
+    let mut encoded_segments = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(segment) = component else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "skill resource path contains a non-normal component",
+            ));
+        };
+        let segment = segment.to_str().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "skill resource path is not valid UTF-8",
+            )
+        })?;
+        encoded_segments.push(percent_encode_uri_segment(segment));
+    }
+    if encoded_segments.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "skill resource path is empty",
+        ));
+    }
+    let base = skill_uri.strip_suffix("SKILL.md").unwrap_or(skill_uri);
+    Ok(format!("{base}{}", encoded_segments.join("/")))
+}
+
+fn percent_encode_uri_segment(segment: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
 }
 
 /// Recursively collect regular files under `dir`, skipping symlinks.
@@ -404,50 +464,166 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn final_uri_segment_always_equals_the_frontmatter_name() {
+    async fn lists_verbatim_frontmatter() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // Directory name matches.
+        let skill_dir = dir.path().join(".claude").join("skills").join("alpha");
+        std::fs::create_dir_all(&skill_dir).expect("mkdir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: alpha\ndescription: d\nlicense: Apache-2.0\ncompatibility: Requires jq\nallowed-tools: Bash(jq:*) Read\nx-future:\n  nested: true\n---\n\n# Body\n",
+        )
+        .expect("write SKILL.md");
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
+        let listed = catalog.list().await.expect("list");
+        assert_eq!(
+            listed.skills[0].frontmatter,
+            serde_json::json!({
+                "name": "alpha",
+                "description": "d",
+                "license": "Apache-2.0",
+                "compatibility": "Requires jq",
+                "allowed-tools": "Bash(jq:*) Read",
+                "x-future": {"nested": true},
+            })
+            .as_object()
+            .expect("object")
+            .clone(),
+            "the SEP requires every frontmatter field to pass through"
+        );
+    }
+
+    #[tokio::test]
+    async fn directory_name_must_match_the_frontmatter_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
         install_skill(dir.path(), "alpha", "alpha", &[]);
-        // Directory name differs — what `skills update` produces when the
-        // upstream frontmatter name has drifted.
         install_skill(dir.path(), "pinned-dir", "upstream-name", &[]);
         let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
 
         let listed = catalog.list().await.expect("list");
-        assert_eq!(listed.skills.len(), 2);
-        for entry in &listed.skills {
-            let name = entry.frontmatter["name"].as_str().expect("name");
-            let final_segment = entry
-                .uri
-                .strip_suffix("/SKILL.md")
-                .and_then(|p| p.rsplit('/').next())
-                .expect("final segment");
-            assert_eq!(
-                final_segment, name,
-                "SEP-2640 requires the final path segment to be the name: {}",
-                entry.uri
-            );
+        assert_eq!(listed.skills.len(), 1, "invalid skills are not published");
+        assert_eq!(listed.skills[0].uri, "skill://alpha/SKILL.md");
+    }
+
+    #[tokio::test]
+    async fn invalid_agent_skill_names_are_not_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["UPPER", "under_score", "has--gap", "-leading", "trailing-"] {
+            install_skill(dir.path(), name, name, &[]);
         }
-        let uris: Vec<&str> = listed.skills.iter().map(|s| s.uri.as_str()).collect();
-        assert!(uris.contains(&"skill://alpha/SKILL.md"));
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
         assert!(
-            uris.contains(&"skill://pinned-dir/upstream-name/SKILL.md"),
-            "install_as keeps the directory as an organizational prefix: {uris:?}"
+            catalog.list().await.expect("list").skills.is_empty(),
+            "SEP entries must satisfy the Agent Skills name grammar"
         );
+    }
+
+    #[tokio::test]
+    async fn overlong_agent_skill_name_is_not_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let name = "a".repeat(65);
+        install_skill(dir.path(), &name, &name, &[]);
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
+        assert!(catalog.list().await.expect("list").skills.is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_agent_skill_description_is_not_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        install_skill(dir.path(), "alpha", "alpha", &[]);
+        let skill_md = dir
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("alpha")
+            .join("SKILL.md");
+        std::fs::write(skill_md, "---\nname: alpha\ndescription: ''\n---\n").expect("write");
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
+        assert!(catalog.list().await.expect("list").skills.is_empty());
+    }
+
+    #[tokio::test]
+    async fn overlong_agent_skill_description_is_not_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        install_skill(dir.path(), "alpha", "alpha", &[]);
+        let skill_md = dir
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("alpha")
+            .join("SKILL.md");
+        std::fs::write(
+            skill_md,
+            format!("---\nname: alpha\ndescription: {}\n---\n", "d".repeat(1025)),
+        )
+        .expect("write");
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
+        assert!(catalog.list().await.expect("list").skills.is_empty());
     }
 
     #[tokio::test]
     async fn two_skills_sharing_a_name_stay_distinguishable() {
         let dir = tempfile::tempdir().expect("tempdir");
         install_skill(dir.path(), "refunds", "refunds", &[]);
-        install_skill(dir.path(), "billing-refunds", "refunds", &[]);
+        let bundled = dir.path().join("skills").join("refunds");
+        std::fs::create_dir_all(&bundled).expect("mkdir bundled skill");
+        std::fs::write(
+            bundled.join("SKILL.md"),
+            "---\nname: refunds\ndescription: bundled\n---\n",
+        )
+        .expect("write bundled skill");
         let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
 
         let listed = catalog.list().await.expect("list");
         assert_eq!(listed.skills.len(), 2, "neither is dropped");
         let uris: std::collections::BTreeSet<&str> =
             listed.skills.iter().map(|s| s.uri.as_str()).collect();
-        assert_eq!(uris.len(), 2, "distinct URIs: {uris:?}");
+        assert_eq!(
+            uris,
+            [
+                "skill://refunds/SKILL.md",
+                "skill://skills/refunds/SKILL.md"
+            ]
+            .into_iter()
+            .collect(),
+            "the conventional source root is an organizational prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_discovery_root_has_an_injective_uri_namespace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("workspace");
+        for (relative, name) in [
+            ("", "workspace"),
+            ("workspace", "workspace"),
+            ("skills", "skills"),
+            ("skills/skills", "skills"),
+            (".claude/skills", "skills"),
+            (".claude/skills/skills", "skills"),
+        ] {
+            let skill_dir = root.join(relative);
+            std::fs::create_dir_all(&skill_dir).expect("mkdir skill");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\n"),
+            )
+            .expect("write skill");
+        }
+        let catalog = InstalledSkillCatalog::new(root);
+
+        let listed = catalog.list().await.expect("list");
+        let uris: std::collections::BTreeSet<&str> = listed
+            .skills
+            .iter()
+            .map(|skill| skill.uri.as_str())
+            .collect();
+        assert_eq!(listed.skills.len(), 6, "no valid skill is dropped");
+        assert_eq!(uris.len(), 6, "every discovered directory has a unique URI");
     }
 
     #[tokio::test]
@@ -494,6 +670,92 @@ mod tests {
             resources.iter().all(|r| !r.uri.ends_with("leak.txt")),
             "symlink is not enumerated: {resources:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinked_skill_directory_outside_the_workspace_is_not_published() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let outside_skill = outside.path().join("evil");
+        std::fs::create_dir_all(&outside_skill).expect("mkdir outside skill");
+        std::fs::write(
+            outside_skill.join("SKILL.md"),
+            "---\nname: evil\ndescription: d\n---\n",
+        )
+        .expect("write outside skill");
+        std::fs::write(outside_skill.join("secret.txt"), "secret").expect("write secret");
+
+        let search_root = workspace.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&search_root).expect("mkdir search root");
+        std::os::unix::fs::symlink(&outside_skill, search_root.join("evil"))
+            .expect("symlink skill directory");
+
+        let catalog = InstalledSkillCatalog::new(workspace.path().to_path_buf());
+        assert!(
+            catalog.list().await.expect("list").skills.is_empty(),
+            "a directory symlink must not publish files outside the configured workspace"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resource_uri_percent_encodes_each_path_segment_and_remains_readable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        install_skill(
+            dir.path(),
+            "encoded",
+            "encoded",
+            &[
+                ("a b.md", "space"),
+                ("hash#query?.txt", "reserved"),
+                ("percent%.txt", "percent"),
+                ("unicodé.md", "unicode"),
+            ],
+        );
+        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+
+        let listed = catalog.list().await.expect("list");
+        let resources = listed.skills[0]
+            .resources
+            .as_ref()
+            .expect("resources present");
+        let uris: std::collections::BTreeSet<&str> = resources
+            .iter()
+            .map(|resource| resource.uri.as_str())
+            .collect();
+        for expected in [
+            "skill://encoded/a%20b.md",
+            "skill://encoded/hash%23query%3F.txt",
+            "skill://encoded/percent%25.txt",
+            "skill://encoded/unicod%C3%A9.md",
+        ] {
+            assert!(
+                uris.contains(expected),
+                "missing encoded URI {expected}: {uris:?}"
+            );
+            catalog
+                .read(expected)
+                .await
+                .unwrap_or_else(|e| panic!("{expected} must resolve: {}", e.0));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_resource_name_cannot_be_encoded_into_a_uri() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let skill_dir = PathBuf::from("opaque");
+        let filename = OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
+        let err = resource_uri_for_path(
+            &skill_dir,
+            "skill://opaque/SKILL.md",
+            &skill_dir.join(filename),
+        )
+        .expect_err("an opaque filename cannot have a bijective UTF-8 URI mapping");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[tokio::test]
@@ -558,7 +820,7 @@ mod tests {
         install_skill(
             dir.path(),
             "pinned",
-            "drifted",
+            "pinned",
             &[("a.md", "a"), ("nested/b.json", "{}")],
         );
         let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());

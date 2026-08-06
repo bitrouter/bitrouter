@@ -980,9 +980,26 @@ pub fn skills_list(global: bool) -> Result<SkillsListReport> {
 /// `bitrouter skills init` — scaffold a SKILL.md.
 pub fn skills_init(name: &str, output: &std::path::Path) -> Result<SkillInitReport> {
     crate::skills::validate_skill_name(name)?;
+    if output.file_name().and_then(|file| file.to_str()) != Some("SKILL.md") {
+        anyhow::bail!("skill output must be named SKILL.md");
+    }
+    let declared_parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let resolved_parent = if declared_parent == std::path::Path::new(".") {
+        std::env::current_dir().context("resolving the current directory")?
+    } else {
+        declared_parent.to_path_buf()
+    };
+    if resolved_parent.file_name().and_then(|dir| dir.to_str()) != Some(name) {
+        anyhow::bail!("skill parent directory must be named '{name}' to match its frontmatter");
+    }
     if output.exists() {
         anyhow::bail!("{} already exists; refusing to overwrite", output.display());
     }
+    std::fs::create_dir_all(declared_parent)
+        .with_context(|| format!("creating {}", declared_parent.display()))?;
     let body = format!(
         "---\nname: {name}\ndescription: TODO — one line on what this skill does and when to use it.\n---\n\n# {name}\n\nTODO: instructions for the agent.\n\n## When to use\n\n## Steps\n"
     );
@@ -991,6 +1008,39 @@ pub fn skills_init(name: &str, output: &std::path::Path) -> Result<SkillInitRepo
         path: output.display().to_string(),
         created: true,
     })
+}
+
+#[cfg(test)]
+mod skills_init_tests {
+    use super::*;
+
+    #[test]
+    fn scaffold_requires_skill_md_under_the_named_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let wrong = dir.path().join("other").join("SKILL.md");
+        std::fs::create_dir_all(wrong.parent().expect("parent")).expect("mkdir");
+
+        let Err(err) = skills_init("demo", &wrong) else {
+            panic!("directory/name mismatch must be invalid");
+        };
+        assert!(err.to_string().contains("parent directory"), "{err}");
+    }
+
+    #[test]
+    fn scaffold_creates_a_valid_named_skill_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = dir.path().join("demo").join("SKILL.md");
+
+        let report = skills_init("demo", &output).expect("scaffold");
+
+        assert!(output.is_file());
+        assert_eq!(report.path, output.display().to_string());
+        let parsed = crate::skills::format::parse_frontmatter(
+            &std::fs::read_to_string(output).expect("read scaffold"),
+        )
+        .expect("valid frontmatter");
+        assert_eq!(parsed.name, "demo");
+    }
 }
 
 #[cfg(test)]

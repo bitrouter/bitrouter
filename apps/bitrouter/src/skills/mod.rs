@@ -40,9 +40,9 @@ pub enum Error {
     /// The YAML frontmatter failed to deserialize.
     #[error("frontmatter parse error: {0}")]
     Frontmatter(String),
-    /// A skill name failed validation (path-traversal / illegal characters).
+    /// A skill name failed the Agent Skills format rules.
     #[error(
-        "invalid skill name {0:?}: names may contain only ASCII letters, digits, '-', '_', '.' and may not start with '.' or contain path separators"
+        "invalid skill name {0:?}: use 1-64 lowercase ASCII letters, digits, or single hyphens; hyphens may not lead, trail, or repeat"
     )]
     InvalidSkillName(String),
     /// A filesystem operation failed.
@@ -53,25 +53,27 @@ pub enum Error {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Reject names that could escape the skills directory or carry illegal
-/// characters. Allowed: ASCII letters, digits, `-`, `_`, `.`; must be
-/// non-empty and may not start with `.` or contain a path separator or `..`.
-///
-/// A *format* rule, not an install rule — it constrains what a skill may be
-/// called, which is why it sits beside the frontmatter parser now that there is
-/// nothing to install. It stays enforced because a skill name still reaches the
-/// filesystem: `skills init` writes a file named after it, and the SEP-2640
-/// catalog builds `skill://<name>/SKILL.md` URIs from it.
+/// Whether `name` satisfies the Agent Skills name grammar.
+pub(crate) fn is_valid_skill_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+}
+
+/// Whether `description` satisfies the Agent Skills length rule.
+pub(crate) fn is_valid_skill_description(description: &str) -> bool {
+    (1..=1024).contains(&description.chars().count())
+}
+
+/// Reject a name that the Agent Skills format, and therefore the SEP catalog,
+/// cannot publish. Keeping the CLI and catalog on this one validator prevents
+/// `skills init` from scaffolding a skill the server later skips.
 pub fn validate_skill_name(name: &str) -> Result<()> {
-    let invalid = name.is_empty()
-        || name.starts_with('.')
-        || name.contains('/')
-        || name.contains('\\')
-        || name.contains("..")
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if invalid {
+    if !is_valid_skill_name(name) {
         return Err(Error::InvalidSkillName(name.to_string()));
     }
     Ok(())
@@ -83,18 +85,35 @@ mod tests {
 
     #[test]
     fn accepts_ordinary_names() {
-        for name in ["alpha", "my-skill", "my_skill", "v1.2", "a1"] {
+        for name in ["alpha", "my-skill", "a1"] {
             assert!(validate_skill_name(name).is_ok(), "{name} should be valid");
         }
     }
 
     #[test]
-    fn rejects_names_that_could_escape_the_skills_directory() {
-        for name in ["", ".hidden", "a/b", "a\\b", "..", "a..b", "sp ace", "é"] {
+    fn rejects_names_outside_the_agent_skills_grammar() {
+        for name in [
+            "",
+            ".hidden",
+            "UPPER",
+            "my_skill",
+            "v1.2",
+            "a/b",
+            "a\\b",
+            "a--b",
+            "-leading",
+            "trailing-",
+            "sp ace",
+            "é",
+        ] {
             assert!(
                 matches!(validate_skill_name(name), Err(Error::InvalidSkillName(_))),
                 "{name:?} should be rejected"
             );
         }
+        assert!(matches!(
+            validate_skill_name(&"a".repeat(65)),
+            Err(Error::InvalidSkillName(_))
+        ));
     }
 }

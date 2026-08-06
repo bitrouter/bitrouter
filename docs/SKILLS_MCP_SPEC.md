@@ -34,12 +34,15 @@ the spec had assumed something that turned out not to hold:
    access. The split also produced a duplicated `SKILL_SCHEME` constant in two
    crates, which is the exact drift the single-source rule exists to prevent.
    The line now falls in three tiers, per §5.
-2. **The URI invariant does not hold by construction, and it is worse than
-   §7 said.** `install_as` lets the installed directory name differ from the
-   frontmatter name — reached via `bitrouter skills update` (which reinstalls
-   into the existing directory when an upstream name drifts), not a CLI flag as
-   an earlier draft of the plan claimed. URIs are derived from the frontmatter
-   name; `skill://<dir>/<name>/SKILL.md` when the two differ.
+2. **Invalid filesystem skills are not repaired into valid-looking URIs.** The
+   Agent Skills specification requires `frontmatter.name` to match the parent
+   directory and constrains the name and description. The origin catalog
+   validates those rules and skips invalid entries. It also retains the entire
+   YAML mapping as JSON so optional and future frontmatter fields pass through
+   verbatim. Same-named valid skills in distinct conventional roots remain
+   addressable: `.claude/skills/refunds` uses
+   `skill://refunds/SKILL.md`, while `skills/refunds` uses the permitted
+   organizational prefix `skill://skills/refunds/SKILL.md`.
 3. **No digest mtime cache.** Planned, then dropped as unjustified complexity:
    `skills/list` is already cached at the MCP layer, and hashing a local skill
    tree is milliseconds. Adding a `Mutex` + invalidation for it would have been
@@ -72,11 +75,10 @@ status note above and §12.
 
 ## 1. Motivation
 
-BitRouter has a skills surface today, but it is shaped as a **package manager**:
-`bitrouter skills add` resolves a source, `git clone --depth 1`s it, and copies
-the tree into `.claude/skills/<name>` so a harness discovers it on disk. The
-only MCP-facing part is a pair of custom tools (`skills_search` / `skills_get`)
-served by an origin server that is injected into TUI-launched harnesses.
+Before this change BitRouter's skills surface combined a package manager with a
+pair of custom MCP tools (`skills_search` / `skills_get`). This change removes
+the package manager and leaves installation to ecosystem tooling while adding
+the SEP methods beside the compatibility tools.
 
 Three forces make that shape wrong going forward:
 
@@ -93,17 +95,17 @@ Three forces make that shape wrong going forward:
    skills ride on MCP Resources. Several implementations independently landed
    on `skill://` and diverged on structure; the SEP is the reconciliation.
    Inventing a third BitRouter-specific shape has no upside.
-3. **"Remote skill" should stop meaning "clone to disk."** Today a remote skill
-   requires a fetch, a disk write, and a host filesystem rescan. Under SEP-2640
-   it is a `resources/read` against an MCP session. That removes the install
-   step entirely — and it removes BitRouter from the host's filesystem.
+3. **"Remote skill" no longer means "clone to disk."** Under SEP-2640 it is a
+   `resources/read` against an MCP session. Removing the former install step
+   also removes BitRouter from the host's filesystem.
 
-The SEP's own rationale names our shape as a motivating server type:
+The SEP's own rationale names this shape as a motivating server type:
 
 > a skill gateway fronting an external index (unbounded)
 
-We already have that index: `marketplace.json`, served from
-`/v1/namespaces/{ns}/skills/hub` ([`marketplace.rs:96`](../crates/bitrouter-skills/src/marketplace.rs#L96)).
+BitRouter deliberately implements the bounded configured-upstream gateway,
+not registry fronting; D8 records why request-driven index fetching was
+declined along with the former package manager.
 
 ## 2. Position: server and gateway, not host
 
@@ -121,28 +123,25 @@ context."** Measured against that line, BitRouter is already compliant:
 
 | Concern | Where it would live | Actual state |
 |---|---|---|
-| Installs skills onto disk from the daemon | `install::{install,remove}` | Called **only** from [`commands.rs:1029`](../apps/bitrouter/src/commands.rs#L1029), the user-invoked CLI. No daemon path calls it. |
+| Installs skills onto disk | package-manager code | Removed. Ecosystem tools populate the directories BitRouter reads. |
 | Puts SKILL.md text into a model's context | `skill_body` | Exists **only** in [`skills_query.rs:85`](../apps/bitrouter/src/skills_query.rs#L85), reached when a model calls the `skills_get` tool. Model-driven, not host-injected. |
 | Loads skills into a harness | [`gateways.rs:47`](../apps/bitrouter/src/gateways.rs#L47) | Injects an **MCP server** into the harness. The harness (Claude Code, Codex) is the host; BitRouter is its server. |
 
-`bitrouter skills add` is a package manager, not a host: it is a peer of `npx
-skills add`, it runs under explicit user command, it puts nothing in a context
-window, and it makes no approval or execution decision. The host is whatever
-later reads `~/.claude/skills/`.
+Installation is handled by tools such as `npx skills add` and agent plugin
+marketplaces. The host is whatever later reads the installed skill or consumes
+the MCP-served entry; BitRouter does neither host-side decision.
 
 **Two rules keep it that way, and they are the normative content of this
 section:**
 
-- **R1.** No daemon code path may call `bitrouter_skills::install::*`. Skill
-  installation is a CLI-only operation, invoked by a human.
+- **R1.** BitRouter contains no skill fetching or install-to-disk path. Its
+  filesystem side is read-only.
 - **R2.** Gateway-sourced skill content must never be written to a filesystem
   skill discovery path. SEP-2640 requires that a host caching MCP-served
   content place it somewhere *excluded from every filesystem-skill discovery
-  path*; `install.rs` writes into exactly that path by design. The §8 content
-  cache therefore gets its own content-addressed store and shares no code with
-  `install.rs`.
+  path*. BitRouter has no gateway content-write path and must not add one.
 
-## 3. Verified starting state
+## 3. Verified pre-change starting state
 
 Measured in this worktree, not inferred.
 
@@ -156,7 +155,7 @@ Measured in this worktree, not inferred.
 | `cacheScope: private` is correctly declined rather than partitioned | [`caching_executor.rs:305`](../crates/bitrouter-sdk/src/mcp/caching_executor.rs#L305) |
 | Streamable HTTP exists in both directions | outbound [`transport.rs:29`](../crates/bitrouter-sdk/src/mcp/transport.rs#L29); inbound `POST /mcp`, `POST /mcp/{name}` ([`app.rs:208`](../crates/bitrouter-sdk/src/app.rs#L208)) |
 | `rmcp` 3.1.0 carries a catch-all `CustomRequest` in `ClientRequest` | `Cargo.lock:4314`; `rmcp-3.1.0/src/model.rs:948`, `:4461` |
-| Nothing outside the CLI depends on `install::*` | `rg` over `apps/`, `crates/` |
+| Package-manager code was isolated to the CLI | `rg` over the pre-change `apps/`, `crates/` |
 
 Two consequences follow directly. First, **no transport work is required** —
 both HTTP directions already exist. Second, **method passthrough needs no rmcp
@@ -198,15 +197,14 @@ the name breaks both invariants. Namespacing must happen in the **URI prefix**
 
 ## 5. Crate boundaries
 
-Three tiers. The protocol tier merges into the SDK; the port tier stays with
-its siblings; the package-manager tier does not move at all.
+Three tiers. The protocol tier lives in the SDK; the port stays with its
+siblings; filesystem parsing and catalog implementation stay in the app.
 
 | Tier | Concern | Home | Rationale |
 |---|---|---|---|
 | **1 — protocol** | `SKILL_SCHEME`, the `skills/*` method names, `SkillEntry`, `SkillResource`, `ListSkillsResult`, `GetSkillParams/Result`, URI namespacing | `bitrouter-sdk::mcp::skills` | Both halves of the gateway speak these, and so must anything that reasons about skills in flight. Pure `serde_json` — ungated, pulls no rmcp, so a consumer gets it at `default-features = false`. |
 | **2 — port** | `SkillCatalog`, `SkillFile`, `SkillFileBody` | `bitrouter-mcp::capabilities::skill_catalog` | A port is "what the app implements for the origin server", not protocol. Its five siblings — `Fleet`, `CostQuery`, `HumanBridge`, `SkillsQuery`, `RoutingQuery` — all live here; moving one to the SDK would be the inconsistency. |
-| **3 — package manager** | frontmatter parsing, source resolution, git fetch, marketplace types, install | `bitrouter-skills` (unchanged) | Already tested and hardened (argument-injection guards in `clone_into`, traversal checks in `subdir_is_safe`). Nothing about "skills is a context primitive" argues for putting a package manager inside a routing SDK — the primitive is the wire shape, not the fetch mechanism. |
-| — | Filesystem `SkillCatalog` impl | `apps/bitrouter` | Same seam as `skills_query.rs` today. |
+| **3 — filesystem** | frontmatter parsing, discovery, filesystem `SkillCatalog` impl | `apps/bitrouter/src/skills/` and `skills_catalog.rs` | These are binary-local read concerns shared by the SEP catalog, compatibility tools, and surviving `skills list` / `skills init` commands. |
 
 **Why tier 1 belongs in the SDK, stated once so it is not re-litigated.** The
 `mcp::PreRequestHook` / `RouteHook` / `ExecutionHook` traits see raw JSON
@@ -223,46 +221,10 @@ field survives a round trip. Without it, routing an upstream entry through the
 type would silently drop whatever a future SEP revision adds — for a gateway,
 quietly degrading what an upstream published.
 
-**`bitrouter-skills` is not deprecated.** Three of its five modules are
-load-bearing for the server we are building.
-
-**Corrected 2026-08-03 — it is one of five, not three.** That claim was written
-before D8 decided against registry fronting, which was the only thing that
-would have made `source.rs` and `marketplace.rs` server-side. As built:
-
-| Module | Consumed by | Server-load-bearing? |
-|---|---|---|
-| `frontmatter.rs` | `skills_catalog.rs` (SEP server) + `skills_query.rs` (tools) | **Yes** — `skills/list` MUST carry verbatim frontmatter, so something must parse `SKILL.md` |
-| `source.rs` | `commands.rs` only | No — CLI. Would have been server-side under registry fronting; D8 declined it |
-| `marketplace.rs` | `commands.rs` only | No — CLI. Same reason |
-| `install.rs` | `commands.rs` only | No — the host-adjacent module; CLI-only under R1/R2 |
-| `lib.rs` (errors, home dir) | all of the above | Shared |
-
-So the crate is now **one shared parser plus a CLI package manager**, which is
-a narrower structural story than the original argument claimed. It is still not
-deprecated, for three reasons that survive the correction:
-
-1. Deleting it means reimplementing SKILL.md frontmatter parsing for the SEP
-   server, which is the one thing the server genuinely cannot do without.
-2. `bitrouter skills add` is a shipped surface, frozen but supported (D5), and
-   the documented install path for `skills/bitrouter` in CLAUDE.md and both
-   plugin manifests.
-3. It is the only working way to get a skill onto disk while no shipping host
-   consumes MCP-served skills.
-
-If (3) ever stops being true — a host reads `skills/list` end-to-end — then
-reasons 2 and 3 weaken together and the crate is worth revisiting. Reason 1
-stands regardless.
-
-The SDK depends on `bitrouter-skills` one-way if it ever needs frontmatter
-parsing host-side; it does not absorb it. Folding `git clone` and
-install-to-disk into a crate consumers embed for *routing* is the wrong trade
-against a feature graph (`server`, `config_file`, `mcp`, `acp`) that is sliced
-precisely to avoid it.
-
-**Re-centering, not retiring.** The crate is organized as a package manager
-with a format library inside. Invert the emphasis: the format library is the
-part with two consumers and a future; install-to-disk is a CLI-only leaf.
+The former `bitrouter-skills` crate mixed the read-only format layer with git,
+registry, and installation concerns. The package-manager pieces and crate are
+removed. The small parser moved into the binary, which keeps the routing SDK
+free of distribution concerns while avoiding a dead standalone crate.
 
 ## 6. Wire types
 
@@ -329,20 +291,28 @@ consumers reach `mcp::skills::SkillEntry` directly.
 
 `bitrouter-mcp` gains a `SkillCatalog` capability alongside the existing
 `SkillsQuery`. `apps/bitrouter` implements it over the installed-skills root
-using `bitrouter_skills::frontmatter::discover_all_skills`, on the blocking
+using the binary-local `skills::format::discover_all_skills`, on the blocking
 pool, exactly as `InstalledSkills` does today.
 
 - **URIs.** `skill://<name>/SKILL.md` for a skill installed as
-  `.claude/skills/<name>`. The invariant (final segment == `frontmatter.name`)
-  holds by construction, because `install.rs` already validates the directory
-  name against the frontmatter name.
+  `.claude/skills/<name>`; `skill://skills/<name>/SKILL.md` for a same-named
+  bundled skill under `skills/<name>`. The catalog validates Agent Skills name,
+  description, and parent-directory rules before publishing an entry. Every
+  filesystem path segment is percent-encoded with RFC 3986 unreserved bytes
+  left literal, and reads resolve by re-enumerating that same mapping rather
+  than decoding URI text into a path. A symlinked discovery path, a path that
+  canonicalizes outside the configured root, or a non-UTF-8 filename rejects
+  the skill instead of publishing an incomplete or escaped manifest.
+- **Frontmatter.** The parser retains a complete JSON rendering of the YAML
+  mapping beside its typed fields. The entry therefore includes `license`,
+  `compatibility`, `allowed-tools`, and unknown future fields rather than a
+  curated subset.
 - **Digests.** SHA-256 over raw bytes of every file in the skill directory,
-  `sha256:{64 lowercase hex}`. Cached by `(path, mtime, len)`; a miss re-hashes.
-  Cheap for a local tree.
+  `sha256:{64 lowercase hex}`. The MCP listing cache avoids repeated hashing;
+  the filesystem catalog itself stays stateless.
 - **Capability declaration.** The origin server knows its own catalog at
-  startup, so it declares honestly — including `directoryRead: true`, which is
-  trivial over a filesystem walk. This is a real asymmetry with the gateway
-  (§8, D1).
+  startup, so it declares honestly. `directoryRead` remains false: the entry's
+  complete `resources` manifest already supports scoped navigation.
 - **`resources/read`.** Serves any file under a skill directory, rejecting
   traversal outside it.
 
@@ -381,6 +351,16 @@ server-chosen organizational prefix"*. The invariants survive:
   them ✓
 
 Every `resources[].uri` in the entry is rewritten with the same prefix.
+Configuration rejects labels that are not one non-empty **lowercase** ASCII
+URI segment (letters, digits, `-._~`). The lowercase rule matters because a
+URI authority is case-insensitive: allowing both `A` and `a` would create two
+configuration labels that clients may normalize to the same origin. Before
+rewriting, the gateway validates that the top-level URI ends in
+`<frontmatter.name>/SKILL.md`; a present `resources` manifest is non-empty,
+contains that top-level URI exactly once, has no duplicate URIs, keeps every
+resource within the skill directory, and gives every resource a
+`sha256:{64 lowercase hex}` digest. Malformed upstream entries are skipped and
+reported rather than published under a valid-looking BitRouter namespace.
 
 ### 8.2 Routing back
 
@@ -398,7 +378,7 @@ That statelessness is why §8.4 restricts v1 to `skill://`.
 | Inbound | Aggregate behaviour |
 |---|---|
 | `skills/list` | fan out, rewrite every `uri` and `resources[].uri`, concat; partial failures under `_bitrouterErrors` per existing convention |
-| `skills/get` | strip label from `params.uri`, dispatch to owning member, rewrite the returned entry |
+| `skills/get` | strip label from `params.uri`, dispatch to owning member, require the returned URI to equal the requested upstream URI, then rewrite the returned entry |
 | `resources/read` on `skill://` | strip label, dispatch to owning member (no `try_each`) |
 | `resources/directory/read` | deferred — see D1 |
 
@@ -464,7 +444,9 @@ Each phase is independently shippable and independently valuable.
 
 **Phase 0 — prerequisites (closes B1, B3).** Advertise `resources` in the
 gateway's `initialize`. Replace `try_each` with origin-addressed routing. Both
-are correct independent of skills; skills make them urgent.
+are correct independent of skills; skills make them urgent. If any member's
+ownership enumeration fails, routing is indeterminate and fails rather than
+silently choosing among the members that happened to answer.
 
 **Phase 1 — method passthrough (closes B2).** Relay unknown methods via
 `ClientRequest::CustomRequest` / `CustomResult`, with an allowlist so the
@@ -476,7 +458,8 @@ behaviour change; pure addition.
 
 **Phase 3 — origin server.** `skills/list` + `skills/get` over installed
 skills, filesystem `SkillCatalog` impl in `apps/bitrouter`, honest capability
-declaration including `directoryRead`. `skills_search` / `skills_get` retained.
+declaration with `directoryRead` absent/false. `skills_search` / `skills_get`
+retained.
 
 **Phase 4 — gateway aggregation.** URI namespacing (§8), label-routed
 `resources/read`, eager pagination.
@@ -523,11 +506,11 @@ feature. Resolution mechanics and the rejected alternative (label-rewriting
 as the compatibility surface (§7). Revisit only when a host we care about can
 consume SEP skills end-to-end.
 
-**D5 — `bitrouter skills add`.** *Proposed:* freeze — keep working and
-supported, stop adding surface. It is the bridge until hosts can read
-MCP-served skills, and it is the documented install path for `skills/bitrouter`
-per CLAUDE.md and both plugin manifests. Deprecating it while the SEP has no
-consumers leaves zero working surfaces.
+**D5 — package-manager surface. RESOLVED: remove.** BitRouter handles serving
+and transport, not distribution. `skills add|remove|find|update`, the
+`bitrouter-skills` crate, registry/source resolution, and install-to-disk logic
+are removed. `skills list` and `skills init` remain; ecosystem installers and
+plugin marketplaces populate the filesystem.
 
 **D6 — `_meta` prefix.** SEP-2640 reserves `io.modelcontextprotocol.skills/`
 but defines no keys, and an implementer has flagged the unspecified namespace
@@ -557,16 +540,15 @@ Everything here is a decision, not a backlog. Reopening one should start from
 the reason it was closed.
 
 - **Becoming a host.** Not in this spec, not later. §2 R1/R2.
-- **Registry fronting** (D8). Serving `marketplace.json` entries as skills
+- **Registry fronting** (D8). Serving former registry-index entries as skills
   needs complete per-file digests, which for an `owner/repo` source means
   clone-and-hash per skill. That would make an inbound MCP request trigger a
   `git clone` and a disk write on the daemon — a request-driven network-fetch
   surface on a local, typically unauthenticated listener. The capability is not
   worth that while SEP-2640 is still draft and no host consumes it. Registry
-  browsing stays the CLI's job (`bitrouter skills find` / `add`), where fetching
-  is human-initiated, which is also what keeps §2 R1 honest. A pre-warmed
-  content-addressed cache (CLI populates, daemon only reads) was considered as
-  a middle path and deferred with the rest.
+  browsing and installation stay with ecosystem tools. A pre-warmed
+  content-addressed cache was considered as a middle path and declined with
+  the rest.
 - **Archive distribution.** Removed from the SEP during review over unpacking
   attack surface. Do not implement.
 - **`resources/directory/read`, anywhere.** Not on the gateway (D1), and not on
@@ -583,30 +565,41 @@ the reason it was closed.
 |---|---|
 | SEP-2640 changes before acceptance | Real. Draft since 2026-04-23; sponsor said "2-3 weeks" on 2026-05-11 and it has been quiet since. Mitigated by building only against the settled core (`uri`, `frontmatter`, `resources[]`), which has survived every revision. |
 | Contested areas move | Archive distribution was added then removed. Single-skill-multiple-representations is unresolved (moved to Discord 2026-05-27). `_meta` namespace unspecified. All are avoided by §12 and D6. |
-| No shipping host consumer | Claude Code cannot consume MCP-served skills end-to-end as of the PR discussion. Mitigated by D4/D5 — keep the surfaces that work. |
+| No shipping host consumer | Claude Code cannot consume MCP-served skills end-to-end as of the PR discussion. Mitigated by D4 (`skills_search` / `skills_get`) and ecosystem filesystem installers. |
 | FastMCP `SkillsProvider` divergence | Reconciliation is an unresolved WG priority. If we aggregate a FastMCP upstream before that lands, its URI structure will not match §8's assumptions. Detect and skip rather than mis-rewrite. |
 | Phase 0 is a behaviour change | Advertising `resources` makes clients probe upstreams that may not implement them — the original reason for not advertising. Empty lists are the correct answer; verify against a non-resource upstream. |
 
 ## 14. Acceptance
 
-- [ ] `resources` advertised; a spec-compliant client completes `initialize` →
+- [x] `resources` advertised; a spec-compliant client completes `initialize` →
       `resources/list` → `resources/read` through `POST /mcp`.
-- [ ] Aggregate `resources/read` routes by origin; a test with two members
+- [x] Aggregate `resources/read` routes by origin; a test with two members
       serving the same URI asserts the correct member answers, not the first.
-- [ ] `skills/list` and `skills/get` traverse the gateway to a stdio upstream
+- [x] `skills/list` and `skills/get` traverse the gateway to a stdio upstream
       and an HTTP upstream.
-- [ ] `skills/list` results pass through `extract_cache_hint`; a test asserts a
+- [x] `skills/list` results pass through `extract_cache_hint`; a test asserts a
       `cacheScope: private` catalog is not cached.
-- [ ] Origin server answers `skills/list` / `skills/get` over installed skills
+- [x] Origin server answers `skills/list` / `skills/get` over installed skills
       with correct `sha256:` digests and verbatim frontmatter.
-- [ ] Aggregation rewrites `uri` and every `resources[].uri`; a test asserts the
+- [x] Aggregation rewrites `uri` and every `resources[].uri`; a test asserts the
       final path segment still equals `frontmatter.name` after rewriting.
-- [ ] Digests survive rewriting unchanged (content-addressed, asserted).
-- [ ] `skills_search` / `skills_get` still work.
-- [ ] No daemon path reaches `install::*` (R1 — assert by `rg` in review).
-- [ ] `skills/bitrouter/` updated in the same change, per CLAUDE.md, for any
-      harness-wiring or CLI change — specifically the `gateways.rs` retirement.
-- [ ] `cargo nextest run --all-features`, `cargo clippy --all-features`,
+- [x] Malformed upstream entries and unsafe origin labels cannot enter the
+      aggregate namespace; cursor pages are exhausted without weakening cache
+      hints.
+- [x] Resource manifests are non-empty when present, include `SKILL.md`
+      exactly once, contain no duplicate URI, and use valid SHA-256 digests.
+- [x] Filesystem discovery rejects symlink escapes and non-UTF-8 resource
+      names; reserved and Unicode filename bytes have a bijective
+      percent-encoded URI mapping.
+- [x] `skills/get` rejects an upstream response for any URI other than the one
+      requested.
+- [x] Unknown skill/resource URIs remain JSON-RPC `-32602` across origin,
+      relay, aggregate, and HTTP error mapping.
+- [x] Digests survive rewriting unchanged (content-addressed, asserted).
+- [x] `skills_search` / `skills_get` still work.
+- [x] Package-manager/install code is absent from the runtime and workspace.
+- [x] `skills/bitrouter/` updated in the same change for the changed CLI.
+- [x] `cargo nextest run --all-features`, `cargo clippy --all-features`,
       `cargo fmt -- --check` all clean. No `#[allow]`, no `unwrap`/`expect`/
       `panic!` in non-test code, no dead code, no re-exports from public mods.
 

@@ -1437,11 +1437,11 @@ mod tests {
                 resources: Some(vec![
                     bitrouter_sdk::mcp::skills::SkillResource {
                         uri: "skill://demo/SKILL.md".into(),
-                        digest: "sha256:aa".into(),
+                        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                     },
                     bitrouter_sdk::mcp::skills::SkillResource {
                         uri: "skill://demo/refs/GUIDE.md".into(),
-                        digest: "sha256:bb".into(),
+                        digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
                     },
                 ]),
                 extra: serde_json::Map::new(),

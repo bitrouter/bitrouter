@@ -154,6 +154,17 @@ fn skills_target() -> McpTarget {
     }
 }
 
+fn paginated_skills_target() -> McpTarget {
+    McpTarget::Direct {
+        server_name: "skills-pages".into(),
+        transport: McpTransport::Stdio {
+            command: env!("CARGO_BIN_EXE_mcp-stdio-local").to_string(),
+            args: vec!["skills-pages".to_string()],
+            env: HashMap::new(),
+        },
+    }
+}
+
 async fn skills_call(method: &str, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let executor = RmcpExecutor::new();
     let request = McpRequest::direct("skills", method, params, CallerContext::new("k", "u"));
@@ -170,7 +181,35 @@ async fn skills_list_survives_the_relay() -> anyhow::Result<()> {
     assert_eq!(skills[0]["frontmatter"]["name"], "git-workflow");
     let resources = skills[0]["resources"].as_array().expect("resources");
     assert_eq!(resources.len(), 2, "complete enumeration: {result}");
-    assert_eq!(resources[0]["digest"], "sha256:aa");
+    assert_eq!(
+        resources[0]["digest"],
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_exhausts_real_upstream_cursor_pages() -> anyhow::Result<()> {
+    let executor = RmcpExecutor::new();
+    let request = McpRequest::direct(
+        "skills-pages",
+        "skills/list",
+        serde_json::json!({}),
+        CallerContext::new("k", "u"),
+    );
+
+    let result = executor
+        .execute(&paginated_skills_target(), &request)
+        .await?
+        .result;
+
+    let skills = result["skills"].as_array().expect("skills");
+    assert_eq!(skills.len(), 2, "got: {result}");
+    assert_eq!(skills[0]["frontmatter"]["name"], "first");
+    assert_eq!(skills[1]["frontmatter"]["name"], "second");
+    assert!(result.get("nextCursor").is_none(), "got: {result}");
+    assert_eq!(result["ttlMs"], 1_000);
+    assert_eq!(result["cacheScope"], "private");
     Ok(())
 }
 

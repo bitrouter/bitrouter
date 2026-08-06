@@ -670,5 +670,7 @@ Prints installed skills (name + path) from `./.claude/skills/`, or
 bitrouter skills init <NAME> [-o|--output <PATH>]
 ```
 
-Scaffolds a starter `SKILL.md` (default `./SKILL.md`). Refuses to overwrite an
-existing file. Skill names are validated to prevent path traversal.
+Scaffolds a starter `<NAME>/SKILL.md`; `--output` may choose another path whose
+file is still named `SKILL.md` and whose parent directory equals `<NAME>`.
+Refuses to overwrite an existing file. Names follow the Agent Skills grammar:
+1–64 lowercase ASCII letters, digits, or non-leading/trailing single hyphens.

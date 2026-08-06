@@ -36,6 +36,11 @@ pub struct SkillFrontmatter {
     /// Freeform metadata map (version, author, tags, …).
     #[serde(default)]
     pub metadata: BTreeMap<String, serde_json::Value>,
+    /// The complete YAML mapping rendered as JSON, including fields this
+    /// version of BitRouter does not model. The SEP catalog publishes this
+    /// verbatim; typed fields above remain available to the CLI/tool surfaces.
+    #[serde(skip)]
+    pub raw: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Extract the YAML frontmatter block (the text between the first pair of `---`
@@ -67,7 +72,15 @@ fn extract_frontmatter_block(content: &str) -> Option<&str> {
 /// Parse the frontmatter from `SKILL.md` content.
 pub fn parse_frontmatter(content: &str) -> Result<SkillFrontmatter> {
     let block = extract_frontmatter_block(content).ok_or(Error::MissingFrontmatter)?;
-    serde_saphyr::from_str::<SkillFrontmatter>(block).map_err(|e| Error::Frontmatter(e.to_string()))
+    let mut parsed = serde_saphyr::from_str::<SkillFrontmatter>(block)
+        .map_err(|e| Error::Frontmatter(e.to_string()))?;
+    let raw = serde_saphyr::from_str::<serde_json::Value>(block)
+        .map_err(|e| Error::Frontmatter(e.to_string()))?;
+    parsed.raw = raw
+        .as_object()
+        .cloned()
+        .ok_or_else(|| Error::Frontmatter("frontmatter must be a YAML mapping".to_string()))?;
+    Ok(parsed)
 }
 
 /// The candidate directories searched for a `SKILL.md`, relative to a fetched
@@ -81,6 +94,43 @@ fn skill_search_roots(root: &Path) -> Vec<PathBuf> {
     ]
 }
 
+/// Whether `candidate` resolves inside `root` without traversing a symlink
+/// below that configured root.
+///
+/// The root itself may intentionally be a symlink selected by the operator,
+/// so it is the canonical containment anchor. Every component beneath it must
+/// be a real directory/file: otherwise discovery could read a `SKILL.md`
+/// outside the configured workspace before the catalog has a chance to reject
+/// it.
+pub(crate) fn is_safe_installed_path(root: &Path, candidate: &Path) -> bool {
+    let Ok(relative) = candidate.strip_prefix(root) else {
+        return false;
+    };
+    let (Ok(canonical_root), Ok(canonical_candidate)) =
+        (root.canonicalize(), candidate.canonicalize())
+    else {
+        return false;
+    };
+    if !canonical_candidate.starts_with(&canonical_root) {
+        return false;
+    }
+
+    let mut cursor = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(segment) = component else {
+            return false;
+        };
+        cursor.push(segment);
+        let Ok(metadata) = std::fs::symlink_metadata(&cursor) else {
+            return false;
+        };
+        if metadata.file_type().is_symlink() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Discover every `SKILL.md` reachable under `root`: a `SKILL.md` directly in
 /// `root`, or one in any immediate subdirectory of the conventional skills
 /// directories. Entries that fail to parse are skipped.
@@ -88,6 +138,9 @@ pub fn discover_all_skills(root: &Path) -> Vec<(PathBuf, SkillFrontmatter)> {
     let mut found = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut push = |path: PathBuf, found: &mut Vec<(PathBuf, SkillFrontmatter)>| {
+        if !is_safe_installed_path(root, &path) {
+            return;
+        }
         // The conventional search roots overlap (e.g. `<root>/skills/SKILL.md`
         // is both a child of `<root>` and the direct file of `<root>/skills`);
         // dedup by path so a skill is never discovered twice.
@@ -101,6 +154,9 @@ pub fn discover_all_skills(root: &Path) -> Vec<(PathBuf, SkillFrontmatter)> {
         }
     };
     for base in skill_search_roots(root) {
+        if !is_safe_installed_path(root, &base) {
+            continue;
+        }
         // A SKILL.md directly inside this base directory.
         push(base.join("SKILL.md"), &mut found);
         // A SKILL.md one level down: base/<child>/SKILL.md.

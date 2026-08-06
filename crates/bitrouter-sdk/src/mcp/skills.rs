@@ -26,9 +26,9 @@
 //! what stops that drift.
 //!
 //! The *port* a server implements to serve skills is a different concern and
-//! lives with its siblings in `bitrouter-mcp::capabilities::skill_catalog`; so
-//! does everything about fetching and installing skills, which stays in
-//! `bitrouter-skills`.
+//! lives with its siblings in `bitrouter-mcp::capabilities::skill_catalog`.
+//! Filesystem format parsing stays in the embedding app; fetching and
+//! installing skills are deliberately outside BitRouter's runtime surface.
 //!
 //! [SEP-2640]: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640
 //! [Agent Skills specification]: https://agentskills.io/specification
@@ -163,10 +163,21 @@ pub struct GetSkillResult {
     pub skill: SkillEntry,
 }
 
+/// Whether a configured server name is safe as one URI authority segment.
+pub(crate) fn is_valid_gateway_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.bytes().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'.' | b'_' | b'~')
+        })
+}
+
 /// Prefix an upstream skill URI with `label`, moving it into the gateway's
-/// namespace. Returns `None` for any URI that is not `skill://`-schemed —
-/// those are not aggregated (see the module docs).
+/// namespace. Returns `None` for an unsafe label or a URI that is not
+/// `skill://`-schemed; those entries are not aggregated (see the module docs).
 pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
+    if !is_valid_gateway_label(label) {
+        return None;
+    }
     let path = uri.strip_prefix(SKILL_SCHEME)?;
     Some(format!("{SKILL_SCHEME}{label}/{path}"))
 }
@@ -184,11 +195,85 @@ pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
 /// upstream. Returning something callers can use directly removes the trap
 /// rather than documenting it.
 pub fn strip_label(label: &str, uri: &str) -> Option<String> {
+    if !is_valid_gateway_label(label) {
+        return None;
+    }
     let path = uri
         .strip_prefix(SKILL_SCHEME)?
         .strip_prefix(label)?
         .strip_prefix('/')?;
     Some(format!("{SKILL_SCHEME}{path}"))
+}
+
+fn valid_agent_skill_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+}
+
+fn has_dot_segment(uri: &str) -> bool {
+    uri.split('/').any(|segment| {
+        matches!(
+            segment.to_ascii_lowercase().as_str(),
+            "." | ".." | "%2e" | ".%2e" | "%2e." | "%2e%2e"
+        )
+    })
+}
+
+/// Return the entry's skill-directory URI when the entry satisfies the
+/// transport-level Agent Skills invariants a gateway can verify without
+/// fetching content.
+fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let uri = entry.get("uri")?.as_str()?;
+    let parsed = url::Url::parse(uri).ok()?;
+    if parsed.scheme() != "skill"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || has_dot_segment(uri)
+    {
+        return None;
+    }
+    let root = uri.strip_suffix("/SKILL.md")?;
+    let uri_name = root.rsplit('/').next()?;
+    let frontmatter = entry.get("frontmatter")?.as_object()?;
+    let name = frontmatter.get("name")?.as_str()?;
+    let description = frontmatter.get("description")?.as_str()?;
+    if uri_name != name
+        || !valid_agent_skill_name(name)
+        || !(1..=1024).contains(&description.chars().count())
+    {
+        return None;
+    }
+    Some(root.to_string())
+}
+
+fn resource_belongs_to(root: &str, uri: &str) -> bool {
+    let parsed = match url::Url::parse(uri) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+    if parsed.scheme() != "skill"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || has_dot_segment(uri)
+    {
+        return false;
+    }
+    uri.strip_prefix(root)
+        .is_some_and(|suffix| suffix.starts_with('/') && suffix.len() > 1)
+}
+
+fn valid_sha256_digest(digest: &str) -> bool {
+    digest.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 /// Rewrite one `skills/list` / `skills/get` entry into the gateway namespace.
@@ -206,27 +291,36 @@ pub fn strip_label(label: &str, uri: &str) -> Option<String> {
 pub fn namespace_entry(label: &str, entry: &serde_json::Value) -> Option<serde_json::Value> {
     let mut entry = entry.clone();
     let object = entry.as_object_mut()?;
-    let uri = object.get("uri").and_then(|v| v.as_str())?;
-    let namespaced = namespace_uri(label, uri)?;
+    let root = validated_skill_root(object)?;
+    let uri = object.get("uri")?.as_str()?.to_string();
+    let namespaced = namespace_uri(label, &uri)?;
     object.insert("uri".to_string(), namespaced.into());
 
     // `resources` is the integrity commitment a host's approval binds to, so
     // every entry in it has to move with the skill.
-    if let Some(resources) = object.get_mut("resources").and_then(|v| v.as_array_mut()) {
+    if let Some(resources_value) = object.get_mut("resources") {
+        let resources = resources_value.as_array_mut()?;
+        if resources.is_empty() {
+            return None;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut includes_skill_md = false;
         for resource in resources.iter_mut() {
-            let Some(resource) = resource.as_object_mut() else {
-                continue;
-            };
-            let Some(uri) = resource.get("uri").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            // A resource URI outside the skill's own scheme is malformed per
-            // the SEP ("Each `uri` MUST be the skill's `SKILL.md` or a file
-            // within the skill's directory"); leave it alone rather than
-            // inventing a rewrite, and let host-side verification reject it.
-            if let Some(namespaced) = namespace_uri(label, uri) {
-                resource.insert("uri".to_string(), namespaced.into());
+            let resource = resource.as_object_mut()?;
+            let resource_uri = resource.get("uri")?.as_str()?.to_string();
+            let digest = resource.get("digest")?.as_str()?;
+            if !valid_sha256_digest(digest)
+                || !seen.insert(resource_uri.clone())
+                || !resource_belongs_to(&root, &resource_uri)
+            {
+                return None;
             }
+            includes_skill_md |= resource_uri == uri;
+            let namespaced = namespace_uri(label, &resource_uri)?;
+            resource.insert("uri".to_string(), namespaced.into());
+        }
+        if !includes_skill_md {
+            return None;
         }
     }
     Some(entry)
@@ -266,7 +360,7 @@ mod tests {
                     "resources": [
                         {
                             "uri": "skill://git-workflow/SKILL.md",
-                            "digest": "sha256:a1b2c3d4"
+                            "digest": "sha256:a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2"
                         }
                     ]
                 },
@@ -280,7 +374,7 @@ mod tests {
                     "resources": [
                         {
                             "uri": "skill://acme/billing/refunds/SKILL.md",
-                            "digest": "sha256:b2c3d4e5"
+                            "digest": "sha256:b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5"
                         }
                     ]
                 }
@@ -318,7 +412,7 @@ mod tests {
         let wire = serde_json::json!({
             "uri": "skill://x/SKILL.md",
             "frontmatter": {"name": "x", "description": "d"},
-            "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:aa"}],
+            "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
             "someFutureField": {"attestation": "signed"},
             "anotherOne": 7
         });
@@ -395,6 +489,99 @@ mod tests {
     }
 
     #[test]
+    fn unsafe_gateway_labels_are_rejected() {
+        for label in [
+            "",
+            "Upper",
+            "A",
+            "a/b",
+            "what?",
+            "frag#",
+            "has space",
+            "percent%2f",
+        ] {
+            assert!(
+                namespace_uri(label, "skill://x/SKILL.md").is_none(),
+                "unsafe label was accepted: {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_skill_entries_are_not_namespaced() {
+        let malformed = [
+            serde_json::json!({
+                "uri": "skill://x/not-skill.md",
+                "frontmatter": {"name": "x", "description": "d"}
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "other", "description": "d"}
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "https://evil.test/payload", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://other/file", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+            }),
+        ];
+
+        for entry in malformed {
+            assert!(
+                namespace_entry("upstream", &entry).is_none(),
+                "malformed entry was published: {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_manifest_must_be_complete_unique_and_digest_bound() {
+        const DIGEST: &str =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let malformed = [
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": []
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://x/other.md", "digest": DIGEST}]
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [
+                    {"uri": "skill://x/SKILL.md", "digest": DIGEST},
+                    {"uri": "skill://x/SKILL.md", "digest": DIGEST}
+                ]
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://x/SKILL.md"}]
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:AA"}]
+            }),
+        ];
+
+        for entry in malformed {
+            assert!(
+                namespace_entry("upstream", &entry).is_none(),
+                "invalid integrity manifest was published: {entry}"
+            );
+        }
+    }
+
+    #[test]
     fn namespacing_preserves_the_name_invariant() {
         // A nested upstream path keeps its final segment, which is the name.
         let namespaced =
@@ -433,8 +620,8 @@ mod tests {
                 "some-future-field": {"nested": true}
             },
             "resources": [
-                {"uri": "skill://refunds/SKILL.md", "digest": "sha256:aa"},
-                {"uri": "skill://refunds/examples/email.md", "digest": "sha256:bb"}
+                {"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                {"uri": "skill://refunds/examples/email.md", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
             ]
         });
         let out = namespace_entry("acme", &entry).expect("aggregatable");
@@ -447,8 +634,14 @@ mod tests {
         );
         // Digests are over content bytes, so rewriting a URI must not disturb
         // them — a changed digest would revoke a host's content-bound approval.
-        assert_eq!(out["resources"][0]["digest"], "sha256:aa");
-        assert_eq!(out["resources"][1]["digest"], "sha256:bb");
+        assert_eq!(
+            out["resources"][0]["digest"],
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            out["resources"][1]["digest"],
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
         // Frontmatter passes through byte-identical, unknown fields included.
         assert_eq!(out["frontmatter"], entry["frontmatter"]);
     }

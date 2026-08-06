@@ -505,14 +505,22 @@ fn classify_transport_auth_error(
     }
 }
 
-/// Map a `ServiceError` from a live MCP call to a `BitrouterError`, preferring
-/// a typed `UpstreamAuth` when the transport error is an auth challenge, else
-/// the generic 502.
+/// Map a `ServiceError` from a live MCP call to a `BitrouterError`.
+///
+/// Invalid params remains a downstream bad request: SEP-2640 requires that
+/// exact code for an unknown skill/resource, including when the lookup crossed
+/// this gateway. Transport auth challenges retain their typed form; other
+/// upstream failures become a generic 502.
 fn map_service_error(
     server: &str,
     method: &str,
     err: rmcp::service::ServiceError,
 ) -> BitrouterError {
+    if let rmcp::service::ServiceError::McpError(mcp) = &err
+        && mcp.code == ErrorCode::INVALID_PARAMS
+    {
+        return BitrouterError::bad_request(format!("mcp '{server}' {method}: {}", mcp.message));
+    }
     if let rmcp::service::ServiceError::TransportSend(dte) = &err
         && let Some(auth) = classify_transport_auth_error(dte)
     {
@@ -758,6 +766,111 @@ fn merge_paginated_cache_hints(
     }
 }
 
+fn take_custom_list_cursor(
+    result: &mut serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    let object = result
+        .as_object_mut()
+        .ok_or_else(|| "skills/list result is not an object".to_string())?;
+    match object.remove("nextCursor") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(cursor)) => Ok(Some(cursor)),
+        Some(_) => Err("skills/list nextCursor is not a string".to_string()),
+    }
+}
+
+fn merge_custom_skills_page(
+    aggregate: &mut serde_json::Value,
+    mut page: serde_json::Value,
+) -> std::result::Result<(), String> {
+    let page_object = page
+        .as_object_mut()
+        .ok_or_else(|| "skills/list page is not an object".to_string())?;
+    let mut page_skills = page_object
+        .remove("skills")
+        .and_then(|value| value.as_array().cloned())
+        .ok_or_else(|| "skills/list page has no array 'skills'".to_string())?;
+    let page_ttl = match page_object.get("ttlMs") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .ok_or_else(|| "skills/list ttlMs is not an unsigned integer".to_string())?,
+        ),
+    };
+    let page_scope = match page_object.get("cacheScope") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| "skills/list cacheScope is not a string".to_string())?
+                .to_string(),
+        ),
+    };
+
+    let aggregate_object = aggregate
+        .as_object_mut()
+        .ok_or_else(|| "skills/list result is not an object".to_string())?;
+    aggregate_object
+        .get_mut("skills")
+        .and_then(|value| value.as_array_mut())
+        .ok_or_else(|| "skills/list result has no array 'skills'".to_string())?
+        .append(&mut page_skills);
+
+    if let Some(page_ttl) = page_ttl {
+        let ttl = aggregate_object
+            .get("ttlMs")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| "skills/list ttlMs is not an unsigned integer".to_string())
+            })
+            .transpose()?
+            .map_or(page_ttl, |current| current.min(page_ttl));
+        aggregate_object.insert("ttlMs".to_string(), ttl.into());
+    }
+    if let Some(page_scope) = page_scope {
+        let current_scope = aggregate_object
+            .get("cacheScope")
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "skills/list cacheScope is not a string".to_string())
+            })
+            .transpose()?;
+        let replace = match current_scope {
+            None => true,
+            Some("private") => false,
+            Some(_) => page_scope != "public",
+        };
+        if replace {
+            aggregate_object.insert("cacheScope".to_string(), page_scope.into());
+        }
+    }
+    Ok(())
+}
+
+async fn send_custom_request(
+    peer: &Peer<RoleClient>,
+    server: &str,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let result = peer
+        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+            method, params,
+        )))
+        .await
+        .map_err(|e| map_service_error(server, method, e))?;
+    match result {
+        ServerResult::CustomResult(value) => Ok(value.0),
+        other => Err(upstream(
+            server,
+            format!("{method}: unexpected server result {other:?}"),
+        )),
+    }
+}
+
 async fn dispatch(
     peer: &Peer<RoleClient>,
     server: &str,
@@ -862,19 +975,39 @@ async fn dispatch(
                 serde_json::Value::Null => None,
                 params => Some(params.clone()),
             };
-            let result = peer
-                .send_request(ClientRequest::CustomRequest(CustomRequest::new(
-                    relayed, params,
-                )))
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            match result {
-                ServerResult::CustomResult(value) => Ok(value.0),
-                other => Err(upstream(
-                    server,
-                    format!("{method}: unexpected server result {other:?}"),
-                )),
+            let mut result = send_custom_request(peer, server, relayed, params).await?;
+            if relayed == super::skills::SKILLS_LIST_METHOD {
+                let mut cursor = take_custom_list_cursor(&mut result)
+                    .map_err(|e| upstream(server, format!("{method}: {e}")))?;
+                let mut seen = std::collections::BTreeSet::new();
+                while let Some(next) = cursor {
+                    if !seen.insert(next.clone()) {
+                        return Err(upstream(
+                            server,
+                            format!("{method}: upstream repeated pagination cursor '{next}'"),
+                        ));
+                    }
+                    let mut page_params = match &request.params {
+                        serde_json::Value::Null => serde_json::Map::new(),
+                        serde_json::Value::Object(params) => params.clone(),
+                        _ => {
+                            return Err(upstream(
+                                server,
+                                format!("{method}: paginated request params are not an object"),
+                            ));
+                        }
+                    };
+                    page_params.insert("cursor".to_string(), next.into());
+                    let mut page =
+                        send_custom_request(peer, server, relayed, Some(page_params.into()))
+                            .await?;
+                    cursor = take_custom_list_cursor(&mut page)
+                        .map_err(|e| upstream(server, format!("{method}: {e}")))?;
+                    merge_custom_skills_page(&mut result, page)
+                        .map_err(|e| upstream(server, format!("{method}: {e}")))?;
+                }
             }
+            Ok(result)
         }
         // Anything else is not relayed: surface it as a JSON-RPC "Method not
         // found" rather than forwarding it blind.
@@ -918,7 +1051,7 @@ mod tests {
                 "uri": "skill://git-workflow/SKILL.md",
                 "frontmatter": { "name": "git-workflow", "description": "d" },
                 "resources": [
-                    { "uri": "skill://git-workflow/SKILL.md", "digest": "sha256:aa" }
+                    { "uri": "skill://git-workflow/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
                 ]
             }]
         });
@@ -944,6 +1077,32 @@ mod tests {
             ServerResult::CustomResult(value) => assert_eq!(value.0, payload),
             other => panic!("expected CustomResult, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn skills_pages_merge_entries_and_cache_hints_conservatively() {
+        let mut aggregate = serde_json::json!({
+            "skills": [{"uri": "skill://a/SKILL.md"}],
+            "ttlMs": 600,
+            "cacheScope": "public",
+            "nextCursor": "page-2"
+        });
+        let cursor = take_custom_list_cursor(&mut aggregate).expect("valid cursor");
+        assert_eq!(cursor.as_deref(), Some("page-2"));
+        let mut page = serde_json::json!({
+            "skills": [{"uri": "skill://b/SKILL.md"}],
+            "ttlMs": 100,
+            "cacheScope": "private"
+        });
+        let next = take_custom_list_cursor(&mut page).expect("last page");
+        assert!(next.is_none());
+
+        merge_custom_skills_page(&mut aggregate, page).expect("merge page");
+
+        assert_eq!(aggregate["skills"].as_array().expect("skills").len(), 2);
+        assert_eq!(aggregate["ttlMs"], 100);
+        assert_eq!(aggregate["cacheScope"], "private");
+        assert!(aggregate.get("nextCursor").is_none());
     }
 
     /// The relay is an allowlist. A method outside it must still be rejected
@@ -1185,6 +1344,18 @@ mod tests {
             }
             other => panic!("expected UpstreamAuth, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn upstream_invalid_params_remains_a_bad_request() {
+        let upstream = rmcp::service::ServiceError::McpError(McpError::new(
+            ErrorCode::INVALID_PARAMS,
+            "unknown skill",
+            None,
+        ));
+        let mapped = map_service_error("skills", "skills/get", upstream);
+        assert_eq!(mapped.status(), 400);
+        assert!(mapped.to_string().contains("unknown skill"));
     }
 
     #[test]

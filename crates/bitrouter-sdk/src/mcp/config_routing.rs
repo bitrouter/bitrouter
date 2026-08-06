@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
+use super::skills::is_valid_gateway_label;
 use super::transport::{McpServerConfig, McpTransport};
 use super::{AggregateMember, McpTarget, RoutingTable, ServerSelector};
 use crate::caller::CallerContext;
@@ -62,6 +63,13 @@ impl ConfigMcpRoutingTable {
             cfg.validate()
                 .map_err(|e| BitrouterError::internal(e.to_string()))?;
             if agg.aggregate {
+                if !is_valid_gateway_label(&key) {
+                    return Err(BitrouterError::internal(format!(
+                        "mcp server routing key '{key}' is not a safe aggregate label; use one \
+                         non-empty ASCII URI segment containing only lowercase letters, digits, \
+                         '-', '.', '_', or '~'"
+                    )));
+                }
                 if let Some(other) = seen_prefixes.get(&agg.tool_prefix) {
                     return Err(BitrouterError::internal(format!(
                         "mcp aggregate: servers '{other}' and '{key}' share tool_prefix \
@@ -274,5 +282,52 @@ mod tests {
             McpServerAggregateConfig::default_for("bad"),
         );
         assert!(ConfigMcpRoutingTable::from_configs([bad]).is_err());
+    }
+
+    #[test]
+    fn aggregate_member_key_must_be_one_safe_uri_segment() {
+        for key in [
+            "",
+            "Upper",
+            "A",
+            "a/b",
+            "what?",
+            "frag#",
+            "has space",
+            "percent%2f",
+        ] {
+            let (_, cfg, agg) = server("valid-config-name", "https://example.com");
+            let err = ConfigMcpRoutingTable::from_configs([(key.to_string(), cfg, agg)])
+                .expect_err("unsafe aggregate label must fail startup");
+            assert!(
+                err.to_string().contains("aggregate label"),
+                "{key:?}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn uppercase_nonaggregate_key_remains_directly_routable() {
+        let (_, cfg, _) = server("Docs", "https://example.com");
+        let table = ConfigMcpRoutingTable::from_configs([(
+            "Docs".to_string(),
+            cfg,
+            McpServerAggregateConfig {
+                aggregate: false,
+                tool_prefix: "Docs__".into(),
+            },
+        )])
+        .expect("a direct-only key never enters the skill URI namespace");
+
+        let direct = table
+            .resolve(&ServerSelector::Direct("Docs".into()), &caller())
+            .await
+            .expect("direct route");
+        assert!(matches!(direct, McpTarget::Direct { .. }));
+        let aggregate = table
+            .resolve(&ServerSelector::Aggregate, &caller())
+            .await
+            .expect("aggregate route");
+        assert!(matches!(aggregate, McpTarget::Aggregate { members } if members.is_empty()));
     }
 }

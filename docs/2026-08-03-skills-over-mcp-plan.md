@@ -5,6 +5,12 @@
 > recorded in the spec's implementation note — read that before treating any
 > task body below as the as-built description.
 >
+> **Historical execution record.** Post-review hardening superseded several
+> task details below: the package-manager crate was removed, format parsing is
+> app-local, Agent Skills directory/name rules are strict, `directoryRead` is
+> false, and the gateway exhausts raw `skills/list` cursor pages. The code and
+> `SKILLS_MCP_SPEC.md` are authoritative; do not execute this plan literally.
+>
 > **For agentic workers:** Steps use checkbox (`- [ ]`) syntax for tracking.
 > Tasks are ordered by dependency; each is independently shippable and leaves
 > the workspace green. Implement task-by-task, RED → GREEN → REFACTOR.
@@ -18,13 +24,13 @@ MCP servers hold, per [SEP-2640](https://github.com/modelcontextprotocol/modelco
 (`io.modelcontextprotocol/skills`), over stdio and Streamable HTTP alike —
 without becoming a skills host.
 
-**Architecture:** Skill wire types and routing live in `bitrouter-sdk::mcp::skills`
-behind the existing `mcp` feature; SKILL.md parsing, source resolution, and
-install stay in `bitrouter-skills`; the filesystem catalog implementation lives
-in `apps/bitrouter`, reusing the SDK-defines-port / app-implements-port seam
-that `SkillsQuery` already uses. The gateway namespaces upstream skills under a
-host-assigned label carried in the URI prefix, and resolves every aggregate
-`resources/read` to exactly one owning member.
+**As-built architecture:** Skill wire types and routing live in
+`bitrouter-sdk::mcp::skills` behind the existing `mcp` feature; read-only
+SKILL.md parsing and the filesystem catalog live in `apps/bitrouter`. The
+former package-manager crate and install surface are absent. The gateway
+namespaces upstream skills under a validated host-assigned label carried in
+the URI prefix, and resolves every aggregate `resources/read` to exactly one
+owning member or fails when ownership is ambiguous or indeterminate.
 
 **Tech stack:** Rust, serde, `rmcp` 3.1.0 (already a dependency — no bump),
 axum, `sha2`, cargo nextest, Clippy, rustfmt.
@@ -34,11 +40,10 @@ axum, `sha2`, cargo nextest, Clippy, rustfmt.
 - Follow `CLAUDE.md`: no `#[allow(...)]`, no `.unwrap`/`.expect`/`panic!` in
   production code, no re-exports from public modules, no dead code,
   conventional commits with titles under 60 characters.
-- **R1 — no daemon code path may call `bitrouter_skills::install::*`.** Skill
-  installation stays CLI-only. Enforced by review and by Task 9's assertion.
+- **R1 — BitRouter has no skill-fetching or install-to-disk path.** Ecosystem
+  tools populate the read-only discovery roots.
 - **R2 — gateway-sourced skill content must never be written to a filesystem
-  skill discovery path.** Any content cache is content-addressed and shares no
-  code with `install.rs`.
+  skill discovery path.** The gateway has no content-write path.
 - The gateway is an intermediary, not a security boundary. It passes digests
   through unchanged and never re-computes or re-signs them.
 - Every behaviour change follows RED → GREEN → REFACTOR. Tests assert observable

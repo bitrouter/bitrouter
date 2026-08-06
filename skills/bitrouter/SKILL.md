@@ -172,6 +172,9 @@ bitrouter mcp serve --transport http
 # SEP-2640 methods (skills/list, skills/get, resources/*) over installed skills
 bitrouter mcp serve --backend skills
 
+# scaffold a spec-valid skill directory (writes ./demo/SKILL.md)
+bitrouter skills init demo
+
 # print the Claude/Cursor mcpServers config block
 bitrouter mcp install --client claude
 
