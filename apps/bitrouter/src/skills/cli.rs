@@ -34,7 +34,7 @@ pub struct ScopeArgs {
 pub struct InitArgs {
     /// Skill name written into the generated frontmatter.
     pub name: String,
-    /// Output path for the SKILL.md (default: <NAME>/SKILL.md).
+    /// Output path for the SKILL.md (default: `<NAME>/SKILL.md`).
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
 }
