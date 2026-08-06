@@ -5,7 +5,7 @@
 //!
 //! Dependency inversion by design: this crate defines the traits in plain
 //! `serde`/`serde_json` types, so it never grows a dependency on
-//! `bitrouter-substrate`, `bitrouter-skills`, or `bitrouter-observe`. Each
+//! `bitrouter-substrate` or `bitrouter-observe`. Each
 //! port's result JSON is built adapter-side; the crate owns only the inputs.
 
 pub mod cost;
@@ -13,4 +13,5 @@ pub mod escalation;
 pub mod fleet;
 pub mod human;
 pub mod routing;
+pub mod skill_catalog;
 pub mod skills;

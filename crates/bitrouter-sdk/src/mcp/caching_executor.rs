@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
 use tokio::sync::broadcast;
 
+use super::skills::SKILLS_LIST_METHOD;
 use super::{
     Executor, InvalidationEvent, InvalidationKind, McpRequest, McpResponse, McpStreamPart,
     McpTarget,
@@ -39,6 +40,9 @@ const DEFAULT_TOOLS_LIST_TTL_SECS: u64 = 60;
 const DEFAULT_RESOURCES_LIST_TTL_SECS: u64 = 60;
 const DEFAULT_RESOURCES_TEMPLATES_LIST_TTL_SECS: u64 = 300;
 const DEFAULT_PROMPTS_LIST_TTL_SECS: u64 = 300;
+/// TTL for SEP-2640 `skills/list`. Not YAML-configurable while the extension
+/// is a draft; the constant is the single source of truth until it is.
+const DEFAULT_SKILLS_LIST_TTL_SECS: u64 = 60;
 /// Default per-server LRU bound. Pub so the config layer can spell the same
 /// number without re-declaring it.
 pub const DEFAULT_MAX_ENTRIES_PER_SERVER: usize = 64;
@@ -54,6 +58,13 @@ pub struct CacheTtls {
     pub resources_templates_list: Duration,
     /// TTL for `prompts/list`.
     pub prompts_list: Duration,
+    /// TTL for SEP-2640 `skills/list`.
+    ///
+    /// `skills/get` is deliberately absent: the SEP specifies that a single
+    /// entry "carries no pagination cursor and no list-caching attributes"
+    /// because it is a point-in-time snapshot, so caching it would defeat the
+    /// method's purpose (refreshing one skill's digests).
+    pub skills_list: Duration,
     /// Max entries per server (LRU eviction safety bound).
     pub max_entries_per_server: usize,
 }
@@ -67,6 +78,7 @@ impl Default for CacheTtls {
                 DEFAULT_RESOURCES_TEMPLATES_LIST_TTL_SECS,
             ),
             prompts_list: Duration::from_secs(DEFAULT_PROMPTS_LIST_TTL_SECS),
+            skills_list: Duration::from_secs(DEFAULT_SKILLS_LIST_TTL_SECS),
             max_entries_per_server: DEFAULT_MAX_ENTRIES_PER_SERVER,
         }
     }
@@ -80,6 +92,8 @@ impl From<&crate::config::McpCacheConfig> for CacheTtls {
             resources_list: Duration::from_secs(cfg.resources_list_ttl_secs),
             resources_templates_list: Duration::from_secs(cfg.resources_templates_list_ttl_secs),
             prompts_list: Duration::from_secs(cfg.prompts_list_ttl_secs),
+            // No YAML knob yet — see `DEFAULT_SKILLS_LIST_TTL_SECS`.
+            skills_list: Duration::from_secs(DEFAULT_SKILLS_LIST_TTL_SECS),
             max_entries_per_server: cfg.max_entries_per_server,
         }
     }
@@ -92,6 +106,7 @@ impl CacheTtls {
             "resources/list" => self.resources_list,
             "resources/templates/list" => self.resources_templates_list,
             "prompts/list" => self.prompts_list,
+            SKILLS_LIST_METHOD => self.skills_list,
             _ => return None,
         };
         if d.is_zero() { None } else { Some(d) }
@@ -272,12 +287,21 @@ fn apply_invalidation(
 
 /// Identify which method the executor will cache for, if any. The TTL to stamp
 /// on the entry comes from [`extract_cache_hint`].
+///
+/// `skills/list` is here for a **correctness** reason, not just for speed. The
+/// cache key is `{server_name, method, params_hash}` with no caller identity,
+/// so any cached entry is visible to every downstream caller. Routing
+/// `skills/list` through this path is what subjects it to
+/// [`extract_cache_hint`], which declines to cache a `cacheScope: private`
+/// result. A relayed extension method that bypassed this function would skip
+/// that check and could serve one tenant's private skill catalog to another.
 fn cached_method(method: &str) -> Option<&'static str> {
     match method {
         "tools/list" => Some("tools/list"),
         "resources/list" => Some("resources/list"),
         "resources/templates/list" => Some("resources/templates/list"),
         "prompts/list" => Some("prompts/list"),
+        SKILLS_LIST_METHOD => Some(SKILLS_LIST_METHOD),
         _ => None,
     }
 }
@@ -747,6 +771,69 @@ mod tests {
                 .unwrap();
         }
         // Both calls went upstream — no entry was ever stamped.
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// SEP-2640 `skills/list` is relayed through the gateway as an extension
+    /// method. It must still be subject to the cache-scope check: the cache
+    /// key carries no caller identity, so a cached private catalog would be
+    /// served to every downstream caller of the daemon.
+    #[tokio::test]
+    async fn private_scoped_skills_list_is_not_cached() {
+        let inner = Arc::new(CountingExecutor {
+            calls: AtomicUsize::new(0),
+            value: serde_json::json!({ "skills": [], "cacheScope": "private" }),
+        });
+        let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());
+        for _ in 0..2 {
+            let _ = exec
+                .execute(&target("a"), &list_req("a", "skills/list"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            inner.calls.load(Ordering::SeqCst),
+            2,
+            "a private skills catalog must never be served from the shared cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_skills_list_is_cached() {
+        let inner = Arc::new(CountingExecutor {
+            calls: AtomicUsize::new(0),
+            value: serde_json::json!({ "skills": [] }),
+        });
+        let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());
+        for _ in 0..2 {
+            let _ = exec
+                .execute(&target("a"), &list_req("a", "skills/list"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            inner.calls.load(Ordering::SeqCst),
+            1,
+            "second call is a hit"
+        );
+    }
+
+    /// `skills/get` is a point-in-time snapshot the SEP explicitly exempts
+    /// from list caching — it is how a host refreshes one skill's digests, so
+    /// caching it would defeat the method.
+    #[tokio::test]
+    async fn skills_get_is_never_cached() {
+        let inner = Arc::new(CountingExecutor {
+            calls: AtomicUsize::new(0),
+            value: serde_json::json!({ "skill": {} }),
+        });
+        let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());
+        for _ in 0..2 {
+            let _ = exec
+                .execute(&target("a"), &list_req("a", "skills/get"))
+                .await
+                .unwrap();
+        }
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
     }
 

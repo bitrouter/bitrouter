@@ -401,10 +401,38 @@ async fn mcp_invoke_inner(
                 "id": inbound_id,
                 "result": {
                     "protocolVersion": protocol_version,
-                    // The gateway proxies tool calls; resources/prompts are not
-                    // advertised so clients don't probe upstreams that may not
-                    // implement them.
-                    "capabilities": { "tools": {} },
+                    // `resources` is advertised because Agent Skills served
+                    // over MCP (SEP-2640) ride entirely on `resources/read`: a
+                    // compliant client that sees no `resources` capability
+                    // never issues one, so withholding it makes skills
+                    // unreachable through the gateway.
+                    //
+                    // The earlier reasoning for withholding it — that clients
+                    // would probe upstreams which may not implement resources
+                    // — is answered by the fan-out contract rather than by
+                    // silence: a member without resources contributes an empty
+                    // list and an entry under `_bitrouterErrors`, which is the
+                    // correct answer to "what resources do you have".
+                    //
+                    // The skills extension (SEP-2640) is declared
+                    // **optimistically**. The gateway answers `initialize`
+                    // synchronously but discovers upstream capabilities lazily
+                    // on first connect, so at this point it cannot know
+                    // whether any member serves skills. Declaring costs a
+                    // client one `skills/list` round trip that comes back
+                    // empty; the alternative — probing every upstream at
+                    // daemon start — would spawn every stdio child at boot.
+                    //
+                    // `directoryRead` is left absent (it defaults to `false`).
+                    // The SEP forbids a client calling
+                    // `resources/directory/read` against a server that has not
+                    // declared it, so `false` is the safe answer for a gateway
+                    // that cannot know whether its members implement it.
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                        "extensions": { "io.modelcontextprotocol/skills": {} },
+                    },
                     "serverInfo": {
                         "name": "bitrouter-mcp-gateway",
                         "version": env!("CARGO_PKG_VERSION"),

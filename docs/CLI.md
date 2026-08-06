@@ -765,43 +765,24 @@ bitrouter cloud byok delete <PROVIDER> [--json]
 
 ## Skills
 
-`bitrouter skills …` installs and manages Claude Code skills — directories containing a `SKILL.md` with YAML frontmatter (`name`, `description`). Skills install into the agent skills directory: `~/.claude/skills/<name>/` with `--global`, or `./.claude/skills/<name>/` (project-local) by default.
+`bitrouter skills …` inspects Agent Skills — directories containing a `SKILL.md` with YAML frontmatter (`name`, `description`). The agent skills directory is `~/.claude/skills/` with `--global`, or `./.claude/skills/` (project-local) by default.
 
-Sources are auto-detected:
+BitRouter **reads** the installed-skills directory; it does not install into it.
+Getting a skill onto disk is the ecosystem's job — `npx skills add`, or the
+Claude Code / Codex plugin marketplaces. BitRouter is a skills *server* and
+*gateway*, not an installer: see `docs/SKILLS_MCP_SPEC.md` §2.
 
-- `owner/repo` — GitHub shorthand (optionally `owner/repo#<branch|tag|sha>`)
-- `https://github.com/owner/repo[.git]` — full GitHub URL
-- `https://github.com/owner/repo/tree/<ref>/<subdir>` — a skill in a subdirectory
-- any other `https://…`, `git://…`, or `git@…` git URL
-- `./path`, `../path`, `/abs/path`, `~/path` — a local directory (copied, not cloned)
-- a bare `name` — resolved against a namespace's registry hub (`-n/--namespace <NSID>` required; `--registry <URL>`, default `https://api.bitrouter.ai`). The hub is per-namespace: `<registry>/v1/namespaces/<NSID>/skills/hub`.
+The `add`, `remove`, `find`, and `update` verbs were removed for that reason.
+To serve installed skills over MCP, see `bitrouter mcp serve --backend skills`.
 
-Git sources are shallow-cloned via the system `git` binary (must be on `PATH`). Plain-HTTP sources are refused (skills are executable content); symlinks in a source tree are skipped, and skill names are validated to prevent path traversal.
-
-### `bitrouter skills add <source>`
+### `bitrouter skills list`
 
 ```
-bitrouter skills add <SOURCE> [--skill <NAME>] [-g|--global] [-y|--yes] [--registry <URL>] [-n|--namespace <NSID>]
+bitrouter skills list [-g|--global]
 ```
 
-Clones/copies the source, discovers its `SKILL.md`, and installs it. `--skill <NAME>` selects one skill by frontmatter name when the source exposes several. Installing over an existing skill requires `-y/--yes`. Resolving a bare `name` requires `-n/--namespace <NSID>` (the registry hub is per-namespace).
-
-### `bitrouter skills list` / `remove`
-
-```
-bitrouter skills list   [-g|--global]
-bitrouter skills remove <NAME> [-g|--global]
-```
-
-`list` prints installed skills (name + path); `remove` deletes one by name.
-
-### `bitrouter skills find <query>`
-
-```
-bitrouter skills find <QUERY> [--registry <URL>] [-n|--namespace <NSID>]
-```
-
-Searches a namespace's registry hub (`-n/--namespace <NSID>` required), matching `query` against name, description, keywords, and tags.
+Prints installed skills (name + path) from `./.claude/skills/`, or
+`~/.claude/skills/` with `-g`.
 
 ### `bitrouter skills init <name>`
 
@@ -809,12 +790,7 @@ Searches a namespace's registry hub (`-n/--namespace <NSID>` required), matching
 bitrouter skills init <NAME> [-o|--output <PATH>]
 ```
 
-Scaffolds a starter `SKILL.md` (default `./SKILL.md`). Refuses to overwrite an existing file.
-
-### `bitrouter skills update`
-
-```
-bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>] [-n|--namespace <NSID>]
-```
-
-Re-installs installed skills from a namespace's registry hub to their latest version (`-n/--namespace <NSID>` required; all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
+Scaffolds a starter `<NAME>/SKILL.md`; `--output` may choose another path whose
+file is still named `SKILL.md` and whose parent directory equals `<NAME>`.
+Refuses to overwrite an existing file. Names follow the Agent Skills grammar:
+1–64 lowercase ASCII letters, digits, or non-leading/trailing single hyphens.

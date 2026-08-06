@@ -21,7 +21,6 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 bitrouter-substrate.workspace = true
 bitrouter-cloud-sdk.workspace = true
 bitrouter-providers = { workspace = true, features = ["pkce"] }
-bitrouter-skills.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
 bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.27" }

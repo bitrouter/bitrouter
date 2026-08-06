@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (CLI):** `bitrouter skills add`, `remove`, `find`, and `update` are
+  removed, along with the `bitrouter-skills` crate that backed them. Installing
+  skills is the ecosystem's job — `npx skills add`, or the Claude Code / Codex
+  plugin marketplaces (this repo ships as one). BitRouter **reads** the
+  installed-skills directory and serves it over MCP; it does not populate it.
+  That is the same line as "server, not host" applied to content lifecycle:
+  BitRouter handles transport, not distribution.
+
+  `bitrouter skills list` and `bitrouter skills init` remain. `SKILL.md` format
+  support moved into the binary (`apps/bitrouter/src/skills/`), where its only
+  consumers live; the git-clone, source-resolution, install-to-disk, and
+  registry-client code is gone. The `--registry` / `--namespace` flags and the
+  `api.bitrouter.ai` skills-hub client went with them.
+
+- **Skills over MCP (SEP-2640).** BitRouter now serves Agent Skills as an MCP
+  server and proxies them as a gateway, over stdio and Streamable HTTP alike.
+  `bitrouter mcp serve --backend skills` answers `skills/list`, `skills/get`,
+  `resources/list`, and `resources/read` over the installed-skills root, with
+  complete `sha256:` digests per file; the existing `skills_search` /
+  `skills_get` tools are unchanged and still served. The daemon's aggregate
+  `POST /mcp` merges upstream skill catalogs, namespacing each under its
+  configured server name (`skill://<server>/<skill-path>/SKILL.md`) so two
+  upstreams publishing the same URI cannot shadow one another. BitRouter is a
+  skills server and gateway, never a host: no daemon path installs skills, and
+  gateway-sourced content never touches a filesystem skill-discovery path.
+  Caveats are documented in `skills/bitrouter/references/mcp-server.md` — the
+  gateway is not a security boundary, and remote catalogs are daemon-scoped
+  rather than caller-scoped.
+
+- **Breaking (behaviour):** aggregate `resources/read` (`POST /mcp`) no longer
+  tries each member and returns the first success. It resolves exactly one
+  owning member — by skill-URI label, else by which member enumerates the URI —
+  and errors when zero or several match, naming the candidates. First-success
+  scanning let configuration order silently decide which upstream answered a
+  URI two members both served, which is a cross-origin misroute (and the
+  impersonation surface SEP-2640 names for skills). A URI that no member
+  enumerates is now an error on the aggregate endpoint; read it from that
+  server's direct route (`POST /mcp/{server}`) instead.
+
+- The gateway's `initialize` now advertises the `resources` capability and
+  declares the `io.modelcontextprotocol/skills` extension. Skills are read
+  through `resources/read`, so a compliant client that saw no `resources`
+  capability would never issue one. The extension is declared optimistically —
+  upstream capabilities are discovered lazily, so the gateway cannot know at
+  handshake time whether any member serves skills.
+
 - **Breaking (Rust API):** `BenchmarkOutcomeRecord` has a new `request_id`
   field and strict reward feedback joins it to the persisted
   `CapturedIngressTrace.id`. Migrate Rust struct literals to

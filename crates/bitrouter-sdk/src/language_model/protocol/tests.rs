@@ -9051,6 +9051,144 @@ fn messages_cache_control_on_tool_round_trips() {
     );
 }
 
+/// A client function tool's unmodelled wire fields survive a same-protocol
+/// round-trip. `defer_loading` is the expensive instance: a request pairing a
+/// `tool_search_tool_*` entry with deferred tools reaches the upstream with the
+/// search tool intact, so dropping the flags leaves every definition eagerly
+/// loaded — the caller silently loses the whole saving the feature exists for.
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool>
+#[test]
+fn messages_defer_loading_on_tool_round_trips() {
+    let adapter = messages::MessagesAdapter;
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [
+            {
+                "type": "tool_search_tool_regex_20251119",
+                "name": "tool_search_tool_regex",
+            },
+            {
+                "name": "get_weather",
+                "description": "weather",
+                "input_schema": { "type": "object" },
+                "defer_loading": true,
+                "input_examples": [{ "location": "SF" }],
+            },
+        ],
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+
+    // The server tool is untouched — it is the one tool that must NOT defer.
+    assert_eq!(
+        rendered["tools"][0]["type"],
+        "tool_search_tool_regex_20251119"
+    );
+    // And the deferred client tool kept both optional properties.
+    let deferred = &rendered["tools"][1];
+    assert_eq!(deferred["name"], "get_weather");
+    assert_eq!(deferred["defer_loading"], serde_json::json!(true));
+    assert_eq!(
+        deferred["input_examples"],
+        serde_json::json!([{ "location": "SF" }])
+    );
+    // The residual fields did not leak into the schema.
+    assert!(deferred["input_schema"].get("defer_loading").is_none());
+}
+
+/// The residual-field slot composes with a tool-level cache breakpoint: both
+/// ride the same `anthropic` namespace and both render back onto the tool.
+#[test]
+fn messages_tool_extra_and_cache_control_compose() {
+    let adapter = messages::MessagesAdapter;
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [{
+            "name": "always_loaded",
+            "description": "stays in context",
+            "input_schema": { "type": "object" },
+            "cache_control": { "type": "ephemeral" },
+            "input_examples": [{ "q": "x" }],
+        }],
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["tools"][0]["cache_control"], ephemeral());
+    assert_eq!(
+        rendered["tools"][0]["input_examples"],
+        serde_json::json!([{ "q": "x" }])
+    );
+}
+
+/// A tool carrying no extension fields renders exactly as before — the residual
+/// slot must not introduce keys (or an empty `anthropic` namespace) on the
+/// overwhelmingly common path.
+#[test]
+fn messages_tool_without_extras_is_unchanged() {
+    let adapter = messages::MessagesAdapter;
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [{
+            "name": "plain",
+            "description": "no extras",
+            "input_schema": { "type": "object" },
+        }],
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    match &prompt.tools[0] {
+        Tool::Function {
+            provider_metadata, ..
+        } => assert!(
+            provider_metadata.is_empty(),
+            "a plain tool must carry no provider metadata, got {provider_metadata:?}"
+        ),
+        other => panic!("expected function tool, got {other:?}"),
+    }
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(
+        rendered["tools"][0],
+        serde_json::json!({
+            "name": "plain",
+            "description": "no extras",
+            "input_schema": { "type": "object" },
+        })
+    );
+}
+
+/// Cross-protocol: `defer_loading` is an Anthropic-namespaced hint, so routing a
+/// Messages request to a Chat Completions upstream must NOT leak it onto the
+/// OpenAI tool shape — the field is meaningless there and OpenAI rejects
+/// unknown properties on some endpoints.
+#[test]
+fn messages_defer_loading_does_not_leak_cross_protocol() {
+    let inbound = messages::MessagesAdapter;
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "tools": [{
+            "name": "get_weather",
+            "description": "weather",
+            "input_schema": { "type": "object" },
+            "defer_loading": true,
+        }],
+    });
+    let prompt = inbound.parse_request(body).unwrap();
+    let rendered = chat_completions::ChatCompletionsAdapter
+        .render_request(&prompt)
+        .unwrap();
+    let tool = &rendered["tools"][0];
+    assert_eq!(tool["function"]["name"], "get_weather");
+    assert!(tool.get("defer_loading").is_none());
+    assert!(tool["function"].get("defer_loading").is_none());
+}
+
 /// Anthropic `cache_control` on a `tool_result` block round-trips: a long tool
 /// output can mark a cache boundary, and the breakpoint must survive.
 #[test]

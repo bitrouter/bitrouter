@@ -36,6 +36,21 @@ use crate::language_model::types::{
 /// SDK's `providerOptions.anthropic.cacheControl` naming.
 /// <https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching>
 const ANTHROPIC_CACHE_CONTROL: &str = "cacheControl";
+/// The metadata key, within the `anthropic` namespace, under which a **client
+/// function tool's** unmodelled wire fields ride as a JSON object.
+///
+/// A [`Tool::Function`] models only `{name, description, input_schema}`, but the
+/// Messages wire keeps adding optional tool properties — `defer_loading` (tool
+/// search), `input_examples`, and whatever ships next. Without this slot the
+/// typeless-tool parse drops every one of them, which silently disables the
+/// feature they turn on: a request carrying a `tool_search_tool_*` entry plus
+/// `defer_loading: true` tools reaches the upstream with the search tool intact
+/// and nothing deferred, so every definition loads into the prefix anyway.
+///
+/// [`Tool::ProviderDefined`] needs no equivalent — its `args` already round-trip
+/// the whole residual object.
+/// <https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool>
+const ANTHROPIC_TOOL_EXTRA: &str = "toolExtra";
 /// The metadata key carrying an Anthropic thinking block's `signature` — the
 /// opaque token that lets a thinking block be replayed on a follow-up turn.
 /// <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
@@ -105,6 +120,42 @@ fn apply_cache_control(target: &mut serde_json::Value, meta: &ProviderMetadata) 
         && let Some(obj) = target.as_object_mut()
     {
         obj.insert("cache_control".to_string(), cc);
+    }
+}
+
+/// Stash a client function tool's residual wire fields under
+/// `anthropic.toolExtra` so [`apply_tool_extra`] can restore them on render. A
+/// no-op when `extra` is empty, so tools that carry nothing extra produce
+/// byte-identical metadata to before.
+fn set_tool_extra(meta: &mut ProviderMetadata, extra: HashMap<String, serde_json::Value>) {
+    if extra.is_empty() {
+        return;
+    }
+    set_provider_metadata(
+        meta,
+        PROVIDER_ID_ANTHROPIC,
+        ANTHROPIC_TOOL_EXTRA,
+        serde_json::Value::Object(extra.into_iter().collect()),
+    );
+}
+
+/// Splat a client function tool's residual wire fields from `meta` back onto a
+/// rendered tool object — the inverse of [`set_tool_extra`]. Existing keys win,
+/// so the typed `{name, description, input_schema}` this adapter just wrote can
+/// never be overwritten by a stale residual field.
+fn apply_tool_extra(target: &mut serde_json::Value, meta: &ProviderMetadata) {
+    let Some(extra) = provider_namespace(meta, PROVIDER_ID_ANTHROPIC)
+        .and_then(|o| o.get(ANTHROPIC_TOOL_EXTRA))
+        .and_then(|v| v.as_object())
+    else {
+        return;
+    };
+    if let Some(obj) = target.as_object_mut() {
+        for (key, value) in extra {
+            if !obj.contains_key(key) {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 
@@ -419,8 +470,15 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
             provider_metadata,
         });
     }
+    // Client function tool. `extra` holds every wire field this adapter does
+    // not model — `defer_loading`, `input_examples`, … — which the canonical
+    // `Tool::Function` has no slot for. Preserve them under the `anthropic`
+    // namespace so a same-protocol round-trip is lossless; dropping them
+    // silently disables the upstream feature they enable.
+    let name = t.name?;
+    set_tool_extra(&mut provider_metadata, t.extra);
     Some(Tool::Function {
-        name: t.name?,
+        name,
         description: t.description,
         parameters: t.input_schema,
         // Anthropic client tools carry no `strict` slot.
@@ -431,10 +489,12 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
 
 /// Render one canonical [`Tool`] into an Anthropic `tools` entry.
 ///
-/// A [`Tool::Function`] becomes `{name, description?, input_schema}`. Anthropic
-/// has **no** `strict` slot, so [`Tool::Function::strict`] is intentionally
-/// dropped here (documented; the same drop applies to structured-output
-/// `strict`). A [`Tool::ProviderDefined`] renders to its source-native shape via
+/// A [`Tool::Function`] becomes `{name, description?, input_schema}` plus any
+/// residual wire fields carried under [`ANTHROPIC_TOOL_EXTRA`] (`defer_loading`,
+/// `input_examples`, …). Anthropic has **no** `strict` slot, so
+/// [`Tool::Function::strict`] is intentionally dropped here (documented; the
+/// same drop applies to structured-output `strict`). A [`Tool::ProviderDefined`]
+/// renders to its source-native shape via
 /// [`provider_defined_native`]: an `anthropic.*` id reproduces the exact server
 /// tool (`{type:<version>, name, …args}`) for a lossless same-protocol
 /// round-trip; a foreign-provider id is preserved verbatim (faithful
@@ -454,7 +514,9 @@ fn render_messages_tool(tool: &Tool) -> serde_json::Value {
                 "description": description,
                 "input_schema": parameters,
             });
-            // Restore a tool-level `cache_control` breakpoint when it round-tripped.
+            // Restore the unmodelled wire fields (`defer_loading`, …) this
+            // adapter lifted on parse, then the `cache_control` breakpoint.
+            apply_tool_extra(&mut obj, provider_metadata);
             apply_cache_control(&mut obj, provider_metadata);
             obj
         }
