@@ -46,6 +46,8 @@ const MAX_PENDING_PUBLICATIONS: usize = 256;
 const RECONCILIATION_BATCH_SIZE: usize = 32;
 const RECONCILIATION_BASE_DELAY: Duration = Duration::from_millis(25);
 const RECONCILIATION_MAX_DELAY: Duration = Duration::from_secs(5);
+const RECONCILIATION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const RECONCILIATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
@@ -539,7 +541,7 @@ impl ContinuationRegistry {
     }
 
     async fn stop_reconciler(&self) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let shutdown_deadline = tokio::time::Instant::now() + RECONCILIATION_SHUTDOWN_GRACE;
         let task = {
             let mut task = match self.inner.reconciler.task.lock() {
                 Ok(task) => task,
@@ -550,22 +552,33 @@ impl ContinuationRegistry {
         if let Some(mut task) = task {
             task.cancelled.store(true, Ordering::Release);
             self.inner.reconciler.notify.notify_waiters();
-            if tokio::time::timeout_at(deadline, &mut task.handle)
-                .await
-                .is_err()
-            {
-                task.handle.abort();
-                anyhow::bail!("continuation reconciliation worker shutdown timed out");
+            match tokio::time::timeout_at(shutdown_deadline, &mut task.handle).await {
+                Ok(result) => {
+                    result.context("continuation reconciliation worker failed during shutdown")?;
+                }
+                Err(_) => {
+                    task.handle.abort();
+                    match task.handle.await {
+                        Ok(()) => {}
+                        Err(error) if error.is_cancelled() => {}
+                        Err(error) => {
+                            return Err(error).context(
+                                "continuation reconciliation worker failed while being aborted",
+                            );
+                        }
+                    }
+                }
             }
         }
         self.mark_pending_for_shutdown_reconciliation();
+        let drain_deadline = tokio::time::Instant::now() + RECONCILIATION_DRAIN_TIMEOUT;
         loop {
             let before = self.pending_reconciliation_count();
             if before == 0 {
                 return Ok(());
             }
             let had_error = tokio::time::timeout_at(
-                deadline,
+                drain_deadline,
                 self.reconcile_local_publications(Utc::now()),
             )
             .await
@@ -5037,7 +5050,7 @@ mod tests {
             ))
             .await?;
 
-        tokio::time::timeout(Duration::from_secs(3), registry.stop_reconciler()).await??;
+        tokio::time::timeout(Duration::from_secs(5), registry.stop_reconciler()).await??;
         assert_eq!(pending_publication_count(&registry), 0);
         let row = registry
             .database()
