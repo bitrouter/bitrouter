@@ -1334,6 +1334,12 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     )
     .await?;
     assert_ne!(first_id, second_id);
+    first_app
+        .app
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
+        .drain_required_pending_settlements()
+        .await?;
 
     let episode_ids = owner_episode_ids(&first_app.db, owner).await?;
     assert_eq!(episode_ids.len(), 1, "both turns must share one episode");
@@ -1387,6 +1393,12 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     )
     .await?;
     assert_ne!(second_id, third_id);
+    restarted_app
+        .app
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("restarted language-model pipeline missing"))?
+        .drain_required_pending_settlements()
+        .await?;
     let (forwarded_parents, served_models) = {
         let responses_state = harness
             .responses_state
