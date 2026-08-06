@@ -10,6 +10,7 @@ See `README.md` and `docs/DEVELOPMENT.md` for full project introduction and arch
 2. **NEVER** re-export components in a public mod. If you already have a public mod: `pub mod a;`, you never re-export components inside it: `pub use a::A; // Don't do this`.
 3. **NEVER** use `.unwrap`, `.expect` or `panic!` to make the Rust program panic.
 4. **NEVER** over-design types, functions and methods that is never used in the feature or fix you are working on. We don't allow dead code.
+5. **Registry data changes do not require TDD.** For changes confined to `registry/`, do not add model- or provider-specific Rust tests that freeze catalog entries or counts. Validate the data with `cargo run -p dist-helper -- registry validate`, `cargo run -p dist-helper -- registry build`, and `cargo run -p dist-helper -- check` instead.
 
 ## Agent Skill
 

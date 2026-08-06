@@ -426,6 +426,15 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 0.28
+  - id: qwen/qwen3.8-max
+    provider_model_id: qwen/qwen3.8-max
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.25
+        cache_write: 2.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 community: false
