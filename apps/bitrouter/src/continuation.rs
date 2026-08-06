@@ -47,7 +47,7 @@ const RECONCILIATION_BATCH_SIZE: usize = 32;
 const RECONCILIATION_BASE_DELAY: Duration = Duration::from_millis(25);
 const RECONCILIATION_MAX_DELAY: Duration = Duration::from_secs(5);
 const RECONCILIATION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
-const RECONCILIATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const RECONCILIATION_DRAIN_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
@@ -571,12 +571,12 @@ impl ContinuationRegistry {
             }
         }
         self.mark_pending_for_shutdown_reconciliation();
-        let drain_deadline = tokio::time::Instant::now() + RECONCILIATION_DRAIN_TIMEOUT;
         loop {
             let before = self.pending_reconciliation_count();
             if before == 0 {
                 return Ok(());
             }
+            let drain_deadline = tokio::time::Instant::now() + RECONCILIATION_DRAIN_BATCH_TIMEOUT;
             let had_error = tokio::time::timeout_at(
                 drain_deadline,
                 self.reconcile_local_publications(Utc::now()),
@@ -5050,7 +5050,7 @@ mod tests {
             ))
             .await?;
 
-        tokio::time::timeout(Duration::from_secs(5), registry.stop_reconciler()).await??;
+        tokio::time::timeout(Duration::from_secs(70), registry.stop_reconciler()).await??;
         assert_eq!(pending_publication_count(&registry), 0);
         let row = registry
             .database()
