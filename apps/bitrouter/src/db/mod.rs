@@ -77,9 +77,12 @@ pub fn anchor_url(url: &str, home: &std::path::Path) -> String {
     }
     let relative = path_part.strip_prefix("./").unwrap_or(path_part);
     let anchored = home.join(relative);
+    let anchored = anchored.to_string_lossy();
+    #[cfg(windows)]
+    let anchored = anchored.replace('\\', "/");
     match query {
-        Some(query) => format!("sqlite://{}?{query}", anchored.display()),
-        None => format!("sqlite://{}", anchored.display()),
+        Some(query) => format!("sqlite://{anchored}?{query}"),
+        None => format!("sqlite://{anchored}"),
     }
 }
 
