@@ -14,7 +14,7 @@ use crate::eval::types::{
 use crate::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
-use crate::workflow_state::ir::RouteProjection;
+use crate::workflow_state::predictive::CanonicalPolicyProjection;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RewardEvalImportSummary {
@@ -161,10 +161,11 @@ pub async fn import_semantic_reward_feedback(
 
 fn candidate_policy_key(candidate: &SemanticPolicyTransitionCandidate) -> Option<(String, String)> {
     if let Some(policy) = candidate.policy.as_deref() {
-        return Some((policy.to_string(), candidate.request_key.clone()));
+        return CanonicalPolicyProjection::parse_key(&candidate.request_key)
+            .map(|_| (policy.to_string(), candidate.request_key.clone()));
     }
     let (policy, request_key) = candidate.ledger_key.as_deref()?.split_once('\0')?;
-    (!policy.is_empty() && RouteProjection::is_canonical_learning_key(request_key))
+    (!policy.is_empty() && CanonicalPolicyProjection::parse_key(request_key).is_some())
         .then(|| (policy.to_string(), request_key.to_string()))
 }
 
@@ -241,6 +242,39 @@ mod tests {
 
         assert_eq!(summary.admitted_count, 0);
         assert_eq!(summary.skipped_reasons["request_not_completed"], 1);
+        assert!(service.store().list_subjects().await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn predictive_legacy_key_is_imported_into_the_eval_exchange() -> anyhow::Result<()> {
+        let db = db::connect("sqlite::memory:").await?;
+        db::run_migrations(&db).await?;
+        let service = EvalService::new(EvalStore::new(db), Default::default());
+        let mut predictive = candidate(1.0);
+        predictive.policy = None;
+        predictive.request_key = "agent_route/v1|implement|normal".into();
+        predictive.ledger_key = Some("auto\0agent_route/v1|implement|normal".into());
+
+        let summary = import_semantic_reward_feedback(&service, &[predictive]).await?;
+
+        assert_eq!(summary.admitted_count, 1);
+        assert_eq!(service.store().list_subjects().await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_namespaced_reward_is_not_imported() -> anyhow::Result<()> {
+        let db = db::connect("sqlite::memory:").await?;
+        db::run_migrations(&db).await?;
+        let service = EvalService::new(EvalStore::new(db), Default::default());
+        let mut malformed = candidate(1.0);
+        malformed.request_key = "agent_route/v2|developer|normal".into();
+
+        let summary = import_semantic_reward_feedback(&service, &[malformed]).await?;
+
+        assert_eq!(summary.admitted_count, 0);
+        assert_eq!(summary.skipped_reasons["missing_named_policy"], 1);
         assert!(service.store().list_subjects().await?.is_empty());
         Ok(())
     }

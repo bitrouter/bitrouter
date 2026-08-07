@@ -2011,6 +2011,67 @@ async fn transport_retry_identity_is_idempotent_without_becoming_a_route_key() -
 }
 
 #[tokio::test]
+async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -> anyhow::Result<()>
+{
+    let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
+        "../../../templates/auto-router/policy-lock.yaml"
+    ))?;
+    let auto = lock
+        .policies
+        .get_mut("auto")
+        .ok_or_else(|| anyhow::anyhow!("template lock is missing the auto policy"))?;
+    auto.tiers
+        .insert("strong".into(), "strong:strong-model".into());
+    auto.tiers
+        .insert("economy".into(), "economy:economy-model".into());
+    auto.default_tier = Some("strong".into());
+    auto.routes
+        .insert("agent_route/v1|orchestrate|normal".into(), "economy".into());
+    let mut certificate = lock
+        .certificates
+        .get("auto")
+        .and_then(|certificates| certificates.values().next())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("template lock is missing an auto certificate"))?;
+    certificate.selected_tier = "economy".into();
+    certificate.baseline_tier = Some("strong".into());
+    lock.certificates
+        .entry("auto".into())
+        .or_default()
+        .insert("agent_route/v1|orchestrate|normal".into(), certificate);
+    let harness = HttpHarness::with_lock(lock).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let owner = "predictive-observed-guard-owner";
+    let bearer = add_owner(&assembled.db, owner).await?;
+
+    post_body(
+        &server,
+        InboundProtocol::Chat,
+        &bearer,
+        owner,
+        &json!({
+            "model": "@auto",
+            "messages": [{"role": "user", "content": "Design the architecture and plan the implementation"}]
+        }),
+        &[],
+    )
+    .await?;
+
+    let outcome = normalized_outcome(&assembled.db, owner).await?;
+    assert_eq!(outcome.selected_tiers, ["economy"]);
+    assert_eq!(
+        outcome.latest_projection.as_deref(),
+        Some("agent_trace/v2|opening|normal")
+    );
+    assert_ne!(
+        outcome.latest_projection.as_deref(),
+        Some("agent_route/v1|orchestrate|normal")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn auto_template_recovery_at_strong_activates_hold_for_next_normal_route()
 -> anyhow::Result<()> {
     let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(

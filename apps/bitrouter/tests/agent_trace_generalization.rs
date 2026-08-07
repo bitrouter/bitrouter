@@ -72,7 +72,7 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     assert_eq!(decisions.len(), 7, "each HTTP request emits one decision");
     for decision in &decisions {
         assert_eq!(decision.key_strategy, "agent_trace");
-        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
         assert_eq!(
             decision.selected_tier.as_deref(),
             Some("strong"),
@@ -254,7 +254,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         .expect("HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), 15);
     for decision in decisions.iter().step_by(2).take(7) {
-        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
@@ -281,7 +281,10 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         decisions[11].selected_model.as_deref(),
         Some(MOCK_BALANCED_MODEL)
     );
-    assert_eq!(decisions[13].request_key, "agent_trace/v2|recovery|guarded");
+    assert_eq!(
+        decisions[13].request_key,
+        "agent_route/v1|implement|guarded"
+    );
     assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
         decisions[13].selected_model.as_deref(),
@@ -332,7 +335,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         ),
         (
             "recovery",
-            "agent_trace/v2|recovery|guarded",
+            "agent_route/v1|implement|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
             claude_fixture_case(
                 "@auto:cost",
@@ -373,7 +376,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     assert_eq!(decisions.len(), 16);
     for ((name, key, _, _, tier, model), pair) in scenarios.iter().zip(decisions.chunks_exact(4)) {
         for root in [&pair[0], &pair[2]] {
-            assert_eq!(root.request_key, "agent_trace/v2|opening|normal");
+            assert_eq!(root.request_key, "agent_route/v1|unknown|normal");
             assert_eq!(root.selected_tier.as_deref(), Some("strong"));
             assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
         }

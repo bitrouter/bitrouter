@@ -20,7 +20,8 @@ use crate::policy_lock::{
     QualitySummary, RouteOwner, semantic_digest, validate_document,
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::workflow_state::ir::WorkflowStateKind;
+use crate::workflow_state::predictive::{CanonicalPolicyProjection, NextStepRole};
 
 /// A point-in-time, ordered view of every pre-v2 learned-state table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -199,7 +200,9 @@ pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
         let policy_eval = eval_routes
             .iter()
             .filter_map(|((eval_policy, request_key), route)| {
-                (eval_policy == policy_name).then_some((request_key.clone(), route))
+                (eval_policy == policy_name
+                    && CanonicalPolicyProjection::parse_key(request_key).is_some())
+                .then_some((request_key.clone(), route))
             })
             .collect::<BTreeMap<_, _>>();
         let mut request_keys = policy.routes.keys().cloned().collect::<BTreeSet<_>>();
@@ -628,7 +631,7 @@ fn route_evidence<'a>(
 
 fn legacy_request_key(policy_name: &str, fingerprint: &str) -> Option<String> {
     let (namespace, request_key) = fingerprint.split_once('\0')?;
-    (namespace == policy_name && RouteProjection::parse_key(request_key).is_some())
+    (namespace == policy_name && CanonicalPolicyProjection::parse_key(request_key).is_some())
         .then(|| request_key.to_string())
 }
 
@@ -667,8 +670,7 @@ fn pin_is_active(pin: &LegacyPin, cooldown_secs: u64, snapshot_time_unix_ms: i64
 }
 
 fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
-    let opening = RouteProjection::parse_key(request_key)
-        .is_some_and(|projection| projection.state_kind == WorkflowStateKind::Opening);
+    let opening = is_opening_like(request_key);
     if opening {
         policy
             .adequacy
@@ -680,9 +682,20 @@ fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
 }
 
 fn positive_route_is_allowed(policy: &PolicyDefinition, request_key: &str) -> bool {
-    RouteProjection::parse_key(request_key).is_some_and(|projection| {
-        projection.state_kind != WorkflowStateKind::Opening || policy.adequacy.explore_opening
-    })
+    CanonicalPolicyProjection::parse_key(request_key)
+        .is_some_and(|_| !is_opening_like(request_key) || policy.adequacy.explore_opening)
+}
+
+fn is_opening_like(request_key: &str) -> bool {
+    match CanonicalPolicyProjection::parse_key(request_key) {
+        Some(CanonicalPolicyProjection::Observed(projection)) => {
+            projection.state_kind == WorkflowStateKind::Opening
+        }
+        Some(CanonicalPolicyProjection::Predictive(projection)) => {
+            projection.next_step_role == NextStepRole::Orchestrate
+        }
+        None => false,
+    }
 }
 
 fn route_evidence_digest(
@@ -1055,6 +1068,70 @@ mod tests {
                 .contains_key(opening_key)
         );
         Ok(())
+    }
+
+    #[test]
+    fn predictive_orchestrate_guardrail_blocks_positive_legacy_promotion() -> anyhow::Result<()> {
+        let opening_key = "agent_route/v1|orchestrate|normal";
+        let fingerprint = format!("auto\0{opening_key}");
+        let mut current = v1(None);
+        current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?
+            .adequacy
+            .min_semantic_successes_for_opening = 1;
+        let evidence = super::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_100_000,
+            pins: Vec::new(),
+            exploration: vec![PersistedExplorationState {
+                fingerprint: fingerprint.clone(),
+                observed: 8,
+                adequate_trials: 4,
+                locked: true,
+            }],
+            semantic_successes: vec![PersistedSemanticSuccess {
+                evidence_id: format!("{fingerprint}\ntask-a"),
+                fingerprint,
+                task_id: "task-a".into(),
+            }],
+            reliability_events: Vec::new(),
+        };
+
+        let result = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &evidence,
+            eval: None,
+            proposed_progress_guards: None,
+        })?;
+
+        assert!(
+            !result.document.policies["auto"]
+                .routes
+                .contains_key(opening_key)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_evidence_accepts_only_canonical_observed_and_predictive_keys() {
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v1|implement|normal").as_deref(),
+            Some("agent_route/v1|implement|normal")
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_trace/v2|edit|normal").as_deref(),
+            Some("agent_trace/v2|edit|normal")
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v2|implement|normal"),
+            None
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v1|developer|normal"),
+            None
+        );
     }
 
     #[test]

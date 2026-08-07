@@ -126,13 +126,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "agent_trace/v2|opening|normal",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|guarded",
+            "agent_route/v1|unknown|guarded",
+            "agent_route/v1|unknown|guarded",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|normal",
         ]
     );
     Ok(())

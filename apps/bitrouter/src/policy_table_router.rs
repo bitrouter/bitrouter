@@ -71,6 +71,7 @@ pub struct PolicyDecision {
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
     pub route_projection: String,
+    pub observed_route_projection: String,
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
     pub harness_id: HarnessId,
@@ -140,21 +141,25 @@ impl PolicyTable {
         }))
     }
 
-    /// Resolve a v2 workflow key, then its exact v1 compatibility projection,
-    /// then the default. The returned key is the key that actually selected
-    /// the tier, except that defaults deliberately retain the v2 learning key.
+    /// Resolve the predictive key, then observed v2 and v1 compatibility
+    /// projections, then the default. The returned key is the key that actually
+    /// selected the tier, except that defaults retain the predictive key.
     fn tier_for_workflow<'table, 'key>(
         &'table self,
-        primary: &'key str,
-        compatibility_v1: &'key str,
+        predictive: &'key str,
+        observed_v2: &'key str,
+        observed_v1: &'key str,
     ) -> Option<(&'table str, &'key str)> {
-        if let Some(tier) = self.fingerprints.get(primary) {
-            return Some((tier.as_str(), primary));
+        if let Some(tier) = self.fingerprints.get(predictive) {
+            return Some((tier.as_str(), predictive));
         }
-        if let Some(tier) = self.fingerprints.get(compatibility_v1) {
-            return Some((tier.as_str(), compatibility_v1));
+        if let Some(tier) = self.fingerprints.get(observed_v2) {
+            return Some((tier.as_str(), observed_v2));
         }
-        self.default_tier.as_deref().map(|tier| (tier, primary))
+        if let Some(tier) = self.fingerprints.get(observed_v1) {
+            return Some((tier.as_str(), observed_v1));
+        }
+        self.default_tier.as_deref().map(|tier| (tier, predictive))
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -389,10 +394,12 @@ impl PolicyTableRouter {
         };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
+        let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key: primary_request_key.clone(),
             route_projection: primary_request_key.clone(),
+            observed_route_projection: observed_route_projection.clone(),
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
@@ -422,10 +429,11 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some((raw_static_tier, matched_request_key)) = self
-            .table
-            .tier_for_workflow(&primary_request_key, online.compatibility_routing_key_v1())
-        else {
+        let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
+            &primary_request_key,
+            &observed_route_projection,
+            online.compatibility_routing_key_v1(),
+        ) else {
             return decision;
         };
         decision.request_key = matched_request_key.to_string();
@@ -691,7 +699,9 @@ mod tests {
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::config::PolicyKeyStrategy;
-    use bitrouter_sdk::language_model::types::{GenerationParams, Message, ProviderMetadata, Tool};
+    use bitrouter_sdk::language_model::types::{
+        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
+    };
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -1280,6 +1290,25 @@ mod tests {
         vec![user("fix the bug"), assistant_calls("read_file")]
     }
 
+    fn completed_read_step() -> Vec<Message> {
+        vec![
+            user("fix the bug"),
+            assistant_calls("read_file"),
+            Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult {
+                    call_id: "call_read_file".to_string(),
+                    tool_name: None,
+                    output: ToolResultOutput::Text {
+                        value: "source contents".to_string(),
+                    },
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
+                }],
+            },
+        ]
+    }
+
     fn route_with_headers(
         router: &PolicyTableRouter,
         messages: Vec<Message>,
@@ -1326,11 +1355,55 @@ mod tests {
     fn v1_policy_routes_remain_active_as_compatibility_fallbacks() {
         let router = router();
         let mut prompt = prompt("inbound");
-        prompt.messages = read_step();
+        prompt.messages = completed_read_step();
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
         assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn predictive_route_wins_before_observed_compatibility_routes() {
+        let mut cfg = config();
+        cfg.fingerprints.insert(
+            "agent_trace/v2|tool_followup|normal".to_string(),
+            "flagship".to_string(),
+        );
+        cfg.fingerprints.insert(
+            "agent_route/v1|implement|normal".to_string(),
+            "cheap".to_string(),
+        );
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_read_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(decision.route_projection, "agent_route/v1|implement|normal");
+        assert_eq!(
+            decision.observed_route_projection,
+            "agent_trace/v2|tool_followup|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn broad_opening_routes_on_predictive_orchestrate_role() {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.fingerprints.insert(
+            "agent_route/v1|orchestrate|normal".to_string(),
+            "cheap".to_string(),
+        );
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Design the architecture and plan the implementation")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
@@ -1352,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_route_records_the_v2_learning_key() {
+    fn default_policy_route_records_the_predictive_learning_key() {
         let mut cfg = config();
         cfg.fingerprints.clear();
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
@@ -1360,7 +1433,7 @@ mod tests {
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 

@@ -2037,10 +2037,10 @@ impl ModelSelector for PolicyRuntime {
             })?;
             let input_model = ctx.model().to_string();
             let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
-            let projection =
-                RouteProjection::parse_key(&decision.route_projection).ok_or_else(|| {
+            let projection = RouteProjection::parse_key(&decision.observed_route_projection)
+                .ok_or_else(|| {
                     bitrouter_sdk::BitrouterError::internal(
-                        "named policy produced an invalid canonical route projection",
+                        "named policy produced an invalid observed route projection",
                     )
                 })?;
             let policy_digest = snapshot.digest.as_deref().ok_or_else(|| {
