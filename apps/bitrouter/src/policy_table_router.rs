@@ -37,7 +37,9 @@ use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
-use crate::workflow_state::predictive::{NextActionClass, NextStepRole, PredictiveEvidence};
+use crate::workflow_state::predictive::{
+    NextActionClass, NextStepRole, PredictiveEvidence, is_predictive_reason_code,
+};
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,7 +674,6 @@ fn key_strategy_name() -> &'static str {
 }
 
 const MAX_PREDICTION_REASON_CODES: usize = 8;
-const MAX_PREDICTION_REASON_CODE_LENGTH: usize = 32;
 const PREDICTION_CONFIDENCE_PPM_MAX: u32 = 1_000_000;
 
 fn prediction_role_name(role: NextStepRole) -> &'static str {
@@ -700,7 +701,7 @@ fn prediction_action_name(action: NextActionClass) -> &'static str {
 
 fn prediction_confidence_ppm(confidence: f32) -> u32 {
     let scaled = f64::from(confidence) * f64::from(PREDICTION_CONFIDENCE_PPM_MAX);
-    if !scaled.is_finite() || scaled <= 0.0 {
+    if scaled.is_nan() || scaled <= 0.0 {
         return 0;
     }
     if scaled >= f64::from(PREDICTION_CONFIDENCE_PPM_MAX) {
@@ -714,12 +715,7 @@ fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
     evidence
         .iter()
         .map(|item| item.code.as_str())
-        .filter(|code| {
-            code.len() <= MAX_PREDICTION_REASON_CODE_LENGTH
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-        })
+        .filter(|code| is_predictive_reason_code(code))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .take(MAX_PREDICTION_REASON_CODES)
@@ -1188,6 +1184,62 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn prediction_confidence_ppm_clamps_a_literal_edge_case_table() {
+        let cases = [
+            (f32::NAN, 0),
+            (f32::INFINITY, 1_000_000),
+            (f32::NEG_INFINITY, 0),
+            (-0.25, 0),
+            (0.0, 0),
+            (0.9, 900_000),
+            (1.1, 1_000_000),
+        ];
+
+        for (confidence, expected) in cases {
+            assert_eq!(prediction_confidence_ppm(confidence), expected);
+        }
+    }
+
+    #[test]
+    fn prediction_reason_codes_allow_only_predictor_categories_in_sorted_capped_order() {
+        let evidence = [
+            "test_succeeded",
+            "action_failed_once",
+            "customer_secret",
+            "read_result_available",
+            "opening_broad_goal",
+            "mutation_requested",
+            "score_margin_low",
+            "verification_requested",
+            "narrow_poll_requested",
+            "concrete_mutation_requested",
+            "mutation_requested",
+            "",
+        ]
+        .into_iter()
+        .map(|code| PredictiveEvidence {
+            code: code.to_string(),
+            weight: 1,
+            confidence: 0.9,
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            prediction_reason_codes(&evidence),
+            vec![
+                "action_failed_once",
+                "concrete_mutation_requested",
+                "mutation_requested",
+                "narrow_poll_requested",
+                "opening_broad_goal",
+                "read_result_available",
+                "score_margin_low",
+                "test_succeeded",
+            ]
+        );
     }
 
     #[test]

@@ -443,6 +443,33 @@ mod tests {
     }
 
     #[test]
+    fn summary_reads_old_json_without_predictive_dimensions() {
+        let legacy = r#"{
+            "total":1,
+            "routed_count":1,
+            "pinned_count":0,
+            "locked_count":0,
+            "trialed_count":0,
+            "by_selected_tier":{"cheap":1},
+            "by_selected_model":{"vendor/cheap":1},
+            "static_tier_replaced_count":0,
+            "static_model_replaced_count":0,
+            "by_tier_transition":{"cheap->cheap":1},
+            "by_model_transition":{"vendor/cheap->vendor/cheap":1},
+            "replacement_by_reason":{},
+            "by_reason":{"static_table":1},
+            "by_trace_state":{"tool_followup":1},
+            "by_agent_role":{"unknown":1},
+            "by_context_epoch":{"0":1}
+        }"#;
+
+        let parsed: PolicyDecisionSummary = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(parsed.by_predicted_role, BTreeMap::new());
+        assert_eq!(parsed.by_predicted_action, BTreeMap::new());
+    }
+
+    #[test]
     fn summary_counts_predictions_and_selected_model_exposure() {
         let mut predicted = record();
         predicted.predicted_role = Some("implement".to_string());

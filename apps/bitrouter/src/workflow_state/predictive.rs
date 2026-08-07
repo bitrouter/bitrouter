@@ -168,6 +168,102 @@ const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PredictiveReasonCode {
+    InstructionContradiction,
+    HistoryAmbiguous,
+    HistoryTruncated,
+    HistoryBoundedPrefix,
+    HistoryUnknown,
+    OpeningBroadGoal,
+    ConcreteMutationRequested,
+    MutationRequested,
+    VerificationRequested,
+    NarrowPollRequested,
+    FinalAnswerRequested,
+    ReadResultAvailable,
+    MutationResultAvailable,
+    TestFailedOnce,
+    RepeatedFailure,
+    ProgressNearDone,
+    TestSucceeded,
+    ActionFailedOnce,
+    RecoveryPressure,
+    RedoPenaltyHigh,
+    ContextPressureHigh,
+    OutputPrecisionHigh,
+    ToolContextAvailable,
+    TrajectoryPressure,
+    ScoreMarginLow,
+}
+
+impl PredictiveReasonCode {
+    const ALL: &[Self] = &[
+        Self::InstructionContradiction,
+        Self::HistoryAmbiguous,
+        Self::HistoryTruncated,
+        Self::HistoryBoundedPrefix,
+        Self::HistoryUnknown,
+        Self::OpeningBroadGoal,
+        Self::ConcreteMutationRequested,
+        Self::MutationRequested,
+        Self::VerificationRequested,
+        Self::NarrowPollRequested,
+        Self::FinalAnswerRequested,
+        Self::ReadResultAvailable,
+        Self::MutationResultAvailable,
+        Self::TestFailedOnce,
+        Self::RepeatedFailure,
+        Self::ProgressNearDone,
+        Self::TestSucceeded,
+        Self::ActionFailedOnce,
+        Self::RecoveryPressure,
+        Self::RedoPenaltyHigh,
+        Self::ContextPressureHigh,
+        Self::OutputPrecisionHigh,
+        Self::ToolContextAvailable,
+        Self::TrajectoryPressure,
+        Self::ScoreMarginLow,
+    ];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::InstructionContradiction => "instruction_contradiction",
+            Self::HistoryAmbiguous => "history_ambiguous",
+            Self::HistoryTruncated => "history_truncated",
+            Self::HistoryBoundedPrefix => "history_bounded_prefix",
+            Self::HistoryUnknown => "history_unknown",
+            Self::OpeningBroadGoal => "opening_broad_goal",
+            Self::ConcreteMutationRequested => "concrete_mutation_requested",
+            Self::MutationRequested => "mutation_requested",
+            Self::VerificationRequested => "verification_requested",
+            Self::NarrowPollRequested => "narrow_poll_requested",
+            Self::FinalAnswerRequested => "final_answer_requested",
+            Self::ReadResultAvailable => "read_result_available",
+            Self::MutationResultAvailable => "mutation_result_available",
+            Self::TestFailedOnce => "test_failed_once",
+            Self::RepeatedFailure => "repeated_failure",
+            Self::ProgressNearDone => "progress_near_done",
+            Self::TestSucceeded => "test_succeeded",
+            Self::ActionFailedOnce => "action_failed_once",
+            Self::RecoveryPressure => "recovery_pressure",
+            Self::RedoPenaltyHigh => "redo_penalty_high",
+            Self::ContextPressureHigh => "context_pressure_high",
+            Self::OutputPrecisionHigh => "output_precision_high",
+            Self::ToolContextAvailable => "tool_context_available",
+            Self::TrajectoryPressure => "trajectory_pressure",
+            Self::ScoreMarginLow => "score_margin_low",
+        }
+    }
+}
+
+/// Returns true only for a categorical reason emitted by the predictor.
+pub fn is_predictive_reason_code(code: &str) -> bool {
+    PredictiveReasonCode::ALL
+        .iter()
+        .any(|candidate| candidate.as_str() == code)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObservedAction {
     Read,
     Mutate,
@@ -218,15 +314,15 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         )
     {
         let code = if instruction.contradictory {
-            "instruction_contradiction"
+            PredictiveReasonCode::InstructionContradiction
         } else if history.completeness == PredictiveHistoryCompleteness::Ambiguous {
-            "history_ambiguous"
+            PredictiveReasonCode::HistoryAmbiguous
         } else if history.completeness == PredictiveHistoryCompleteness::Truncated {
-            "history_truncated"
+            PredictiveReasonCode::HistoryTruncated
         } else if history.completeness == PredictiveHistoryCompleteness::BoundedPrefix {
-            "history_bounded_prefix"
+            PredictiveReasonCode::HistoryBoundedPrefix
         } else {
-            "history_unknown"
+            PredictiveReasonCode::HistoryUnknown
         };
         push_evidence(&mut evidence, code, -8, 0.95);
         return unknown_prediction(observed_projection, history.completeness, evidence);
@@ -242,7 +338,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             weight,
             &mut evidence,
-            "opening_broad_goal",
+            PredictiveReasonCode::OpeningBroadGoal,
             0.85,
         );
     }
@@ -254,9 +350,9 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             weight,
             &mut evidence,
             if instruction.concrete {
-                "concrete_mutation_requested"
+                PredictiveReasonCode::ConcreteMutationRequested
             } else {
-                "mutation_requested"
+                PredictiveReasonCode::MutationRequested
             },
             0.8,
         );
@@ -267,7 +363,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Verify,
             4,
             &mut evidence,
-            "verification_requested",
+            PredictiveReasonCode::VerificationRequested,
             0.75,
         );
     }
@@ -277,7 +373,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Mechanical,
             9,
             &mut evidence,
-            "narrow_poll_requested",
+            PredictiveReasonCode::NarrowPollRequested,
             0.9,
         );
     }
@@ -287,7 +383,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Finalize,
             3,
             &mut evidence,
-            "final_answer_requested",
+            PredictiveReasonCode::FinalAnswerRequested,
             0.65,
         );
     }
@@ -298,7 +394,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Implement,
             9,
             &mut evidence,
-            "read_result_available",
+            PredictiveReasonCode::ReadResultAvailable,
             0.9,
         ),
         (Some(ObservedAction::Mutate), false) => add_score(
@@ -306,7 +402,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Verify,
             9,
             &mut evidence,
-            "mutation_result_available",
+            PredictiveReasonCode::MutationResultAvailable,
             0.9,
         ),
         (Some(ObservedAction::Test), true) if history.failure_count == 1 => add_score(
@@ -314,7 +410,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Implement,
             9,
             &mut evidence,
-            "test_failed_once",
+            PredictiveReasonCode::TestFailedOnce,
             0.9,
         ),
         (Some(ObservedAction::Test), true) => add_score(
@@ -322,7 +418,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             12,
             &mut evidence,
-            "repeated_failure",
+            PredictiveReasonCode::RepeatedFailure,
             0.95,
         ),
         (Some(ObservedAction::Test), false) if history.successful_test_after_mutation => add_score(
@@ -330,7 +426,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Finalize,
             12,
             &mut evidence,
-            "progress_near_done",
+            PredictiveReasonCode::ProgressNearDone,
             0.95,
         ),
         (Some(ObservedAction::Test), false) => add_score(
@@ -338,7 +434,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Finalize,
             7,
             &mut evidence,
-            "test_succeeded",
+            PredictiveReasonCode::TestSucceeded,
             0.8,
         ),
         (Some(ObservedAction::Other), false) => {}
@@ -348,7 +444,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
                 NextStepRole::Implement,
                 5,
                 &mut evidence,
-                "action_failed_once",
+                PredictiveReasonCode::ActionFailedOnce,
                 0.7,
             );
         }
@@ -361,7 +457,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             4,
             &mut evidence,
-            "recovery_pressure",
+            PredictiveReasonCode::RecoveryPressure,
             0.9,
         );
     }
@@ -373,7 +469,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             2,
             &mut evidence,
-            "redo_penalty_high",
+            PredictiveReasonCode::RedoPenaltyHigh,
             0.8,
         );
     }
@@ -383,7 +479,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             2,
             &mut evidence,
-            "context_pressure_high",
+            PredictiveReasonCode::ContextPressureHigh,
             0.7,
         );
     }
@@ -395,7 +491,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Verify,
             2,
             &mut evidence,
-            "output_precision_high",
+            PredictiveReasonCode::OutputPrecisionHigh,
             0.75,
         );
     }
@@ -407,7 +503,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Implement,
             1,
             &mut evidence,
-            "tool_context_available",
+            PredictiveReasonCode::ToolContextAvailable,
             0.65,
         );
     }
@@ -421,7 +517,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             NextStepRole::Orchestrate,
             3,
             &mut evidence,
-            "trajectory_pressure",
+            PredictiveReasonCode::TrajectoryPressure,
             0.85,
         );
     }
@@ -432,7 +528,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     let (role, top_score, runner_up) = choose_role(scores);
     let margin = top_score.saturating_sub(runner_up);
     if top_score < 5 || margin < 2 || coverage < 2 {
-        push_evidence(&mut evidence, "score_margin_low", -4, 0.8);
+        push_evidence(&mut evidence, PredictiveReasonCode::ScoreMarginLow, -4, 0.8);
         return unknown_prediction(observed_projection, history.completeness, evidence);
     }
 
@@ -763,7 +859,7 @@ fn add_score(
     role: NextStepRole,
     weight: i16,
     evidence: &mut Vec<PredictiveEvidence>,
-    code: &'static str,
+    code: PredictiveReasonCode,
     confidence: f32,
 ) {
     if let Some(index) = role_index(role) {
@@ -828,13 +924,15 @@ fn confidence_band(margin: i16) -> f32 {
 
 fn push_evidence(
     evidence: &mut Vec<PredictiveEvidence>,
-    code: &'static str,
+    code: PredictiveReasonCode,
     weight: i16,
     confidence: f32,
 ) {
-    if evidence.len() < MAX_PREDICTIVE_EVIDENCE && !evidence.iter().any(|item| item.code == code) {
+    if evidence.len() < MAX_PREDICTIVE_EVIDENCE
+        && !evidence.iter().any(|item| item.code == code.as_str())
+    {
         evidence.push(PredictiveEvidence {
-            code: code.to_string(),
+            code: code.as_str().to_string(),
             weight,
             confidence,
         });
@@ -1006,6 +1104,15 @@ mod tests {
             serde_json::to_string(&PredictiveHistoryCompleteness::BoundedPrefix),
             Ok(value) if value == "\"bounded_prefix\""
         ));
+    }
+
+    #[test]
+    fn predictive_reason_code_validator_accepts_every_producer_category() {
+        for code in PredictiveReasonCode::ALL {
+            assert!(is_predictive_reason_code(code.as_str()));
+        }
+        assert!(!is_predictive_reason_code("customer_secret"));
+        assert!(!is_predictive_reason_code(""));
     }
 
     #[test]
