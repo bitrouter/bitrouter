@@ -5,7 +5,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use bitrouter_sdk::Result as BitrouterResult;
+use bitrouter_sdk::event::PipelineEvent;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage};
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
+use uuid::Uuid;
 
 use super::store::EvalStore;
 use super::types::{
@@ -14,6 +18,55 @@ use super::types::{
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
+
+/// Opaque, process-local identity for one pipeline invocation that produced an
+/// evaluable policy decision. Its token and owner never enter serialized event
+/// output or durable evidence.
+#[derive(Clone)]
+pub struct EvalInvocation {
+    token: Uuid,
+    owner_user_id: String,
+}
+
+impl EvalInvocation {
+    pub fn new(owner_user_id: impl Into<String>) -> Self {
+        Self {
+            token: Uuid::new_v4(),
+            owner_user_id: owner_user_id.into(),
+        }
+    }
+
+    pub(crate) fn token(&self) -> Uuid {
+        self.token
+    }
+
+    pub(crate) fn owner_user_id(&self) -> &str {
+        &self.owner_user_id
+    }
+}
+
+impl std::fmt::Debug for EvalInvocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("EvalInvocation(REDACTED)")
+    }
+}
+
+impl Serialize for EvalInvocation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("EvalInvocation", 1)?;
+        state.serialize_field("token", "redacted")?;
+        state.end()
+    }
+}
+
+impl PipelineEvent for EvalInvocation {
+    fn event_name(&self) -> &'static str {
+        "eval.invocation"
+    }
+}
 
 /// A policy decision waiting for the always-run settlement stage to attach
 /// request outcome evidence. This is process-local correlation state only; it
@@ -136,51 +189,89 @@ fn normalize_predicted_action(value: &str) -> String {
 /// never alter the active routing policy.
 #[derive(Clone, Default)]
 pub struct PendingEvalDecisionStore {
-    entries: Arc<Mutex<BTreeMap<String, PendingEvalDecision>>>,
+    entries: Arc<Mutex<BTreeMap<Uuid, PendingEvalEntry>>>,
+}
+
+struct PendingEvalEntry {
+    owner_user_id: String,
+    decision: PendingEvalDecision,
 }
 
 impl PendingEvalDecisionStore {
-    pub fn insert(&self, decision: PendingEvalDecision) {
+    pub fn insert(&self, invocation: &EvalInvocation, decision: PendingEvalDecision) {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(decision.request_id.clone(), decision);
+            .insert(
+                invocation.token(),
+                PendingEvalEntry {
+                    owner_user_id: invocation.owner_user_id().to_owned(),
+                    decision,
+                },
+            );
     }
 
-    pub fn peek(&self, request_id: &str) -> Option<PendingEvalDecision> {
+    pub fn peek(
+        &self,
+        invocation: &EvalInvocation,
+        owner_user_id: &str,
+    ) -> Option<PendingEvalDecision> {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(request_id)
-            .cloned()
+            .get(&invocation.token())
+            .filter(|entry| entry.owner_user_id == owner_user_id)
+            .map(|entry| entry.decision.clone())
     }
 
-    pub fn observe(&self, request_id: &str, observation: PredictionObservation) -> bool {
+    pub fn observe(
+        &self,
+        invocation: &EvalInvocation,
+        owner_user_id: &str,
+        observation: PredictionObservation,
+    ) -> bool {
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(decision) = entries.get_mut(request_id) else {
+        let Some(entry) = entries
+            .get_mut(&invocation.token())
+            .filter(|entry| entry.owner_user_id == owner_user_id)
+        else {
             return false;
         };
-        decision.observation = Some(match decision.observation {
+        entry.decision.observation = Some(match entry.decision.observation {
             Some(existing) => existing.merge(observation),
             None => observation,
         });
         true
     }
 
-    pub fn take(&self, request_id: &str) -> Option<PendingEvalDecision> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(request_id)
+    pub fn take(
+        &self,
+        invocation: &EvalInvocation,
+        owner_user_id: &str,
+    ) -> Option<PendingEvalDecision> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        if entries
+            .get(&invocation.token())
+            .is_none_or(|entry| entry.owner_user_id != owner_user_id)
+        {
+            return None;
+        }
+        entries
+            .remove(&invocation.token())
+            .map(|entry| entry.decision)
     }
 
-    pub fn remove(&self, request_id: &str) -> bool {
-        self.take(request_id).is_some()
+    pub fn remove(&self, invocation: &EvalInvocation, owner_user_id: &str) -> bool {
+        self.take(invocation, owner_user_id).is_some()
     }
 
     #[cfg(test)]
-    pub(crate) fn get(&self, request_id: &str) -> Option<PendingEvalDecision> {
-        self.peek(request_id)
+    pub(crate) fn get(
+        &self,
+        invocation: &EvalInvocation,
+        owner_user_id: &str,
+    ) -> Option<PendingEvalDecision> {
+        self.peek(invocation, owner_user_id)
     }
 
     #[cfg(test)]
@@ -311,7 +402,10 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
-        let pending = self.pending.peek(&context.request_id);
+        let invocation = context.get_event::<EvalInvocation>().cloned();
+        let pending = invocation
+            .as_ref()
+            .and_then(|invocation| self.pending.peek(invocation, context.caller.user_id()));
         if let Some(trajectory) = &self.trajectory {
             let snapshot = pending
                 .as_ref()
@@ -331,7 +425,10 @@ impl SettlementRecorder for EvalSettlementRecorder {
                 }
                 crate::trajectory::settlement::TrajectorySettlementDisposition::Persisted
                 | crate::trajectory::settlement::TrajectorySettlementDisposition::AlreadyTerminal => {
-                    self.pending.remove(&context.request_id);
+                    if let Some(invocation) = &invocation {
+                        self.pending
+                            .remove(invocation, context.caller.user_id());
+                    }
                     return Ok(());
                 }
             }
@@ -352,7 +449,9 @@ impl SettlementRecorder for EvalSettlementRecorder {
                     "persisting request eval subject: {error}"
                 ))
             })?;
-        self.pending.take(&context.request_id);
+        if let Some(invocation) = &invocation {
+            self.pending.take(invocation, context.caller.user_id());
+        }
         Ok(())
     }
 }
@@ -367,7 +466,9 @@ mod tests {
     use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-    use super::{EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore};
+    use super::{
+        EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+    };
     use crate::eval::store::EvalStore;
     use crate::metering::PricingTable;
 
@@ -379,25 +480,29 @@ mod tests {
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db);
         let pending = PendingEvalDecisionStore::default();
-        pending.insert(PendingEvalDecision {
-            request_id: "request-1".into(),
-            decision_id: "decision-1".into(),
-            policy: "auto:cost".into(),
-            policy_digest: DIGEST.into(),
-            request_key: "opening".into(),
-            selected_tier: "economy".into(),
-            baseline_tier: Some("strong".into()),
-            preset: Some("auto:cost".into()),
-            holdout: false,
-            predicted_role: None,
-            predicted_action: None,
-            prediction_confidence_ppm: None,
-            observation: None,
-            observed_at: "2026-08-08T00:00:00Z".into(),
-        });
+        let invocation = EvalInvocation::new("local");
+        pending.insert(
+            &invocation,
+            PendingEvalDecision {
+                request_id: "request-1".into(),
+                decision_id: "decision-1".into(),
+                policy: "auto:cost".into(),
+                policy_digest: DIGEST.into(),
+                request_key: "opening".into(),
+                selected_tier: "economy".into(),
+                baseline_tier: Some("strong".into()),
+                preset: Some("auto:cost".into()),
+                holdout: false,
+                predicted_role: None,
+                predicted_action: None,
+                prediction_confidence_ppm: None,
+                observation: None,
+                observed_at: "2026-08-08T00:00:00Z".into(),
+            },
+        );
         let recorder =
             EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
-        let mut context = settlement_context();
+        let mut context = settlement_context_with(&invocation);
 
         recorder.record(&mut context).await?;
 
@@ -426,26 +531,30 @@ mod tests {
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db.clone());
         let pending = PendingEvalDecisionStore::default();
-        pending.insert(PendingEvalDecision {
-            request_id: "request-1".into(),
-            decision_id: "decision-1".into(),
-            policy: "auto:cost".into(),
-            policy_digest: DIGEST.into(),
-            request_key: "opening".into(),
-            selected_tier: "economy".into(),
-            baseline_tier: Some("strong".into()),
-            preset: Some("auto:cost".into()),
-            holdout: false,
-            predicted_role: Some("implement".into()),
-            predicted_action: Some("mutate".into()),
-            prediction_confidence_ppm: Some(900_000),
-            observation: Some(
-                crate::workflow_state::response_observer::PredictionObservation::new(
-                    crate::workflow_state::response_observer::ObservedActionClass::Mutate,
+        let invocation = EvalInvocation::new("local");
+        pending.insert(
+            &invocation,
+            PendingEvalDecision {
+                request_id: "request-1".into(),
+                decision_id: "decision-1".into(),
+                policy: "auto:cost".into(),
+                policy_digest: DIGEST.into(),
+                request_key: "opening".into(),
+                selected_tier: "economy".into(),
+                baseline_tier: Some("strong".into()),
+                preset: Some("auto:cost".into()),
+                holdout: false,
+                predicted_role: Some("implement".into()),
+                predicted_action: Some("mutate".into()),
+                prediction_confidence_ppm: Some(900_000),
+                observation: Some(
+                    crate::workflow_state::response_observer::PredictionObservation::new(
+                        crate::workflow_state::response_observer::ObservedActionClass::Mutate,
+                    ),
                 ),
-            ),
-            observed_at: "2026-08-08T00:00:00Z".into(),
-        });
+                observed_at: "2026-08-08T00:00:00Z".into(),
+            },
+        );
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "CREATE TRIGGER fail_eval_subject BEFORE INSERT ON eval_subjects \
@@ -458,10 +567,10 @@ mod tests {
             pending.clone(),
             Arc::new(PricingTable::new()),
         );
-        let mut context = settlement_context();
+        let mut context = settlement_context_with(&invocation);
 
         assert!(recorder.record(&mut context).await.is_err());
-        assert!(pending.peek("request-1").is_some());
+        assert!(pending.peek(&invocation, "local").is_some());
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "DROP TRIGGER fail_eval_subject".to_owned(),
@@ -470,7 +579,7 @@ mod tests {
 
         recorder.record(&mut context).await?;
 
-        assert!(pending.peek("request-1").is_none());
+        assert!(pending.peek(&invocation, "local").is_none());
         assert!(store.subject("request:request-1").await?.is_some());
         Ok(())
     }
@@ -537,5 +646,11 @@ mod tests {
             error: None,
             events: EventBus::default(),
         }
+    }
+
+    fn settlement_context_with(invocation: &EvalInvocation) -> SettlementContext {
+        let mut context = settlement_context();
+        context.emit(invocation.clone());
+        context
     }
 }

@@ -91,6 +91,8 @@ pub struct Assembled {
     pub continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
+    #[cfg(test)]
+    pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
@@ -592,6 +594,9 @@ pub async fn build_app_with_path(
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
+    let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
+    #[cfg(test)]
+    let response_observer_for_tests = response_observer.clone();
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
@@ -633,9 +638,7 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
-            lm.observe_hook(PredictiveResponseObserver::new(
-                pending_eval_decisions.clone(),
-            ));
+            lm.observe_hook(response_observer);
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -728,6 +731,8 @@ pub async fn build_app_with_path(
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
+        #[cfg(test)]
+        response_observer: response_observer_for_tests,
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
@@ -2124,6 +2129,7 @@ presets:
             Some("strong")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
+        assert_eq!(assembled.response_observer.buffered_request_count(), 0);
         Ok(())
     }
 
@@ -2159,7 +2165,20 @@ presets:
             subjects[0].decisions[0].baseline_tier.as_deref(),
             Some("economy")
         );
+        let observation = subjects[0]
+            .evidence
+            .iter()
+            .find(|evidence| evidence.kind == "routing.prediction_observation")
+            .ok_or_else(|| anyhow::anyhow!("guarded response observation evidence missing"))?;
+        assert_eq!(
+            observation
+                .attributes
+                .get("observed_action")
+                .map(String::as_str),
+            Some("answer_or_summarize")
+        );
         assert!(assembled.pending_eval_decisions.is_empty());
+        assert_eq!(assembled.response_observer.buffered_request_count(), 0);
         Ok(())
     }
 

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
-use crate::eval::settlement::PendingEvalDecisionStore;
+use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
@@ -1944,22 +1944,13 @@ impl PolicyRuntime {
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
                     .with_progress_guard(definition.progress_guard.clone());
-                router = if definition.progress_guard.is_none() {
-                    router.with_eval_observer(
-                        self.eval_decisions.clone(),
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                } else {
-                    router.with_eval_metadata(
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                };
+                router = router.with_eval_observer(
+                    self.eval_decisions.clone(),
+                    name.clone(),
+                    loaded.digest.clone(),
+                    route_baselines,
+                    definition.default_tier.clone(),
+                );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
                 }
@@ -2018,6 +2009,13 @@ impl ModelSelector for PolicyRuntime {
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
+        let invocation = ctx
+            .extension::<EvalInvocation>()
+            .unwrap_or_else(|| Arc::new(EvalInvocation::new(ctx.caller().user_id())));
+        if !ctx.has_event::<EvalInvocation>() {
+            ctx.emit(invocation.as_ref().clone());
+        }
+        ctx.insert_extension(invocation.clone());
         let guard = router.progress_guard();
         if let (Some(trajectory), Some(guard)) = (&self.trajectory, guard) {
             if ctx.caller().is_anonymous() {
@@ -2125,6 +2123,7 @@ impl ModelSelector for PolicyRuntime {
                 .collect();
             let selected = router.record_bound_policy_decision(
                 &correlated.request_id,
+                invocation.as_ref(),
                 input_model,
                 decision,
                 ctx.headers(),
@@ -2139,6 +2138,7 @@ impl ModelSelector for PolicyRuntime {
         let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
         let selected = router.record_bound_policy_decision(
             ctx.request_id(),
+            invocation.as_ref(),
             input_model,
             decision,
             ctx.headers(),

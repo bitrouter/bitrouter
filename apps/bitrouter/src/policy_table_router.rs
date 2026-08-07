@@ -31,7 +31,7 @@ use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
-use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
+use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
@@ -313,23 +313,6 @@ impl PolicyTableRouter {
         self
     }
 
-    pub(crate) fn with_eval_metadata(
-        mut self,
-        policy: impl Into<String>,
-        policy_digest: impl Into<String>,
-        route_baselines: HashMap<String, String>,
-        default_baseline: Option<String>,
-    ) -> Self {
-        self.eval_observer = Some(EvalDecisionObserver {
-            pending: None,
-            policy: policy.into(),
-            policy_digest: policy_digest.into(),
-            route_baselines,
-            default_baseline,
-        });
-        self
-    }
-
     pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
         self.progress_guard = guard;
         self
@@ -484,7 +467,7 @@ impl PolicyTableRouter {
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
         let input_model = prompt.model.clone();
         let decision = self.decision_for(prompt, headers);
-        let selected = self.record_decision(input_model, decision, headers, None);
+        let selected = self.record_decision(input_model, decision, headers, None, None);
         let Some(model) = selected else {
             return false;
         };
@@ -539,11 +522,18 @@ impl PolicyTableRouter {
     pub(crate) fn record_bound_policy_decision(
         &self,
         request_id: &str,
+        invocation: &EvalInvocation,
         input_model: String,
         decision: PolicyDecision,
         headers: &HeaderMap,
     ) -> Option<String> {
-        self.record_decision(input_model, decision, headers, Some(request_id))
+        self.record_decision(
+            input_model,
+            decision,
+            headers,
+            Some(request_id),
+            Some(invocation),
+        )
     }
 
     fn record_decision(
@@ -552,6 +542,7 @@ impl PolicyTableRouter {
         decision: PolicyDecision,
         headers: &HeaderMap,
         request_id_override: Option<&str>,
+        invocation: Option<&EvalInvocation>,
     ) -> Option<String> {
         let baseline_tier = self.eval_baseline_tier(&decision);
         let request_id = request_id_override.or_else(|| {
@@ -591,28 +582,32 @@ impl PolicyTableRouter {
             trialed = decision.trialed,
             "policy routing decision"
         );
-        if let (Some(observer), Some(request_id), Some(selected_tier)) = (
+        if let (Some(observer), Some(invocation), Some(request_id), Some(selected_tier)) = (
             &self.eval_observer,
+            invocation,
             request_id,
             decision.selected_tier.as_deref(),
         ) && let Some(pending) = &observer.pending
         {
-            pending.insert(PendingEvalDecision {
-                request_id: request_id.to_string(),
-                decision_id: format!("{request_id}:{}", observer.policy),
-                policy: observer.policy.clone(),
-                policy_digest: observer.policy_digest.clone(),
-                request_key: decision.request_key.clone(),
-                selected_tier: selected_tier.to_string(),
-                baseline_tier: baseline_tier.clone(),
-                preset: Some(observer.policy.clone()),
-                holdout: false,
-                predicted_role: decision.predicted_role.clone(),
-                predicted_action: decision.predicted_action.clone(),
-                prediction_confidence_ppm: decision.prediction_confidence_ppm,
-                observation: None,
-                observed_at: chrono::Utc::now().to_rfc3339(),
-            });
+            pending.insert(
+                invocation,
+                PendingEvalDecision {
+                    request_id: request_id.to_string(),
+                    decision_id: format!("{request_id}:{}", observer.policy),
+                    policy: observer.policy.clone(),
+                    policy_digest: observer.policy_digest.clone(),
+                    request_key: decision.request_key.clone(),
+                    selected_tier: selected_tier.to_string(),
+                    baseline_tier: baseline_tier.clone(),
+                    preset: Some(observer.policy.clone()),
+                    holdout: false,
+                    predicted_role: decision.predicted_role.clone(),
+                    predicted_action: decision.predicted_action.clone(),
+                    prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                    observation: None,
+                    observed_at: chrono::Utc::now().to_rfc3339(),
+                },
+            );
         }
         if let Some(recorder) = &self.decision_recorder {
             let record = PolicyDecisionRecord {
@@ -984,6 +979,7 @@ mod tests {
             HeaderValue::from_str(raw_request_id)?,
         );
         let decision = router.candidate_for_guarded_policy(&request_prompt, &headers);
+        let invocation = EvalInvocation::new("owner-a");
         let captured = Arc::new(Mutex::new(Vec::new()));
         let sink = captured.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -995,6 +991,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             router.record_bound_policy_decision(
                 &opaque_request_id,
+                &invocation,
                 "inbound".into(),
                 decision,
                 &headers,
@@ -1265,10 +1262,21 @@ mod tests {
         );
         let mut routed = prompt("inbound");
         routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        let invocation = EvalInvocation::new("local");
+        let decision = router.decision_for_bound_policy(&routed, &headers);
 
-        assert!(router.route_prompt(&mut routed, &headers));
+        let selected = router.record_bound_policy_decision(
+            "request-1",
+            &invocation,
+            routed.model.clone(),
+            decision,
+            &headers,
+        );
+        assert_eq!(selected.as_deref(), Some("vendor/economy"));
 
-        let decision = pending.get("request-1").expect("pending eval decision");
+        let decision = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
         assert_eq!(decision.policy, "auto:cost");
         assert_eq!(decision.selected_tier, "economy");
         assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
@@ -1304,11 +1312,21 @@ mod tests {
         );
         let mut routed = prompt("inbound");
         routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        let invocation = EvalInvocation::new("local");
+        let decision = router.decision_for_bound_policy(&routed, &headers);
 
-        assert!(router.route_prompt(&mut routed, &headers));
-        assert_eq!(routed.model, "vendor/economy");
+        let selected = router.record_bound_policy_decision(
+            "request-2",
+            &invocation,
+            routed.model.clone(),
+            decision,
+            &headers,
+        );
+        assert_eq!(selected.as_deref(), Some("vendor/economy"));
 
-        let pending_decision = pending.get("request-2").expect("pending eval decision");
+        let pending_decision = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
         assert_eq!(pending_decision.selected_tier, "economy");
         assert_eq!(pending_decision.baseline_tier.as_deref(), Some("reference"));
         let records = PolicyDecisionRecord::load_jsonl(&path).expect("decision record");

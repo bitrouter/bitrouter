@@ -4,7 +4,7 @@ use bitrouter::eval::EvalService;
 use bitrouter::eval::admission::SubmissionPrincipal;
 use bitrouter::eval::compiler::EvalEvidenceSnapshot;
 use bitrouter::eval::settlement::{
-    EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+    EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
 };
 use bitrouter::eval::store::EvalStore;
 use bitrouter::eval::types::{
@@ -232,25 +232,29 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
     bitrouter::db::run_migrations(&db).await?;
     let store = EvalStore::new(db);
     let pending = PendingEvalDecisionStore::default();
-    pending.insert(PendingEvalDecision {
-        request_id: "request-observed".into(),
-        decision_id: "decision-observed".into(),
-        policy: "auto:cost".into(),
-        policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .into(),
-        request_key: "agent_trace/v2|edit|normal".into(),
-        selected_tier: "economy".into(),
-        baseline_tier: Some("strong".into()),
-        preset: Some("auto:cost".into()),
-        holdout: false,
-        predicted_role: Some("implement".into()),
-        predicted_action: Some("mutate".into()),
-        prediction_confidence_ppm: Some(900_000),
-        observation: None,
-        observed_at: "2026-08-08T00:00:00Z".into(),
-    });
+    let invocation = EvalInvocation::new("local");
+    pending.insert(
+        &invocation,
+        PendingEvalDecision {
+            request_id: "request-observed".into(),
+            decision_id: "decision-observed".into(),
+            policy: "auto:cost".into(),
+            policy_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            request_key: "agent_trace/v2|edit|normal".into(),
+            selected_tier: "economy".into(),
+            baseline_tier: Some("strong".into()),
+            preset: Some("auto:cost".into()),
+            holdout: false,
+            predicted_role: Some("implement".into()),
+            predicted_action: Some("mutate".into()),
+            prediction_confidence_ppm: Some(900_000),
+            observation: None,
+            observed_at: "2026-08-08T00:00:00Z".into(),
+        },
+    );
     let observer = PredictiveResponseObserver::new(pending.clone());
-    let context = PipelineContext::new(PipelineRequest {
+    let mut context = PipelineContext::new(PipelineRequest {
         request_id: "request-observed".into(),
         model: "model".into(),
         caller: CallerContext::local(),
@@ -268,6 +272,8 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         },
         inbound_protocol: Some(ApiProtocol::Responses),
     });
+    context.emit(invocation.clone());
+    context.insert_extension(std::sync::Arc::new(invocation.clone()));
     let execution = ExecutionResult {
         provider_id: "provider".into(),
         model_id: "model".into(),
@@ -344,6 +350,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         error: None,
         events: EventBus::default(),
     };
+    settlement.emit(invocation);
 
     recorder.record(&mut settlement).await?;
 

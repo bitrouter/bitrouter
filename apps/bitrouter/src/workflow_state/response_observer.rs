@@ -8,7 +8,7 @@ use bitrouter_sdk::language_model::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::eval::settlement::PendingEvalDecisionStore;
+use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 
 const MAX_STREAM_BUFFER_BYTES: usize = 4_096;
 const MAX_STREAM_TOOL_CALLS: usize = 32;
@@ -92,7 +92,7 @@ impl PredictionObservation {
 #[derive(Clone)]
 pub struct PredictiveResponseObserver {
     pending: PendingEvalDecisionStore,
-    streams: Arc<Mutex<BTreeMap<String, StreamObservationBuffer>>>,
+    streams: Arc<Mutex<BTreeMap<uuid::Uuid, StreamObservationBuffer>>>,
 }
 
 impl PredictiveResponseObserver {
@@ -104,6 +104,12 @@ impl PredictiveResponseObserver {
     }
 
     fn initialize_stream(&self, context: &PipelineContext) {
+        let Some(invocation) = context.extension::<EvalInvocation>() else {
+            return;
+        };
+        if invocation.owner_user_id() != context.caller().user_id() {
+            return;
+        }
         let definitions = context
             .prompt()
             .tools
@@ -120,45 +126,61 @@ impl PredictiveResponseObserver {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(
-                context.request_id().to_owned(),
+                invocation.token(),
                 StreamObservationBuffer::new(definitions),
             );
     }
 
-    fn observe_stream_part(&self, request_id: &str, part: &StreamPart) {
+    fn observe_stream_part(&self, context: &StreamContext, part: &StreamPart) {
+        let Some(invocation) = context.extension::<EvalInvocation>() else {
+            return;
+        };
+        if invocation.owner_user_id() != context.caller.user_id() {
+            return;
+        }
+        let token = invocation.token();
         let terminal = part.is_terminal();
         let observation = {
             let mut streams = self.streams.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(buffer) = streams.get_mut(request_id) else {
+            let Some(buffer) = streams.get_mut(&token) else {
                 return;
             };
             buffer.observe(part);
             terminal.then(|| buffer.finalize())
         };
         if let Some(observation) = observation {
-            self.pending.observe(request_id, observation);
+            self.pending
+                .observe(&invocation, context.caller.user_id(), observation);
             self.streams
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .remove(request_id);
+                .remove(&token);
         }
     }
 
-    fn clear_stream(&self, request_id: &str) {
+    fn clear_stream(&self, invocation: &EvalInvocation) {
         self.streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(request_id);
+            .remove(&invocation.token());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn buffered_request_count(&self) -> usize {
+        self.streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 
 #[async_trait]
 impl ObserveHook for PredictiveResponseObserver {
-    async fn on_request_start(&self, context: &PipelineContext) {
-        self.initialize_stream(context);
+    async fn after_phase(&self, phase: Phase, context: &PipelineContext) {
+        if phase == Phase::Route {
+            self.initialize_stream(context);
+        }
     }
-
-    async fn after_phase(&self, _phase: Phase, _context: &PipelineContext) {}
 
     async fn on_hop_end(
         &self,
@@ -166,10 +188,14 @@ impl ObserveHook for PredictiveResponseObserver {
         _target: &RoutingTarget,
         outcome: HopOutcome<'_>,
     ) {
-        if let HopOutcome::Generated(result) = outcome {
+        if let HopOutcome::Generated(result) = outcome
+            && let Some(invocation) = context.extension::<EvalInvocation>()
+            && invocation.owner_user_id() == context.caller().user_id()
+        {
             let observation = classify_content(&result.result.content, &context.prompt().tools);
-            self.pending.observe(context.request_id(), observation);
-            self.clear_stream(context.request_id());
+            self.pending
+                .observe(&invocation, context.caller().user_id(), observation);
+            self.clear_stream(&invocation);
         }
     }
 
@@ -181,15 +207,14 @@ impl ObserveHook for PredictiveResponseObserver {
     }
 
     async fn on_stream_part(&self, context: &StreamContext, part: &StreamPart) {
-        self.observe_stream_part(&context.request_id, part);
+        self.observe_stream_part(context, part);
     }
 
-    async fn on_request_end(&self, context: &PipelineContext, outcome: &RequestOutcome) {
-        if matches!(
-            outcome,
-            RequestOutcome::Failed(_) | RequestOutcome::ClientDisconnected
-        ) {
-            self.clear_stream(context.request_id());
+    async fn on_request_end(&self, context: &PipelineContext, _outcome: &RequestOutcome) {
+        if let Some(invocation) = context.extension::<EvalInvocation>()
+            && invocation.owner_user_id() == context.caller().user_id()
+        {
+            self.clear_stream(&invocation);
         }
     }
 }
@@ -239,6 +264,10 @@ impl StreamObservationBuffer {
 
     fn observe_tool_delta(&mut self, id: &str, name: Option<&str>, arguments: &str) {
         self.saw_tool = true;
+        if let Some(name) = name {
+            let declared_action = classify_tool_name(name, &self.tool_definitions);
+            self.dominant_tool_action = self.dominant_tool_action.dominant(declared_action);
+        }
         let id_digest = tool_name_digest(id);
         let call_index = self
             .calls
@@ -349,9 +378,9 @@ fn classify_tool_call(
     arguments: &str,
     definitions: &BTreeMap<[u8; 32], ObservedActionClass>,
 ) -> ObservedActionClass {
-    let label_action = classify_label(name);
-    if label_action != ObservedActionClass::Unknown {
-        return label_action;
+    let declared_action = classify_tool_name(name, definitions);
+    if declared_action != ObservedActionClass::Unknown {
+        return declared_action;
     }
     if is_command_tool(name)
         && let Some(command) = command_argument(arguments)
@@ -360,6 +389,17 @@ fn classify_tool_call(
         if command_action != ObservedActionClass::Unknown {
             return command_action;
         }
+    }
+    ObservedActionClass::Unknown
+}
+
+fn classify_tool_name(
+    name: &str,
+    definitions: &BTreeMap<[u8; 32], ObservedActionClass>,
+) -> ObservedActionClass {
+    let label_action = classify_label(name);
+    if label_action != ObservedActionClass::Unknown {
+        return label_action;
     }
     definitions
         .get(&tool_name_digest(name))
@@ -519,12 +559,12 @@ mod tests {
     use bitrouter_sdk::language_model::types::AuthScheme;
     use bitrouter_sdk::language_model::{
         ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-        HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RequestOutcome, RoutingTarget,
-        StreamPart, StreamProcessor, Tool,
+        HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest, RequestOutcome,
+        RoutingTarget, StreamPart, StreamProcessor, Tool,
     };
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
-    use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
+    use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -616,12 +656,12 @@ mod tests {
     #[tokio::test]
     async fn response_observer_reassembles_stream_calls_without_changing_output()
     -> anyhow::Result<()> {
-        let pending = pending("stream-fragments");
+        let (pending, invocation) = pending("stream-fragments");
         let observer = PredictiveResponseObserver::new(pending.clone());
         let prompt = prompt(Vec::new());
         let original_prompt = prompt.clone();
-        let context = pipeline_context("stream-fragments", prompt);
-        observer.on_request_start(&context).await;
+        let context = pipeline_context("stream-fragments", prompt, &invocation);
+        observer.after_phase(Phase::Route, &context).await;
         assert_eq!(context.prompt(), &original_prompt);
         let mut processor = StreamProcessor::new(
             Vec::new(),
@@ -651,7 +691,7 @@ mod tests {
 
         assert_eq!(emitted, parts);
         let decision = pending
-            .peek("stream-fragments")
+            .peek(&invocation, "local")
             .ok_or_else(|| anyhow::anyhow!("pending stream decision missing"))?;
         assert_eq!(
             decision
@@ -660,22 +700,16 @@ mod tests {
             Some(ObservedActionClass::ExecuteOrTest)
         );
         assert!(!format!("{decision:?}").contains("cargo test --all-features"));
-        assert!(
-            !observer
-                .streams
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains_key("stream-fragments")
-        );
+        assert_eq!(observer.buffered_request_count(), 0);
         Ok(())
     }
 
     #[tokio::test]
     async fn response_observer_bounds_stream_fragments_to_4096_bytes() -> anyhow::Result<()> {
-        let pending = pending("stream-bound");
+        let (pending, invocation) = pending("stream-bound");
         let observer = PredictiveResponseObserver::new(pending.clone());
-        let context = pipeline_context("stream-bound", prompt(Vec::new()));
-        observer.on_request_start(&context).await;
+        let context = pipeline_context("stream-bound", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
         let stream = context.stream_context();
         observer
             .on_stream_part(
@@ -691,7 +725,7 @@ mod tests {
             .streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get("stream-bound")
+            .get(&invocation.token())
             .map(|buffer| buffer.buffered_bytes)
             .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
         assert!(buffered <= 4_096);
@@ -707,27 +741,128 @@ mod tests {
 
         assert_eq!(
             pending
-                .peek("stream-bound")
+                .peek(&invocation, "local")
                 .and_then(|decision| decision.observation)
                 .map(|observation| observation.observed_action),
             Some(ObservedActionClass::Unknown)
         );
-        assert!(
-            !observer
-                .streams
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains_key("stream-bound")
+        assert_eq!(observer.buffered_request_count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_keeps_mutation_dominance_after_thirty_two_read_calls()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-call-limit");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context("stream-call-limit", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("read-{index}"),
+                        name: Some("read_file".into()),
+                        arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                    },
+                )
+                .await;
+        }
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "mutation-after-limit".into(),
+                    name: Some("apply_patch".into()),
+                    arguments: r#"{"patch":"private"}"#.into(),
+                },
+            )
+            .await;
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_classifies_mutation_after_raw_byte_limit() -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-byte-limit-mutation");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context(
+            "stream-byte-limit-mutation",
+            prompt(Vec::new()),
+            &invocation,
+        );
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "unknown-large".into(),
+                    name: Some("opaque_capability".into()),
+                    arguments: "x".repeat(8_192),
+                },
+            )
+            .await;
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "mutation-after-bytes".into(),
+                    name: Some("apply_patch".into()),
+                    arguments: r#"{"patch":"private"}"#.into(),
+                },
+            )
+            .await;
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
         );
         Ok(())
     }
 
     #[tokio::test]
     async fn response_observer_teardown_clears_abandoned_stream_fragments() -> anyhow::Result<()> {
-        let pending = pending("stream-abandoned");
+        let (pending, invocation) = pending("stream-abandoned");
         let observer = PredictiveResponseObserver::new(pending.clone());
-        let context = pipeline_context("stream-abandoned", prompt(Vec::new()));
-        observer.on_request_start(&context).await;
+        let context = pipeline_context("stream-abandoned", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
         let stream = context.stream_context();
         observer
             .on_stream_part(
@@ -744,19 +879,129 @@ mod tests {
             .on_request_end(&context, &RequestOutcome::ClientDisconnected)
             .await;
 
-        assert!(
-            !observer
-                .streams
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .contains_key("stream-abandoned")
-        );
+        assert_eq!(observer.buffered_request_count(), 0);
         assert!(
             pending
-                .peek("stream-abandoned")
+                .peek(&invocation, "local")
                 .and_then(|decision| decision.observation)
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_completed_teardown_clears_unobserved_terminal_state()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-completed-without-terminal");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context(
+            "stream-completed-without-terminal",
+            prompt(Vec::new()),
+            &invocation,
+        );
+        observer.after_phase(Phase::Route, &context).await;
+        observer
+            .on_stream_part(
+                &context.stream_context(),
+                &StreamPart::ToolCallDelta {
+                    id: "removed-terminal".into(),
+                    name: Some("exec_command".into()),
+                    arguments: r#"{"cmd":"private-command"}"#.into(),
+                },
+            )
+            .await;
+
+        observer
+            .on_request_end(&context, &RequestOutcome::Completed)
+            .await;
+
+        assert_eq!(observer.buffered_request_count(), 0);
+        assert!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_isolates_same_external_id_across_invocations_and_callers()
+    -> anyhow::Result<()> {
+        let pending = PendingEvalDecisionStore::default();
+        let first_invocation = EvalInvocation::new("owner-a");
+        let second_invocation = EvalInvocation::new("owner-b");
+        pending.insert(
+            &first_invocation,
+            pending_decision("shared-request", "decision-a"),
+        );
+        pending.insert(
+            &second_invocation,
+            pending_decision("shared-request", "decision-b"),
+        );
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let first = pipeline_context_for(
+            "shared-request",
+            CallerContext::new("key-a", "owner-a"),
+            prompt(Vec::new()),
+            &first_invocation,
+        );
+        let second = pipeline_context_for(
+            "shared-request",
+            CallerContext::new("key-b", "owner-b"),
+            prompt(Vec::new()),
+            &second_invocation,
+        );
+        observer.after_phase(Phase::Route, &first).await;
+        observer.after_phase(Phase::Route, &second).await;
+
+        for (stream, part) in [
+            (
+                first.stream_context(),
+                StreamPart::ToolCallDelta {
+                    id: "call-a".into(),
+                    name: Some("apply_patch".into()),
+                    arguments: r#"{"patch":"private-a"}"#.into(),
+                },
+            ),
+            (
+                second.stream_context(),
+                StreamPart::ToolCallDelta {
+                    id: "call-b".into(),
+                    name: Some("read_file".into()),
+                    arguments: r#"{"path":"private-b"}"#.into(),
+                },
+            ),
+        ] {
+            observer.on_stream_part(&stream, &part).await;
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                )
+                .await;
+        }
+
+        assert_eq!(
+            pending
+                .peek(&first_invocation, "owner-a")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
+        );
+        assert_eq!(
+            pending
+                .peek(&second_invocation, "owner-b")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::InspectOrRead)
+        );
+        assert!(pending.peek(&first_invocation, "owner-b").is_none());
+        assert!(pending.take(&first_invocation, "owner-a").is_some());
+        assert!(pending.peek(&second_invocation, "owner-b").is_some());
+        assert_eq!(observer.buffered_request_count(), 0);
         Ok(())
     }
 
@@ -765,9 +1010,9 @@ mod tests {
         content: Vec<Content>,
         tools: Vec<Tool>,
     ) -> anyhow::Result<ObservedActionClass> {
-        let pending = pending(request_id);
+        let (pending, invocation) = pending(request_id);
         let observer = PredictiveResponseObserver::new(pending.clone());
-        let context = pipeline_context(request_id, prompt(tools));
+        let context = pipeline_context(request_id, prompt(tools), &invocation);
         let result = ExecutionResult {
             provider_id: "provider".into(),
             model_id: "model".into(),
@@ -788,17 +1033,26 @@ mod tests {
             .on_hop_end(&context, &target(), HopOutcome::Generated(&result))
             .await;
         pending
-            .peek(request_id)
+            .peek(&invocation, "local")
             .and_then(|decision| decision.observation)
             .map(|observation| observation.observed_action)
             .ok_or_else(|| anyhow::anyhow!("observation missing for {request_id}"))
     }
 
-    fn pending(request_id: &str) -> PendingEvalDecisionStore {
+    fn pending(request_id: &str) -> (PendingEvalDecisionStore, EvalInvocation) {
         let pending = PendingEvalDecisionStore::default();
-        pending.insert(PendingEvalDecision {
+        let invocation = EvalInvocation::new("local");
+        pending.insert(
+            &invocation,
+            pending_decision(request_id, &format!("decision-{request_id}")),
+        );
+        (pending, invocation)
+    }
+
+    fn pending_decision(request_id: &str, decision_id: &str) -> PendingEvalDecision {
+        PendingEvalDecision {
             request_id: request_id.into(),
-            decision_id: format!("decision-{request_id}"),
+            decision_id: decision_id.into(),
             policy: "auto:cost".into(),
             policy_digest: DIGEST.into(),
             request_key: "agent_trace/v2|edit|normal".into(),
@@ -811,22 +1065,34 @@ mod tests {
             prediction_confidence_ppm: Some(800_000),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
-        });
-        pending
+        }
     }
 
     fn pipeline_context(
         request_id: &str,
         prompt: bitrouter_sdk::language_model::Prompt,
+        invocation: &EvalInvocation,
     ) -> PipelineContext {
-        PipelineContext::new(PipelineRequest {
+        pipeline_context_for(request_id, CallerContext::local(), prompt, invocation)
+    }
+
+    fn pipeline_context_for(
+        request_id: &str,
+        caller: CallerContext,
+        prompt: bitrouter_sdk::language_model::Prompt,
+        invocation: &EvalInvocation,
+    ) -> PipelineContext {
+        let mut context = PipelineContext::new(PipelineRequest {
             request_id: request_id.into(),
             model: "model".into(),
-            caller: CallerContext::local(),
+            caller,
             headers: http::HeaderMap::new(),
             prompt,
             inbound_protocol: Some(ApiProtocol::Responses),
-        })
+        });
+        context.emit(invocation.clone());
+        context.insert_extension(Arc::new(invocation.clone()));
+        context
     }
 
     fn prompt(tools: Vec<Tool>) -> bitrouter_sdk::language_model::Prompt {

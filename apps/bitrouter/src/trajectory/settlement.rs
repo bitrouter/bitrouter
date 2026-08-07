@@ -268,7 +268,9 @@ mod tests {
     use crate::eval::{
         EvalService,
         admission::SubmissionPrincipal,
-        settlement::{EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore},
+        settlement::{
+            EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+        },
         store::EvalStore,
     };
     use crate::metering::MeteringSettlementEvent;
@@ -376,7 +378,8 @@ mod tests {
         let trajectory =
             TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
         let pending = PendingEvalDecisionStore::default();
-        pending.insert(pending_decision("external-request"));
+        let invocation = EvalInvocation::new("owner-a");
+        pending.insert(&invocation, pending_decision("external-request"));
         let recorder = EvalSettlementRecorder::new(
             eval_store.clone(),
             pending.clone(),
@@ -384,10 +387,11 @@ mod tests {
         )
         .with_trajectory(trajectory);
         let mut missing_metering = context("external-request");
+        missing_metering.emit(invocation.clone());
 
         recorder.record(&mut missing_metering).await?;
 
-        assert!(pending.peek("external-request").is_some());
+        assert!(pending.peek(&invocation, "owner-a").is_some());
         assert!(
             eval_store
                 .list_subjects_for_owner("owner-a")
@@ -409,10 +413,11 @@ mod tests {
         ))
         .await?;
         let mut metered = context("external-request");
+        metered.emit(invocation.clone());
         metered.emit(metering("external-request"));
 
         assert!(recorder.record(&mut metered).await.is_err());
-        assert!(pending.peek("external-request").is_some());
+        assert!(pending.peek(&invocation, "owner-a").is_some());
         assert_eq!(
             store
                 .request("owner-a", &stored_request)
@@ -429,7 +434,7 @@ mod tests {
         recorder.record(&mut metered).await?;
         publisher.wait_for_idle().await;
 
-        assert!(pending.peek("external-request").is_none());
+        assert!(pending.peek(&invocation, "owner-a").is_none());
         let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
         assert_eq!(subjects.len(), 1);
         assert_eq!(subjects[0].scope, crate::eval::types::EvalScope::Episode);
