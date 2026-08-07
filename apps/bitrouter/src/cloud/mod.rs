@@ -149,6 +149,35 @@ pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
     cloud_bearer_source_from_store(store).await
 }
 
+/// Resolve the signed-in Cloud bearer only when `target_base_url` has the
+/// exact origin recorded at login. This permits headless gateway clients to
+/// reuse `bitrouter cloud login` without ever forwarding that credential to
+/// an arbitrary remote host.
+pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
+    let store = CredentialsStore::default_path().ok()?;
+    cloud_bearer_for_base_url_from_store(store, target_base_url).await
+}
+
+async fn cloud_bearer_for_base_url_from_store(
+    store: CredentialsStore,
+    target_base_url: &str,
+) -> Option<String> {
+    let login_base_url = store.current()?.base_url().to_owned();
+    if !same_origin(&login_base_url, target_base_url) {
+        return None;
+    }
+    cloud_bearer_source_from_store(store).await?.bearer().await
+}
+
+fn same_origin(left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (reqwest::Url::parse(left), reqwest::Url::parse(right)) else {
+        return false;
+    };
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
 /// Inner form of [`cloud_bearer_source`] taking an already-loaded store, so the
 /// "not signed in ⇒ None" decision is testable without the default path or a
 /// live AS-metadata fetch. Requires a current credential (else `None`), then
@@ -285,6 +314,38 @@ mod tests {
         assert_eq!(
             source.bearer().await.as_deref(),
             Some("brk_telemetry.secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() {
+        let path = fresh_tmp_creds_path("gateway-origin");
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(StoredCredential::api_key(
+                "brk_gateway.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai/v1/responses")
+                .await
+                .as_deref(),
+            Some("brk_gateway.secret")
+        );
+
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(StoredCredential::api_key(
+                "brk_gateway.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .unwrap();
+        assert!(
+            cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai.evil/v1")
+                .await
+                .is_none()
         );
     }
 

@@ -333,6 +333,32 @@ impl Harness {
         }
     }
 
+    /// Pin only the model while preserving the agent's own provider and
+    /// subscription authority. Used by explicitly direct ACP sessions.
+    pub fn direct_model_overlay(&self, model: &str) -> RoutingOverlay {
+        match &self.routing {
+            Routing::Env {
+                model_env: Some(model_env),
+                ..
+            } => RoutingOverlay {
+                env: vec![((*model_env).to_string(), model.to_string())],
+                args: Vec::new(),
+            },
+            Routing::CodexArgs => RoutingOverlay {
+                env: Vec::new(),
+                args: vec!["-c".to_string(), codex_config_string("model", model)],
+            },
+            Routing::Env {
+                model_env: None, ..
+            }
+            | Routing::OpencodeConfig
+            | Routing::PiConfigDir
+            | Routing::HermesHome
+            | Routing::OpenclawProfile
+            | Routing::OwnAuth => RoutingOverlay::default(),
+        }
+    }
+
     /// Whether this harness routes through pure env/args injection (the
     /// headless-spawn facet). Config-synthesis harnesses (opencode, pi)
     /// route only through [`Self::orchestrator_overlay`] — headless callers
@@ -1036,6 +1062,28 @@ mod tests {
         let h = by_id("codex-acp").unwrap();
         let o = h.routing_overlay("http://x:1", PLACEHOLDER_API_KEY, Some("gpt-5.2"));
         assert!(o.args.contains(&"model=\"gpt-5.2\"".to_string()));
+    }
+
+    #[test]
+    fn direct_model_overlay_pins_without_changing_provider_authority() {
+        let codex = by_id("codex-acp").unwrap();
+        let overlay = codex.direct_model_overlay("gpt-5.6");
+        assert!(overlay.args.contains(&"model=\"gpt-5.6\"".to_string()));
+        assert!(
+            overlay
+                .args
+                .iter()
+                .all(|arg| !arg.contains("model_provider"))
+        );
+        assert!(overlay.env.is_empty());
+
+        let claude = by_id("claude-acp").unwrap();
+        let overlay = claude.direct_model_overlay("claude-opus-5");
+        assert_eq!(
+            overlay.env,
+            vec![("ANTHROPIC_MODEL".into(), "claude-opus-5".into())]
+        );
+        assert!(overlay.args.is_empty());
     }
 
     #[test]

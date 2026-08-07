@@ -104,6 +104,14 @@ pub enum RoutingError {
     },
 }
 
+impl std::fmt::Display for RoutingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for RoutingError {}
+
 impl RoutingError {
     /// Machine-readable `code` for the NDJSON `error` line.
     fn code(&self) -> &'static str {
@@ -258,8 +266,14 @@ pub async fn apply_routing(
         );
     }
 
+    let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
+    let stored_cloud_key = if explicit_key.is_none() && require_key && !target_is_local {
+        crate::cloud::cloud_bearer_for_base_url(&base_url).await
+    } else {
+        None
+    };
     let auth = match crate::harness::resolve_gateway_auth(
-        crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV),
+        explicit_key.or(stored_cloud_key),
         require_key,
     ) {
         Some(a) => a,
@@ -1015,7 +1029,7 @@ pub fn launch_options(
 }
 
 /// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.
-fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
+pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
     ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
         .context("building acp routing table from config")
 }

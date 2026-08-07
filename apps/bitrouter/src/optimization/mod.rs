@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+pub mod evaluator;
+
 pub const OPTIMIZATION_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_INTENT_FILENAME: &str = "bitrouter.optimize.yaml";
 pub const DEFAULT_LOCK_FILENAME: &str = "bitrouter.optimize.lock.yaml";
