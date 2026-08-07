@@ -348,7 +348,7 @@ fn recovery_signal(prompt: &Prompt) -> RecoverySignal {
     }
 }
 
-fn tool_result_reports_failure(output: &ToolResultOutput) -> bool {
+pub(crate) fn tool_result_reports_failure(output: &ToolResultOutput) -> bool {
     match output {
         ToolResultOutput::ErrorText { .. }
         | ToolResultOutput::ErrorJson { .. }

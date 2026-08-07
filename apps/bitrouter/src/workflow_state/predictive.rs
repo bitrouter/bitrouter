@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use bitrouter_sdk::language_model::types::{
-    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
-};
+use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
+use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::ir::{
     RecoverySignal, RequirementLevel, RouteProjection, RouteRisk, ToolDensity, WorkflowStateIR,
     WorkflowStateKind, parse_route_risk,
@@ -166,6 +165,7 @@ impl CanonicalPolicyProjection {
 
 const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
+const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObservedAction {
@@ -211,7 +211,8 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if instruction.contradictory
         || matches!(
             history.completeness,
-            PredictiveHistoryCompleteness::Truncated
+            PredictiveHistoryCompleteness::BoundedPrefix
+                | PredictiveHistoryCompleteness::Truncated
                 | PredictiveHistoryCompleteness::Ambiguous
                 | PredictiveHistoryCompleteness::Unknown
         )
@@ -222,6 +223,8 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             "history_ambiguous"
         } else if history.completeness == PredictiveHistoryCompleteness::Truncated {
             "history_truncated"
+        } else if history.completeness == PredictiveHistoryCompleteness::BoundedPrefix {
+            "history_bounded_prefix"
         } else {
             "history_unknown"
         };
@@ -605,7 +608,7 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
             } => {
                 let action = classify_action(name, arguments, observed);
                 if action == ObservedAction::Mutate {
-                    mutation_count = mutation_count.saturating_add(1).min(3);
+                    mutation_count = bounded_signal_count(mutation_count);
                 }
                 calls.push((id.clone(), action, false));
             }
@@ -621,9 +624,9 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
                     continue;
                 };
                 *matched = true;
-                let failed = tool_result_failed(output);
+                let failed = tool_result_reports_failure(output);
                 if failed {
-                    failure_count = failure_count.saturating_add(1).min(3);
+                    failure_count = bounded_signal_count(failure_count);
                 }
                 result_count = result_count.saturating_add(1).min(3);
                 last_action = Some(*action);
@@ -666,6 +669,10 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
             && mutation_count > 0,
         has_trajectory: !calls.is_empty() || result_count > 0,
     }
+}
+
+fn bounded_signal_count(count: u8) -> u8 {
+    count.saturating_add(1).min(MAX_HISTORY_SIGNAL_COUNT)
 }
 
 fn classify_action(name: &str, arguments: &str, observed: &WorkflowStateIR) -> ObservedAction {
@@ -749,42 +756,6 @@ fn command_is_read(command: &str) -> bool {
     ]
     .iter()
     .any(|prefix| command.starts_with(prefix))
-}
-
-fn tool_result_failed(output: &ToolResultOutput) -> bool {
-    match output {
-        ToolResultOutput::ErrorText { .. }
-        | ToolResultOutput::ErrorJson { .. }
-        | ToolResultOutput::ExecutionDenied { .. } => true,
-        ToolResultOutput::Text { value } => text_reports_failure(value),
-        ToolResultOutput::Json { value } => text_reports_failure(&value.to_string()),
-        ToolResultOutput::Content { value } => value.iter().any(|part| match part {
-            ToolResultContentPart::Text { text } => text_reports_failure(text),
-            ToolResultContentPart::Media { .. } | ToolResultContentPart::FileId { .. } => false,
-        }),
-    }
-}
-
-fn text_reports_failure(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim().to_ascii_lowercase();
-        line.starts_with("error:")
-            || line.starts_with("failed:")
-            || line.starts_with("failed ")
-            || line.contains("test result: failed")
-            || nonzero_exit_code(&line)
-    })
-}
-
-fn nonzero_exit_code(line: &str) -> bool {
-    let Some((_, suffix)) = line.split_once("process exited with code") else {
-        return false;
-    };
-    suffix
-        .split_whitespace()
-        .next()
-        .and_then(|value| value.parse::<i32>().ok())
-        .is_some_and(|code| code != 0)
 }
 
 fn add_score(
@@ -1151,6 +1122,49 @@ mod tests {
     }
 
     #[test]
+    fn predicts_implementation_after_native_nonzero_test_exit() {
+        for output in ["command exited with code 1", "exit code 1", "exit_code: 1"] {
+            let failed_test = prompt(vec![
+                Message::text(Role::User, "Fix src/parser.rs and pass its tests."),
+                assistant_call("edit-1", "Edit", r#"{"file_path":"src/parser.rs"}"#),
+                tool_result(
+                    "edit-1",
+                    ToolResultOutput::Text {
+                        value: "file updated".to_string(),
+                    },
+                ),
+                assistant_call("test-1", "Bash", r#"{"command":"cargo test -p parser"}"#),
+                tool_result(
+                    "test-1",
+                    ToolResultOutput::Text {
+                        value: output.to_string(),
+                    },
+                ),
+            ]);
+
+            let prediction = predict_next_step(&observed(&failed_test), &failed_test);
+
+            assert_eq!(
+                prediction.next_step_role,
+                NextStepRole::Implement,
+                "{output}"
+            );
+            assert_eq!(
+                prediction.next_action_class,
+                NextActionClass::Mutate,
+                "{output}"
+            );
+            assert!(
+                prediction
+                    .evidence
+                    .iter()
+                    .any(|item| item.code == "test_failed_once"),
+                "{output}"
+            );
+        }
+    }
+
+    #[test]
     fn predicts_unknown_for_missing_or_contradictory_history() {
         let missing = prompt(Vec::new());
         let contradictory = prompt(vec![tool_result(
@@ -1178,6 +1192,28 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn predicts_unknown_for_bounded_prefix_history() {
+        let bounded_prefix = prompt(vec![
+            assistant_call("read-1", "read_file", r#"{"path":"src/parser.rs"}"#),
+            tool_result(
+                "read-1",
+                ToolResultOutput::Text {
+                    value: "parser source available".to_string(),
+                },
+            ),
+        ]);
+
+        let prediction = predict_next_step(&observed(&bounded_prefix), &bounded_prefix);
+
+        assert_eq!(
+            prediction.history_completeness,
+            PredictiveHistoryCompleteness::BoundedPrefix
+        );
+        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
+        assert_eq!(prediction.next_action_class, NextActionClass::Unknown);
     }
 
     #[test]
@@ -1241,34 +1277,54 @@ mod tests {
     }
 
     #[test]
-    fn private_headers_cannot_reach_pure_predictor() {
-        let Some((ir, prompt)) = fixture_input(OPENING_PLAN_FIXTURE) else {
-            assert!(false, "invalid opening fixture");
-            return;
-        };
-        let mut private_headers = HeaderMap::new();
-        if let Ok(value) = "mechanical".parse() {
-            assert!(
-                private_headers
-                    .insert("x-bitrouter-agent-role", value)
-                    .is_none()
-            );
-        } else {
-            assert!(false, "invalid private role header value");
-        }
-        if let Ok(value) = "path-tracing-reverse".parse() {
-            assert!(
-                private_headers
-                    .insert("x-superpowers-task", value)
-                    .is_none()
-            );
-        } else {
-            assert!(false, "invalid private task header value");
+    fn bounds_failure_and_mutation_signal_counts() {
+        let mut failure_count = 0;
+        let mut mutation_count = 0;
+        for _ in 0..5 {
+            failure_count = bounded_signal_count(failure_count);
+            mutation_count = bounded_signal_count(mutation_count);
         }
 
-        let without_headers = predict_next_step(&ir, &prompt);
-        let with_unreachable_headers = predict_next_step(&ir, &prompt);
+        assert_eq!(failure_count, 3);
+        assert_eq!(mutation_count, 3);
+    }
 
-        assert_eq!(without_headers, with_unreachable_headers);
+    #[test]
+    fn score_ties_follow_stable_role_order() {
+        let cases = [
+            ([4, 4, 0, 0, 0], NextStepRole::Orchestrate, 4, 4),
+            ([0, 6, 6, 6, 6], NextStepRole::Implement, 6, 6),
+            ([0, 0, 5, 5, 5], NextStepRole::Mechanical, 5, 5),
+            ([0, 0, 0, 3, 3], NextStepRole::Verify, 3, 3),
+        ];
+
+        for (scores, expected_role, expected_top, expected_runner_up) in cases {
+            assert_eq!(
+                choose_role(scores),
+                (expected_role, expected_top, expected_runner_up)
+            );
+        }
+    }
+
+    #[test]
+    fn predictor_boundary_excludes_headers_and_task_labels() {
+        let pure_predictor: fn(&WorkflowStateIR, &Prompt) -> PredictiveRouteIR = predict_next_step;
+        let neutral = prompt(vec![Message::text(
+            Role::User,
+            "Fix opaque-work-item in src/solver.rs: error: wrong edge order.",
+        )]);
+        let header_shaped = prompt(vec![Message::text(
+            Role::User,
+            concat!(
+                "Fix x-bitrouter-agent-role/mechanical ",
+                "x-superpowers-task/path-tracing-reverse in src/solver.rs: ",
+                "error: wrong edge order."
+            ),
+        )]);
+
+        let neutral_prediction = pure_predictor(&observed(&neutral), &neutral);
+        let labeled_prediction = pure_predictor(&observed(&header_shaped), &header_shaped);
+
+        assert_eq!(neutral_prediction, labeled_prediction);
     }
 }
