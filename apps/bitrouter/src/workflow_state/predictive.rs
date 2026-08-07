@@ -110,12 +110,7 @@ pub struct PredictiveRouteProjection {
 
 impl PredictiveRouteProjection {
     pub fn key(&self) -> String {
-        format!(
-            "agent_route/v{}|{}|{}",
-            self.schema_version,
-            self.next_step_role.key(),
-            self.risk
-        )
+        format!("agent_route/v1|{}|{}", self.next_step_role.key(), self.risk)
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
@@ -175,6 +170,19 @@ mod tests {
         assert!(CanonicalPolicyProjection::parse_key("agent_trace/v2|edit|normal").is_some());
         assert!(CanonicalPolicyProjection::parse_key("agent_route/v1|implement|normal").is_some());
         assert!(CanonicalPolicyProjection::parse_key("agent_route/v2|implement|normal").is_none());
+    }
+
+    #[test]
+    fn predictive_key_normalizes_unsupported_schema_versions_to_v1() {
+        let projection = PredictiveRouteProjection {
+            schema_version: 2,
+            next_step_role: NextStepRole::Implement,
+            risk: RouteRisk::Normal,
+        };
+        let key = projection.key();
+
+        assert_eq!(key, "agent_route/v1|implement|normal");
+        assert!(PredictiveRouteProjection::parse_key(&key).is_some());
     }
 
     #[test]
