@@ -196,7 +196,7 @@ fn parse_workflow_state_kind(value: &str) -> Option<WorkflowStateKind> {
     }
 }
 
-fn parse_route_risk(value: &str) -> Option<RouteRisk> {
+pub(crate) fn parse_route_risk(value: &str) -> Option<RouteRisk> {
     match value {
         "normal" => Some(RouteRisk::Normal),
         "context" => Some(RouteRisk::Context),

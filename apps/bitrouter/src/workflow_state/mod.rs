@@ -7,6 +7,7 @@ pub mod extractors;
 pub mod fixture;
 pub mod ir;
 pub mod online;
+pub mod predictive;
 pub mod real_trace;
 pub mod replay;
 pub mod reward;
