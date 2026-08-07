@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::workflow_state::ir::{RouteProjection, RouteRisk, parse_route_risk};
+use bitrouter_sdk::language_model::types::{
+    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
+};
+
+use crate::workflow_state::ir::{
+    RecoverySignal, RequirementLevel, RouteProjection, RouteRisk, ToolDensity, WorkflowStateIR,
+    WorkflowStateKind, parse_route_risk,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -157,9 +164,823 @@ impl CanonicalPolicyProjection {
     }
 }
 
+const ROLE_COUNT: usize = 5;
+const MAX_PREDICTIVE_EVIDENCE: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObservedAction {
+    Read,
+    Mutate,
+    Test,
+    Other,
+}
+
+#[derive(Debug, Default)]
+struct InstructionFeatures {
+    broad: bool,
+    mutate: bool,
+    verify: bool,
+    poll: bool,
+    finalize: bool,
+    concrete: bool,
+    contradictory: bool,
+}
+
+impl InstructionFeatures {
+    fn has_signal(&self) -> bool {
+        self.broad || self.mutate || self.verify || self.poll || self.finalize || self.concrete
+    }
+}
+
+#[derive(Debug)]
+struct HistoryFeatures {
+    completeness: PredictiveHistoryCompleteness,
+    last_action: Option<ObservedAction>,
+    last_failed: bool,
+    failure_count: u8,
+    successful_test_after_mutation: bool,
+    has_trajectory: bool,
+}
+
+pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> PredictiveRouteIR {
+    let instruction = instruction_features(prompt);
+    let history = history_features(prompt, observed);
+    let observed_projection = observed.route_projection();
+    let mut evidence = Vec::new();
+
+    if instruction.contradictory
+        || matches!(
+            history.completeness,
+            PredictiveHistoryCompleteness::Truncated
+                | PredictiveHistoryCompleteness::Ambiguous
+                | PredictiveHistoryCompleteness::Unknown
+        )
+    {
+        let code = if instruction.contradictory {
+            "instruction_contradiction"
+        } else if history.completeness == PredictiveHistoryCompleteness::Ambiguous {
+            "history_ambiguous"
+        } else if history.completeness == PredictiveHistoryCompleteness::Truncated {
+            "history_truncated"
+        } else {
+            "history_unknown"
+        };
+        push_evidence(&mut evidence, code, -8, 0.95);
+        return unknown_prediction(observed_projection, history.completeness, evidence);
+    }
+
+    let mut scores = [0_i16; ROLE_COUNT];
+    let opening = observed.state_kind == WorkflowStateKind::Opening && !history.has_trajectory;
+
+    if instruction.broad {
+        let weight = if opening { 9 } else { 5 };
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            weight,
+            &mut evidence,
+            "opening_broad_goal",
+            0.85,
+        );
+    }
+    if instruction.mutate {
+        let weight = if instruction.concrete { 7 } else { 4 };
+        add_score(
+            &mut scores,
+            NextStepRole::Implement,
+            weight,
+            &mut evidence,
+            if instruction.concrete {
+                "concrete_mutation_requested"
+            } else {
+                "mutation_requested"
+            },
+            0.8,
+        );
+    }
+    if instruction.verify {
+        add_score(
+            &mut scores,
+            NextStepRole::Verify,
+            4,
+            &mut evidence,
+            "verification_requested",
+            0.75,
+        );
+    }
+    if instruction.poll {
+        add_score(
+            &mut scores,
+            NextStepRole::Mechanical,
+            9,
+            &mut evidence,
+            "narrow_poll_requested",
+            0.9,
+        );
+    }
+    if instruction.finalize {
+        add_score(
+            &mut scores,
+            NextStepRole::Finalize,
+            3,
+            &mut evidence,
+            "final_answer_requested",
+            0.65,
+        );
+    }
+
+    match (history.last_action, history.last_failed) {
+        (Some(ObservedAction::Read), false) => add_score(
+            &mut scores,
+            NextStepRole::Implement,
+            9,
+            &mut evidence,
+            "read_result_available",
+            0.9,
+        ),
+        (Some(ObservedAction::Mutate), false) => add_score(
+            &mut scores,
+            NextStepRole::Verify,
+            9,
+            &mut evidence,
+            "mutation_result_available",
+            0.9,
+        ),
+        (Some(ObservedAction::Test), true) if history.failure_count == 1 => add_score(
+            &mut scores,
+            NextStepRole::Implement,
+            9,
+            &mut evidence,
+            "test_failed_once",
+            0.9,
+        ),
+        (Some(ObservedAction::Test), true) => add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            12,
+            &mut evidence,
+            "repeated_failure",
+            0.95,
+        ),
+        (Some(ObservedAction::Test), false) if history.successful_test_after_mutation => add_score(
+            &mut scores,
+            NextStepRole::Finalize,
+            12,
+            &mut evidence,
+            "progress_near_done",
+            0.95,
+        ),
+        (Some(ObservedAction::Test), false) => add_score(
+            &mut scores,
+            NextStepRole::Finalize,
+            7,
+            &mut evidence,
+            "test_succeeded",
+            0.8,
+        ),
+        (Some(ObservedAction::Other), false) => {}
+        (Some(ObservedAction::Read | ObservedAction::Mutate | ObservedAction::Other), true) => {
+            add_score(
+                &mut scores,
+                NextStepRole::Implement,
+                5,
+                &mut evidence,
+                "action_failed_once",
+                0.7,
+            );
+        }
+        (None, _) => {}
+    }
+
+    if history.failure_count >= 2 && observed.recovery_signal == RecoverySignal::LikelyRecovery {
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            4,
+            &mut evidence,
+            "recovery_pressure",
+            0.9,
+        );
+    }
+    if observed.capability_constraints.expected_redo_penalty == RequirementLevel::High
+        && history.failure_count >= 2
+    {
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            2,
+            &mut evidence,
+            "redo_penalty_high",
+            0.8,
+        );
+    }
+    if observed.capability_constraints.context_pressure == RequirementLevel::High {
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            2,
+            &mut evidence,
+            "context_pressure_high",
+            0.7,
+        );
+    }
+    if observed.capability_constraints.output_precision == RequirementLevel::High
+        && history.last_action == Some(ObservedAction::Mutate)
+    {
+        add_score(
+            &mut scores,
+            NextStepRole::Verify,
+            2,
+            &mut evidence,
+            "output_precision_high",
+            0.75,
+        );
+    }
+    if observed.tool_density == ToolDensity::High
+        && history.last_action == Some(ObservedAction::Read)
+    {
+        add_score(
+            &mut scores,
+            NextStepRole::Implement,
+            1,
+            &mut evidence,
+            "tool_context_available",
+            0.65,
+        );
+    }
+    if observed
+        .evidence
+        .iter()
+        .any(|item| item.kind == "trajectory_pressure")
+    {
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            3,
+            &mut evidence,
+            "trajectory_pressure",
+            0.85,
+        );
+    }
+
+    let coverage = u8::from(instruction.has_signal())
+        + u8::from(history.has_trajectory)
+        + u8::from(observed.confidence > 0.0);
+    let (role, top_score, runner_up) = choose_role(scores);
+    let margin = top_score.saturating_sub(runner_up);
+    if top_score < 5 || margin < 2 || coverage < 2 {
+        push_evidence(&mut evidence, "score_margin_low", -4, 0.8);
+        return unknown_prediction(observed_projection, history.completeness, evidence);
+    }
+
+    let next_action_class = action_for_role(role);
+    let task_complexity = if role == NextStepRole::Mechanical {
+        TaskComplexity::Mechanical
+    } else if instruction.broad || instruction.concrete || history.failure_count > 0 {
+        TaskComplexity::Substantive
+    } else {
+        TaskComplexity::Simple
+    };
+    let progress_state = if history.successful_test_after_mutation {
+        ProgressState::NearDone
+    } else if history.failure_count > 0
+        && observed.recovery_signal == RecoverySignal::LikelyRecovery
+    {
+        ProgressState::Recovering
+    } else if opening {
+        ProgressState::Opening
+    } else {
+        ProgressState::Progressing
+    };
+    let route_risk = if history.failure_count >= 2 {
+        RouteRisk::Guarded
+    } else {
+        observed_projection.risk
+    };
+
+    PredictiveRouteIR {
+        schema_version: 1,
+        observed: observed_projection,
+        next_step_role: role,
+        next_action_class,
+        task_complexity,
+        progress_state,
+        history_completeness: history.completeness,
+        route_risk,
+        confidence: confidence_band(margin),
+        evidence,
+    }
+}
+
+fn instruction_features(prompt: &Prompt) -> InstructionFeatures {
+    let text = prompt
+        .messages
+        .iter()
+        .rev()
+        .filter(|message| matches!(message.role, Role::User | Role::System))
+        .find_map(message_text)
+        .or_else(|| prompt.system.clone())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let broad = contains_any(
+        &text,
+        &[
+            "plan",
+            "investigate",
+            "analyze",
+            "architecture",
+            "design",
+            "understand",
+            "decompose",
+            "identify the affected",
+            "choose a direction",
+        ],
+    );
+    let mutate = contains_any(
+        &text,
+        &[
+            "fix",
+            "implement",
+            "update",
+            "change",
+            "add",
+            "remove",
+            "correct",
+            "repair",
+            "refactor",
+        ],
+    );
+    let verify = contains_any(&text, &["verify", "test", "review", "check", "validate"]);
+    let poll = contains_any(&text, &["poll", "status", "wait", "watch", "monitor"]);
+    let finalize = contains_any(
+        &text,
+        &[
+            "summarize",
+            "final answer",
+            "report",
+            "handoff",
+            "explain the completed",
+        ],
+    );
+    let concrete = has_concrete_evidence(&text);
+    let contradictory = mutate
+        && contains_any(
+            &text,
+            &[
+                "do not modify",
+                "without changing",
+                "only summarize",
+                "no changes",
+            ],
+        );
+
+    InstructionFeatures {
+        broad,
+        mutate,
+        verify,
+        poll,
+        finalize,
+        concrete,
+        contradictory,
+    }
+}
+
+fn message_text(message: &bitrouter_sdk::language_model::types::Message) -> Option<String> {
+    let text = message
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            Content::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+fn has_concrete_evidence(text: &str) -> bool {
+    contains_any(
+        text,
+        &[
+            "error:",
+            "failed",
+            "acceptance",
+            "expected ",
+            "actual ",
+            "line ",
+            ".rs",
+            ".py",
+            ".ts",
+            ".js",
+            ".go",
+            ".toml",
+            ".yaml",
+            ".json",
+            "src/",
+            "tests/",
+        ],
+    )
+}
+
+fn contains_any(text: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| text.contains(term))
+}
+
+fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatures {
+    let mut calls = Vec::<(String, ObservedAction, bool)>::new();
+    let mut failure_count = 0_u8;
+    let mut mutation_count = 0_u8;
+    let mut last_action = None;
+    let mut last_failed = false;
+    let mut unmatched_result = false;
+    let mut result_count = 0_u8;
+
+    for content in prompt.messages.iter().flat_map(|message| &message.content) {
+        match content {
+            Content::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } => {
+                let action = classify_action(name, arguments, observed);
+                if action == ObservedAction::Mutate {
+                    mutation_count = mutation_count.saturating_add(1).min(3);
+                }
+                calls.push((id.clone(), action, false));
+            }
+            Content::ToolResult {
+                call_id, output, ..
+            } => {
+                let Some((_, action, matched)) = calls
+                    .iter_mut()
+                    .rev()
+                    .find(|(id, _, matched)| id == call_id && !*matched)
+                else {
+                    unmatched_result = true;
+                    continue;
+                };
+                *matched = true;
+                let failed = tool_result_failed(output);
+                if failed {
+                    failure_count = failure_count.saturating_add(1).min(3);
+                }
+                result_count = result_count.saturating_add(1).min(3);
+                last_action = Some(*action);
+                last_failed = failed;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(last) = last_action
+        && last == ObservedAction::Other
+    {
+        last_action = match observed.state_kind {
+            WorkflowStateKind::Edit => Some(ObservedAction::Mutate),
+            WorkflowStateKind::Test => Some(ObservedAction::Test),
+            _ => Some(ObservedAction::Other),
+        };
+    }
+    let unmatched_call = calls.iter().any(|(_, _, matched)| !matched);
+    let first_role = prompt.messages.first().map(|message| message.role);
+    let completeness = if prompt.messages.is_empty() {
+        PredictiveHistoryCompleteness::Unknown
+    } else if unmatched_result {
+        PredictiveHistoryCompleteness::Ambiguous
+    } else if unmatched_call {
+        PredictiveHistoryCompleteness::Truncated
+    } else if matches!(first_role, Some(Role::Assistant | Role::Tool)) {
+        PredictiveHistoryCompleteness::BoundedPrefix
+    } else {
+        PredictiveHistoryCompleteness::Complete
+    };
+
+    HistoryFeatures {
+        completeness,
+        last_action,
+        last_failed,
+        failure_count,
+        successful_test_after_mutation: last_action == Some(ObservedAction::Test)
+            && !last_failed
+            && mutation_count > 0,
+        has_trajectory: !calls.is_empty() || result_count > 0,
+    }
+}
+
+fn classify_action(name: &str, arguments: &str, observed: &WorkflowStateIR) -> ObservedAction {
+    let name = name.to_ascii_lowercase();
+    if contains_any(
+        &name,
+        &[
+            "edit", "write", "patch", "create", "delete", "move", "rename",
+        ],
+    ) {
+        return ObservedAction::Mutate;
+    }
+    if contains_any(
+        &name,
+        &[
+            "read", "search", "find", "grep", "glob", "list", "view", "inspect",
+        ],
+    ) {
+        return ObservedAction::Read;
+    }
+    if contains_any(&name, &["test", "check", "lint", "build"]) {
+        return ObservedAction::Test;
+    }
+    if contains_any(&name, &["bash", "shell", "terminal", "exec", "command"])
+        && let Some(command) = command_argument(arguments)
+    {
+        if command_is_test(&command) {
+            return ObservedAction::Test;
+        }
+        if command_is_read(&command) {
+            return ObservedAction::Read;
+        }
+    }
+    match observed.state_kind {
+        WorkflowStateKind::Edit => ObservedAction::Mutate,
+        WorkflowStateKind::Test => ObservedAction::Test,
+        _ => ObservedAction::Other,
+    }
+}
+
+fn command_argument(arguments: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(arguments).ok()?;
+    value
+        .as_object()?
+        .iter()
+        .find_map(|(key, value)| {
+            matches!(key.as_str(), "cmd" | "command")
+                .then(|| value.as_str())
+                .flatten()
+        })
+        .map(str::to_ascii_lowercase)
+}
+
+fn command_is_test(command: &str) -> bool {
+    contains_any(
+        command,
+        &[
+            "cargo test",
+            "cargo check",
+            "cargo clippy",
+            "pytest",
+            "npm test",
+            "pnpm test",
+            "yarn test",
+            "go test",
+            "ctest",
+        ],
+    )
+}
+
+fn command_is_read(command: &str) -> bool {
+    let command = command.trim_start();
+    [
+        "cat ",
+        "sed ",
+        "rg ",
+        "grep ",
+        "ls",
+        "git diff",
+        "git status",
+    ]
+    .iter()
+    .any(|prefix| command.starts_with(prefix))
+}
+
+fn tool_result_failed(output: &ToolResultOutput) -> bool {
+    match output {
+        ToolResultOutput::ErrorText { .. }
+        | ToolResultOutput::ErrorJson { .. }
+        | ToolResultOutput::ExecutionDenied { .. } => true,
+        ToolResultOutput::Text { value } => text_reports_failure(value),
+        ToolResultOutput::Json { value } => text_reports_failure(&value.to_string()),
+        ToolResultOutput::Content { value } => value.iter().any(|part| match part {
+            ToolResultContentPart::Text { text } => text_reports_failure(text),
+            ToolResultContentPart::Media { .. } | ToolResultContentPart::FileId { .. } => false,
+        }),
+    }
+}
+
+fn text_reports_failure(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        line.starts_with("error:")
+            || line.starts_with("failed:")
+            || line.starts_with("failed ")
+            || line.contains("test result: failed")
+            || nonzero_exit_code(&line)
+    })
+}
+
+fn nonzero_exit_code(line: &str) -> bool {
+    let Some((_, suffix)) = line.split_once("process exited with code") else {
+        return false;
+    };
+    suffix
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<i32>().ok())
+        .is_some_and(|code| code != 0)
+}
+
+fn add_score(
+    scores: &mut [i16; ROLE_COUNT],
+    role: NextStepRole,
+    weight: i16,
+    evidence: &mut Vec<PredictiveEvidence>,
+    code: &'static str,
+    confidence: f32,
+) {
+    if let Some(index) = role_index(role) {
+        scores[index] = scores[index].saturating_add(weight);
+        push_evidence(evidence, code, weight, confidence);
+    }
+}
+
+fn role_index(role: NextStepRole) -> Option<usize> {
+    match role {
+        NextStepRole::Orchestrate => Some(0),
+        NextStepRole::Implement => Some(1),
+        NextStepRole::Mechanical => Some(2),
+        NextStepRole::Verify => Some(3),
+        NextStepRole::Finalize => Some(4),
+        NextStepRole::Unknown => None,
+    }
+}
+
+fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStepRole, i16, i16) {
+    let roles = [
+        NextStepRole::Orchestrate,
+        NextStepRole::Implement,
+        NextStepRole::Mechanical,
+        NextStepRole::Verify,
+        NextStepRole::Finalize,
+    ];
+    let mut best_index = 0;
+    let mut best_score = scores[0];
+    let mut runner_up = i16::MIN;
+    for (index, score) in scores.into_iter().enumerate().skip(1) {
+        if score > best_score {
+            runner_up = best_score.max(runner_up);
+            best_index = index;
+            best_score = score;
+        } else {
+            runner_up = runner_up.max(score);
+        }
+    }
+    (roles[best_index], best_score, runner_up.max(0))
+}
+
+fn action_for_role(role: NextStepRole) -> NextActionClass {
+    match role {
+        NextStepRole::Orchestrate => NextActionClass::ReasonOrPlan,
+        NextStepRole::Implement => NextActionClass::Mutate,
+        NextStepRole::Mechanical => NextActionClass::WaitOrPoll,
+        NextStepRole::Verify => NextActionClass::ExecuteOrTest,
+        NextStepRole::Finalize => NextActionClass::AnswerOrSummarize,
+        NextStepRole::Unknown => NextActionClass::Unknown,
+    }
+}
+
+fn confidence_band(margin: i16) -> f32 {
+    match margin {
+        8.. => 0.9,
+        5..=7 => 0.8,
+        3..=4 => 0.7,
+        _ => 0.6,
+    }
+}
+
+fn push_evidence(
+    evidence: &mut Vec<PredictiveEvidence>,
+    code: &'static str,
+    weight: i16,
+    confidence: f32,
+) {
+    if evidence.len() < MAX_PREDICTIVE_EVIDENCE && !evidence.iter().any(|item| item.code == code) {
+        evidence.push(PredictiveEvidence {
+            code: code.to_string(),
+            weight,
+            confidence,
+        });
+    }
+}
+
+fn unknown_prediction(
+    observed: RouteProjection,
+    history_completeness: PredictiveHistoryCompleteness,
+    evidence: Vec<PredictiveEvidence>,
+) -> PredictiveRouteIR {
+    PredictiveRouteIR {
+        schema_version: 1,
+        route_risk: observed.risk,
+        observed,
+        next_step_role: NextStepRole::Unknown,
+        next_action_class: NextActionClass::Unknown,
+        task_complexity: TaskComplexity::Ambiguous,
+        progress_state: ProgressState::Unknown,
+        history_completeness,
+        confidence: 0.35,
+        evidence,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use bitrouter_sdk::HeaderMap;
+    use bitrouter_sdk::language_model::types::{
+        Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
+    };
+
+    use crate::workflow_state::extractors::generic::GenericPromptExtractor;
+    use crate::workflow_state::extractors::{
+        ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
+    };
+    use crate::workflow_state::fixture::WorkflowTraceFixture;
+    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+
+    const OPENING_PLAN_FIXTURE: &str =
+        include_str!("../../tests/fixtures/workflow_state/predictive/opening-plan.json");
+    const POST_READ_IMPLEMENT_FIXTURE: &str =
+        include_str!("../../tests/fixtures/workflow_state/predictive/post-read-implement.json");
+    const POST_EDIT_VERIFY_FIXTURE: &str =
+        include_str!("../../tests/fixtures/workflow_state/predictive/post-edit-verify.json");
+    const REPEATED_FAILURE_REPLAN_FIXTURE: &str =
+        include_str!("../../tests/fixtures/workflow_state/predictive/repeated-failure-replan.json");
+    const NEAR_DONE_FINALIZE_FIXTURE: &str =
+        include_str!("../../tests/fixtures/workflow_state/predictive/near-done-finalize.json");
+
+    fn prompt(messages: Vec<Message>) -> Prompt {
+        Prompt {
+            model: "inbound".to_string(),
+            system: None,
+            system_provider_metadata: ProviderMetadata::new(),
+            messages,
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    fn assistant_call(id: &str, name: &str, arguments: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![Content::ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+                provider_executed: false,
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        }
+    }
+
+    fn tool_result(call_id: &str, output: ToolResultOutput) -> Message {
+        Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult {
+                call_id: call_id.to_string(),
+                tool_name: None,
+                output,
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        }
+    }
+
+    fn observed(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+        let headers = HeaderMap::new();
+        let raw_body = serde_json::json!({});
+        GenericPromptExtractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::ChatCompletions,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt,
+        })
+    }
+
+    fn fixture_input(text: &str) -> Option<(crate::workflow_state::ir::WorkflowStateIR, Prompt)> {
+        let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+        let fixture = WorkflowTraceFixture::from_value(value).ok()?;
+        let ir = extract_workflow_state(&ExtractorInput {
+            harness_hint: Some(fixture.harness),
+            protocol_hint: fixture.protocol,
+            headers: &fixture.headers,
+            raw_body: &fixture.raw_body,
+            prompt: &fixture.prompt,
+        });
+        Some((ir, fixture.prompt))
+    }
 
     #[test]
     fn predictive_projection_uses_a_stable_canonical_key() {
@@ -225,5 +1046,229 @@ mod tests {
         for source_identity in ["codex", "claude_code", "hermes", "smithers", "openclaw"] {
             assert!(!key.contains(source_identity), "{source_identity}");
         }
+    }
+
+    #[test]
+    fn predicts_roles_from_http_native_history() {
+        let cases = [
+            (
+                "broad complex opening",
+                OPENING_PLAN_FIXTURE,
+                NextStepRole::Orchestrate,
+                NextActionClass::ReasonOrPlan,
+                RouteRisk::Normal,
+            ),
+            (
+                "successful repository read",
+                POST_READ_IMPLEMENT_FIXTURE,
+                NextStepRole::Implement,
+                NextActionClass::Mutate,
+                RouteRisk::Normal,
+            ),
+            (
+                "successful mutation",
+                POST_EDIT_VERIFY_FIXTURE,
+                NextStepRole::Verify,
+                NextActionClass::ExecuteOrTest,
+                RouteRisk::Normal,
+            ),
+            (
+                "repeated failure recovery pressure",
+                REPEATED_FAILURE_REPLAN_FIXTURE,
+                NextStepRole::Orchestrate,
+                NextActionClass::ReasonOrPlan,
+                RouteRisk::Guarded,
+            ),
+            (
+                "successful final test",
+                NEAR_DONE_FINALIZE_FIXTURE,
+                NextStepRole::Finalize,
+                NextActionClass::AnswerOrSummarize,
+                RouteRisk::Normal,
+            ),
+        ];
+
+        for (name, fixture_text, expected_role, expected_action, expected_risk) in cases {
+            let Some((ir, prompt)) = fixture_input(fixture_text) else {
+                assert!(false, "invalid prediction fixture: {name}");
+                continue;
+            };
+            let prediction = predict_next_step(&ir, &prompt);
+
+            assert_eq!(prediction.next_step_role, expected_role, "{name}");
+            assert_eq!(prediction.next_action_class, expected_action, "{name}");
+            assert_eq!(prediction.route_risk, expected_risk, "{name}");
+        }
+    }
+
+    #[test]
+    fn predicts_concrete_fix_first_failure_and_narrow_poll() {
+        let concrete_fix = prompt(vec![Message::text(
+            Role::User,
+            "Fix the parser error in src/parser.rs: expected a closing delimiter.",
+        )]);
+        let first_failure = prompt(vec![
+            Message::text(Role::User, "Make src/parser.rs pass its parser tests."),
+            assistant_call("test-1", "bash", r#"{"cmd":"cargo test -p parser"}"#),
+            tool_result(
+                "test-1",
+                ToolResultOutput::ErrorText {
+                    value: "assertion mismatch".to_string(),
+                },
+            ),
+        ]);
+        let narrow_poll = prompt(vec![Message::text(
+            Role::User,
+            "Poll the deployment status once and report whether it is complete.",
+        )]);
+        let cases = [
+            (
+                "concrete fix with file and error",
+                concrete_fix,
+                NextStepRole::Implement,
+                NextActionClass::Mutate,
+            ),
+            (
+                "first failed test",
+                first_failure,
+                NextStepRole::Implement,
+                NextActionClass::Mutate,
+            ),
+            (
+                "narrow status poll",
+                narrow_poll,
+                NextStepRole::Mechanical,
+                NextActionClass::WaitOrPoll,
+            ),
+        ];
+
+        for (name, prompt, expected_role, expected_action) in cases {
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.next_step_role, expected_role, "{name}");
+            assert_eq!(prediction.next_action_class, expected_action, "{name}");
+        }
+    }
+
+    #[test]
+    fn predicts_unknown_for_missing_or_contradictory_history() {
+        let missing = prompt(Vec::new());
+        let contradictory = prompt(vec![tool_result(
+            "missing-call",
+            ToolResultOutput::Text {
+                value: "completed".to_string(),
+            },
+        )]);
+        let truncated = prompt(vec![
+            Message::text(Role::User, "Implement the correction in src/parser.rs."),
+            assistant_call("missing-result", "read_file", r#"{"path":"src/parser.rs"}"#),
+        ]);
+
+        for (name, prompt) in [
+            ("missing", missing),
+            ("contradictory", contradictory),
+            ("truncated", truncated),
+        ] {
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.next_step_role, NextStepRole::Unknown, "{name}");
+            assert_eq!(
+                prediction.next_action_class,
+                NextActionClass::Unknown,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn predicts_without_task_name_or_source_identity() {
+        let named = prompt(vec![Message::text(
+            Role::User,
+            "Fix path-tracing-reverse in src/solver.rs: error: wrong edge order.",
+        )]);
+        let renamed = prompt(vec![Message::text(
+            Role::User,
+            "Fix opaque-work-item in src/solver.rs: error: wrong edge order.",
+        )]);
+        let mut named_ir = observed(&named);
+        named_ir.harness_id = HarnessId::Codex;
+        named_ir.active_workflow = Some("private-phase".to_string());
+        let mut renamed_ir = observed(&renamed);
+        renamed_ir.harness_id = HarnessId::Hermes;
+        renamed_ir.active_workflow = Some("another-private-phase".to_string());
+
+        let named_prediction = predict_next_step(&named_ir, &named);
+        let renamed_prediction = predict_next_step(&renamed_ir, &renamed);
+
+        assert_eq!(
+            PredictiveRouteProjection::new(
+                named_prediction.next_step_role,
+                named_prediction.route_risk
+            ),
+            PredictiveRouteProjection::new(
+                renamed_prediction.next_step_role,
+                renamed_prediction.route_risk
+            )
+        );
+        assert_eq!(
+            named_prediction.next_action_class,
+            renamed_prediction.next_action_class
+        );
+        assert_eq!(named_prediction.evidence, renamed_prediction.evidence);
+    }
+
+    #[test]
+    fn predictor_preserves_prompt_tools_and_excludes_private_evidence() {
+        let Some((ir, prompt)) = fixture_input(POST_EDIT_VERIFY_FIXTURE) else {
+            assert!(false, "invalid post-edit fixture");
+            return;
+        };
+        let original = prompt.clone();
+
+        let prediction = predict_next_step(&ir, &prompt);
+
+        assert_eq!(prompt, original);
+        assert!(prediction.evidence.len() <= 8);
+        assert!(prediction.evidence.iter().all(|evidence| {
+            evidence.code.len() <= 32
+                && evidence
+                    .code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                && !evidence.code.contains("src/")
+                && !evidence.code.contains("apply_patch")
+        }));
+    }
+
+    #[test]
+    fn private_headers_cannot_reach_pure_predictor() {
+        let Some((ir, prompt)) = fixture_input(OPENING_PLAN_FIXTURE) else {
+            assert!(false, "invalid opening fixture");
+            return;
+        };
+        let mut private_headers = HeaderMap::new();
+        if let Ok(value) = "mechanical".parse() {
+            assert!(
+                private_headers
+                    .insert("x-bitrouter-agent-role", value)
+                    .is_none()
+            );
+        } else {
+            assert!(false, "invalid private role header value");
+        }
+        if let Ok(value) = "path-tracing-reverse".parse() {
+            assert!(
+                private_headers
+                    .insert("x-superpowers-task", value)
+                    .is_none()
+            );
+        } else {
+            assert!(false, "invalid private task header value");
+        }
+
+        let without_headers = predict_next_step(&ir, &prompt);
+        let with_unreachable_headers = predict_next_step(&ir, &prompt);
+
+        assert_eq!(without_headers, with_unreachable_headers);
     }
 }
