@@ -22,6 +22,8 @@ use crate::policy_lock::{
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
+const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
+
 /// A point-in-time, ordered view of every pre-v2 learned-state table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LegacyAdequacySnapshot {
@@ -96,6 +98,68 @@ pub struct CompileInput<'a> {
     pub proposed_progress_guards: Option<&'a BTreeMap<String, Option<ProgressGuardPolicy>>>,
 }
 
+/// Versioned, deterministic quality conditions used for positive route
+/// recommendations. Publication remains a separate operator action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PromotionQualityCriteria {
+    pub minimum_candidate_pass_rate_ppm: i64,
+    pub maximum_quality_loss_ppm: Option<i64>,
+}
+
+impl PromotionQualityCriteria {
+    /// Conservative compatibility default: at least 90% observed pass rate
+    /// and no observed regression from the baseline tier.
+    pub fn quality_first() -> Self {
+        Self {
+            minimum_candidate_pass_rate_ppm: 900_000,
+            maximum_quality_loss_ppm: Some(0),
+        }
+    }
+
+    /// Produce a reviewable candidate from any conclusive positive evidence.
+    /// The optimization layer must keep publication as an explicit action.
+    pub fn manual_review() -> Self {
+        Self {
+            minimum_candidate_pass_rate_ppm: 1,
+            maximum_quality_loss_ppm: None,
+        }
+    }
+
+    pub fn custom(
+        minimum_candidate_pass_rate_ppm: i64,
+        maximum_quality_loss_ppm: i64,
+    ) -> Result<Self> {
+        let criteria = Self {
+            minimum_candidate_pass_rate_ppm,
+            maximum_quality_loss_ppm: Some(maximum_quality_loss_ppm),
+        };
+        criteria.validate()?;
+        Ok(criteria)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if !(0..=1_000_000).contains(&self.minimum_candidate_pass_rate_ppm) {
+            anyhow::bail!("minimum candidate pass rate must be between 0 and 1000000 ppm");
+        }
+        if self
+            .maximum_quality_loss_ppm
+            .is_some_and(|value| !(0..=1_000_000).contains(&value))
+        {
+            anyhow::bail!("maximum quality loss must be between 0 and 1000000 ppm");
+        }
+        Ok(())
+    }
+
+    fn admits(&self, candidate_pass_rate_ppm: i64, baseline_pass_rate_ppm: Option<i64>) -> bool {
+        candidate_pass_rate_ppm >= self.minimum_candidate_pass_rate_ppm
+            && self.maximum_quality_loss_ppm.is_none_or(|maximum_loss| {
+                baseline_pass_rate_ppm.is_none_or(|baseline| {
+                    candidate_pass_rate_ppm >= baseline.saturating_sub(maximum_loss)
+                })
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CompileChange {
     pub policy: String,
@@ -126,7 +190,8 @@ struct CompilerConfigDigest {
     id: &'static str,
     version: u32,
     precedence: &'static str,
-    minimum_quality_ppm: i64,
+    active_route_minimum_quality_ppm: i64,
+    promotion_quality: PromotionQualityCriteria,
     progress_guard_proposals_digest: String,
 }
 
@@ -139,7 +204,17 @@ struct RouteEvidence<'a> {
 
 /// Compile a deterministic v2 candidate without mutating the active lock.
 pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
+    compile_candidate_with_quality(input, &PromotionQualityCriteria::quality_first())
+}
+
+/// Compile with explicit promotion quality criteria. The criteria are included
+/// in every certificate's compiler config digest.
+pub fn compile_candidate_with_quality(
+    input: CompileInput<'_>,
+    quality: &PromotionQualityCriteria,
+) -> Result<CompileResult> {
     validate_document(input.current)?;
+    quality.validate()?;
     let legacy_evidence_root = input.legacy.semantic_digest()?;
     let evidence_root = match input.eval {
         Some(eval) => canonical_digest(&(
@@ -157,7 +232,8 @@ pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
         id: POLICY_COMPILER_ID,
         version: POLICY_COMPILER_VERSION,
         precedence: "guardrail>operator>eval_negative>eval_positive>legacy_negative>legacy_positive>inherited",
-        minimum_quality_ppm: 900_000,
+        active_route_minimum_quality_ppm: ACTIVE_ROUTE_MINIMUM_QUALITY_PPM,
+        promotion_quality: quality.clone(),
         progress_guard_proposals_digest: canonical_digest(&input.proposed_progress_guards)?,
     })?;
     let parent_digest = match input.parent_digest {
@@ -245,7 +321,7 @@ pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
             let explore_tier = policy.adequacy.explore_tier.as_deref();
             let eval_evidence = policy_eval.get(&request_key).copied();
             let eval_recommendation = eval_evidence.and_then(|route| {
-                eval_recommendation(policy, &request_key, prior_tier.as_deref(), route)
+                eval_recommendation(policy, &request_key, prior_tier.as_deref(), route, quality)
             });
             let legacy_recommendation = if active_pin {
                 escalation_tier.map(|tier| (tier.to_string(), PromotionVerdict::Demote))
@@ -491,6 +567,7 @@ fn eval_recommendation(
     request_key: &str,
     prior_tier: Option<&str>,
     route: &RouteEvalEvidence,
+    quality: &PromotionQualityCriteria,
 ) -> Option<(String, PromotionVerdict)> {
     let baseline = route
         .baseline_tier
@@ -500,7 +577,8 @@ fn eval_recommendation(
         && prior != baseline
         && let Some(active) = route.tiers.get(prior)
         && (active.critical_violations > 0
-            || (active.fail_weight_ppm > 0 && active.pass_rate_ppm() < 900_000))
+            || (active.fail_weight_ppm > 0
+                && active.pass_rate_ppm() < ACTIVE_ROUTE_MINIMUM_QUALITY_PPM))
     {
         return Some((baseline.to_string(), PromotionVerdict::Demote));
     }
@@ -520,9 +598,7 @@ fn eval_recommendation(
                 && u32::try_from(evidence.independent_tasks.len()).unwrap_or(u32::MAX)
                     >= minimum_tasks
                 && evidence.critical_violations == 0
-                && evidence.pass_rate_ppm() >= 900_000
-                && baseline_pass_rate
-                    .is_none_or(|baseline_rate| evidence.pass_rate_ppm() >= baseline_rate)
+                && quality.admits(evidence.pass_rate_ppm(), baseline_pass_rate)
         })
         .max_by(|(left_tier, left), (right_tier, right)| {
             let cost_order = if left.independent_tasks == right.independent_tasks {
@@ -765,6 +841,92 @@ mod tests {
             policies: BTreeMap::from([("auto".into(), policy(route))]),
             certificates: BTreeMap::new(),
         }
+    }
+
+    fn regressed_route_evidence() -> crate::eval::compiler::RouteEvalEvidence {
+        use crate::eval::compiler::TierEvalEvidence;
+
+        crate::eval::compiler::RouteEvalEvidence {
+            baseline_tier: Some("strong".into()),
+            tiers: BTreeMap::from([
+                (
+                    "strong".into(),
+                    TierEvalEvidence {
+                        eligible_episodes: 10,
+                        independent_tasks: BTreeSet::from(["baseline-task".into()]),
+                        total_weight_ppm: 10_000_000,
+                        pass_weight_ppm: 10_000_000,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "economy".into(),
+                    TierEvalEvidence {
+                        eligible_episodes: 10,
+                        independent_tasks: BTreeSet::from(["candidate-task".into()]),
+                        total_weight_ppm: 10_000_000,
+                        pass_weight_ppm: 8_000_000,
+                        fail_weight_ppm: 2_000_000,
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn promotion_quality_criteria_make_the_tradeoff_explicit() -> anyhow::Result<()> {
+        let route = regressed_route_evidence();
+        let policy = policy(None);
+
+        assert!(
+            super::eval_recommendation(
+                &policy,
+                EDIT_KEY,
+                None,
+                &route,
+                &super::PromotionQualityCriteria::quality_first(),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::eval_recommendation(
+                &policy,
+                EDIT_KEY,
+                None,
+                &route,
+                &super::PromotionQualityCriteria::manual_review(),
+            ),
+            Some(("economy".into(), PromotionVerdict::Promote))
+        );
+        assert_eq!(
+            super::eval_recommendation(
+                &policy,
+                EDIT_KEY,
+                None,
+                &route,
+                &super::PromotionQualityCriteria::custom(750_000, 250_000)?,
+            ),
+            Some(("economy".into(), PromotionVerdict::Promote))
+        );
+        assert!(
+            super::eval_recommendation(
+                &policy,
+                EDIT_KEY,
+                None,
+                &route,
+                &super::PromotionQualityCriteria::custom(750_000, 100_000)?,
+            )
+            .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn promotion_quality_criteria_reject_invalid_ppm_values() {
+        assert!(super::PromotionQualityCriteria::custom(-1, 0).is_err());
+        assert!(super::PromotionQualityCriteria::custom(0, 1_000_001).is_err());
     }
 
     fn snapshot(positive: bool, pinned_at_unix: Option<i64>) -> super::LegacyAdequacySnapshot {
