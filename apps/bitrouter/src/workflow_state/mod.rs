@@ -10,6 +10,7 @@ pub mod online;
 pub mod predictive;
 pub mod real_trace;
 pub mod replay;
+pub mod response_observer;
 pub mod reward;
 pub mod reward_feedback;
 pub mod session;

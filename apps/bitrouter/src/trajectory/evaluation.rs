@@ -119,8 +119,15 @@ pub(crate) fn build_operational_evaluation(
             ),
         ]),
     };
-    let evidence = vec![event_evidence, snapshot_evidence];
+    let mut evidence = vec![event_evidence, snapshot_evidence];
+    if let Some(prediction_evidence) = prediction_observation_evidence(settlement)? {
+        evidence.push(prediction_evidence);
+    }
     let evidence_digest = evidence_digest(&evidence)?;
+    let evidence_refs = evidence
+        .iter()
+        .map(|item| item.evidence_id.clone())
+        .collect();
     let decisions = decoded
         .iter()
         .map(|(_, decision)| decision.clone())
@@ -164,10 +171,7 @@ pub(crate) fn build_operational_evaluation(
         metrics,
         hard_violations: Vec::new(),
         confidence_ppm: None,
-        evidence_refs: vec![
-            "episode-events".to_owned(),
-            "trajectory-snapshot".to_owned(),
-        ],
+        evidence_refs,
         idempotency_key: format!(
             "trajectory-operational:{}:{}",
             snapshot.episode_id, snapshot.through_sequence
@@ -177,6 +181,40 @@ pub(crate) fn build_operational_evaluation(
     let envelope = TrajectoryEvaluationEnvelope { subject, result };
     validate_evaluation_envelope(&envelope)?;
     Ok(envelope)
+}
+
+fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Option<EvidenceItem>> {
+    let mut attributes = BTreeMap::new();
+    for (event_key, attribute_key) in [
+        ("routing.predicted_role", "predicted_role"),
+        ("routing.predicted_action", "predicted_action"),
+        ("routing.observed_action", "observed_action"),
+        ("routing.action_match", "action_match"),
+    ] {
+        if let Some(value) = settlement.evidence.categorical.get(event_key) {
+            attributes.insert(attribute_key.to_owned(), value.clone());
+        }
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.prediction_confidence_ppm")
+    {
+        attributes.insert(
+            "prediction_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if attributes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(EvidenceItem {
+        evidence_id: "routing-prediction-observation".to_owned(),
+        kind: "routing.prediction_observation".to_owned(),
+        digest: canonical_digest(&attributes)?,
+        redacted: true,
+        attributes,
+    }))
 }
 
 fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRef>> {

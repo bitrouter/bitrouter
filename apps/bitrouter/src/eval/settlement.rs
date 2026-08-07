@@ -13,6 +13,7 @@ use super::types::{
     evidence_digest,
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
+use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
 
 /// A policy decision waiting for the always-run settlement stage to attach
 /// request outcome evidence. This is process-local correlation state only; it
@@ -28,6 +29,106 @@ pub struct PendingEvalDecision {
     pub baseline_tier: Option<String>,
     pub preset: Option<String>,
     pub holdout: bool,
+    pub predicted_role: Option<String>,
+    pub predicted_action: Option<String>,
+    pub prediction_confidence_ppm: Option<u32>,
+    pub observation: Option<PredictionObservation>,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PredictionObservationSnapshot {
+    predicted_role: Option<String>,
+    predicted_action: Option<String>,
+    prediction_confidence_ppm: Option<u32>,
+    observed_action: Option<ObservedActionClass>,
+}
+
+impl PendingEvalDecision {
+    pub(crate) fn observation_snapshot(&self) -> PredictionObservationSnapshot {
+        PredictionObservationSnapshot {
+            predicted_role: self.predicted_role.as_deref().map(normalize_predicted_role),
+            predicted_action: self
+                .predicted_action
+                .as_deref()
+                .map(normalize_predicted_action),
+            prediction_confidence_ppm: self
+                .prediction_confidence_ppm
+                .map(|confidence| confidence.min(1_000_000)),
+            observed_action: self
+                .observation
+                .map(|observation| observation.observed_action),
+        }
+    }
+}
+
+impl PredictionObservationSnapshot {
+    pub(crate) fn attributes(&self) -> BTreeMap<String, String> {
+        let mut attributes = BTreeMap::new();
+        if let Some(role) = &self.predicted_role {
+            attributes.insert("predicted_role".into(), role.clone());
+        }
+        if let Some(action) = &self.predicted_action {
+            attributes.insert("predicted_action".into(), action.clone());
+        }
+        if let Some(confidence) = self.prediction_confidence_ppm {
+            attributes.insert("prediction_confidence_ppm".into(), confidence.to_string());
+        }
+        if let Some(action) = self.observed_action {
+            attributes.insert("observed_action".into(), action.as_str().into());
+        }
+        if let (Some(predicted), Some(observed)) = (
+            self.predicted_action
+                .as_deref()
+                .and_then(ObservedActionClass::parse)
+                .filter(|action| action.is_known()),
+            self.observed_action.filter(|action| action.is_known()),
+        ) {
+            attributes.insert("action_match".into(), (predicted == observed).to_string());
+        }
+        attributes
+    }
+
+    pub(crate) fn write_namespaced(
+        &self,
+        structural: &mut BTreeMap<String, u64>,
+        categorical: &mut BTreeMap<String, String>,
+    ) {
+        if let Some(role) = &self.predicted_role {
+            categorical.insert("routing.predicted_role".into(), role.clone());
+        }
+        if let Some(action) = &self.predicted_action {
+            categorical.insert("routing.predicted_action".into(), action.clone());
+        }
+        if let Some(confidence) = self.prediction_confidence_ppm {
+            structural.insert(
+                "routing.prediction_confidence_ppm".into(),
+                u64::from(confidence),
+            );
+        }
+        if let Some(action) = self.observed_action {
+            categorical.insert("routing.observed_action".into(), action.as_str().into());
+        }
+        if let Some(action_match) = self.attributes().get("action_match") {
+            categorical.insert("routing.action_match".into(), action_match.clone());
+        }
+    }
+}
+
+fn normalize_predicted_role(value: &str) -> String {
+    match value {
+        "orchestrate" | "implement" | "mechanical" | "verify" | "finalize" | "unknown" => {
+            value.to_owned()
+        }
+        _ => "unknown".to_owned(),
+    }
+}
+
+fn normalize_predicted_action(value: &str) -> String {
+    ObservedActionClass::parse(value)
+        .unwrap_or(ObservedActionClass::Unknown)
+        .as_str()
+        .to_owned()
 }
 
 /// Bounded-lifetime request correlation used between model selection and
@@ -46,20 +147,40 @@ impl PendingEvalDecisionStore {
             .insert(decision.request_id.clone(), decision);
     }
 
-    fn take(&self, request_id: &str) -> Option<PendingEvalDecision> {
+    pub fn peek(&self, request_id: &str) -> Option<PendingEvalDecision> {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(request_id)
+            .cloned()
+    }
+
+    pub fn observe(&self, request_id: &str, observation: PredictionObservation) -> bool {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(decision) = entries.get_mut(request_id) else {
+            return false;
+        };
+        decision.observation = Some(match decision.observation {
+            Some(existing) => existing.merge(observation),
+            None => observation,
+        });
+        true
+    }
+
+    pub fn take(&self, request_id: &str) -> Option<PendingEvalDecision> {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(request_id)
     }
 
+    pub fn remove(&self, request_id: &str) -> bool {
+        self.take(request_id).is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn get(&self, request_id: &str) -> Option<PendingEvalDecision> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(request_id)
-            .cloned()
+        self.peek(request_id)
     }
 
     #[cfg(test)]
@@ -105,7 +226,7 @@ impl EvalSettlementRecorder {
 
     fn subject(
         &self,
-        decision: PendingEvalDecision,
+        decision: &PendingEvalDecision,
         context: &SettlementContext,
     ) -> anyhow::Result<EvalSubject> {
         let mut attributes = BTreeMap::from([
@@ -132,6 +253,7 @@ impl EvalSettlementRecorder {
         if let Some(error) = &context.error {
             attributes.insert("error_code".into(), error.error_code().into());
         }
+        attributes.extend(decision.observation_snapshot().attributes());
         let usage = Usage {
             prompt_tokens: context.prompt_tokens,
             completion_tokens: context.completion_tokens,
@@ -163,16 +285,16 @@ impl EvalSettlementRecorder {
             scope: EvalScope::Request,
             subject_id: context.request_id.clone(),
             policy_digest: decision.policy_digest.clone(),
-            preset: decision.preset,
+            preset: decision.preset.clone(),
             cohort: None,
             holdout: decision.holdout,
             decisions: vec![EvalDecisionRef {
-                decision_id: decision.decision_id,
-                policy: decision.policy,
-                request_key: decision.request_key,
-                selected_tier: decision.selected_tier,
-                baseline_tier: decision.baseline_tier,
-                policy_digest: decision.policy_digest,
+                decision_id: decision.decision_id.clone(),
+                policy: decision.policy.clone(),
+                request_key: decision.request_key.clone(),
+                selected_tier: decision.selected_tier.clone(),
+                baseline_tier: decision.baseline_tier.clone(),
+                policy_digest: decision.policy_digest.clone(),
             }],
             requested_dimensions: BTreeSet::from([
                 "cost.usd_micros".into(),
@@ -181,7 +303,7 @@ impl EvalSettlementRecorder {
             ]),
             evidence,
             evidence_digest,
-            observed_at: chrono::Utc::now().to_rfc3339(),
+            observed_at: decision.observed_at.clone(),
         })
     }
 }
@@ -189,22 +311,35 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
-        if let Some(trajectory) = &self.trajectory
-            && trajectory
-                .record_if_tracked(context)
+        let pending = self.pending.peek(&context.request_id);
+        if let Some(trajectory) = &self.trajectory {
+            let snapshot = pending
+                .as_ref()
+                .map(PendingEvalDecision::observation_snapshot);
+            let disposition = trajectory
+                .record_if_tracked(context, snapshot.as_ref())
                 .await
                 .map_err(|error| {
                     bitrouter_sdk::BitrouterError::internal(format!(
                         "persisting trajectory settlement: {error}"
                     ))
-                })?
-        {
-            return Ok(());
+                })?;
+            match disposition {
+                crate::trajectory::settlement::TrajectorySettlementDisposition::Untracked => {}
+                crate::trajectory::settlement::TrajectorySettlementDisposition::AwaitingAuthoritativeMetering => {
+                    return Ok(());
+                }
+                crate::trajectory::settlement::TrajectorySettlementDisposition::Persisted
+                | crate::trajectory::settlement::TrajectorySettlementDisposition::AlreadyTerminal => {
+                    self.pending.remove(&context.request_id);
+                    return Ok(());
+                }
+            }
         }
-        let Some(decision) = self.pending.take(&context.request_id) else {
+        let Some(decision) = pending else {
             return Ok(());
         };
-        let subject = self.subject(decision, context).map_err(|error| {
+        let subject = self.subject(&decision, context).map_err(|error| {
             bitrouter_sdk::BitrouterError::internal(format!(
                 "building request eval subject: {error}"
             ))
@@ -217,6 +352,7 @@ impl SettlementRecorder for EvalSettlementRecorder {
                     "persisting request eval subject: {error}"
                 ))
             })?;
+        self.pending.take(&context.request_id);
         Ok(())
     }
 }
@@ -229,6 +365,7 @@ mod tests {
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::event::EventBus;
     use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore};
     use crate::eval::store::EvalStore;
@@ -252,6 +389,11 @@ mod tests {
             baseline_tier: Some("strong".into()),
             preset: Some("auto:cost".into()),
             holdout: false,
+            predicted_role: None,
+            predicted_action: None,
+            prediction_confidence_ppm: None,
+            observation: None,
+            observed_at: "2026-08-08T00:00:00Z".into(),
         });
         let recorder =
             EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
@@ -274,6 +416,95 @@ mod tests {
                 "quality.pass".to_string(),
             ])
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settlement_storage_failure_preserves_pending_decision_for_retry() -> anyhow::Result<()>
+    {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db.clone());
+        let pending = PendingEvalDecisionStore::default();
+        pending.insert(PendingEvalDecision {
+            request_id: "request-1".into(),
+            decision_id: "decision-1".into(),
+            policy: "auto:cost".into(),
+            policy_digest: DIGEST.into(),
+            request_key: "opening".into(),
+            selected_tier: "economy".into(),
+            baseline_tier: Some("strong".into()),
+            preset: Some("auto:cost".into()),
+            holdout: false,
+            predicted_role: Some("implement".into()),
+            predicted_action: Some("mutate".into()),
+            prediction_confidence_ppm: Some(900_000),
+            observation: Some(
+                crate::workflow_state::response_observer::PredictionObservation::new(
+                    crate::workflow_state::response_observer::ObservedActionClass::Mutate,
+                ),
+            ),
+            observed_at: "2026-08-08T00:00:00Z".into(),
+        });
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TRIGGER fail_eval_subject BEFORE INSERT ON eval_subjects \
+             BEGIN SELECT RAISE(FAIL, 'injected eval failure'); END"
+                .to_owned(),
+        ))
+        .await?;
+        let recorder = EvalSettlementRecorder::new(
+            store.clone(),
+            pending.clone(),
+            Arc::new(PricingTable::new()),
+        );
+        let mut context = settlement_context();
+
+        assert!(recorder.record(&mut context).await.is_err());
+        assert!(pending.peek("request-1").is_some());
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DROP TRIGGER fail_eval_subject".to_owned(),
+        ))
+        .await?;
+
+        recorder.record(&mut context).await?;
+
+        assert!(pending.peek("request-1").is_none());
+        assert!(store.subject("request:request-1").await?.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_subject_digest_is_stable_across_storage_retries() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let recorder = EvalSettlementRecorder::new(
+            EvalStore::new(db),
+            PendingEvalDecisionStore::default(),
+            Arc::new(PricingTable::new()),
+        );
+        let decision = PendingEvalDecision {
+            request_id: "request-1".into(),
+            decision_id: "decision-1".into(),
+            policy: "auto:cost".into(),
+            policy_digest: DIGEST.into(),
+            request_key: "opening".into(),
+            selected_tier: "economy".into(),
+            baseline_tier: Some("strong".into()),
+            preset: Some("auto:cost".into()),
+            holdout: false,
+            predicted_role: Some("implement".into()),
+            predicted_action: Some("mutate".into()),
+            prediction_confidence_ppm: Some(900_000),
+            observation: None,
+            observed_at: "2026-08-08T00:00:00Z".into(),
+        };
+        let first = recorder.subject(&decision, &settlement_context())?;
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        let second = recorder.subject(&decision, &settlement_context())?;
+
+        assert_eq!(first.semantic_digest()?, second.semantic_digest()?);
         Ok(())
     }
 

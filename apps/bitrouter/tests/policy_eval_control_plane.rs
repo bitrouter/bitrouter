@@ -3,6 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitrouter::eval::EvalService;
 use bitrouter::eval::admission::SubmissionPrincipal;
 use bitrouter::eval::compiler::EvalEvidenceSnapshot;
+use bitrouter::eval::settlement::{
+    EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+};
 use bitrouter::eval::store::EvalStore;
 use bitrouter::eval::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
@@ -10,6 +13,15 @@ use bitrouter::eval::types::{
 };
 use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
+use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
+use bitrouter_sdk::caller::CallerContext;
+use bitrouter_sdk::event::EventBus;
+use bitrouter_sdk::language_model::types::AuthScheme;
+use bitrouter_sdk::language_model::{
+    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
+    HopOutcome, ObserveHook, PipelineContext, PipelineRequest, Prompt, RoutingTarget,
+    SettlementContext, SettlementRecorder, UsageOrigin,
+};
 
 fn base_lock() -> PolicyLock {
     PolicyLock {
@@ -211,6 +223,153 @@ fn compile(active: &PolicyLock) -> anyhow::Result<PolicyLock> {
         proposed_progress_guards: None,
     })?
     .document)
+}
+
+#[tokio::test]
+async fn policy_eval_control_plane_records_observed_action_without_quality_reward()
+-> anyhow::Result<()> {
+    let db = bitrouter::db::connect("sqlite::memory:").await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let store = EvalStore::new(db);
+    let pending = PendingEvalDecisionStore::default();
+    pending.insert(PendingEvalDecision {
+        request_id: "request-observed".into(),
+        decision_id: "decision-observed".into(),
+        policy: "auto:cost".into(),
+        policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .into(),
+        request_key: "agent_trace/v2|edit|normal".into(),
+        selected_tier: "economy".into(),
+        baseline_tier: Some("strong".into()),
+        preset: Some("auto:cost".into()),
+        holdout: false,
+        predicted_role: Some("implement".into()),
+        predicted_action: Some("mutate".into()),
+        prediction_confidence_ppm: Some(900_000),
+        observation: None,
+        observed_at: "2026-08-08T00:00:00Z".into(),
+    });
+    let observer = PredictiveResponseObserver::new(pending.clone());
+    let context = PipelineContext::new(PipelineRequest {
+        request_id: "request-observed".into(),
+        model: "model".into(),
+        caller: CallerContext::local(),
+        headers: http::HeaderMap::new(),
+        prompt: Prompt {
+            model: "model".into(),
+            system: None,
+            system_provider_metadata: BTreeMap::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        },
+        inbound_protocol: Some(ApiProtocol::Responses),
+    });
+    let execution = ExecutionResult {
+        provider_id: "provider".into(),
+        model_id: "model".into(),
+        account_label: None,
+        result: GenerateResult {
+            content: vec![Content::ToolCall {
+                id: "call-1".into(),
+                name: "apply_patch".into(),
+                arguments: r#"{"private":"never-persist"}"#.into(),
+                provider_executed: false,
+                dynamic: false,
+                provider_metadata: BTreeMap::new(),
+            }],
+            usage: None,
+            finish_reason: Some(FinishReason::Stop),
+            response_id: None,
+            stop_details: None,
+            provider_metadata: BTreeMap::new(),
+        },
+        request_duration_ms: 1,
+        upstream_duration_ms: Some(1),
+        server_tool_calls: Vec::new(),
+    };
+    observer
+        .on_hop_end(
+            &context,
+            &RoutingTarget {
+                provider_name: "provider".into(),
+                service_id: "model".into(),
+                api_base: "https://example.invalid".into(),
+                api_key: String::new(),
+                api_protocol: ApiProtocol::Responses,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::XApiKey,
+            },
+            HopOutcome::Generated(&execution),
+        )
+        .await;
+    let recorder = EvalSettlementRecorder::new(
+        store.clone(),
+        pending,
+        std::sync::Arc::new(bitrouter::metering::PricingTable::new()),
+    );
+    let mut settlement = SettlementContext {
+        request_id: "request-observed".into(),
+        caller: CallerContext::local(),
+        target: None,
+        model_id: "model".into(),
+        provider_id: "provider".into(),
+        account_label: None,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        usage_origin: UsageOrigin::ProviderReported,
+        raw_usage: None,
+        web_search_count: 0,
+        media_input_count: 0,
+        media_output_count: 0,
+        server_tool_calls: Vec::new(),
+        streamed: false,
+        request_duration_ms: 123,
+        upstream_duration_ms: Some(100),
+        ttft_ms: None,
+        generation_duration_ms: None,
+        first_token_kind: None,
+        finish_reason: Some(FinishReason::Stop),
+        error: None,
+        events: EventBus::default(),
+    };
+
+    recorder.record(&mut settlement).await?;
+
+    let subject = store
+        .subject("request:request-observed")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("request eval subject missing"))?;
+    let evidence = subject
+        .evidence
+        .iter()
+        .find(|evidence| evidence.evidence_id == "request-outcome")
+        .ok_or_else(|| anyhow::anyhow!("request outcome evidence missing"))?;
+    assert_eq!(
+        evidence
+            .attributes
+            .get("observed_action")
+            .map(String::as_str),
+        Some("mutate")
+    );
+    assert_eq!(
+        evidence.attributes.get("action_match").map(String::as_str),
+        Some("true")
+    );
+    assert!(!evidence.attributes.contains_key("quality.pass"));
+    assert!(!serde_json::to_string(&subject)?.contains("never-persist"));
+    Ok(())
 }
 
 fn publish_command(

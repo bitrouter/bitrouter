@@ -67,6 +67,7 @@ use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
+use crate::workflow_state::response_observer::PredictiveResponseObserver;
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -632,6 +633,9 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
+            lm.observe_hook(PredictiveResponseObserver::new(
+                pending_eval_decisions.clone(),
+            ));
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`

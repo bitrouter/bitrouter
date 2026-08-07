@@ -607,6 +607,11 @@ impl PolicyTableRouter {
                 baseline_tier: baseline_tier.clone(),
                 preset: Some(observer.policy.clone()),
                 holdout: false,
+                predicted_role: decision.predicted_role.clone(),
+                predicted_action: decision.predicted_action.clone(),
+                prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                observation: None,
+                observed_at: chrono::Utc::now().to_rfc3339(),
             });
         }
         if let Some(recorder) = &self.decision_recorder {
