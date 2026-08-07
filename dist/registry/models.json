@@ -4241,6 +4241,11 @@
           "provider_model_id": "moonshotai/kimi-k3"
         },
         {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "kimi-k3"
+        },
+        {
           "api_protocol": [
             "openai",
             "anthropic"
