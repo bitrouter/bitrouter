@@ -190,6 +190,19 @@ pub struct OnboardingFlags {
     pub model: Option<String>,
     /// (Step 3) Write a starter `bitrouter.yaml`.
     pub write_config: bool,
+    /// Optional generic workflow optimization onboarding.
+    pub optimization: Option<OnboardingOptimization>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OnboardingOptimization {
+    /// Exact argv when already supplied; interactive onboarding fills it in.
+    pub workflow_command: Option<Vec<String>>,
+    /// Observable success criteria; interactive onboarding fills it in.
+    pub success_contract: Option<String>,
+    pub strong: String,
+    pub economy: String,
+    pub preference: crate::optimization::OptimizationPreference,
 }
 
 impl Default for OnboardingFlags {
@@ -209,6 +222,7 @@ impl Default for OnboardingFlags {
             after: None,
             model: None,
             write_config: false,
+            optimization: None,
         }
     }
 }
@@ -247,6 +261,16 @@ pub struct OnboardingReport {
     pub after: String,
     /// The paste-in snippet for `after: serve`; `null` otherwise.
     pub snippet: Option<Snippet>,
+    /// Version-controlled optimization files configured during onboarding.
+    pub optimization: Option<OptimizationOnboardingReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OptimizationOnboardingReport {
+    pub intent: String,
+    pub lock: String,
+    pub evaluator: String,
+    pub preference: crate::optimization::OptimizationPreference,
 }
 
 impl CliReport for OnboardingReport {
@@ -272,6 +296,11 @@ impl CliReport for OnboardingReport {
             },
         )?;
         h.field("after", &self.after)?;
+        if let Some(optimization) = &self.optimization {
+            h.field("optimization intent", &optimization.intent)?;
+            h.field("optimization lock", &optimization.lock)?;
+            h.field("quality evaluator", &optimization.evaluator)?;
+        }
         if let Some(snippet) = &self.snippet {
             h.blank()?;
             h.line(&format!("paste-in wiring ({}):", snippet.base_url))?;
@@ -403,6 +432,7 @@ fn empty_report() -> OnboardingReport {
         harnesses_installed: Vec::new(),
         after: AfterAction::Exit.as_str().to_string(),
         snippet: None,
+        optimization: None,
     }
 }
 
@@ -451,6 +481,15 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         }
     }
 
+    let optimization = match flags.optimization.clone() {
+        Some(optimization) => Some(
+            configure_optimization(&flags.config, optimization, &installed)
+                .await
+                .context("configuring workflow optimization during onboarding")?,
+        ),
+        None => None,
+    };
+
     // --- Step 3: finish ---
     let after = flags.after.unwrap_or(AfterAction::Exit);
     let mut report = OnboardingReport {
@@ -460,6 +499,7 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
+        optimization,
     };
 
     match after {
@@ -619,6 +659,27 @@ async fn run_interactive(
     // --- Step 2: harness ---
     let installed = interactive_harness(&flags).await?;
 
+    // --- Optional workflow optimization ---
+    let optimization_request = interactive_optimization(&flags)?;
+    let optimization = if let Some(optimization_request) = optimization_request {
+        if !flags.config.is_file() {
+            match crate::commands::write_starter_config(&flags.config, flags.force).await? {
+                ScaffoldOutcome::Wrote => note(&format!(
+                    "wrote starter config to {}",
+                    flags.config.display()
+                )),
+                ScaffoldOutcome::Skipped => {}
+            }
+        }
+        Some(
+            configure_optimization(&flags.config, optimization_request, &installed)
+                .await
+                .context("configuring workflow optimization during onboarding")?,
+        )
+    } else {
+        None
+    };
+
     // --- Step 3: finish ---
     let after = interactive_after(&flags, &installed)?;
 
@@ -629,6 +690,7 @@ async fn run_interactive(
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
+        optimization,
     };
 
     match after {
@@ -784,6 +846,127 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
         }
     }
     Ok(installed)
+}
+
+fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<OnboardingOptimization>> {
+    let requested = match flags.optimization.clone() {
+        Some(requested) => requested,
+        None if !prompt_yes_no(
+            "Optimize an agent workflow with measured quality and cost?",
+            false,
+        ) =>
+        {
+            return Ok(None);
+        }
+        None => OnboardingOptimization {
+            workflow_command: None,
+            success_contract: None,
+            strong: "bitrouter:openai/gpt-5.6-terra".into(),
+            economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            preference: crate::optimization::OptimizationPreference::Balanced,
+        },
+    };
+    eprintln!();
+    eprintln!("Workflow optimization — generic agentic evaluation");
+    let workflow_command = match requested.workflow_command {
+        Some(command) => command,
+        None => {
+            let raw = prompt_line("  Workflow argv as JSON (example: [\"npm\",\"test\"]): ")?;
+            let command: Vec<String> = serde_json::from_str(&raw)
+                .context("workflow command must be a JSON string array")?;
+            if command.is_empty() {
+                anyhow::bail!("workflow command must not be empty");
+            }
+            command
+        }
+    };
+    let success_contract = match requested.success_contract {
+        Some(contract) => contract,
+        None => prompt_line("  What observable output means the workflow succeeded? ")?,
+    };
+    if success_contract.trim().is_empty() {
+        anyhow::bail!("workflow success criteria must not be empty");
+    }
+    let preference = if flags.optimization.is_some() {
+        requested.preference
+    } else {
+        let answer =
+            prompt_line("  Trade-off [quality-first/balanced/savings-first] [balanced]: ")?;
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "quality-first" | "quality_first" => {
+                crate::optimization::OptimizationPreference::QualityFirst
+            }
+            "savings-first" | "savings_first" => {
+                crate::optimization::OptimizationPreference::SavingsFirst
+            }
+            _ => crate::optimization::OptimizationPreference::Balanced,
+        }
+    };
+    if preference == crate::optimization::OptimizationPreference::Custom {
+        anyhow::bail!(
+            "custom PPM gates are available through `bitrouter optimize setup`; onboarding keeps profiles qualitative"
+        );
+    }
+    Ok(Some(OnboardingOptimization {
+        workflow_command: Some(workflow_command),
+        success_contract: Some(success_contract),
+        strong: requested.strong,
+        economy: requested.economy,
+        preference,
+    }))
+}
+
+async fn configure_optimization(
+    config: &std::path::Path,
+    requested: OnboardingOptimization,
+    installed: &[String],
+) -> Result<OptimizationOnboardingReport> {
+    let workflow_command = requested.workflow_command.ok_or_else(|| {
+        anyhow::anyhow!("headless optimization onboarding requires --optimize-workflow-command")
+    })?;
+    let success_contract = requested.success_contract.ok_or_else(|| {
+        anyhow::anyhow!("headless optimization onboarding requires --optimize-success")
+    })?;
+    if requested.preference == crate::optimization::OptimizationPreference::Custom {
+        anyhow::bail!("custom PPM gates require the explicit `bitrouter optimize setup` command");
+    }
+    let evaluator_agent = if installed.iter().any(|agent| agent.contains("codex")) {
+        "codex-acp"
+    } else if installed.iter().any(|agent| agent.contains("claude")) {
+        "claude-acp"
+    } else {
+        "codex-acp"
+    };
+    let intent_path = config.with_file_name(crate::optimization::DEFAULT_INTENT_FILENAME);
+    let contract_path = config.with_file_name(crate::optimization::DEFAULT_CONTRACT_FILENAME);
+    let outcome = crate::optimization::setup::setup_optimization(
+        crate::optimization::setup::SetupOptimizationRequest {
+            intent_path,
+            source_config: config.to_path_buf(),
+            workflow_command,
+            timeout_secs: 1800,
+            contract: contract_path,
+            contract_contents: Some(format!(
+                "# Workflow success contract\n\n{success_contract}\n"
+            )),
+            policy: "auto".into(),
+            preset: "auto".into(),
+            strong: requested.strong,
+            economy: requested.economy,
+            preference: requested.preference,
+            custom_quality: None,
+            evaluator_agent: evaluator_agent.into(),
+            evaluator_model: None,
+            evaluator_route: crate::optimization::EvaluatorRoute::Direct,
+        },
+    )
+    .await?;
+    Ok(OptimizationOnboardingReport {
+        intent: outcome.paths.intent.display().to_string(),
+        lock: outcome.paths.lock.display().to_string(),
+        evaluator: evaluator_agent.into(),
+        preference: outcome.intent.preference,
+    })
 }
 
 fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
@@ -1139,6 +1322,7 @@ mod tests {
             harnesses_installed: vec!["claude".to_string()],
             after: "launch".to_string(),
             snippet: None,
+            optimization: None,
         };
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "onboarding");

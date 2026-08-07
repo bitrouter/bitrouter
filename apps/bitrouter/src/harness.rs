@@ -164,10 +164,10 @@ pub const CATALOG: &[Harness] = &[
     },
     Harness {
         id: "codex-acp",
-        description: "OpenAI Codex via Zed's `codex-acp`",
-        project_url: "https://github.com/zed-industries/codex-acp",
+        description: "OpenAI Codex via the Agent Client Protocol adapter",
+        project_url: "https://github.com/agentclientprotocol/codex-acp",
         acp_command: Some("npx"),
-        acp_args: &["-y", "@zed-industries/codex-acp@latest"],
+        acp_args: &["-y", "@agentclientprotocol/codex-acp@latest"],
         package_marker: "codex-acp",
         interactive_binary: Some("codex"),
         routing: Routing::CodexArgs,

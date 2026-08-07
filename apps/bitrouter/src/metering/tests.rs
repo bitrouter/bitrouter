@@ -322,6 +322,55 @@ async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Res
 }
 
 #[tokio::test]
+async fn product_reconciliation_accepts_authenticated_final_charge_without_price_injection()
+-> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("product-receipt", 1, 1);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+    let receipt = SettlementReceipt {
+        request_id: settlement.request_id.clone(),
+        state: SettlementState::Computed,
+        model_id: Some("model-a".to_string()),
+        provider_id: Some("provider-a".to_string()),
+        usage: SettlementUsage {
+            uncached_input_tokens: 2,
+            cache_read_tokens: 3,
+            cache_write_tokens: 5,
+            output_tokens: 7,
+            reasoning_tokens: 11,
+        },
+        final_charge_micro_usd: Some(164),
+    };
+
+    let status = store.apply_authoritative_receipt_charge(&receipt).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let Some(evidence) = records[0].charge_evidence.as_ref() else {
+        return Err(bitrouter_sdk::BitrouterError::internal(
+            "missing authoritative charge evidence",
+        ));
+    };
+
+    assert_eq!(status, super::ReconciliationStatus::Computed);
+    assert_eq!(records[0].final_charge_micro_usd, Some(164));
+    assert_eq!(
+        evidence.pricing_source,
+        super::PricingSource::AuthoritativeReceipt
+    );
+    assert!(
+        evidence
+            .effective_rates
+            .output_micro_usd_per_token
+            .is_none()
+    );
+    assert!(records[0].authoritative_receipt.is_some());
+    Ok(())
+}
+
+#[tokio::test]
 async fn computed_receipt_selects_the_unique_exact_price_candidate() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());

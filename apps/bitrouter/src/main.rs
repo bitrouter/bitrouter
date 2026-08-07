@@ -263,6 +263,27 @@ enum Command {
         /// write).
         #[arg(long)]
         write_config: bool,
+        /// Configure the version-controlled workflow optimization loop.
+        #[arg(long)]
+        optimize: bool,
+        /// Exact workflow executable for headless optimization onboarding.
+        #[arg(long)]
+        optimize_workflow_command: Option<String>,
+        /// One exact workflow argument; repeat to preserve argv boundaries.
+        #[arg(long, allow_hyphen_values = true)]
+        optimize_workflow_arg: Vec<String>,
+        /// Observable workflow success contract text.
+        #[arg(long)]
+        optimize_success: Option<String>,
+        /// Strong Cloud route for optimization onboarding.
+        #[arg(long, default_value = "bitrouter:openai/gpt-5.6-terra")]
+        optimize_strong: String,
+        /// Economy Cloud route for optimization onboarding.
+        #[arg(long, default_value = "bitrouter:deepseek/deepseek-v4-flash-0731")]
+        optimize_economy: String,
+        /// Qualitative optimization trade-off; latency is observe-only.
+        #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
+        optimize_preference: OptimizePreferenceArg,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -307,6 +328,11 @@ enum Command {
     Eval {
         #[command(subcommand)]
         action: EvalAction,
+    },
+    /// Optimize an agent workflow against measured quality and Cloud cost.
+    Optimize {
+        #[command(subcommand)]
+        action: OptimizeAction,
     },
     /// Inspect, replay, and retain durable trajectory history in the local database.
     Trajectory {
@@ -1079,6 +1105,105 @@ enum EvalAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum OptimizePreferenceArg {
+    QualityFirst,
+    Balanced,
+    SavingsFirst,
+    Custom,
+}
+
+impl From<OptimizePreferenceArg> for bitrouter::optimization::OptimizationPreference {
+    fn from(value: OptimizePreferenceArg) -> Self {
+        match value {
+            OptimizePreferenceArg::QualityFirst => Self::QualityFirst,
+            OptimizePreferenceArg::Balanced => Self::Balanced,
+            OptimizePreferenceArg::SavingsFirst => Self::SavingsFirst,
+            OptimizePreferenceArg::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum OptimizeAction {
+    /// Create version-controlled optimization intent and lock files.
+    Setup {
+        /// Optimization intent path.
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        /// Source BitRouter config used by the workflow.
+        #[arg(long, default_value = "bitrouter.yaml")]
+        source_config: PathBuf,
+        /// Exact workflow executable (no shell parsing).
+        #[arg(long)]
+        workflow_command: String,
+        /// One exact workflow argument; repeat to preserve argv boundaries.
+        #[arg(long, allow_hyphen_values = true)]
+        workflow_arg: Vec<String>,
+        /// Hard deadline for each baseline or candidate workflow invocation.
+        #[arg(long, default_value_t = 1800)]
+        timeout_secs: u64,
+        /// Success contract path. A starter is created when absent.
+        #[arg(long, default_value = "bitrouter.eval.md")]
+        contract: PathBuf,
+        /// Named routing policy.
+        #[arg(long, default_value = "auto")]
+        policy: String,
+        /// Preset passed to the workflow as `@preset`.
+        #[arg(long, default_value = "auto")]
+        preset: String,
+        /// Strong Cloud route used by the baseline.
+        #[arg(long)]
+        strong: String,
+        /// Economy Cloud route tested as the one-variable candidate.
+        #[arg(long)]
+        economy: String,
+        /// Qualitative quality/cost trade-off. Latency remains observe-only.
+        #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
+        preference: OptimizePreferenceArg,
+        /// Custom minimum pass rate in integer parts-per-million.
+        #[arg(long, requires = "maximum_quality_loss_ppm")]
+        minimum_pass_rate_ppm: Option<u32>,
+        /// Custom maximum quality loss in integer parts-per-million.
+        #[arg(long, requires = "minimum_pass_rate_ppm")]
+        maximum_quality_loss_ppm: Option<u32>,
+        /// ACP evaluator id. Codex is the default generic agentic evaluator.
+        #[arg(long, default_value = "codex-acp")]
+        evaluator_agent: String,
+        /// Concrete judge model, independent from the workflow candidate.
+        #[arg(long)]
+        evaluator_model: Option<String>,
+        /// Route judge traffic through BitRouter Cloud instead of the detected
+        /// agent's own subscription. Workflow traffic always uses Cloud.
+        #[arg(long)]
+        evaluator_via_cloud: bool,
+    },
+    /// Run one baseline and one controlled candidate, then compile a report.
+    Run {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+    },
+    /// Show the immutable report for the latest or named run.
+    Review {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Atomically publish the reviewed candidate policy.
+    Publish {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Show resolved optimization state without running the workflow.
+    Status {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+    },
+}
+
 #[derive(Subcommand)]
 enum TrajectoryAction {
     /// Inspect one episode's structural health, route intents, and event digests.
@@ -1465,7 +1590,29 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             after,
             model,
             write_config,
+            optimize,
+            optimize_workflow_command,
+            optimize_workflow_arg,
+            optimize_success,
+            optimize_strong,
+            optimize_economy,
+            optimize_preference,
         } => {
+            let optimization = if optimize || optimize_workflow_command.is_some() {
+                Some(bitrouter::onboarding::OnboardingOptimization {
+                    workflow_command: optimize_workflow_command.map(|command| {
+                        std::iter::once(command)
+                            .chain(optimize_workflow_arg)
+                            .collect()
+                    }),
+                    success_contract: optimize_success,
+                    strong: optimize_strong,
+                    economy: optimize_economy,
+                    preference: optimize_preference.into(),
+                })
+            } else {
+                None
+            };
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
                 yes,
@@ -1481,6 +1628,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 after,
                 model,
                 write_config,
+                optimization,
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -1506,6 +1654,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => policy(action, output).await,
         Command::Eval { action } => eval(action, output).await,
+        Command::Optimize { action } => optimize(action, output).await,
         Command::Trajectory { config, action } => {
             trajectory(config.as_deref(), action, output).await
         }
@@ -3543,6 +3692,265 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
+    match action {
+        OptimizeAction::Setup {
+            config,
+            source_config,
+            workflow_command,
+            workflow_arg,
+            timeout_secs,
+            contract,
+            policy,
+            preset,
+            strong,
+            economy,
+            preference,
+            minimum_pass_rate_ppm,
+            maximum_quality_loss_ppm,
+            evaluator_agent,
+            evaluator_model,
+            evaluator_via_cloud,
+        } => {
+            let preference: bitrouter::optimization::OptimizationPreference = preference.into();
+            let custom_quality = match (preference, minimum_pass_rate_ppm, maximum_quality_loss_ppm)
+            {
+                (
+                    bitrouter::optimization::OptimizationPreference::Custom,
+                    Some(minimum_pass_rate_ppm),
+                    Some(maximum_quality_loss_ppm),
+                ) => Some(bitrouter::optimization::CustomQualityGate {
+                    minimum_pass_rate_ppm,
+                    maximum_quality_loss_ppm,
+                }),
+                (bitrouter::optimization::OptimizationPreference::Custom, _, _) => {
+                    anyhow::bail!("custom preference requires both explicit PPM quality gates")
+                }
+                (_, None, None) => None,
+                _ => anyhow::bail!("explicit PPM quality gates require --preference custom"),
+            };
+            let evaluator_route = if evaluator_via_cloud {
+                bitrouter::optimization::EvaluatorRoute::Cloud
+            } else {
+                bitrouter::optimization::EvaluatorRoute::Direct
+            };
+            let outcome = bitrouter::optimization::setup::setup_optimization(
+                bitrouter::optimization::setup::SetupOptimizationRequest {
+                    intent_path: config,
+                    source_config,
+                    workflow_command: std::iter::once(workflow_command)
+                        .chain(workflow_arg)
+                        .collect(),
+                    timeout_secs,
+                    contract,
+                    contract_contents: None,
+                    policy,
+                    preset,
+                    strong,
+                    economy,
+                    preference,
+                    custom_quality,
+                    evaluator_agent,
+                    evaluator_model,
+                    evaluator_route,
+                },
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.setup".into(),
+                data: serde_json::json!({
+                    "intent": outcome.paths.intent,
+                    "lock": outcome.paths.lock,
+                    "contract": outcome.contract_path,
+                    "active_policy_digest": outcome.lock.active_policy_digest,
+                    "evaluator": outcome.lock.evaluator,
+                    "preference": outcome.intent.preference,
+                    "latency": "observe_only",
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Run { config } => {
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            let source = bitrouter::paths::resolve_config(Some(&loaded.paths.source_config))?;
+            let source_config = bitrouter::paths::load_config(&source).await?;
+            let backend = bitrouter::optimization::evaluator::AcpAgenticEvaluatorBackend::new(
+                source,
+                source_config,
+                lock.document.evaluator.clone(),
+                std::env::current_dir().context("resolving workflow directory")?,
+                std::time::Duration::from_secs(300),
+            )?;
+            let settlement_bearer = optimization_cloud_bearer().await?;
+            let executable = std::env::current_exe().context("resolving BitRouter executable")?;
+            let workflow_cwd = std::env::current_dir().context("resolving workflow directory")?;
+            let outcome = bitrouter::optimization::orchestrator::run_optimization(
+                bitrouter::optimization::orchestrator::RunOptimizationRequest {
+                    loaded: &loaded,
+                    optimization_lock: &lock,
+                    workflow_cwd: &workflow_cwd,
+                    bitrouter_executable: &executable,
+                    settlement_bearer: &settlement_bearer,
+                    evaluator: &backend,
+                },
+            )
+            .await?;
+            bitrouter::optimization::write_lock_compare_and_swap(
+                &loaded.paths.lock,
+                Some(&lock.digest),
+                &outcome.updated_lock,
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.run".into(),
+                data: serde_json::to_value(outcome.report)?,
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Review { config, run } => {
+            let (report, _) = load_optimization_report(&config, run.as_deref()).await?;
+            output.emit(&EvalReport {
+                action: "optimize.review".into(),
+                data: serde_json::to_value(report)?,
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Publish { config, run } => {
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            let latest = lock
+                .document
+                .latest_run
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no reviewed optimization run is available"))?;
+            if run.as_deref().is_some_and(|run| run != latest.run_id) {
+                anyhow::bail!("only the latest lock-pinned optimization run can be published");
+            }
+            if !latest.publishable || latest.published {
+                anyhow::bail!("latest optimization candidate is not publishable");
+            }
+            let (report, report_digest) =
+                load_optimization_report(&config, Some(&latest.run_id)).await?;
+            if report_digest != latest.report_digest
+                || report.candidate_digest != latest.candidate_digest
+                || report.eval_snapshot_digest != latest.eval_snapshot_digest
+                || report.source_policy_digest != latest.source_policy_digest
+            {
+                anyhow::bail!("reviewed optimization report no longer matches the lock");
+            }
+            let candidate = bitrouter::policy_lock::load(&report.candidate_path).await?;
+            if candidate.digest != latest.candidate_digest {
+                anyhow::bail!("compiled candidate content changed after review");
+            }
+            let published = bitrouter::policy_lock::publish_candidate_file(
+                &loaded.paths.source_config,
+                &report.candidate_path,
+            )
+            .await?;
+            let mut updated = lock.document.clone();
+            updated.active_policy_digest = published.digest.clone();
+            let updated_latest = updated
+                .latest_run
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("latest optimization run disappeared"))?;
+            updated_latest.published = true;
+            bitrouter::optimization::write_lock_compare_and_swap(
+                &loaded.paths.lock,
+                Some(&lock.digest),
+                &updated,
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.publish".into(),
+                data: serde_json::json!({
+                    "run_id": latest.run_id,
+                    "published": true,
+                    "active_policy_digest": published.digest,
+                    "policy_path": published.path,
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Status { config } => {
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            output.emit(&EvalReport {
+                action: "optimize.status".into(),
+                data: serde_json::json!({
+                    "intent": loaded.paths.intent,
+                    "intent_digest": loaded.digest,
+                    "active_policy_digest": lock.document.active_policy_digest,
+                    "preference": loaded.intent.preference,
+                    "evaluator": lock.document.evaluator,
+                    "latest_run": lock.document.latest_run,
+                    "latency": "observe_only",
+                }),
+            })?;
+            Ok(())
+        }
+    }
+}
+
+async fn optimization_cloud_bearer() -> Result<String> {
+    if let Ok(key) = std::env::var(bitrouter::harness::BITROUTER_API_KEY_ENV)
+        && !key.is_empty()
+    {
+        return Ok(key);
+    }
+    bitrouter::cloud::cloud_bearer_for_base_url(
+        bitrouter_cloud_sdk::auth::settings::DEFAULT_AS,
+    )
+    .await
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "BitRouter Cloud credentials are required; export BITROUTER_API_KEY or run `bitrouter cloud login`"
+        )
+    })
+}
+
+async fn load_optimization_report(
+    config: &Path,
+    requested_run: Option<&str>,
+) -> Result<(
+    bitrouter::optimization::orchestrator::OptimizationReport,
+    String,
+)> {
+    let loaded = bitrouter::optimization::load_intent(config).await?;
+    let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+    let run_id = match requested_run {
+        Some(run) => run,
+        None => lock
+            .document
+            .latest_run
+            .as_ref()
+            .map(|run| run.run_id.as_str())
+            .ok_or_else(|| anyhow::anyhow!("no optimization run is available"))?,
+    };
+    if run_id.contains('/') || run_id.contains('\\') || run_id == "." || run_id == ".." {
+        anyhow::bail!("invalid optimization run id");
+    }
+    let path = loaded.paths.private_runs.join(run_id).join("report.json");
+    let raw = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("reading private optimization report {}", path.display()))?;
+    use sha2::Digest;
+    let digest = format!("sha256:{}", hex::encode(sha2::Sha256::digest(&raw)));
+    let report: bitrouter::optimization::orchestrator::OptimizationReport =
+        serde_json::from_slice(&raw)
+            .with_context(|| format!("parsing private optimization report {}", path.display()))?;
+    if report.run_id != run_id {
+        anyhow::bail!("optimization report identity mismatch");
+    }
+    if let Some(latest) = lock.document.latest_run.as_ref()
+        && latest.run_id == run_id
+        && latest.report_digest != digest
+    {
+        anyhow::bail!("optimization report changed after it was locked");
+    }
+    Ok((report, digest))
 }
 
 async fn eval(action: EvalAction, output: &Output) -> Result<()> {

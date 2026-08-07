@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -170,6 +171,11 @@ impl AcpAgenticEvaluatorBackend {
         crate::acp_cli::apply_routing(&self.source, &mut config, &self.evaluator.agent, &routing)
             .await
             .map_err(anyhow::Error::new)?;
+        pin_catalog_adapter_version(
+            &mut config,
+            &self.evaluator.agent,
+            &self.evaluator.agent_version,
+        )?;
         if self.evaluator.route == super::EvaluatorRoute::Direct {
             apply_direct_model_pin(&mut config, &self.evaluator.agent, &self.evaluator.model)?;
         }
@@ -191,6 +197,68 @@ impl AcpAgenticEvaluatorBackend {
             )
         })
     }
+}
+
+fn pin_catalog_adapter_version(config: &mut Config, agent_id: &str, version: &str) -> Result<()> {
+    if version.trim().is_empty()
+        || version.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+'))
+        })
+    {
+        anyhow::bail!("pinned evaluator adapter version is invalid");
+    }
+    let entry = config
+        .agents
+        .get_mut(agent_id)
+        .ok_or_else(|| anyhow::anyhow!("agentic evaluator '{agent_id}' is not configured"))?;
+    let AcpTransport::Stdio { args, .. } = &mut entry.transport;
+    for argument in args {
+        if let Some(package) = argument.strip_suffix("@latest")
+            && matches!(agent_id, "codex-acp" | "claude-acp")
+        {
+            *argument = format!("{package}@{version}");
+            return Ok(());
+        }
+    }
+    if crate::harness::by_id(agent_id).is_some() {
+        anyhow::bail!("catalog evaluator '{agent_id}' has no version-pinnable adapter invocation");
+    }
+    Ok(())
+}
+
+pub async fn resolve_catalog_adapter_version(agent_id: &str) -> Result<String> {
+    let package = match agent_id {
+        "codex-acp" => "@agentclientprotocol/codex-acp",
+        "claude-acp" => "@zed-industries/claude-code-acp",
+        _ => anyhow::bail!(
+            "automatic evaluator setup supports codex-acp or claude-acp; configure a pinned custom agent explicitly"
+        ),
+    };
+    let output = tokio::process::Command::new("npm")
+        .args(["view", package, "version", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("resolving exact {agent_id} adapter version from npm"))?;
+    if !output.status.success() {
+        anyhow::bail!("could not resolve the exact {agent_id} adapter version from npm");
+    }
+    let raw = String::from_utf8(output.stdout).context("decoding evaluator adapter version")?;
+    let version = match serde_json::from_str::<String>(&raw) {
+        Ok(version) => version,
+        Err(_) => raw.trim().trim_matches('"').to_string(),
+    };
+    if version.trim().is_empty()
+        || version.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+'))
+        })
+    {
+        anyhow::bail!("npm returned an invalid evaluator adapter version");
+    }
+    Ok(version)
 }
 
 #[async_trait]
@@ -457,10 +525,12 @@ mod tests {
     use super::{
         AGENTIC_RESULT_SCHEMA, AgenticEvaluation, AgenticEvaluationInput, AgenticEvaluatorBackend,
         AgenticVerdict, WorkflowEvidence, build_evaluator_prompt, embedded_evaluator_digest,
-        evaluate_agentic, verify_evaluator_lock,
+        evaluate_agentic, pin_catalog_adapter_version, verify_evaluator_lock,
     };
     use crate::optimization::{EvaluatorLock, EvaluatorRoute};
     use async_trait::async_trait;
+    use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport};
+    use bitrouter_sdk::config::Config;
 
     fn input(stdout: &str, stderr: &str) -> AgenticEvaluationInput {
         AgenticEvaluationInput {
@@ -596,6 +666,27 @@ mod tests {
         evaluator.contract_digest =
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
         assert!(verify_evaluator_lock(&evaluator, &input).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_adapter_latest_is_replaced_by_the_locked_exact_version() -> anyhow::Result<()> {
+        let mut config = Config::default();
+        config.agents.insert(
+            "codex-acp".into(),
+            AcpAgentConfig {
+                name: "codex-acp".into(),
+                transport: AcpTransport::Stdio {
+                    command: "npx".into(),
+                    args: vec!["-y".into(), "@agentclientprotocol/codex-acp@latest".into()],
+                    env: Default::default(),
+                },
+            },
+        );
+        pin_catalog_adapter_version(&mut config, "codex-acp", "0.9.1")?;
+        let AcpTransport::Stdio { args, .. } = &config.agents["codex-acp"].transport;
+        assert_eq!(args[1], "@agentclientprotocol/codex-acp@0.9.1");
+        assert!(pin_catalog_adapter_version(&mut config, "codex-acp", "latest bad").is_err());
         Ok(())
     }
 }

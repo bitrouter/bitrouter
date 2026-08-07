@@ -6,6 +6,9 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 pub mod evaluator;
+pub mod orchestrator;
+pub mod runner;
+pub mod setup;
 
 pub const OPTIMIZATION_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_INTENT_FILENAME: &str = "bitrouter.optimize.yaml";
@@ -33,6 +36,26 @@ pub enum EvaluatorRoute {
 pub struct WorkflowCommand {
     pub command: Vec<String>,
     pub timeout_secs: u64,
+}
+
+impl WorkflowCommand {
+    pub fn validate(&self) -> Result<()> {
+        if self.command.is_empty()
+            || self
+                .command
+                .iter()
+                .any(|part| part.trim().is_empty() || part.chars().any(char::is_control))
+        {
+            anyhow::bail!("workflow command must contain non-empty bounded arguments");
+        }
+        if self.command.len() > 256 || self.command.iter().any(|part| part.len() > 4096) {
+            anyhow::bail!("workflow command exceeds the bounded argv contract");
+        }
+        if self.timeout_secs == 0 {
+            anyhow::bail!("workflow timeout must be positive");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,23 +95,7 @@ impl OptimizationIntent {
         if self.version != OPTIMIZATION_SCHEMA_VERSION {
             anyhow::bail!("unsupported optimization intent version {}", self.version);
         }
-        if self.workflow.command.is_empty()
-            || self
-                .workflow
-                .command
-                .iter()
-                .any(|part| part.trim().is_empty() || part.chars().any(char::is_control))
-        {
-            anyhow::bail!("workflow command must contain non-empty bounded arguments");
-        }
-        if self.workflow.command.len() > 256
-            || self.workflow.command.iter().any(|part| part.len() > 4096)
-        {
-            anyhow::bail!("workflow command exceeds the bounded argv contract");
-        }
-        if self.workflow.timeout_secs == 0 {
-            anyhow::bail!("workflow timeout must be positive");
-        }
+        self.workflow.validate()?;
         if self.contract.as_os_str().is_empty() || self.source_config.as_os_str().is_empty() {
             anyhow::bail!("contract and source_config paths must be non-empty");
         }

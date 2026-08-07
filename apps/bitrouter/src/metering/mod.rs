@@ -36,7 +36,9 @@ pub use pricing::{
     ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,
     PricingTable, calculate_charge_evidence, calculate_charge_micro_usd,
 };
-pub use reconciliation::{ReconciliationSummary, reconcile_requests};
+pub use reconciliation::{
+    ReconciliationSummary, reconcile_authoritative_requests, reconcile_requests,
+};
 pub use recorder::{MeteringRecorder, MeteringSettlementEvent};
 pub use store::{
     MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
