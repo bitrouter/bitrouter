@@ -51,6 +51,16 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub selected_model: Option<String>,
     #[serde(default)]
+    pub predicted_role: Option<String>,
+    #[serde(default)]
+    pub predicted_action: Option<String>,
+    #[serde(default)]
+    pub prediction_confidence_ppm: Option<u32>,
+    #[serde(default)]
+    pub prediction_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub observed_route_projection: Option<String>,
+    #[serde(default)]
     pub trajectory_episode_id: Option<String>,
     #[serde(default)]
     pub trajectory_sequence: Option<u64>,
@@ -83,6 +93,10 @@ pub struct PolicyDecisionSummary {
     pub trialed_count: usize,
     pub by_selected_tier: BTreeMap<String, usize>,
     pub by_selected_model: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_predicted_role: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_predicted_action: BTreeMap<String, usize>,
     pub static_tier_replaced_count: usize,
     pub static_model_replaced_count: usize,
     pub by_tier_transition: BTreeMap<String, usize>,
@@ -229,6 +243,18 @@ impl PolicyDecisionSummary {
                     .entry(model.to_string())
                     .or_insert(0) += 1;
             }
+            if let Some(role) = record.predicted_role.as_deref() {
+                *summary
+                    .by_predicted_role
+                    .entry(role.to_string())
+                    .or_insert(0) += 1;
+            }
+            if let Some(action) = record.predicted_action.as_deref() {
+                *summary
+                    .by_predicted_action
+                    .entry(action.to_string())
+                    .or_insert(0) += 1;
+            }
             if let (Some(static_model), Some(selected_model)) = (
                 record.static_model.as_deref(),
                 record.selected_model.as_deref(),
@@ -336,6 +362,11 @@ mod tests {
             static_model: Some("vendor/capable".to_string()),
             selected_tier: Some("cheap".to_string()),
             selected_model: Some("vendor/cheap".to_string()),
+            predicted_role: None,
+            predicted_action: None,
+            prediction_confidence_ppm: None,
+            prediction_reason_codes: Vec::new(),
+            observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,
             trajectory_completeness: None,
@@ -372,6 +403,30 @@ mod tests {
     }
 
     #[test]
+    fn decision_record_reads_legacy_jsonl_without_predictive_fields() {
+        let legacy = r#"{
+            "input_model":"inbound",
+            "key_strategy":"agent_trace",
+            "request_key":"agent_trace/v1|tool_followup|normal",
+            "legacy_fingerprint":"after_read_file",
+            "trace_state":"tool_followup",
+            "trace_identity":{"role":"unknown","context_epoch":0,"transition":"none","fingerprint":"","source":"","confidence":"none"},
+            "reason":"static_table",
+            "pinned":false,
+            "locked":false,
+            "trialed":false
+        }"#;
+
+        let parsed: PolicyDecisionRecord = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(parsed.predicted_role, None);
+        assert_eq!(parsed.predicted_action, None);
+        assert_eq!(parsed.prediction_confidence_ppm, None);
+        assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
+        assert_eq!(parsed.observed_route_projection, None);
+    }
+
+    #[test]
     fn summary_emits_by_trace_state_and_reads_legacy_workflow_summary() {
         let summary = PolicyDecisionSummary::from_records(&[record()]);
         assert_eq!(summary.by_workflow_state["tool_followup"], 1);
@@ -385,5 +440,34 @@ mod tests {
         object.insert("by_workflow_state".to_string(), states);
         let parsed: PolicyDecisionSummary = serde_json::from_value(legacy).unwrap();
         assert_eq!(parsed.by_workflow_state["tool_followup"], 1);
+    }
+
+    #[test]
+    fn summary_counts_predictions_and_selected_model_exposure() {
+        let mut predicted = record();
+        predicted.predicted_role = Some("implement".to_string());
+        predicted.predicted_action = Some("mutate".to_string());
+        predicted.selected_model = Some("vendor/cheap".to_string());
+
+        let mut unpredicted = record();
+        unpredicted.selected_model = Some("vendor/flagship".to_string());
+
+        let summary = PolicyDecisionSummary::from_records(&[predicted, unpredicted]);
+
+        assert_eq!(
+            summary.by_predicted_role,
+            BTreeMap::from([("implement".to_string(), 1)])
+        );
+        assert_eq!(
+            summary.by_predicted_action,
+            BTreeMap::from([("mutate".to_string(), 1)])
+        );
+        assert_eq!(
+            summary.by_selected_model,
+            BTreeMap::from([
+                ("vendor/cheap".to_string(), 1),
+                ("vendor/flagship".to_string(), 1),
+            ])
+        );
     }
 }

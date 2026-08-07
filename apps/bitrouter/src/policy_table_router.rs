@@ -23,7 +23,7 @@
 //! The policy table is purely declarative and never mutated at runtime; it is
 //! the kind of thing an operator keeps under version control.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
@@ -37,6 +37,7 @@ use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
+use crate::workflow_state::predictive::{NextActionClass, NextStepRole, PredictiveEvidence};
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +81,10 @@ pub struct PolicyDecision {
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
     pub selected_model: Option<String>,
+    pub predicted_role: Option<String>,
+    pub predicted_action: Option<String>,
+    pub prediction_confidence_ppm: Option<u32>,
+    pub prediction_reason_codes: Vec<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
     pub request_qualified: bool,
@@ -408,6 +413,16 @@ impl PolicyTableRouter {
             static_model: None,
             selected_tier: None,
             selected_model: None,
+            predicted_role: Some(
+                prediction_role_name(online.predictive.next_step_role).to_string(),
+            ),
+            predicted_action: Some(
+                prediction_action_name(online.predictive.next_action_class).to_string(),
+            ),
+            prediction_confidence_ppm: Some(prediction_confidence_ppm(
+                online.predictive.confidence,
+            )),
+            prediction_reason_codes: prediction_reason_codes(&online.predictive.evidence),
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
             request_qualified: false,
@@ -617,6 +632,11 @@ impl PolicyTableRouter {
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 selected_model: decision.selected_model.clone(),
+                predicted_role: decision.predicted_role.clone(),
+                predicted_action: decision.predicted_action.clone(),
+                prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                prediction_reason_codes: decision.prediction_reason_codes.clone(),
+                observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
                 trajectory_sequence: decision.trajectory_sequence,
                 trajectory_completeness: decision
@@ -649,6 +669,62 @@ impl PolicyTableRouter {
 
 fn key_strategy_name() -> &'static str {
     "agent_trace"
+}
+
+const MAX_PREDICTION_REASON_CODES: usize = 8;
+const MAX_PREDICTION_REASON_CODE_LENGTH: usize = 32;
+const PREDICTION_CONFIDENCE_PPM_MAX: u32 = 1_000_000;
+
+fn prediction_role_name(role: NextStepRole) -> &'static str {
+    match role {
+        NextStepRole::Orchestrate => "orchestrate",
+        NextStepRole::Implement => "implement",
+        NextStepRole::Mechanical => "mechanical",
+        NextStepRole::Verify => "verify",
+        NextStepRole::Finalize => "finalize",
+        NextStepRole::Unknown => "unknown",
+    }
+}
+
+fn prediction_action_name(action: NextActionClass) -> &'static str {
+    match action {
+        NextActionClass::ReasonOrPlan => "reason_or_plan",
+        NextActionClass::InspectOrRead => "inspect_or_read",
+        NextActionClass::Mutate => "mutate",
+        NextActionClass::ExecuteOrTest => "execute_or_test",
+        NextActionClass::WaitOrPoll => "wait_or_poll",
+        NextActionClass::AnswerOrSummarize => "answer_or_summarize",
+        NextActionClass::Unknown => "unknown",
+    }
+}
+
+fn prediction_confidence_ppm(confidence: f32) -> u32 {
+    let scaled = f64::from(confidence) * f64::from(PREDICTION_CONFIDENCE_PPM_MAX);
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return 0;
+    }
+    if scaled >= f64::from(PREDICTION_CONFIDENCE_PPM_MAX) {
+        return PREDICTION_CONFIDENCE_PPM_MAX;
+    }
+    let rounded = scaled.round() as u64;
+    u32::try_from(rounded).unwrap_or(PREDICTION_CONFIDENCE_PPM_MAX)
+}
+
+fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .map(|item| item.code.as_str())
+        .filter(|code| {
+            code.len() <= MAX_PREDICTION_REASON_CODE_LENGTH
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_PREDICTION_REASON_CODES)
+        .map(ToString::to_string)
+        .collect()
 }
 
 impl PromptTransform for PolicyTableRouter {
@@ -1079,6 +1155,17 @@ mod tests {
         );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
+        assert_eq!(records[0].predicted_role.as_deref(), Some("unknown"));
+        assert_eq!(records[0].predicted_action.as_deref(), Some("unknown"));
+        assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
+        assert_eq!(
+            records[0].prediction_reason_codes,
+            vec!["history_truncated"]
+        );
+        assert_eq!(
+            records[0].observed_route_projection.as_deref(),
+            Some("agent_trace/v2|tool_followup|normal")
+        );
         assert_eq!(records[0].reason, "static_table");
         assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
         assert_eq!(
