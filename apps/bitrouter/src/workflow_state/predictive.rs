@@ -102,13 +102,24 @@ pub struct PredictiveRouteIR {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PredictiveRouteProjection {
-    pub schema_version: u8,
     pub next_step_role: NextStepRole,
     pub risk: RouteRisk,
 }
 
 impl PredictiveRouteProjection {
+    pub const fn new(next_step_role: NextStepRole, risk: RouteRisk) -> Self {
+        Self {
+            next_step_role,
+            risk,
+        }
+    }
+
+    pub const fn schema_version(&self) -> u8 {
+        1
+    }
+
     pub fn key(&self) -> String {
         format!("agent_route/v1|{}|{}", self.next_step_role.key(), self.risk)
     }
@@ -128,11 +139,7 @@ impl PredictiveRouteProjection {
         }
         let risk = parse_route_risk(risk)?;
 
-        Some(Self {
-            schema_version: 1,
-            next_step_role: NextStepRole::parse_key(next_step_role)?,
-            risk,
-        })
+        Some(Self::new(NextStepRole::parse_key(next_step_role)?, risk))
     }
 }
 
@@ -156,11 +163,7 @@ mod tests {
 
     #[test]
     fn predictive_projection_uses_a_stable_canonical_key() {
-        let projection = PredictiveRouteProjection {
-            schema_version: 1,
-            next_step_role: NextStepRole::Implement,
-            risk: RouteRisk::Normal,
-        };
+        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
 
         assert_eq!(projection.key(), "agent_route/v1|implement|normal");
         assert_eq!(
@@ -173,16 +176,20 @@ mod tests {
     }
 
     #[test]
-    fn predictive_key_normalizes_unsupported_schema_versions_to_v1() {
-        let projection = PredictiveRouteProjection {
-            schema_version: 2,
-            next_step_role: NextStepRole::Implement,
-            risk: RouteRisk::Normal,
-        };
-        let key = projection.key();
+    fn predictive_projection_round_trips_exactly() {
+        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
 
-        assert_eq!(key, "agent_route/v1|implement|normal");
-        assert!(PredictiveRouteProjection::parse_key(&key).is_some());
+        assert_eq!(projection.schema_version(), 1);
+        assert_eq!(
+            PredictiveRouteProjection::parse_key(&projection.key()),
+            Some(projection)
+        );
+        assert!(
+            serde_json::from_str::<PredictiveRouteProjection>(
+                r#"{"schema_version":2,"next_step_role":"implement","risk":"normal"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -211,11 +218,7 @@ mod tests {
 
     #[test]
     fn predictive_key_excludes_source_specific_identity() {
-        let projection = PredictiveRouteProjection {
-            schema_version: 1,
-            next_step_role: NextStepRole::Implement,
-            risk: RouteRisk::Normal,
-        };
+        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
         let key = projection.key();
 
         assert_eq!(key, "agent_route/v1|implement|normal");
