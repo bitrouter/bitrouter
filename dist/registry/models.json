@@ -4085,6 +4085,26 @@
           "provider_model_id": "moonshotai/kimi-k2.7-code"
         },
         {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.19,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "kimi-k2.7-code",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
