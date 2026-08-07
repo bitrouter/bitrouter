@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use tokio::io::AsyncReadExt;
 
 use super::evaluator::{
     AgenticConfidence, AgenticEvaluation, AgenticEvaluationInput, AgenticEvaluatorBackend,
@@ -29,10 +30,18 @@ const MAXIMUM_WORKFLOW_OUTPUT_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WorkflowFingerprint {
+    pub argv_digest: String,
+    pub referenced_files: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OptimizationReport {
     pub run_id: String,
     pub created_at: String,
     pub source_policy_digest: String,
+    pub workflow_fingerprint: WorkflowFingerprint,
     pub target_request_key: String,
     pub preference: super::OptimizationPreference,
     pub baseline: VariantReport,
@@ -121,6 +130,11 @@ pub async fn run_optimization(
     tokio::fs::create_dir_all(&run_root)
         .await
         .with_context(|| format!("creating optimization run root {}", run_root.display()))?;
+    let workflow_fingerprint = fingerprint_workflow(
+        &request.loaded.intent.workflow.command,
+        request.workflow_cwd,
+    )
+    .await?;
 
     let baseline = run_private_variant(PrivateVariantRequest {
         variant: "baseline",
@@ -135,6 +149,13 @@ pub async fn run_optimization(
     })
     .await
     .context("running controlled baseline")?;
+    verify_workflow_unchanged(
+        &workflow_fingerprint,
+        &request.loaded.intent.workflow.command,
+        request.workflow_cwd,
+        "baseline",
+    )
+    .await?;
     let target_request_key = select_target_request_key(
         &active.document,
         &request.loaded.intent.policy,
@@ -163,6 +184,13 @@ pub async fn run_optimization(
     })
     .await
     .context("running one-key routing candidate")?;
+    verify_workflow_unchanged(
+        &workflow_fingerprint,
+        &request.loaded.intent.workflow.command,
+        request.workflow_cwd,
+        "candidate",
+    )
+    .await?;
     verify_controlled_candidate(&candidate, &target_request_key)?;
 
     let baseline_input = evaluation_input(&run_id, "baseline", &contract, &baseline);
@@ -271,6 +299,7 @@ pub async fn run_optimization(
         run_id: run_id.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
         source_policy_digest: active.digest.clone(),
+        workflow_fingerprint,
         target_request_key: target_request_key.clone(),
         preference: request.loaded.intent.preference,
         baseline: variant_report(&baseline, &baseline_evaluation)?,
@@ -315,6 +344,82 @@ pub async fn run_optimization(
         report_digest,
         updated_lock,
     })
+}
+
+async fn verify_workflow_unchanged(
+    expected: &WorkflowFingerprint,
+    command: &[String],
+    cwd: &Path,
+    variant: &str,
+) -> Result<()> {
+    let actual = fingerprint_workflow(command, cwd).await?;
+    if &actual != expected {
+        anyhow::bail!(
+            "workflow argv or referenced file inputs changed during the {variant} experiment"
+        );
+    }
+    Ok(())
+}
+
+async fn fingerprint_workflow(command: &[String], cwd: &Path) -> Result<WorkflowFingerprint> {
+    let argv_digest = canonical_digest(&command.to_vec())?;
+    let mut candidates = command
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| {
+            let path = PathBuf::from(argument);
+            let resolved = if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            };
+            resolved
+                .is_file()
+                .then(|| (format!("argv[{index}]"), resolved))
+        })
+        .collect::<Vec<_>>();
+    if !command.is_empty()
+        && !Path::new(&command[0]).is_absolute()
+        && !command[0].contains(std::path::MAIN_SEPARATOR)
+        && let Some(path) = executable_in_path(&command[0])
+    {
+        candidates.push(("executable".into(), path));
+    }
+    let mut referenced_files = BTreeMap::new();
+    for (label, path) in candidates {
+        referenced_files.insert(label, digest_file(&path).await?);
+    }
+    Ok(WorkflowFingerprint {
+        argv_digest,
+        referenced_files,
+    })
+}
+
+fn executable_in_path(command: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(command))
+        .find(|path| path.is_file())
+}
+
+async fn digest_file(path: &Path) -> Result<String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .with_context(|| format!("opening workflow input {}", path.display()))?;
+    let mut digest = sha2::Sha256::new();
+    let mut buffer = [0_u8; 32 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .with_context(|| format!("hashing workflow input {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("sha256:{}", hex::encode(digest.finalize())))
 }
 
 fn evaluation_input(
@@ -440,10 +545,11 @@ async fn submit_variant_result(
             ),
         );
     }
-    let hard_violations = evaluation
-        .critical_failure
-        .then(|| vec!["quality.critical_failure".into()])
-        .unwrap_or_default();
+    let hard_violations = if evaluation.critical_failure {
+        vec!["quality.critical_failure".into()]
+    } else {
+        Vec::new()
+    };
     let metric_ids = metrics
         .keys()
         .cloned()
@@ -597,18 +703,21 @@ fn writable_database_url(url: &str, config_path: &Path) -> Result<String> {
         }
         params.push_str("mode=rwc");
     }
-    Ok(format!("sqlite://{}?{params}", absolute.display()))
+    let database_path = absolute.to_string_lossy().replace('\\', "/");
+    Ok(format!("sqlite://{database_path}?{params}"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::Path;
     use std::time::Duration;
 
     use bitrouter_sdk::config::{AdequacyConfig, EvalConfig};
 
-    use super::{percentage_delta_ppm, split_weight, submit_variant_result, writable_database_url};
+    use super::{
+        fingerprint_workflow, percentage_delta_ppm, split_weight, submit_variant_result,
+        writable_database_url,
+    };
     use crate::eval::types::{AdmissionStatus, EvalDecisionRef};
     use crate::optimization::evaluator::{
         AgenticConfidence, AgenticEvaluation, AgenticVerdict, embedded_evaluator_digest,
@@ -638,20 +747,50 @@ mod tests {
 
     #[test]
     fn source_database_is_anchored_next_to_the_config() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = directory.path().join("bitrouter.yaml");
         assert_eq!(
-            writable_database_url(
-                "sqlite://./state.db",
-                Path::new("/tmp/project/bitrouter.yaml")
-            )?,
-            "sqlite:///tmp/project/state.db?mode=rwc"
+            writable_database_url("sqlite://./state.db", &config)?,
+            format!(
+                "sqlite://{}?mode=rwc",
+                directory
+                    .path()
+                    .join("state.db")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_fingerprint_covers_argv_and_referenced_files() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        tokio::fs::write(directory.path().join("runner"), b"runner-v1").await?;
+        tokio::fs::write(directory.path().join("suite.json"), b"suite-v1").await?;
+        let command = vec!["./runner".into(), "suite.json".into()];
+        let before = fingerprint_workflow(&command, directory.path()).await?;
+        assert_eq!(before.referenced_files.len(), 2);
+
+        tokio::fs::write(directory.path().join("suite.json"), b"suite-v2").await?;
+        let after = fingerprint_workflow(&command, directory.path()).await?;
+        assert_eq!(before.argv_digest, after.argv_digest);
+        assert_ne!(before.referenced_files, after.referenced_files);
+        assert_ne!(
+            before.argv_digest,
+            fingerprint_workflow(&["./runner".into()], directory.path())
+                .await?
+                .argv_digest
         );
         Ok(())
     }
 
     fn active_policy() -> PolicyLock {
-        let mut lock = PolicyLock::default();
-        lock.lockfile_version = 1;
-        lock.artifact = None;
+        let mut lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            ..Default::default()
+        };
         lock.policies.insert(
             "auto".into(),
             PolicyDefinition {

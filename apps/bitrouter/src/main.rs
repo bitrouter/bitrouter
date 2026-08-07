@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
@@ -1124,60 +1124,63 @@ impl From<OptimizePreferenceArg> for bitrouter::optimization::OptimizationPrefer
     }
 }
 
+#[derive(Args)]
+struct OptimizeSetupArgs {
+    /// Optimization intent path.
+    #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+    config: PathBuf,
+    /// Source BitRouter config used by the workflow.
+    #[arg(long, default_value = "bitrouter.yaml")]
+    source_config: PathBuf,
+    /// Exact workflow executable (no shell parsing).
+    #[arg(long)]
+    workflow_command: String,
+    /// One exact workflow argument; repeat to preserve argv boundaries.
+    #[arg(long, allow_hyphen_values = true)]
+    workflow_arg: Vec<String>,
+    /// Hard deadline for each baseline or candidate workflow invocation.
+    #[arg(long, default_value_t = 1800)]
+    timeout_secs: u64,
+    /// Success contract path. A starter is created when absent.
+    #[arg(long, default_value = "bitrouter.eval.md")]
+    contract: PathBuf,
+    /// Named routing policy.
+    #[arg(long, default_value = "auto")]
+    policy: String,
+    /// Preset passed to the workflow as `@preset`.
+    #[arg(long, default_value = "auto")]
+    preset: String,
+    /// Strong Cloud route used by the baseline.
+    #[arg(long)]
+    strong: String,
+    /// Economy Cloud route tested as the one-variable candidate.
+    #[arg(long)]
+    economy: String,
+    /// Qualitative quality/cost trade-off. Latency remains observe-only.
+    #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
+    preference: OptimizePreferenceArg,
+    /// Custom minimum pass rate in integer parts-per-million.
+    #[arg(long, requires = "maximum_quality_loss_ppm")]
+    minimum_pass_rate_ppm: Option<u32>,
+    /// Custom maximum quality loss in integer parts-per-million.
+    #[arg(long, requires = "minimum_pass_rate_ppm")]
+    maximum_quality_loss_ppm: Option<u32>,
+    /// ACP evaluator id. Codex is the default generic agentic evaluator.
+    #[arg(long, default_value = "codex-acp")]
+    evaluator_agent: String,
+    /// Concrete judge model, independent from the workflow candidate.
+    #[arg(long)]
+    evaluator_model: Option<String>,
+    /// Route judge traffic through BitRouter Cloud instead of the detected
+    /// agent's own subscription. Workflow traffic always uses Cloud.
+    #[arg(long)]
+    evaluator_via_cloud: bool,
+}
+
 #[derive(Subcommand)]
 enum OptimizeAction {
     /// Create version-controlled optimization intent and lock files.
-    Setup {
-        /// Optimization intent path.
-        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
-        config: PathBuf,
-        /// Source BitRouter config used by the workflow.
-        #[arg(long, default_value = "bitrouter.yaml")]
-        source_config: PathBuf,
-        /// Exact workflow executable (no shell parsing).
-        #[arg(long)]
-        workflow_command: String,
-        /// One exact workflow argument; repeat to preserve argv boundaries.
-        #[arg(long, allow_hyphen_values = true)]
-        workflow_arg: Vec<String>,
-        /// Hard deadline for each baseline or candidate workflow invocation.
-        #[arg(long, default_value_t = 1800)]
-        timeout_secs: u64,
-        /// Success contract path. A starter is created when absent.
-        #[arg(long, default_value = "bitrouter.eval.md")]
-        contract: PathBuf,
-        /// Named routing policy.
-        #[arg(long, default_value = "auto")]
-        policy: String,
-        /// Preset passed to the workflow as `@preset`.
-        #[arg(long, default_value = "auto")]
-        preset: String,
-        /// Strong Cloud route used by the baseline.
-        #[arg(long)]
-        strong: String,
-        /// Economy Cloud route tested as the one-variable candidate.
-        #[arg(long)]
-        economy: String,
-        /// Qualitative quality/cost trade-off. Latency remains observe-only.
-        #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
-        preference: OptimizePreferenceArg,
-        /// Custom minimum pass rate in integer parts-per-million.
-        #[arg(long, requires = "maximum_quality_loss_ppm")]
-        minimum_pass_rate_ppm: Option<u32>,
-        /// Custom maximum quality loss in integer parts-per-million.
-        #[arg(long, requires = "minimum_pass_rate_ppm")]
-        maximum_quality_loss_ppm: Option<u32>,
-        /// ACP evaluator id. Codex is the default generic agentic evaluator.
-        #[arg(long, default_value = "codex-acp")]
-        evaluator_agent: String,
-        /// Concrete judge model, independent from the workflow candidate.
-        #[arg(long)]
-        evaluator_model: Option<String>,
-        /// Route judge traffic through BitRouter Cloud instead of the detected
-        /// agent's own subscription. Workflow traffic always uses Cloud.
-        #[arg(long)]
-        evaluator_via_cloud: bool,
-    },
+    Setup(Box<OptimizeSetupArgs>),
     /// Run one baseline and one controlled candidate, then compile a report.
     Run {
         #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
@@ -3696,24 +3699,25 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
 
 async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
     match action {
-        OptimizeAction::Setup {
-            config,
-            source_config,
-            workflow_command,
-            workflow_arg,
-            timeout_secs,
-            contract,
-            policy,
-            preset,
-            strong,
-            economy,
-            preference,
-            minimum_pass_rate_ppm,
-            maximum_quality_loss_ppm,
-            evaluator_agent,
-            evaluator_model,
-            evaluator_via_cloud,
-        } => {
+        OptimizeAction::Setup(args) => {
+            let OptimizeSetupArgs {
+                config,
+                source_config,
+                workflow_command,
+                workflow_arg,
+                timeout_secs,
+                contract,
+                policy,
+                preset,
+                strong,
+                economy,
+                preference,
+                minimum_pass_rate_ppm,
+                maximum_quality_loss_ppm,
+                evaluator_agent,
+                evaluator_model,
+                evaluator_via_cloud,
+            } = *args;
             let preference: bitrouter::optimization::OptimizationPreference = preference.into();
             let custom_quality = match (preference, minimum_pass_rate_ppm, maximum_quality_loss_ppm)
             {
@@ -5846,6 +5850,50 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
+    }
+
+    #[test]
+    fn workflow_optimization_commands_parse_with_direct_judge_default() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let setup = Cli::try_parse_from([
+            "bitrouter",
+            "optimize",
+            "setup",
+            "--workflow-command",
+            "./run-eval",
+            "--workflow-arg",
+            "--smoke",
+            "--strong",
+            "bitrouter:openai/gpt-5.6-terra",
+            "--economy",
+            "bitrouter:openai/gpt-5.4-mini",
+        ])?;
+        assert!(matches!(
+            setup.command,
+            Some(Command::Optimize {
+                action: OptimizeAction::Setup(args)
+            }) if !args.evaluator_via_cloud
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "optimize",
+                "setup",
+                "--workflow-command",
+                "./run-eval",
+                "--strong",
+                "bitrouter:openai/gpt-5.6-terra",
+                "--economy",
+                "bitrouter:openai/gpt-5.4-mini",
+                "--evaluator-via-cloud",
+            ])
+            .is_ok()
+        );
+        for action in ["run", "review", "publish", "status"] {
+            assert!(Cli::try_parse_from(["bitrouter", "optimize", action]).is_ok());
+        }
+        Ok(())
     }
 
     #[test]

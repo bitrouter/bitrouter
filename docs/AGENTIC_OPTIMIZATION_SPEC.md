@@ -83,7 +83,10 @@ idempotency keys, or publication state. The trusted host constructs the final
 
 The first supported executor is an installed ACP coding agent selected during
 onboarding. `codex-acp` is preferred when Codex is installed; otherwise
-`claude-acp` is selected when available. The resolved agent id, executable
+`claude-acp` is selected when available. Direct use of the detected agent's
+own subscription is the default; Cloud judging is an explicit opt-in. The
+maintained Codex adapter is `@agentclientprotocol/codex-acp`, installed on
+demand and pinned to an exact version. The resolved agent id, executable
 version, concrete judge model, result schema, success-contract digest, and
 generic-eval skill digest are pinned in the optimization lock.
 
@@ -108,6 +111,8 @@ One `optimize run` performs these steps:
    socket, database, and the active policy lock.
 4. Run the configured workflow without a shell while pointing common OpenAI,
    Anthropic, and BitRouter base-url variables at the private daemon.
+   Fingerprint exact argv, its resolved executable, and referenced regular-file
+   arguments before and after both variants.
 5. Require at least one settled named-policy decision and build a redacted
    baseline evidence packet.
 6. Select one eligible route key according to the qualitative preference.
@@ -126,8 +131,11 @@ One `optimize run` performs these steps:
     `run`.
 
 Long or failed workflow commands occupy only their own run. There are no hidden
-retries. A timed-out or structurally ambiguous run is terminal and cannot
-produce a publishable candidate.
+retries. A non-zero exit remains quality evidence for the generic evaluator;
+it is not mislabeled as a routing-infrastructure error. A timed-out,
+source-drifted, or structurally ambiguous run is terminal and cannot produce a
+publishable candidate. Users who need statistical power configure their
+workflow command to run an eval suite; BitRouter does not secretly resample it.
 
 ### Evidence and credit
 

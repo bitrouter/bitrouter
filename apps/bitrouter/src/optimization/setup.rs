@@ -240,6 +240,7 @@ fn resolve_evaluator_model(
         (EvaluatorRoute::Cloud, None) => Ok(strong.to_string()),
         (EvaluatorRoute::Direct, Some(model)) => validate_direct_model(model),
         (EvaluatorRoute::Direct, None) if agent == "codex-acp" => detect_codex_model(),
+        (EvaluatorRoute::Direct, None) if agent == "claude-acp" => detect_claude_model(),
         (EvaluatorRoute::Direct, None) => anyhow::bail!(
             "could not infer a model for direct evaluator '{agent}'; pass --evaluator-model"
         ),
@@ -292,9 +293,48 @@ fn codex_model_from_config(raw: &str) -> Result<String> {
     validate_direct_model(model.to_string())
 }
 
+fn detect_claude_model() -> Result<String> {
+    if let Some(model) = std::env::var_os("ANTHROPIC_MODEL").filter(|value| !value.is_empty()) {
+        return validate_direct_model(model.to_string_lossy().into_owned());
+    }
+    let claude_home = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|home| home.join(".claude"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("cannot locate the detected Claude configuration"))?;
+    let settings_path = claude_home.join("settings.json");
+    let raw = std::fs::read_to_string(&settings_path).with_context(|| {
+        format!(
+            "reading detected Claude model from {}; pass --evaluator-model to choose explicitly",
+            settings_path.display()
+        )
+    })?;
+    claude_model_from_settings(&raw).with_context(|| {
+        format!(
+            "detecting the Claude judge model from {}; pass --evaluator-model to choose explicitly",
+            settings_path.display()
+        )
+    })
+}
+
+fn claude_model_from_settings(raw: &str) -> Result<String> {
+    let settings: serde_json::Value =
+        serde_json::from_str(raw).context("parsing Claude settings")?;
+    let model = settings
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Claude settings have no top-level model"))?;
+    validate_direct_model(model.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{codex_model_from_config, validate_catalog_model};
+    use super::{claude_model_from_settings, codex_model_from_config, validate_catalog_model};
 
     #[test]
     fn detects_exact_local_codex_model_without_importing_agent_settings() -> anyhow::Result<()> {
@@ -316,5 +356,15 @@ trust_level = "trusted"
         assert!(validate_catalog_model("bitrouter:openai/gpt-5.6-terra").is_ok());
         assert!(validate_catalog_model("bitrouter:deepseek/deepseek-v4-flash-0731").is_ok());
         assert!(validate_catalog_model("bitrouter:openai/gpt-5.6").is_err());
+    }
+
+    #[test]
+    fn detects_exact_local_claude_model_setting() -> anyhow::Result<()> {
+        assert_eq!(
+            claude_model_from_settings(r#"{"model":"sonnet[1m]","effortLevel":"high"}"#)?,
+            "sonnet[1m]"
+        );
+        assert!(claude_model_from_settings("{}").is_err());
+        Ok(())
     }
 }

@@ -819,9 +819,11 @@ mod tests {
     use crate::policy_lock::{PolicyDefinition, PolicyLock, semantic_digest, validate_document};
 
     fn active_lock() -> PolicyLock {
-        let mut lock = PolicyLock::default();
-        lock.lockfile_version = 1;
-        lock.artifact = None;
+        let mut lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            ..Default::default()
+        };
         lock.policies.insert(
             "auto".into(),
             PolicyDefinition {
@@ -1047,13 +1049,23 @@ mod tests {
     #[tokio::test]
     async fn workflow_runner_uses_exact_argv_env_and_timeout_without_retry() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
+        #[cfg(unix)]
+        let success_command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '%s' \"$BITROUTER_MODEL\"".into(),
+        ];
+        #[cfg(windows)]
+        let success_command = vec![
+            "powershell.exe".into(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            "[Console]::Out.Write($env:BITROUTER_MODEL)".into(),
+        ];
         let success = run_workflow_command(WorkflowRunRequest {
             workflow: &WorkflowCommand {
-                command: vec![
-                    "/bin/sh".into(),
-                    "-c".into(),
-                    "printf '%s' \"$BITROUTER_MODEL\"".into(),
-                ],
+                command: success_command,
                 timeout_secs: 2,
             },
             cwd: dir.path(),
@@ -1065,9 +1077,19 @@ mod tests {
         assert!(!success.timed_out);
         assert_eq!(success.stdout, "@auto");
 
+        #[cfg(unix)]
+        let timeout_command = vec!["/bin/sleep".into(), "5".into()];
+        #[cfg(windows)]
+        let timeout_command = vec![
+            "powershell.exe".into(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 5".into(),
+        ];
         let timeout = run_workflow_command(WorkflowRunRequest {
             workflow: &WorkflowCommand {
-                command: vec!["/bin/sleep".into(), "5".into()],
+                command: timeout_command,
                 timeout_secs: 1,
             },
             cwd: dir.path(),

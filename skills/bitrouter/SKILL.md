@@ -11,7 +11,8 @@ description: >
   migrating off LiteLLM /
   OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
   bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
-  Hermes Agent, Harbor Terminus-2, OpenClaw). Trigger on "set up a local LLM proxy",
+  Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing agent workflows
+  against eval quality and settled cost. Trigger on "set up a local LLM proxy",
   "managed AI gateway", "replace litellm", "point claude code at a
   proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
   port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
@@ -249,6 +250,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/adaptive-routing.md` | Generic `@auto` routing, trace projections, policy locks, and compatibility |
+| `references/workflow-optimization.md` | Version-controlled agentic quality/cost optimization: onboarding, run/review/publish loop, evaluator defaults, and failure semantics |
 | `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |

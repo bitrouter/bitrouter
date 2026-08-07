@@ -650,15 +650,17 @@ mod tests {
     }
 
     #[test]
-    fn default_paths_are_version_controlled_and_private_runs_are_external() {
-        let paths = OptimizationPaths::for_intent(PathBuf::from("/repo/bitrouter.optimize.yaml"));
+    fn default_paths_are_version_controlled_and_private_runs_are_external() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let paths = OptimizationPaths::for_intent(directory.path().join("bitrouter.optimize.yaml"));
 
         assert_eq!(
             paths.lock,
-            PathBuf::from("/repo/bitrouter.optimize.lock.yaml")
+            directory.path().join("bitrouter.optimize.lock.yaml")
         );
-        assert_eq!(paths.contract, PathBuf::from("/repo/bitrouter.eval.md"));
-        assert!(!paths.private_runs.starts_with("/repo"));
+        assert_eq!(paths.contract, directory.path().join("bitrouter.eval.md"));
+        assert!(!paths.private_runs.starts_with(directory.path()));
+        Ok(())
     }
 
     fn lock(intent_digest: &str) -> OptimizationLock {
