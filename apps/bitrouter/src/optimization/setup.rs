@@ -37,6 +37,46 @@ pub struct SetupOptimizationOutcome {
     pub lock: OptimizationLock,
 }
 
+/// Resolve the current strong/economy routes for a named policy, when one is active.
+pub async fn existing_tier_routes(
+    source_config: &std::path::Path,
+    policy: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let raw = tokio::fs::read_to_string(source_config)
+        .await
+        .with_context(|| format!("reading source config {}", source_config.display()))?;
+    let parsed = bitrouter_sdk::config::parse(&raw).context("parsing source BitRouter config")?;
+    let Some(active) = crate::policy_lock::load_for_config(&parsed, Some(source_config)).await?
+    else {
+        return Ok((None, None));
+    };
+    let Some(definition) = active.document.policies.get(policy) else {
+        return Ok((None, None));
+    };
+    Ok((
+        definition.tiers.get("strong").cloned(),
+        definition.tiers.get("economy").cloned(),
+    ))
+}
+
+pub fn ensure_workflow_optimization_compatible(
+    policy_lock: &crate::policy_lock::PolicyLock,
+) -> Result<()> {
+    let guarded = policy_lock
+        .policies
+        .iter()
+        .filter_map(|(name, definition)| definition.progress_guard.is_some().then_some(name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !guarded.is_empty() {
+        anyhow::bail!(
+            "workflow optimization cannot preserve the active progress guard for policies [{}] in its exact two-tier experiment; use an unguarded @auto policy for this optimization lineage",
+            guarded.join(", ")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub async fn setup_optimization(
     _request: SetupOptimizationRequest,
@@ -139,6 +179,12 @@ pub async fn setup_optimization(
     let policy_path = crate::policy_lock::resolve_path(&source_parsed, Some(&source_config))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
     let _policy_lock = crate::policy_lock::acquire_publication_lock(&policy_path)?;
+    if policy_path.is_file()
+        && let Some(active) =
+            crate::policy_lock::load_for_config(&source_parsed, Some(&source_config)).await?
+    {
+        ensure_workflow_optimization_compatible(&active.document)?;
+    }
     let policy_original = if policy_path.is_file() {
         Some(
             std::fs::read(&policy_path)
@@ -165,7 +211,7 @@ pub async fn setup_optimization(
                 &source_raw,
                 &source_with_providers,
             )?;
-            rollback.record_source_policy_owned()?;
+            rollback.record_source_owned()?;
         }
         let source_raw = tokio::fs::read_to_string(&source_config).await?;
         let source_parsed = bitrouter_sdk::config::parse(&source_raw)
@@ -361,8 +407,13 @@ impl SetupRollback {
         self.committed = true;
     }
 
-    fn record_source_policy_owned(&mut self) -> Result<()> {
+    fn record_source_owned(&mut self) -> Result<()> {
         self.source_owned = Some(std::fs::read(&self.source_config)?);
+        Ok(())
+    }
+
+    fn record_source_policy_owned(&mut self) -> Result<()> {
+        self.record_source_owned()?;
         self.policy_owned = Some(std::fs::read(&self.policy_path)?);
         Ok(())
     }
@@ -662,9 +713,31 @@ fn claude_model_from_settings(raw: &str) -> Result<String> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::{
-        claude_model_from_settings, codex_model_from_config, validate_cloud_catalog_model,
+        SetupRollback, claude_model_from_settings, codex_model_from_config,
+        ensure_workflow_optimization_compatible, validate_cloud_catalog_model,
         validate_routable_model,
     };
+
+    #[test]
+    fn setup_can_record_a_source_edit_before_the_policy_exists() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("bitrouter.yaml");
+        let policy = directory.path().join("policy-lock.yaml");
+        std::fs::write(&source, b"inherit_defaults: true\n")?;
+        let mut rollback = SetupRollback::new(
+            source.clone(),
+            Vec::new(),
+            policy,
+            None,
+            directory.path().join("bitrouter.eval.md"),
+            directory.path().join("bitrouter.optimize.yaml"),
+            directory.path().join("bitrouter.optimize.lock.yaml"),
+        );
+
+        rollback.record_source_owned()?;
+        rollback.commit();
+        Ok(())
+    }
 
     #[test]
     fn detects_exact_local_codex_model_without_importing_agent_settings() -> anyhow::Result<()> {
@@ -719,5 +792,36 @@ inherit_defaults: false
         );
         assert_eq!(claude_model_from_settings("{}")?, "claude-sonnet-4-6");
         Ok(())
+    }
+
+    #[test]
+    fn progress_guard_is_rejected_by_setup_preflight() {
+        let mut document = crate::policy_lock::PolicyLock::default();
+        let definition = crate::policy_lock::PolicyDefinition {
+            progress_guard: Some(crate::trajectory::guard::ProgressGuardPolicy {
+                escalation_tier: "strong".into(),
+                protected_tiers: std::collections::BTreeSet::from(["strong".into()]),
+                max_consecutive_unprotected: Some(3),
+                max_same_projection_unprotected: None,
+                max_recovery_count: None,
+                max_episode_requests: None,
+                max_episode_elapsed_ms: None,
+                max_episode_cost_micro_usd: None,
+                hold_for_requests: 2,
+                incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+            }),
+            ..Default::default()
+        };
+        document.policies.insert("auto".into(), definition);
+
+        let error = ensure_workflow_optimization_compatible(&document);
+
+        assert!(error.is_err());
+        assert!(
+            error
+                .err()
+                .map(|value| value.to_string())
+                .is_some_and(|message| message.contains("progress guard"))
+        );
     }
 }

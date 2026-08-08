@@ -863,6 +863,12 @@ pub fn collect_variant_evidence(
     if !matches!(variant, "baseline" | "candidate") {
         anyhow::bail!("variant must be baseline or candidate");
     }
+    if !usage.is_empty() && usage.iter().all(|record| record.error_code.is_some()) {
+        anyhow::bail!(
+            "{variant} produced no successful model request ({} failed); verify provider login and route health before optimizing",
+            usage.len()
+        );
+    }
     let mut by_request = BTreeMap::new();
     for record in usage {
         let request_id = record
@@ -1664,10 +1670,33 @@ mod tests {
                 execution,
                 &[decision(&policy_digest)],
                 &[subject(&policy_digest)?],
-                &[missing_price],
+                &[missing_price.clone()],
             )
             .is_err()
         );
+
+        let mut failed_request = missing_price;
+        failed_request.error_code = Some("upstream_bad_gateway".into());
+        let error = collect_variant_evidence(
+            "baseline",
+            &policy_digest,
+            WorkflowExecution {
+                exit_code: Some(1),
+                timed_out: false,
+                elapsed: Duration::from_millis(500),
+                stdout: String::new(),
+                stderr: String::new(),
+                launches: 1,
+                cwd: "/tmp/project".into(),
+            },
+            &[decision(&policy_digest)],
+            &[subject(&policy_digest)?],
+            &[failed_request],
+        )
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("all-failed evidence unexpectedly succeeded"))?;
+        assert!(error.to_string().contains("no successful model request"));
+        assert!(!error.to_string().contains("normalized showback"));
         Ok(())
     }
 

@@ -1101,11 +1101,54 @@ pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
                         output_micro_usd_per_token: t.output_micro_usd_per_token,
                     })
                     .collect();
-                table.insert(provider_id.clone(), model.id.clone(), model_pricing);
+                table.insert(provider_id.clone(), model.id.clone(), model_pricing.clone());
+                if let Some(native_id) = model.provider_model_id.as_deref()
+                    && native_id != model.id
+                {
+                    table.insert(provider_id.clone(), native_id, model_pricing);
+                }
             }
         }
     }
     table
+}
+
+#[cfg(test)]
+mod pricing_assembly_tests {
+    use super::build_pricing_table;
+
+    #[test]
+    fn provider_native_model_id_reuses_registry_pricing() -> anyhow::Result<()> {
+        let config = bitrouter_sdk::config::parse_with(
+            r#"
+providers:
+  example:
+    api_base: https://example.test/v1
+    models:
+      - id: example/canonical-model
+        provider_model_id: native-model
+        pricing:
+          input_micro_usd_per_token: 1.25
+          output_micro_usd_per_token: 5.0
+"#,
+            |_| None,
+        )?;
+
+        let pricing = build_pricing_table(&config);
+        assert_eq!(
+            pricing
+                .resolve("example", "example/canonical-model")
+                .and_then(|entry| entry.input_micro_usd_per_token),
+            Some(1.25)
+        );
+        assert_eq!(
+            pricing
+                .resolve("example", "native-model")
+                .and_then(|entry| entry.input_micro_usd_per_token),
+            Some(1.25)
+        );
+        Ok(())
+    }
 }
 
 /// Load the `PolicyStore` from `plugins.bitrouter-policy.policy_dir`, if set.

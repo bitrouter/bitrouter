@@ -14,8 +14,12 @@ Interactive:
 bitrouter init
 ```
 
-Choose workflow optimization, provide the exact workflow argv and an
-observable success contract, then choose a qualitative preference. Do not
+Choose workflow optimization, confirm a discovered workflow (or provide exact
+argv), provide an observable success contract, then choose a qualitative
+preference. Setup proposes repository-owned eval/benchmark package scripts and
+executable entrypoints; it adopts one unambiguous candidate automatically and
+offers a numbered choice when several are plausible. Ordinary unit-test
+scripts and symlink escapes are not guessed. Do not
 promise fixed quality-loss or latency percentages: latency is observe-only in
 this release and the user's eval data determines the actual trade-off.
 
@@ -55,9 +59,10 @@ a claim of marginal cash spend.
 ## Evolve one route at a time
 
 ```bash
-bitrouter optimize run
-bitrouter optimize review
-bitrouter optimize publish --enable-adaptive # first publication from frozen mode
+bitrouter optimize run --human
+bitrouter optimize review --human
+bitrouter optimize publish # confirms the first frozen -> adaptive publication on a TTY
+# Headless/CI first publication: bitrouter optimize publish --enable-adaptive
 # Optional: restore a prior policy while keeping the optimization lock aligned.
 bitrouter optimize rollback sha256:<digest>
 ```
@@ -73,6 +78,9 @@ observed latency, the route-key change, and content digests. `run` never changes
 active policy. `publish` is a separate explicit action and rejects stale or
 mismatched lineage. Run the loop again after publication to optimize another
 eligible route key.
+
+The stable public model is `@auto`. Internal policy and preset keys remain
+`auto`; do not document or send `bitrouter/auto` as an alias.
 
 Profiles:
 
@@ -90,6 +98,11 @@ If the workflow uses ignored/generated inputs (for example `node_modules`,
 setup or `--optimize-workflow-input` during onboarding. BitRouter freezes the
 same manifest into two detached Git worktrees. Controlled execution is
 currently Unix-only.
+
+The controlled two-tier experiment does not yet preserve a signed
+`progress_guard`. Setup checks every active policy before writing any
+optimization file and asks the user to use an unguarded `@auto` lineage rather
+than silently changing guard semantics.
 
 ## Failure interpretation
 

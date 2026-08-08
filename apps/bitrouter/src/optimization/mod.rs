@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod discovery;
 pub mod evaluator;
 pub mod orchestrator;
 pub mod runner;

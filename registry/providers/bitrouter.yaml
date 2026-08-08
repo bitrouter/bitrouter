@@ -420,6 +420,7 @@ models:
         text: 25
   - id: deepseek/deepseek-v4-flash-0731
     provider_model_id: deepseek/deepseek-v4-flash-0731
+    capabilities: [reasoning, tools]
     pricing:
       input_tokens:
         no_cache: 0.14
