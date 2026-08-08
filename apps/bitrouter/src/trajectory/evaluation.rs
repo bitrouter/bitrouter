@@ -190,6 +190,15 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
         ("routing.predicted_action", "predicted_action"),
         ("routing.observed_action", "observed_action"),
         ("routing.action_match", "action_match"),
+        (
+            "routing.continuation_proposed_tier",
+            "continuation_proposed_tier",
+        ),
+        (
+            "routing.continuation_proposed_model",
+            "continuation_proposed_model",
+        ),
+        ("routing.continuation_adjustment", "continuation_adjustment"),
     ] {
         if let Some(value) = settlement.evidence.categorical.get(event_key) {
             attributes.insert(attribute_key.to_owned(), value.clone());
@@ -480,6 +489,50 @@ mod tests {
         assert_eq!(
             envelope.subject.requested_dimensions,
             envelope.result.metrics.keys().cloned().collect()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tracked_eval_evidence_keeps_continuation_proposal_and_adjustment() -> anyhow::Result<()> {
+        let mut events = complete_events(Some(15), Some(70))?;
+        let settlement = events
+            .last_mut()
+            .ok_or_else(|| anyhow::anyhow!("settlement missing"))?;
+        settlement.evidence.categorical.extend(BTreeMap::from([
+            (
+                "routing.continuation_proposed_tier".to_owned(),
+                "economy".to_owned(),
+            ),
+            (
+                "routing.continuation_proposed_model".to_owned(),
+                "provider:economy".to_owned(),
+            ),
+            (
+                "routing.continuation_adjustment".to_owned(),
+                "pin".to_owned(),
+            ),
+        ]));
+        resign(settlement)?;
+
+        let envelope = build_operational_evaluation(&events)?;
+        let evidence = envelope
+            .subject
+            .evidence
+            .iter()
+            .find(|item| item.evidence_id == "routing-prediction-observation")
+            .ok_or_else(|| anyhow::anyhow!("prediction evidence missing"))?;
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_tier"),
+            Some(&"economy".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_model"),
+            Some(&"provider:economy".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_adjustment"),
+            Some(&"pin".to_owned())
         );
         Ok(())
     }

@@ -17,13 +17,14 @@ use bitrouter_sdk::language_model::context::{
 };
 use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook, RouteHook};
 use bitrouter_sdk::language_model::protocol::responses::{
-    AssistantTurnCommitment, decode_gateway_continuation_id, encode_gateway_continuation_id,
+    AssistantTurnCommitment, CausalPrefixCommitment, CausalPrefixPlan,
+    decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
 use bitrouter_sdk::language_model::settlement::{
     RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
     RequiredFinalizer,
 };
-use bitrouter_sdk::language_model::{ApiProtocol, AuthAppliers, RoutingTarget};
+use bitrouter_sdk::language_model::{ApiProtocol, AuthAppliers, Role, RoutingTarget};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -33,7 +34,7 @@ use sea_orm::{ActiveValue::Set, DatabaseConnection, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::workflow_state::predictive::has_authenticated_visible_parent;
+use crate::workflow_state::predictive::authenticated_visible_causal_prefix;
 
 const OWNER_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.owner.v1";
 const CONTINUATION_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.identity.v1";
@@ -55,9 +56,11 @@ const RECONCILIATION_DRAIN_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
-const CONTINUATION_PAYLOAD_VERSION: u8 = 2;
+const CONTINUATION_PAYLOAD_VERSION: u8 = 3;
+#[cfg(test)]
 const CONTINUATION_PAYLOAD_V1_PREFIX: &str = "bitrouter-continuation-payload-v1:";
 const CONTINUATION_PAYLOAD_V2_MAGIC: &[u8] = b"\xffbitrouter-continuation-payload-v2\0";
+const CONTINUATION_PAYLOAD_V3_MAGIC: &[u8] = b"\xffbitrouter-continuation-payload-v3\0";
 const MAX_EFFECTIVE_MODEL_BYTES: usize = 512;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,21 +70,24 @@ struct ContinuationPayload {
     effective_model: Option<String>,
     #[serde(default)]
     assistant_turn_commitment: Option<String>,
+    #[serde(default)]
+    causal_prefix_commitment: Option<String>,
 }
 
 impl ContinuationPayload {
     fn current(
         provider_response_id: &str,
         effective_model: &str,
-        assistant_turn_commitment: Option<&AssistantTurnCommitment>,
+        causal_prefix_commitment: Option<&CausalPrefixCommitment>,
     ) -> Result<Self> {
         validate_effective_model(effective_model)?;
         Ok(Self {
             version: CONTINUATION_PAYLOAD_VERSION,
             provider_response_id: provider_response_id.to_owned(),
             effective_model: Some(effective_model.to_owned()),
-            assistant_turn_commitment: assistant_turn_commitment
-                .map(AssistantTurnCommitment::as_str)
+            assistant_turn_commitment: None,
+            causal_prefix_commitment: causal_prefix_commitment
+                .map(CausalPrefixCommitment::as_str)
                 .map(ToOwned::to_owned),
         })
     }
@@ -92,6 +98,7 @@ impl ContinuationPayload {
             provider_response_id,
             effective_model: None,
             assistant_turn_commitment: None,
+            causal_prefix_commitment: None,
         }
     }
 }
@@ -104,6 +111,7 @@ impl std::fmt::Debug for ContinuationPayload {
             .field("provider_response_id", &"<redacted>")
             .field("effective_model", &self.effective_model)
             .field("assistant_turn_commitment", &"<redacted>")
+            .field("causal_prefix_commitment", &"<redacted>")
             .finish()
     }
 }
@@ -238,7 +246,7 @@ pub enum ContinuationResolution {
 pub struct ResolvedContinuation {
     pub provider_response_id: String,
     pub effective_model: Option<String>,
-    pub assistant_turn_commitment: Option<AssistantTurnCommitment>,
+    pub causal_prefix_commitment: Option<CausalPrefixCommitment>,
     target_fingerprint: String,
     key: ContinuationKey,
 }
@@ -249,7 +257,7 @@ impl std::fmt::Debug for ResolvedContinuation {
             .debug_struct("ResolvedContinuation")
             .field("provider_response_id", &"<redacted>")
             .field("effective_model", &self.effective_model)
-            .field("assistant_turn_commitment", &"<redacted>")
+            .field("causal_prefix_commitment", &"<redacted>")
             .field("target_fingerprint", &"<redacted>")
             .field("key", &self.key)
             .finish()
@@ -437,7 +445,7 @@ struct PendingBindAttempt {
 struct ContinuationBinding<'a> {
     provider_response_id: &'a str,
     effective_model: &'a str,
-    assistant_turn_commitment: Option<&'a AssistantTurnCommitment>,
+    causal_prefix_commitment: Option<&'a CausalPrefixCommitment>,
     target: &'a RoutingTarget,
     credential_authority: &'a ContinuationAuthority,
 }
@@ -1475,7 +1483,7 @@ impl ContinuationRegistry {
                 ContinuationBinding {
                     provider_response_id,
                     effective_model: &effective_model,
-                    assistant_turn_commitment: None,
+                    causal_prefix_commitment: None,
                     target,
                     credential_authority,
                 },
@@ -1634,13 +1642,13 @@ impl ContinuationRegistry {
         let payload = ContinuationPayload::current(
             binding.provider_response_id,
             binding.effective_model,
-            binding.assistant_turn_commitment,
+            binding.causal_prefix_commitment,
         )
         .map_err(OwnershipFailure::lost_or_foreign)?;
         let serialized = serde_json::to_vec(&payload)
             .context("serializing continuation payload")
             .map_err(OwnershipFailure::lost_or_foreign)?;
-        let mut plaintext = CONTINUATION_PAYLOAD_V2_MAGIC.to_vec();
+        let mut plaintext = CONTINUATION_PAYLOAD_V3_MAGIC.to_vec();
         plaintext.extend_from_slice(&serialized);
         let created_at = timestamp(now);
         let expires_at = timestamp(
@@ -1820,10 +1828,10 @@ impl ContinuationRegistry {
             return Ok(ContinuationResolution::Active(ResolvedContinuation {
                 provider_response_id: payload.provider_response_id,
                 effective_model: payload.effective_model,
-                assistant_turn_commitment: payload
-                    .assistant_turn_commitment
+                causal_prefix_commitment: payload
+                    .causal_prefix_commitment
                     .as_deref()
-                    .and_then(AssistantTurnCommitment::parse),
+                    .and_then(CausalPrefixCommitment::parse),
                 target_fingerprint: row.target_fingerprint,
                 key,
             }));
@@ -2062,18 +2070,41 @@ impl PreRequestHook for ContinuationRuntime {
                 )));
                 Some(ContinuationAdjustment::RejectLegacy)
             }
-            Some(_)
-                if active
-                    .assistant_turn_commitment
-                    .as_ref()
-                    .is_some_and(|commitment| {
-                        has_authenticated_visible_parent(ctx.prompt(), commitment)
-                    }) =>
-            {
-                ctx.insert_extension(Arc::new(SuppressProviderContinuation));
-                Some(ContinuationAdjustment::Detach)
+            Some(effective_model) => {
+                let exact_visible_prefix =
+                    active
+                        .causal_prefix_commitment
+                        .as_ref()
+                        .and_then(|commitment| {
+                            authenticated_visible_causal_prefix(ctx.prompt(), commitment)
+                        });
+                if let (Some(commitment), Some(suffix_start)) = (
+                    active.causal_prefix_commitment.clone(),
+                    exact_visible_prefix,
+                ) {
+                    ctx.insert_extension(Arc::new(CausalPrefixPlan::extend(
+                        commitment,
+                        suffix_start,
+                    )));
+                    ctx.insert_extension(Arc::new(SuppressProviderContinuation));
+                    Some(ContinuationAdjustment::Detach)
+                } else {
+                    let hidden_suffix = !ctx
+                        .prompt()
+                        .messages
+                        .iter()
+                        .any(|message| message.role == Role::Assistant);
+                    let causal_plan = active
+                        .causal_prefix_commitment
+                        .clone()
+                        .filter(|_| hidden_suffix)
+                        .map_or_else(CausalPrefixPlan::ineligible, |commitment| {
+                            CausalPrefixPlan::extend(commitment, 0)
+                        });
+                    ctx.insert_extension(Arc::new(causal_plan));
+                    Some(ContinuationAdjustment::Pin { effective_model })
+                }
             }
-            Some(effective_model) => Some(ContinuationAdjustment::Pin { effective_model }),
         };
         ctx.insert_extension(Arc::new(ContinuationRequestPlan { adjustment, active }));
         Ok(HookDecision::Allow)
@@ -2266,7 +2297,7 @@ impl ContinuationRuntime {
                 ContinuationBinding {
                     provider_response_id,
                     effective_model: &ctx.effective_model,
-                    assistant_turn_commitment: ctx.assistant_turn_commitment.as_ref(),
+                    causal_prefix_commitment: ctx.causal_prefix_commitment.as_ref(),
                     target,
                     credential_authority: &credential_authority,
                 },
@@ -2496,30 +2527,29 @@ fn decrypt_payload(
     row: &continuation_entity::Model,
 ) -> Result<ContinuationPayload> {
     let plaintext = decrypt_row(key, row)?;
-    let (payload, is_v2) =
-        if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V2_MAGIC) {
-            (
-                serde_json::from_slice::<ContinuationPayload>(serialized)
-                    .context("continuation payload is invalid")?,
-                true,
-            )
-        } else {
-            let plaintext = String::from_utf8(plaintext)
-                .context("legacy continuation plaintext is not valid UTF-8")?;
-            let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V1_PREFIX) else {
-                return Ok(ContinuationPayload::legacy(plaintext));
-            };
-            let mut payload: ContinuationPayload =
-                serde_json::from_str(serialized).context("continuation v1 payload is invalid")?;
-            if payload.version != 1 {
-                anyhow::bail!("unsupported continuation v1 payload version");
-            }
-            payload.assistant_turn_commitment = None;
-            (payload, false)
-        };
-    if is_v2 && payload.version != CONTINUATION_PAYLOAD_VERSION {
-        anyhow::bail!("unsupported continuation payload version");
-    }
+    let payload = if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V3_MAGIC) {
+        let payload: ContinuationPayload =
+            serde_json::from_slice(serialized).context("continuation v3 payload is invalid")?;
+        if payload.version != 3 {
+            anyhow::bail!("unsupported continuation v3 payload version");
+        }
+        payload
+    } else if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V2_MAGIC) {
+        let mut payload: ContinuationPayload =
+            serde_json::from_slice(serialized).context("continuation v2 payload is invalid")?;
+        if payload.version != 2 {
+            anyhow::bail!("unsupported continuation v2 payload version");
+        }
+        payload.causal_prefix_commitment = None;
+        payload
+    } else {
+        let plaintext = String::from_utf8(plaintext)
+            .context("legacy continuation plaintext is not valid UTF-8")?;
+        // V1 used a valid UTF-8 magic prefix and can collide with a provider's
+        // opaque native id. Preserve decode compatibility as legacy data, but
+        // never infer model provenance from the colliding plaintext.
+        return Ok(ContinuationPayload::legacy(plaintext));
+    };
     let effective_model = payload
         .effective_model
         .as_deref()
@@ -2529,6 +2559,11 @@ fn decrypt_payload(
         && AssistantTurnCommitment::parse(commitment).is_none()
     {
         anyhow::bail!("continuation assistant-turn commitment is invalid");
+    }
+    if let Some(commitment) = payload.causal_prefix_commitment.as_deref()
+        && CausalPrefixCommitment::parse(commitment).is_none()
+    {
+        anyhow::bail!("continuation causal-prefix commitment is invalid");
     }
     Ok(payload)
 }
@@ -2654,7 +2689,7 @@ mod tests {
         let resolved = ResolvedContinuation {
             provider_response_id: "provider-debug-private-sentinel".into(),
             effective_model: Some("provider:model".into()),
-            assistant_turn_commitment: None,
+            causal_prefix_commitment: None,
             target_fingerprint: "fingerprint-debug-private-sentinel".into(),
             key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
         };
@@ -2716,13 +2751,7 @@ mod tests {
 
     #[test]
     fn continuation_payload_debug_redacts_native_id_and_commitment() -> anyhow::Result<()> {
-        let commitment =
-            bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment(&[
-                Content::Text {
-                    text: "parent-debug-private-sentinel".into(),
-                    provider_metadata: Default::default(),
-                },
-            ])
+        let commitment = CausalPrefixCommitment::parse(&format!("sha256:{}", "ab".repeat(32)))
             .ok_or_else(|| anyhow::anyhow!("test commitment missing"))?;
         let payload = ContinuationPayload::current(
             "provider-debug-private-sentinel",
@@ -2996,10 +3025,10 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("sealed continuation row missing"))?;
         let envelope = decrypt_row(&ContinuationKey::from_bytes([7; 32])?, &sealed)?;
-        assert!(envelope.starts_with(CONTINUATION_PAYLOAD_V2_MAGIC));
+        assert!(envelope.starts_with(CONTINUATION_PAYLOAD_V3_MAGIC));
         assert!(
             String::from_utf8(envelope).is_err(),
-            "v2 envelope must not collide with any legacy UTF-8 response id"
+            "v3 envelope must not collide with any legacy UTF-8 response id"
         );
 
         let reloaded = ContinuationRegistry::new(
@@ -3020,7 +3049,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v1_payload_decodes_compatibly_but_cannot_authorize_detach() -> anyhow::Result<()> {
+    async fn v1_magic_prefix_collision_decodes_as_unservable_legacy() -> anyhow::Result<()> {
         let registry = registry(77).await?;
         let gateway_id = encode_gateway_continuation_id("v1-gateway")?;
         let now = Utc::now();
@@ -3072,8 +3101,9 @@ mod tests {
         else {
             anyhow::bail!("v1 continuation did not resolve")
         };
-        assert_eq!(resolved.effective_model.as_deref(), Some("openai:gpt-5"));
-        assert_eq!(resolved.assistant_turn_commitment, None);
+        assert_eq!(resolved.provider_response_id, v1);
+        assert_eq!(resolved.effective_model, None);
+        assert_eq!(resolved.causal_prefix_commitment, None);
 
         let runtime = ContinuationRuntime::new(registry);
         let mut ctx = continuation_context_for_owner(&gateway_id, "v1-owner");
@@ -3083,8 +3113,7 @@ mod tests {
                 .is_some_and(|plan| {
                     matches!(
                         plan.adjustment.as_ref(),
-                        Some(ContinuationAdjustment::Pin { effective_model })
-                            if effective_model == "openai:gpt-5"
+                        Some(ContinuationAdjustment::RejectLegacy)
                     )
                 })
         );
@@ -3956,13 +3985,8 @@ mod tests {
         let registry = registry(14).await?;
         let runtime = ContinuationRuntime::new(registry.clone());
         let mut finalization = finalization_context("gateway-result", 1, "resp-provider-final");
-        finalization.assistant_turn_commitment =
-            bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment(&[
-                Content::Text {
-                    text: "committed parent response".into(),
-                    provider_metadata: Default::default(),
-                },
-            ]);
+        finalization.causal_prefix_commitment =
+            CausalPrefixCommitment::parse(&format!("sha256:{}", "cd".repeat(32)));
         runtime.finalize(&finalization).await?;
         commit_delivered(&runtime, &finalization).await?;
         let resolved = registry
@@ -3975,7 +3999,7 @@ mod tests {
         let ContinuationResolution::Active(resolved) = resolved else {
             anyhow::bail!("required finalizer did not publish an active mapping")
         };
-        assert!(resolved.assistant_turn_commitment.is_some());
+        assert!(resolved.causal_prefix_commitment.is_some());
         Ok(())
     }
 
@@ -3990,7 +4014,7 @@ mod tests {
             caller: CallerContext::new("key", "owner"),
             target: Some(target("credential")),
             effective_model: "openai:gpt-5".into(),
-            assistant_turn_commitment: None,
+            causal_prefix_commitment: None,
             inbound_protocol: Some(ApiProtocol::Responses),
             response_id: Some(provider_response_id.into()),
             finish_reason: Some(bitrouter_sdk::language_model::FinishReason::Stop),
@@ -7956,6 +7980,7 @@ mod tests {
                 source_protocol: ApiProtocol::Responses,
                 status: "completed".into(),
                 usage: None,
+                response_output_commitment: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();
@@ -8061,6 +8086,7 @@ mod tests {
                         source_protocol: ApiProtocol::Responses,
                         status: "failed".into(),
                         usage: None,
+                        response_output_commitment: None,
                     }])
                 }
                 TerminalMutation::ReplaceNonterminal => {
@@ -9200,6 +9226,7 @@ mod tests {
                     source_protocol: ApiProtocol::Responses,
                     status: "completed".into(),
                     usage: None,
+                    response_output_commitment: None,
                 },
             ])]));
             let mut builder = PipelineBuilder::new();
@@ -9356,6 +9383,7 @@ mod tests {
                 source_protocol: ApiProtocol::Responses,
                 status: "completed".into(),
                 usage: None,
+                response_output_commitment: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();
@@ -9395,6 +9423,7 @@ mod tests {
                 source_protocol: ApiProtocol::Responses,
                 status: "completed".into(),
                 usage: None,
+                response_output_commitment: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();
@@ -9555,6 +9584,7 @@ mod tests {
                 source_protocol: ApiProtocol::Responses,
                 status: "completed".into(),
                 usage: None,
+                response_output_commitment: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();
@@ -9728,6 +9758,7 @@ mod tests {
                     completion_tokens: 3,
                     ..Default::default()
                 }),
+                response_output_commitment: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();

@@ -13,7 +13,8 @@ use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::{
-    AssistantTurnCommitment, StreamingAssistantTurnCommitment, assistant_turn_commitment,
+    AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
+    assistant_turn_commitment, extend_causal_prefix,
 };
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
@@ -624,6 +625,7 @@ impl PipelineContext {
             terminal_succeeded: false,
             native_response_completed: false,
             assistant_turn_commitment: StreamingAssistantTurnCommitment::default(),
+            terminal_assistant_turn_commitment: None,
             response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
@@ -647,7 +649,10 @@ impl PipelineContext {
         }
         self.stream_terminal_succeeded = stream.terminal_succeeded;
         self.stream_native_response_completed = stream.native_response_completed;
-        self.stream_assistant_turn_commitment = stream.assistant_turn_commitment.finish();
+        let observed = stream.assistant_turn_commitment.finish();
+        self.stream_assistant_turn_commitment = stream
+            .terminal_assistant_turn_commitment
+            .filter(|terminal| observed.as_ref() == Some(terminal));
         self.first_token_timing = stream.first_token_timing;
         self.generation_duration_ms = stream.generation_duration_ms;
         self.events.merge_from(stream.events);
@@ -665,17 +670,24 @@ impl PipelineContext {
         } else {
             execution.is_some() && !matches!(finish_reason, Some(FinishReason::Error(_)))
         };
+        let delivered = if streamed {
+            self.stream_assistant_turn_commitment.clone()
+        } else {
+            execution.and_then(|result| assistant_turn_commitment(&result.result.content))
+        };
+        let causal_prefix_commitment = delivered.as_ref().and_then(|delivered| {
+            self.extension::<CausalPrefixPlan>().map_or_else(
+                || extend_causal_prefix(None, &self.prompt.messages, delivered),
+                |plan| plan.finalize(&self.prompt.messages, delivered),
+            )
+        });
         RequiredFinalizationContext {
             request_id: self.request_id.clone(),
             delivery_attempt_id: self.delivery_attempt_id,
             caller: self.caller.clone(),
             target,
             effective_model: self.model.clone(),
-            assistant_turn_commitment: if streamed {
-                self.stream_assistant_turn_commitment.clone()
-            } else {
-                execution.and_then(|result| assistant_turn_commitment(&result.result.content))
-            },
+            causal_prefix_commitment,
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: execution.and_then(|result| result.result.response_id.clone()),
             finish_reason,
@@ -845,6 +857,7 @@ pub struct StreamContext {
     /// provider. Router-synthetic `Finish` parts deliberately cannot set it.
     native_response_completed: bool,
     assistant_turn_commitment: StreamingAssistantTurnCommitment,
+    terminal_assistant_turn_commitment: Option<AssistantTurnCommitment>,
     /// Native Responses continuation id observed on `response.created`.
     /// Request-local only: settlement may derive an opaque owner-bound alias,
     /// but the raw value must never enter durable events or storage.
@@ -912,6 +925,7 @@ impl StreamContext {
                 id,
                 source_protocol,
                 status,
+                response_output_commitment,
                 ..
             } => {
                 let successful = matches!(status.as_str(), "completed" | "incomplete");
@@ -921,6 +935,9 @@ impl StreamContext {
                 if *source_protocol == ApiProtocol::Responses && !id.is_empty() {
                     self.response_id = Some(id.clone());
                 }
+                self.terminal_assistant_turn_commitment = response_output_commitment
+                    .as_deref()
+                    .and_then(AssistantTurnCommitment::parse);
                 self.finish_reason = Some(match status.as_str() {
                     "completed" => FinishReason::Stop,
                     "incomplete" => FinishReason::Length,
@@ -1395,6 +1412,40 @@ mod tests {
                 .response_id,
             None
         );
+    }
+
+    #[test]
+    fn streaming_continuation_requires_terminal_and_delta_commitment_parity() {
+        fn publishes_commitment(terminal_text: Option<&str>) -> bool {
+            let mut pipeline = ctx_from_prompt(prompt_with_text(None, "opening"));
+            let mut stream = pipeline.stream_context();
+            stream.observe_downstream_part(&StreamPart::TextDelta {
+                text: "delivered".into(),
+            });
+            let terminal = terminal_text.and_then(|terminal_text| {
+                assistant_turn_commitment(&[Content::Text {
+                    text: terminal_text.into(),
+                    provider_metadata: Default::default(),
+                }])
+                .map(|commitment| commitment.as_str().to_owned())
+            });
+            stream.observe_downstream_part(&StreamPart::ResponseCompleted {
+                id: "resp-terminal".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: None,
+                response_output_commitment: terminal,
+            });
+            pipeline.absorb_stream(stream);
+            pipeline
+                .required_finalization_context(true)
+                .causal_prefix_commitment
+                .is_some()
+        }
+
+        assert!(publishes_commitment(Some("delivered")));
+        assert!(!publishes_commitment(Some("different terminal output")));
+        assert!(!publishes_commitment(None));
     }
 
     #[tokio::test]

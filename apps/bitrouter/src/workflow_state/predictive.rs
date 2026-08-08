@@ -856,40 +856,17 @@ pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
         })
 }
 
-pub(crate) fn has_authenticated_visible_parent(
+pub(crate) fn authenticated_visible_causal_prefix(
     prompt: &Prompt,
-    expected: &bitrouter_sdk::language_model::protocol::responses::AssistantTurnCommitment,
-) -> bool {
+    expected: &bitrouter_sdk::language_model::protocol::responses::CausalPrefixCommitment,
+) -> Option<usize> {
     if !has_complete_visible_causal_history(prompt) {
-        return false;
+        return None;
     }
-    let mut matching_index = None;
-    for (index, message) in prompt
-        .messages
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| message.role == Role::Assistant)
-    {
-        let matches =
-            bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment(
-                &message.content,
-            )
-            .is_some_and(|commitment| &commitment == expected);
-        if matches && matching_index.replace(index).is_some() {
-            return false;
-        }
-    }
-    let Some(matching_index) = matching_index else {
-        return false;
-    };
-    let last_assistant_index = prompt
-        .messages
-        .iter()
-        .rposition(|message| message.role == Role::Assistant);
-    last_assistant_index == Some(matching_index)
-        && prompt.messages[matching_index.saturating_add(1)..]
-            .iter()
-            .any(|message| message.role == Role::User)
+    bitrouter_sdk::language_model::protocol::responses::find_unique_causal_prefix(
+        &prompt.messages,
+        expected,
+    )
 }
 
 fn bounded_signal_count(count: u8) -> u8 {
@@ -1551,13 +1528,18 @@ mod tests {
 
     #[test]
     fn authenticated_parent_requires_one_exact_last_assistant_turn() -> anyhow::Result<()> {
-        use bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment;
+        use bitrouter_sdk::language_model::protocol::responses::{
+            assistant_turn_commitment, extend_causal_prefix,
+        };
 
+        let opening = Message::text(Role::User, "opening");
         let parent = Message::text(Role::Assistant, "the exact parent response");
-        let commitment = assistant_turn_commitment(&parent.content)
+        let delivered = assistant_turn_commitment(&parent.content)
             .ok_or_else(|| anyhow::anyhow!("parent commitment missing"))?;
+        let commitment = extend_causal_prefix(None, std::slice::from_ref(&opening), &delivered)
+            .ok_or_else(|| anyhow::anyhow!("causal prefix missing"))?;
         let exact = prompt(vec![
-            Message::text(Role::User, "opening"),
+            opening.clone(),
             parent.clone(),
             Message::text(Role::User, "follow up"),
         ]);
@@ -1579,9 +1561,15 @@ mod tests {
             Message::text(Role::User, "follow up"),
         ]);
 
-        assert!(has_authenticated_visible_parent(&exact, &commitment));
+        assert_eq!(
+            authenticated_visible_causal_prefix(&exact, &commitment),
+            Some(2)
+        );
         for rejected in [unrelated, tampered, ambiguous] {
-            assert!(!has_authenticated_visible_parent(&rejected, &commitment));
+            assert_eq!(
+                authenticated_visible_causal_prefix(&rejected, &commitment),
+                None
+            );
         }
         Ok(())
     }

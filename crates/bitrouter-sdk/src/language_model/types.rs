@@ -1963,6 +1963,10 @@ pub enum StreamPart {
         /// Final usage, if the provider reported it.
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        /// Bounded commitment derived from the terminal full Responses output.
+        /// It is internal lifecycle evidence and is never rendered to clients.
+        #[serde(skip)]
+        response_output_commitment: Option<String>,
     },
 }
 

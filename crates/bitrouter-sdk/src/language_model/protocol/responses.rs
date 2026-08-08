@@ -41,33 +41,79 @@ const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
 const MAX_GATEWAY_REQUEST_ID_BYTES: usize = 128;
 const ASSISTANT_TURN_COMMITMENT_DOMAIN: &[u8] = b"bitrouter.assistant-turn.v1";
 const ASSISTANT_TURN_FIELD_DOMAIN: &[u8] = b"bitrouter.assistant-turn.field.v1";
+const CAUSAL_PREFIX_ROOT_DOMAIN: &[u8] = b"bitrouter.causal-prefix.root.v1";
+const CAUSAL_PREFIX_STEP_DOMAIN: &[u8] = b"bitrouter.causal-prefix.step.v1";
 const MAX_STREAMING_COMMITMENT_TOOL_CALLS: usize = 64;
 
 /// Fixed-size, protocol-neutral commitment to one canonical assistant turn.
 /// Provider metadata and stream fragmentation are intentionally excluded.
 #[derive(Clone, PartialEq, Eq)]
-pub struct AssistantTurnCommitment(String);
+pub struct AssistantTurnCommitment {
+    encoded: String,
+    digest: [u8; 32],
+}
 
 impl AssistantTurnCommitment {
     /// Parse the bounded canonical storage representation.
     pub fn parse(value: &str) -> Option<Self> {
-        let digest = value.strip_prefix("sha256:")?;
-        (digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
-        .then(|| Self(value.to_owned()))
+        Some(Self {
+            encoded: value.to_owned(),
+            digest: decode_digest(value)?,
+        })
     }
 
     /// Borrow the bounded canonical storage representation.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.encoded
+    }
+
+    fn from_digest(digest: [u8; 32]) -> Self {
+        Self {
+            encoded: format!("sha256:{}", encode_digest(digest)),
+            digest,
+        }
     }
 }
 
 impl std::fmt::Debug for AssistantTurnCommitment {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("AssistantTurnCommitment(<redacted>)")
+    }
+}
+
+/// Fixed-size rolling commitment to one complete causal message prefix.
+/// The encrypted continuation row supplies owner and gateway identity binding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CausalPrefixCommitment {
+    encoded: String,
+    digest: [u8; 32],
+}
+
+impl CausalPrefixCommitment {
+    /// Parse the bounded canonical storage representation.
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(Self {
+            encoded: value.to_owned(),
+            digest: decode_digest(value)?,
+        })
+    }
+
+    /// Borrow the bounded canonical storage representation.
+    pub fn as_str(&self) -> &str {
+        &self.encoded
+    }
+
+    fn from_digest(digest: [u8; 32]) -> Self {
+        Self {
+            encoded: format!("sha256:{}", encode_digest(digest)),
+            digest,
+        }
+    }
+}
+
+impl std::fmt::Debug for CausalPrefixCommitment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CausalPrefixCommitment(<redacted>)")
     }
 }
 
@@ -171,10 +217,9 @@ impl TurnAccumulator {
             return None;
         }
         self.hasher.update(self.part_count.to_be_bytes());
-        Some(AssistantTurnCommitment(format!(
-            "sha256:{}",
-            encode_digest(self.hasher.finalize().into())
-        )))
+        Some(AssistantTurnCommitment::from_digest(
+            self.hasher.finalize().into(),
+        ))
     }
 }
 
@@ -186,6 +231,28 @@ fn encode_digest(digest: [u8; 32]) -> String {
         encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn decode_digest(value: &str) -> Option<[u8; 32]> {
+    let encoded = value.strip_prefix("sha256:")?.as_bytes();
+    if encoded.len() != 64 {
+        return None;
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in encoded.chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(pair[0])?;
+        let low = decode_hex_nibble(pair[1])?;
+        digest[index] = (high << 4) | low;
+    }
+    Some(digest)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn field(value: &str) -> Option<FieldDigest> {
@@ -282,6 +349,274 @@ pub fn assistant_turn_commitment(content: &[Content]) -> Option<AssistantTurnCom
         observe_content(&mut turn, part);
     }
     turn.finish()
+}
+
+/// Hash the complete terminal Responses output without materializing another
+/// transcript. Only protocol-neutral assistant semantics supported by the
+/// post-hook stream accumulator are eligible; every other item fails closed.
+fn terminal_assistant_turn_commitment(
+    response: &serde_json::Value,
+) -> Option<AssistantTurnCommitment> {
+    let output = response.get("output")?.as_array()?;
+    if output.is_empty() {
+        return None;
+    }
+    let mut turn = TurnAccumulator::default();
+    for item in output {
+        match item.get("type")?.as_str()? {
+            "message" => {
+                if item.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+                    return None;
+                }
+                let content = item.get("content")?.as_array()?;
+                if content.is_empty() {
+                    return None;
+                }
+                for part in content {
+                    if !matches!(
+                        part.get("type").and_then(serde_json::Value::as_str),
+                        Some("output_text" | "text")
+                    ) || part.get("annotations").is_some_and(|annotations| {
+                        !annotations.as_array().is_some_and(Vec::is_empty)
+                    }) {
+                        return None;
+                    }
+                    let text = part.get("text")?.as_str()?;
+                    let value = field(text)?;
+                    turn.add_part(1, std::slice::from_ref(&value), !text.is_empty());
+                }
+            }
+            "reasoning" => {
+                let summary = item.get("summary")?.as_array()?;
+                if summary.is_empty() {
+                    return None;
+                }
+                let mut value = FieldAccumulator::default();
+                for part in summary {
+                    if part.get("type").and_then(serde_json::Value::as_str) != Some("summary_text")
+                    {
+                        return None;
+                    }
+                    if !value.update(part.get("text")?.as_str()?.as_bytes()) {
+                        return None;
+                    }
+                }
+                let value = value.finish();
+                turn.add_part(2, std::slice::from_ref(&value), value.len > 0);
+            }
+            "function_call" => observe_tool_call(
+                &mut turn,
+                item.get("call_id")?.as_str()?,
+                item.get("name")?.as_str()?,
+                item.get("arguments")?.as_str()?,
+                false,
+                false,
+            ),
+            _ => return None,
+        }
+    }
+    turn.finish()
+}
+
+fn causal_content_role(message_role: Role, content: &Content) -> Option<Role> {
+    match content {
+        Content::Text { .. } => Some(message_role),
+        Content::Reasoning { .. } | Content::ToolCall { .. } => Some(Role::Assistant),
+        Content::ToolResult { .. } => Some(Role::Tool),
+        Content::File { .. }
+        | Content::Source { .. }
+        | Content::ToolApprovalRequest { .. }
+        | Content::ToolApprovalResponse { .. } => None,
+    }
+}
+
+fn causal_message_role(message: &Message) -> Option<Role> {
+    if message.role == Role::System {
+        return Some(Role::System);
+    }
+    let first = message.content.first()?;
+    let role = causal_content_role(message.role, first)?;
+    if message
+        .content
+        .iter()
+        .any(|content| causal_content_role(message.role, content) != Some(role))
+    {
+        return None;
+    }
+    Some(role)
+}
+
+fn observe_causal_content(turn: &mut TurnAccumulator, content: &Content) {
+    match content {
+        Content::Text { .. } | Content::Reasoning { .. } | Content::ToolCall { .. } => {
+            observe_content(turn, content);
+        }
+        Content::ToolResult {
+            call_id,
+            output,
+            dynamic,
+            ..
+        } => {
+            let (output_tag, output_value) = match output {
+                ToolResultOutput::Text { value } => ("text", value.as_str()),
+                ToolResultOutput::ErrorText { value } => ("error_text", value.as_str()),
+                ToolResultOutput::ExecutionDenied { reason } => {
+                    ("execution_denied", reason.as_deref().unwrap_or(""))
+                }
+                ToolResultOutput::Json { .. }
+                | ToolResultOutput::ErrorJson { .. }
+                | ToolResultOutput::Content { .. } => {
+                    turn.invalidate();
+                    return;
+                }
+            };
+            let (Some(call_id), Some(output_tag), Some(output_value)) =
+                (field(call_id), field(output_tag), field(output_value))
+            else {
+                turn.invalidate();
+                return;
+            };
+            if call_id.len == 0 {
+                turn.invalidate();
+                return;
+            }
+            turn.add_part(
+                4,
+                &[call_id, output_tag, output_value, bool_field(*dynamic)],
+                true,
+            );
+        }
+        Content::File { .. }
+        | Content::Source { .. }
+        | Content::ToolApprovalRequest { .. }
+        | Content::ToolApprovalResponse { .. } => turn.invalidate(),
+    }
+}
+
+fn initial_causal_prefix() -> CausalPrefixCommitment {
+    CausalPrefixCommitment::from_digest(Sha256::digest(CAUSAL_PREFIX_ROOT_DOMAIN).into())
+}
+
+fn extend_causal_step(
+    prior: &CausalPrefixCommitment,
+    role: Role,
+    message: &AssistantTurnCommitment,
+) -> CausalPrefixCommitment {
+    let mut hasher = Sha256::new();
+    hasher.update(CAUSAL_PREFIX_STEP_DOMAIN);
+    hasher.update(prior.digest);
+    hasher.update([match role {
+        Role::System => 0,
+        Role::User => 1,
+        Role::Assistant => 2,
+        Role::Tool => 3,
+    }]);
+    hasher.update(message.digest);
+    CausalPrefixCommitment::from_digest(hasher.finalize().into())
+}
+
+fn fold_causal_messages(
+    prior: Option<&CausalPrefixCommitment>,
+    messages: &[Message],
+    mut observe: impl FnMut(usize, Role, &CausalPrefixCommitment),
+) -> Option<CausalPrefixCommitment> {
+    let mut root = prior.cloned().unwrap_or_else(initial_causal_prefix);
+    let mut index = 0;
+    while index < messages.len() {
+        let role = causal_message_role(&messages[index])?;
+        if role == Role::System {
+            index += 1;
+            continue;
+        }
+        let mut end = index + 1;
+        let mut turn = TurnAccumulator::default();
+        for content in &messages[index].content {
+            observe_causal_content(&mut turn, content);
+        }
+        if matches!(role, Role::Assistant | Role::Tool) {
+            while end < messages.len() && causal_message_role(&messages[end]) == Some(role) {
+                for content in &messages[end].content {
+                    observe_causal_content(&mut turn, content);
+                }
+                end += 1;
+            }
+        }
+        let message = turn.finish()?;
+        root = extend_causal_step(&root, role, &message);
+        observe(end, role, &root);
+        index = end;
+    }
+    Some(root)
+}
+
+/// Extend an authenticated prior causal root with the current visible suffix
+/// and the newly delivered assistant turn. System/developer envelope content is
+/// excluded so clients that resend it do not change the conversation chain.
+pub fn extend_causal_prefix(
+    prior: Option<&CausalPrefixCommitment>,
+    messages: &[Message],
+    delivered: &AssistantTurnCommitment,
+) -> Option<CausalPrefixCommitment> {
+    let root = fold_causal_messages(prior, messages, |_, _, _| {})?;
+    Some(extend_causal_step(&root, Role::Assistant, delivered))
+}
+
+/// Find the unique exact prior root in a complete visible history. The match
+/// must end at the last assistant turn; truncated and repeated-parent suffixes
+/// therefore fail closed.
+pub fn find_unique_causal_prefix(
+    messages: &[Message],
+    expected: &CausalPrefixCommitment,
+) -> Option<usize> {
+    let mut matching_end = None;
+    let mut ambiguous = false;
+    let mut last_assistant_end = None;
+    fold_causal_messages(None, messages, |end, role, root| {
+        if role == Role::Assistant {
+            last_assistant_end = Some(end);
+            if root == expected && matching_end.replace(end).is_some() {
+                ambiguous = true;
+            }
+        }
+    })?;
+    let matching_end = matching_end?;
+    (!ambiguous && last_assistant_end == Some(matching_end)).then_some(matching_end)
+}
+
+/// Request-local instructions for extending a continuation's authenticated
+/// causal root during required finalization.
+#[derive(Clone, Debug)]
+pub struct CausalPrefixPlan {
+    prior: Option<CausalPrefixCommitment>,
+    suffix_start: Option<usize>,
+}
+
+impl CausalPrefixPlan {
+    /// Extend `prior` with `messages[suffix_start..]` and the delivered turn.
+    pub fn extend(prior: CausalPrefixCommitment, suffix_start: usize) -> Self {
+        Self {
+            prior: Some(prior),
+            suffix_start: Some(suffix_start),
+        }
+    }
+
+    /// Prevent publication of a new root when ancestry cannot be reconstructed.
+    pub fn ineligible() -> Self {
+        Self {
+            prior: None,
+            suffix_start: None,
+        }
+    }
+
+    pub(crate) fn finalize(
+        &self,
+        messages: &[Message],
+        delivered: &AssistantTurnCommitment,
+    ) -> Option<CausalPrefixCommitment> {
+        let start = self.suffix_start?;
+        let suffix = messages.get(start..)?;
+        extend_causal_prefix(self.prior.as_ref(), suffix, delivered)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -391,9 +726,13 @@ impl StreamingAssistantTurnCommitment {
         let index = self.tools[..self.tool_count]
             .iter()
             .position(|tool| tool.as_ref().is_some_and(|tool| tool.id == id_digest));
-        let index = match index {
-            Some(index) => index,
-            None if self.tool_count < MAX_STREAMING_COMMITMENT_TOOL_CALLS => {
+        let index = match (index, name) {
+            (Some(index), None) => index,
+            (Some(_), Some(_)) | (None, None) => {
+                self.turn.invalidate();
+                return;
+            }
+            (None, Some(_)) if self.tool_count < MAX_STREAMING_COMMITMENT_TOOL_CALLS => {
                 let index = self.tool_count;
                 self.tools[index] = Some(StreamingToolCall {
                     id: id_digest,
@@ -403,7 +742,7 @@ impl StreamingAssistantTurnCommitment {
                 self.tool_count += 1;
                 index
             }
-            None => {
+            (None, Some(_)) => {
                 self.turn.invalidate();
                 return;
             }
@@ -665,6 +1004,40 @@ mod assistant_turn_commitment_tests {
     }
 
     #[test]
+    fn terminal_output_is_authoritative_and_rejects_silently_dropped_items() {
+        let supported = serde_json::json!({
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer", "annotations": []}]
+            }]
+        });
+        assert_eq!(
+            terminal_assistant_turn_commitment(&supported),
+            assistant_turn_commitment(&[text("answer")])
+        );
+
+        for unsupported in [
+            serde_json::json!({"output": [{"type": "mcp_call", "id": "mcp-1"}]}),
+            serde_json::json!({"output": [{"type": "mcp_approval_request", "id": "approval-1"}]}),
+            serde_json::json!({"output": [{"type": "web_search_call", "id": "search-1"}]}),
+            serde_json::json!({
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [{"type": "url_citation", "url": "https://example.test"}]
+                    }]
+                }]
+            }),
+        ] {
+            assert_eq!(terminal_assistant_turn_commitment(&unsupported), None);
+        }
+    }
+
+    #[test]
     fn interleaved_tool_call_fragments_match_complete_content() {
         let expected = assistant_turn_commitment(&[
             client_tool_call("call-a", "inspect", r#"{"path":"src/"}"#),
@@ -701,6 +1074,50 @@ mod assistant_turn_commitment_tests {
     }
 
     #[test]
+    fn duplicate_name_bearing_tool_call_id_fails_closed() {
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        for part in [
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("inspect".into()),
+                arguments: "{".into(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("inspect".into()),
+                arguments: "}".into(),
+            },
+        ] {
+            streamed.observe(&part);
+        }
+
+        assert_eq!(streamed.finish(), None);
+    }
+
+    #[test]
+    fn streaming_tool_call_capacity_is_exactly_sixty_four() {
+        let mut at_limit = StreamingAssistantTurnCommitment::default();
+        for index in 0..64 {
+            at_limit.observe(&StreamPart::ToolCallDelta {
+                id: format!("call-{index}"),
+                name: Some(format!("tool-{index}")),
+                arguments: "{}".into(),
+            });
+        }
+        assert!(at_limit.finish().is_some());
+
+        let mut over_limit = StreamingAssistantTurnCommitment::default();
+        for index in 0..65 {
+            over_limit.observe(&StreamPart::ToolCallDelta {
+                id: format!("call-{index}"),
+                name: Some(format!("tool-{index}")),
+                arguments: "{}".into(),
+            });
+        }
+        assert_eq!(over_limit.finish(), None);
+    }
+
+    #[test]
     fn large_fragmented_stream_has_a_fixed_size_accumulator() {
         const FRAGMENT: &str = "0123456789abcdef0123456789abcdef";
         const REPEATS: usize = 262_144;
@@ -717,6 +1134,111 @@ mod assistant_turn_commitment_tests {
 
         assert!(std::mem::size_of::<StreamingAssistantTurnCommitment>() <= 32 * 1024);
         assert_eq!(streamed.finish(), expected);
+    }
+
+    #[test]
+    fn rolling_causal_prefix_binds_the_complete_visible_history() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &parent_output)
+            .expect("root commitment");
+        let followup = Message::text(Role::User, "follow up");
+        let visible = vec![opening.clone(), parent.clone(), followup.clone()];
+
+        assert_eq!(find_unique_causal_prefix(&visible, &root), Some(2));
+
+        let changed = vec![
+            Message::text(Role::User, "different opening"),
+            parent.clone(),
+            followup.clone(),
+        ];
+        let sliding = vec![parent.clone(), followup.clone()];
+        let repeated = vec![
+            opening,
+            parent.clone(),
+            Message::text(Role::User, "middle"),
+            parent,
+            followup,
+        ];
+        for rejected in [changed, sliding, repeated] {
+            assert_eq!(find_unique_causal_prefix(&rejected, &root), None);
+        }
+    }
+
+    #[test]
+    fn assistant_output_item_fragmentation_keeps_one_causal_turn() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent_content = vec![
+            text("I will inspect it."),
+            client_tool_call("call-1", "inspect", r#"{"path":"src"}"#),
+        ];
+        let delivered = assistant_turn_commitment(&parent_content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &delivered)
+            .expect("root commitment");
+        let visible = vec![
+            opening,
+            Message::text(Role::Assistant, "I will inspect it."),
+            Message {
+                role: Role::Assistant,
+                content: vec![client_tool_call("call-1", "inspect", r#"{"path":"src"}"#)],
+            },
+            Message::text(Role::User, "continue"),
+        ];
+
+        assert_eq!(find_unique_causal_prefix(&visible, &root), Some(3));
+    }
+
+    #[test]
+    fn hidden_suffix_extension_matches_the_full_visible_chain() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &parent_output)
+            .expect("root commitment");
+        let followup = Message::text(Role::User, "hidden follow up");
+        let second = Message::text(Role::Assistant, "second response");
+        let second_output = assistant_turn_commitment(&second.content).expect("second commitment");
+
+        let extended =
+            extend_causal_prefix(Some(&root), std::slice::from_ref(&followup), &second_output)
+                .expect("extended commitment");
+        let rebuilt = extend_causal_prefix(None, &[opening, parent, followup], &second_output)
+            .expect("rebuilt commitment");
+
+        assert_eq!(extended, rebuilt);
+    }
+
+    #[test]
+    fn repeated_system_envelope_does_not_change_the_causal_root() {
+        let system = Message::text(Role::System, "stable instructions");
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, &[system.clone(), opening.clone()], &parent_output)
+            .expect("root commitment");
+        let second_output =
+            assistant_turn_commitment(&[text("second response")]).expect("second commitment");
+
+        let hidden = extend_causal_prefix(
+            Some(&root),
+            &[system.clone(), Message::text(Role::User, "follow up")],
+            &second_output,
+        )
+        .expect("hidden root");
+        let visible = extend_causal_prefix(
+            None,
+            &[
+                system,
+                opening,
+                parent,
+                Message::text(Role::User, "follow up"),
+            ],
+            &second_output,
+        )
+        .expect("visible root");
+
+        assert_eq!(hidden, visible);
     }
 }
 
@@ -3072,6 +3594,9 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     });
                 }
                 let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
+                let response_output_commitment = response
+                    .and_then(terminal_assistant_turn_commitment)
+                    .map(|commitment| commitment.as_str().to_owned());
                 let id = response
                     .and_then(|r| r.get("id"))
                     .and_then(|i| i.as_str())
@@ -3096,6 +3621,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     source_protocol: ApiProtocol::Responses,
                     status: expected_status.to_string(),
                     usage,
+                    response_output_commitment,
                 });
             }
             "error" | "response.failed" => {

@@ -2473,6 +2473,7 @@ mod hop_tests {
                     source_protocol: ApiProtocol::Responses,
                     status: "completed".to_string(),
                     usage: None,
+                    response_output_commitment: None,
                 },
             )
             .await;

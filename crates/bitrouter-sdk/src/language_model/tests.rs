@@ -958,6 +958,7 @@ async fn typed_failed_response_terminal_stays_truthful_and_settles_failed() {
                     source_protocol: ApiProtocol::Responses,
                     status: status.into(),
                     usage: None,
+                    response_output_commitment: None,
                 },
             ])])),
             |builder| {

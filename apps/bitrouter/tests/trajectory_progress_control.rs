@@ -1650,6 +1650,81 @@ async fn hidden_responses_continuation_pins_the_exact_serving_authority() -> any
 }
 
 #[tokio::test]
+async fn hidden_suffix_root_detaches_only_with_the_complete_visible_prefix() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "hidden-suffix-root").await?;
+    let opening_user = "Design the architecture and plan the implementation";
+    let hidden_user = "Continue with the implementation";
+
+    let first_id = post_streaming_responses(&server, &bearer, opening_user, None).await?;
+    let second_id =
+        post_streaming_responses(&server, &bearer, hidden_user, Some(&first_id)).await?;
+    let visible = json!([
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": opening_user}]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}]
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": hidden_user}]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}]
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Implement the approved change now"}]
+        }
+    ]);
+    post_streaming_responses_body(
+        &server,
+        &bearer,
+        &json!({
+            "model": "@auto",
+            "stream": true,
+            "previous_response_id": second_id,
+            "input": visible
+        }),
+    )
+    .await?;
+
+    let state = harness
+        .responses_state
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+    assert_eq!(
+        state.served_models,
+        ["strong-model", "strong-model", "balanced-model"]
+    );
+    assert_eq!(
+        state.forwarded_parents,
+        [None, Some("provider-only-response-0".to_owned()), None]
+    );
+    assert_eq!(
+        state
+            .forwarded_bodies
+            .get(2)
+            .and_then(|body| body.get("input")),
+        Some(&visible)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn hidden_continuation_fails_closed_when_reload_removes_its_model() -> anyhow::Result<()> {
     let harness = HttpHarness::predictive_responses_split_authority().await?;
     let first_app = harness.assemble().await?;
@@ -1769,6 +1844,7 @@ async fn visible_responses_history_detaches_and_crosses_provider_once() -> anyho
         "stream": true,
         "previous_response_id": first_id,
         "input": visible_history,
+        "instructions": "Follow the repository rules",
         "tools": tools,
         "tool_choice": "auto",
         "parallel_tool_calls": false
@@ -1797,6 +1873,10 @@ async fn visible_responses_history_detaches_and_crosses_provider_once() -> anyho
     assert_eq!(served_models, ["strong-model", "balanced-model"]);
     assert_eq!(forwarded_parents, [None, None]);
     assert_eq!(forwarded.get("input"), Some(&visible_history));
+    assert_eq!(
+        forwarded.get("instructions"),
+        Some(&Value::String("Follow the repository rules".into()))
+    );
     assert_eq!(forwarded.get("tools"), Some(&tools));
     assert_eq!(
         forwarded.get("tool_choice"),
@@ -1903,7 +1983,10 @@ async fn nonstream_exact_parent_detaches_once_with_equal_body_and_response() -> 
         {
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": "Design the architecture"}]
+            "content": [{
+                "type": "input_text",
+                "text": "Design the architecture and plan the implementation"
+            }]
         },
         {
             "type": "message",
@@ -1984,15 +2067,32 @@ async fn nonstream_exact_parent_detaches_once_with_equal_body_and_response() -> 
 
 #[tokio::test]
 async fn unrelated_visible_responses_history_pins_instead_of_detaching() -> anyhow::Result<()> {
-    assert_uncommitted_visible_history_pins("An unrelated assistant answer").await
+    assert_uncommitted_visible_history_pins(
+        "Design the architecture and plan the implementation",
+        "An unrelated assistant answer",
+    )
+    .await
 }
 
 #[tokio::test]
 async fn tampered_visible_responses_history_pins_instead_of_detaching() -> anyhow::Result<()> {
-    assert_uncommitted_visible_history_pins(&format!("{ASSISTANT_REVIEW_ACTION} tampered")).await
+    assert_uncommitted_visible_history_pins(
+        "Design the architecture and plan the implementation",
+        &format!("{ASSISTANT_REVIEW_ACTION} tampered"),
+    )
+    .await
 }
 
-async fn assert_uncommitted_visible_history_pins(assistant_text: &str) -> anyhow::Result<()> {
+#[tokio::test]
+async fn same_parent_output_with_changed_earlier_user_pins() -> anyhow::Result<()> {
+    assert_uncommitted_visible_history_pins("A different opening request", ASSISTANT_REVIEW_ACTION)
+        .await
+}
+
+async fn assert_uncommitted_visible_history_pins(
+    opening_user: &str,
+    assistant_text: &str,
+) -> anyhow::Result<()> {
     let harness = HttpHarness::predictive_responses_split_authority().await?;
     let app = harness.assemble().await?;
     let server = server(&app);
@@ -2012,7 +2112,7 @@ async fn assert_uncommitted_visible_history_pins(assistant_text: &str) -> anyhow
             {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "Design the architecture"}]
+                "content": [{"type": "input_text", "text": opening_user}]
             },
             {
                 "type": "message",
