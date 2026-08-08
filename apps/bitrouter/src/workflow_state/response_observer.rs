@@ -430,12 +430,11 @@ enum CommandArgumentState {
     },
     ReadingStringValue {
         command_value: bool,
-        escaped: bool,
+        decoder: JsonStringDecoderState,
         mutation: StreamingPatternSetState<11>,
     },
     SkippingNestedValue {
         depth: u16,
-        root_value: bool,
         in_string: bool,
         escaped: bool,
     },
@@ -448,17 +447,12 @@ impl CommandArgumentState {
     fn advance(self, byte: u8, mutates: &mut bool) -> Self {
         match self {
             Self::SeekingRoot => {
-                if byte == b'{' {
-                    Self::SeekingRootKey
-                } else if byte == b'[' {
-                    Self::SkippingNestedValue {
-                        depth: 1,
-                        root_value: true,
-                        in_string: false,
-                        escaped: false,
-                    }
-                } else {
+                if byte.is_ascii_whitespace() {
                     Self::SeekingRoot
+                } else if byte == b'{' {
+                    Self::SeekingRootKey
+                } else {
+                    Self::Complete
                 }
             }
             Self::SeekingRootKey => match byte {
@@ -511,13 +505,12 @@ impl CommandArgumentState {
                 } else if byte == b'"' {
                     Self::ReadingStringValue {
                         command_value: command_key,
-                        escaped: false,
+                        decoder: JsonStringDecoderState::Plain,
                         mutation: StreamingPatternSetState::new(),
                     }
                 } else if matches!(byte, b'{' | b'[') {
                     Self::SkippingNestedValue {
                         depth: 1,
-                        root_value: false,
                         in_string: false,
                         escaped: false,
                     }
@@ -529,38 +522,44 @@ impl CommandArgumentState {
             }
             Self::ReadingStringValue {
                 command_value,
-                escaped,
+                decoder,
                 mut mutation,
             } => {
-                if escaped {
-                    Self::ReadingStringValue {
+                let (decoder, output) = decoder.advance(byte);
+                match output {
+                    JsonStringDecoderOutput::Pending => Self::ReadingStringValue {
                         command_value,
-                        escaped: false,
+                        decoder,
                         mutation,
+                    },
+                    JsonStringDecoderOutput::Byte(decoded) => {
+                        if command_value {
+                            mutation.observe(decoded, &MUTATING_COMMAND_MARKERS);
+                        }
+                        Self::ReadingStringValue {
+                            command_value,
+                            decoder,
+                            mutation,
+                        }
                     }
-                } else if byte == b'\\' {
-                    Self::ReadingStringValue {
-                        command_value,
-                        escaped: true,
-                        mutation,
+                    JsonStringDecoderOutput::Delimiter => {
+                        if command_value {
+                            mutation.reset_progress();
+                        }
+                        Self::ReadingStringValue {
+                            command_value,
+                            decoder,
+                            mutation,
+                        }
                     }
-                } else if byte == b'"' {
-                    *mutates |= command_value && mutation.matched();
-                    Self::AfterValue
-                } else {
-                    if command_value {
-                        mutation.observe(byte, &MUTATING_COMMAND_MARKERS);
-                    }
-                    Self::ReadingStringValue {
-                        command_value,
-                        escaped: false,
-                        mutation,
+                    JsonStringDecoderOutput::End => {
+                        *mutates |= command_value && mutation.matched();
+                        Self::AfterValue
                     }
                 }
             }
             Self::SkippingNestedValue {
                 mut depth,
-                root_value,
                 in_string,
                 escaped,
             } => {
@@ -568,21 +567,18 @@ impl CommandArgumentState {
                     if escaped {
                         Self::SkippingNestedValue {
                             depth,
-                            root_value,
                             in_string: true,
                             escaped: false,
                         }
                     } else if byte == b'\\' {
                         Self::SkippingNestedValue {
                             depth,
-                            root_value,
                             in_string: true,
                             escaped: true,
                         }
                     } else {
                         Self::SkippingNestedValue {
                             depth,
-                            root_value,
                             in_string: byte != b'"',
                             escaped: false,
                         }
@@ -591,7 +587,6 @@ impl CommandArgumentState {
                     match byte {
                         b'"' => Self::SkippingNestedValue {
                             depth,
-                            root_value,
                             in_string: true,
                             escaped: false,
                         },
@@ -599,7 +594,6 @@ impl CommandArgumentState {
                             depth = depth.saturating_add(1);
                             Self::SkippingNestedValue {
                                 depth,
-                                root_value,
                                 in_string: false,
                                 escaped: false,
                             }
@@ -607,15 +601,10 @@ impl CommandArgumentState {
                         b'}' | b']' => {
                             depth = depth.saturating_sub(1);
                             if depth == 0 {
-                                if root_value {
-                                    Self::Complete
-                                } else {
-                                    Self::AfterValue
-                                }
+                                Self::AfterValue
                             } else {
                                 Self::SkippingNestedValue {
                                     depth,
-                                    root_value,
                                     in_string: false,
                                     escaped: false,
                                 }
@@ -623,7 +612,6 @@ impl CommandArgumentState {
                         }
                         _ => Self::SkippingNestedValue {
                             depth,
-                            root_value,
                             in_string: false,
                             escaped: false,
                         },
@@ -642,6 +630,86 @@ impl CommandArgumentState {
             },
             Self::Complete => Self::Complete,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonStringDecoderState {
+    Plain,
+    Escape,
+    Unicode { value: u16, digits: u8, valid: bool },
+}
+
+impl JsonStringDecoderState {
+    fn advance(self, byte: u8) -> (Self, JsonStringDecoderOutput) {
+        match self {
+            Self::Plain => match byte {
+                b'\\' => (Self::Escape, JsonStringDecoderOutput::Pending),
+                b'"' => (Self::Plain, JsonStringDecoderOutput::End),
+                _ => (Self::Plain, JsonStringDecoderOutput::Byte(byte)),
+            },
+            Self::Escape => match byte {
+                b'"' | b'\\' | b'/' => (Self::Plain, JsonStringDecoderOutput::Byte(byte)),
+                b'b' => (Self::Plain, JsonStringDecoderOutput::Byte(0x08)),
+                b'f' => (Self::Plain, JsonStringDecoderOutput::Byte(0x0c)),
+                b'n' => (Self::Plain, JsonStringDecoderOutput::Byte(b'\n')),
+                b'r' => (Self::Plain, JsonStringDecoderOutput::Byte(b'\r')),
+                b't' => (Self::Plain, JsonStringDecoderOutput::Byte(b'\t')),
+                b'u' => (
+                    Self::Unicode {
+                        value: 0,
+                        digits: 0,
+                        valid: true,
+                    },
+                    JsonStringDecoderOutput::Pending,
+                ),
+                _ => (Self::Plain, JsonStringDecoderOutput::Delimiter),
+            },
+            Self::Unicode {
+                value,
+                digits,
+                valid,
+            } => {
+                let digit = json_hex_digit(byte);
+                let valid = valid && digit.is_some();
+                let value = digit.map_or(value, |digit| (value << 4) | digit);
+                let digits = digits.saturating_add(1);
+                if digits < 4 {
+                    (
+                        Self::Unicode {
+                            value,
+                            digits,
+                            valid,
+                        },
+                        JsonStringDecoderOutput::Pending,
+                    )
+                } else if valid {
+                    match u8::try_from(value) {
+                        Ok(decoded) => (Self::Plain, JsonStringDecoderOutput::Byte(decoded)),
+                        Err(_) => (Self::Plain, JsonStringDecoderOutput::Delimiter),
+                    }
+                } else {
+                    (Self::Plain, JsonStringDecoderOutput::Delimiter)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JsonStringDecoderOutput {
+    Pending,
+    Byte(u8),
+    Delimiter,
+    End,
+}
+
+fn json_hex_digit(byte: u8) -> Option<u16> {
+    match byte {
+        b'0'..=b'9' => Some(u16::from(byte - b'0')),
+        b'a'..=b'f' => Some(u16::from(byte - b'a') + 10),
+        b'A'..=b'F' => Some(u16::from(byte - b'A') + 10),
+        _ => None,
     }
 }
 
@@ -724,6 +792,10 @@ impl<const N: usize> StreamingPatternSetState<N> {
 
     fn matched(&self) -> bool {
         self.matched
+    }
+
+    fn reset_progress(&mut self) {
+        self.progress.fill(0);
     }
 }
 
@@ -1502,6 +1574,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_observer_decodes_fragmented_simple_escapes_like_nonstream()
+    -> anyhow::Result<()> {
+        let cases: [(&str, &[&str]); 3] = [
+            ("newline", &[r#"{"cmd":"r"#, r#"\n"#, r#"m private-file"}"#]),
+            ("escaped-quote", &[r#"{"cmd":"r\"#, r#""m private-file"}"#]),
+            (
+                "escaped-backslash",
+                &[r#"{"cmd":"r\"#, r#"\m private-file"}"#],
+            ),
+        ];
+
+        for (name, fragments) in cases {
+            let arguments = fragments.concat();
+            let nonstream = observe_nonstream(
+                &format!("simple-escape-{name}-nonstream"),
+                vec![tool_call("exec_command", &arguments)],
+                Vec::new(),
+            )
+            .await?;
+            assert_eq!(nonstream, ObservedActionClass::Unknown, "{name} nonstream");
+
+            let streaming = observe_streamed_command_after_raw_limit(
+                &format!("simple-escape-{name}-stream"),
+                fragments,
+            )
+            .await?;
+            assert_eq!(streaming, nonstream, "{name} streaming");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_decodes_fragmented_ascii_unicode_escape_like_nonstream()
+    -> anyhow::Result<()> {
+        let fragments = [r#"{"cmd":"r\"#, "u0", "06", r#"d private-file"}"#];
+        let arguments = fragments.concat();
+        let nonstream = observe_nonstream(
+            "unicode-escape-nonstream",
+            vec![tool_call("exec_command", &arguments)],
+            Vec::new(),
+        )
+        .await?;
+        assert_eq!(nonstream, ObservedActionClass::Mutate);
+
+        let streaming =
+            observe_streamed_command_after_raw_limit("unicode-escape-stream", &fragments).await?;
+        assert_eq!(streaming, nonstream);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_treats_complete_scalar_roots_as_non_command_json()
+    -> anyhow::Result<()> {
+        for (name, arguments) in [
+            ("string", r#""echo harmless""#),
+            ("null", "null"),
+            ("boolean", "true"),
+            ("number", "42"),
+        ] {
+            let nonstream = observe_nonstream(
+                &format!("root-scalar-{name}-nonstream"),
+                vec![tool_call("exec_command", arguments)],
+                Vec::new(),
+            )
+            .await?;
+            assert_eq!(nonstream, ObservedActionClass::Unknown, "{name} nonstream");
+
+            let streaming =
+                observe_evicted_overflow_command(&format!("root-scalar-{name}-stream"), arguments)
+                    .await?;
+            assert_eq!(streaming, nonstream, "{name} streaming");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn response_observer_classifies_mutation_after_raw_byte_limit() -> anyhow::Result<()> {
         let (pending, invocation) = pending("stream-byte-limit-mutation");
         let observer = PredictiveResponseObserver::new(pending.clone());
@@ -1801,6 +1949,113 @@ mod tests {
             .and_then(|decision| decision.observation)
             .map(|observation| observation.observed_action)
             .ok_or_else(|| anyhow::anyhow!("observation missing for {request_id}"))
+    }
+
+    async fn observe_streamed_command_after_raw_limit(
+        request_id: &str,
+        fragments: &[&str],
+    ) -> anyhow::Result<ObservedActionClass> {
+        let (pending, invocation) = pending(request_id);
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context(request_id, prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "unknown-large".into(),
+                    name: Some("opaque_capability".into()),
+                    arguments: "x".repeat(8_192),
+                },
+            )
+            .await;
+        for (index, fragment) in fragments.iter().enumerate() {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: "streamed-command".into(),
+                        name: (index == 0).then(|| "exec_command".into()),
+                        arguments: (*fragment).into(),
+                    },
+                )
+                .await;
+        }
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        pending
+            .peek(&invocation, "local")
+            .and_then(|decision| decision.observation)
+            .map(|observation| observation.observed_action)
+            .ok_or_else(|| anyhow::anyhow!("stream observation missing for {request_id}"))
+    }
+
+    async fn observe_evicted_overflow_command(
+        request_id: &str,
+        arguments: &str,
+    ) -> anyhow::Result<ObservedActionClass> {
+        let (pending, invocation) = pending(request_id);
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context(request_id, prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("retained-{index}"),
+                        name: Some("opaque_capability".into()),
+                        arguments: r#"{}"#.into(),
+                    },
+                )
+                .await;
+        }
+        for (id, name, arguments) in [
+            ("scalar-root", "exec_command", arguments),
+            ("replacement", "opaque_capability", r#"{}"#),
+        ] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: id.into(),
+                        name: Some(name.into()),
+                        arguments: arguments.into(),
+                    },
+                )
+                .await;
+        }
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        pending
+            .peek(&invocation, "local")
+            .and_then(|decision| decision.observation)
+            .map(|observation| observation.observed_action)
+            .ok_or_else(|| anyhow::anyhow!("stream observation missing for {request_id}"))
     }
 
     fn pending(request_id: &str) -> (PendingEvalDecisionStore, EvalInvocation) {
