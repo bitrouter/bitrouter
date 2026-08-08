@@ -615,7 +615,7 @@
           ]
         },
         "capabilities": {
-          "description": "Features this concrete provider/model route explicitly advertises.\nAn empty list means unknown, not unsupported; capability-constrained\nrouting admits only positive declarations.",
+          "description": "Features this concrete provider/model route explicitly advertises.\nAn empty list means unknown, not unsupported. Runtime routing preserves\nlegacy unknown entries; policy code that grants a capability-specific\nexception requires a positive declaration.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Capability"

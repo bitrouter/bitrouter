@@ -775,19 +775,21 @@ inherit_defaults: false
     #[test]
     fn progress_guard_is_rejected_by_setup_preflight() {
         let mut document = crate::policy_lock::PolicyLock::default();
-        let mut definition = crate::policy_lock::PolicyDefinition::default();
-        definition.progress_guard = Some(crate::trajectory::guard::ProgressGuardPolicy {
-            escalation_tier: "strong".into(),
-            protected_tiers: std::collections::BTreeSet::from(["strong".into()]),
-            max_consecutive_unprotected: Some(3),
-            max_same_projection_unprotected: None,
-            max_recovery_count: None,
-            max_episode_requests: None,
-            max_episode_elapsed_ms: None,
-            max_episode_cost_micro_usd: None,
-            hold_for_requests: 2,
-            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
-        });
+        let definition = crate::policy_lock::PolicyDefinition {
+            progress_guard: Some(crate::trajectory::guard::ProgressGuardPolicy {
+                escalation_tier: "strong".into(),
+                protected_tiers: std::collections::BTreeSet::from(["strong".into()]),
+                max_consecutive_unprotected: Some(3),
+                max_same_projection_unprotected: None,
+                max_recovery_count: None,
+                max_episode_requests: None,
+                max_episode_elapsed_ms: None,
+                max_episode_cost_micro_usd: None,
+                hold_for_requests: 2,
+                incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+            }),
+            ..Default::default()
+        };
         document.policies.insert("auto".into(), definition);
 
         let error = ensure_workflow_optimization_compatible(&document);
