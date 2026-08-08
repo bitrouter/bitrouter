@@ -572,6 +572,8 @@ pub(crate) async fn secure_private_file(path: &Path) -> Result<()> {
             .await
             .with_context(|| format!("securing private file {}", path.display()))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

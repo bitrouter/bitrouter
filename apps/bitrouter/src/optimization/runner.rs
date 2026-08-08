@@ -2,10 +2,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[cfg(not(windows))]
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(not(windows))]
 use tokio::io::AsyncReadExt;
 
 use crate::optimization::OptimizationPreference;
@@ -551,12 +555,15 @@ async fn remove_control_socket(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<WorkflowExecution> {
-    #[cfg(windows)]
+#[cfg(windows)]
+pub async fn run_workflow_command(_request: WorkflowRunRequest<'_>) -> Result<WorkflowExecution> {
     anyhow::bail!(
         "controlled workflow optimization is not supported on Windows until Job Object process-tree isolation is available"
-    );
-    #[cfg(not(windows))]
+    )
+}
+
+#[cfg(not(windows))]
+pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<WorkflowExecution> {
     run_workflow_command_isolated(request).await
 }
 
@@ -606,7 +613,7 @@ async fn run_workflow_command_isolated(
     let (exit_code, timed_out) = match tokio::time::timeout(deadline, child.wait()).await {
         Ok(status) => {
             let exit_code = status.context("waiting for workflow program")?.code();
-            if workflow_process_group_exists(child_pid).await? {
+            if workflow_process_group_has_live_members(child_pid).await? {
                 terminate_workflow_tree(&mut child, child_pid)
                     .await
                     .context("terminating workflow background descendants")?;
@@ -658,6 +665,7 @@ async fn run_workflow_command_isolated(
     })
 }
 
+#[cfg(not(windows))]
 async fn terminate_workflow_tree(
     child: &mut tokio::process::Child,
     child_pid: Option<u32>,
@@ -672,7 +680,7 @@ async fn terminate_workflow_tree(
             .status()
             .await
             .context("launching workflow process-group kill")?;
-        if !status.success() && workflow_process_group_exists(child_pid).await? {
+        if !status.success() && workflow_process_group_has_live_members(child_pid).await? {
             anyhow::bail!("could not terminate workflow process group {pid}");
         }
     }
@@ -689,7 +697,7 @@ async fn terminate_workflow_tree(
     }
     let gone = async {
         loop {
-            if !workflow_process_group_exists(child_pid).await? {
+            if !workflow_process_group_has_live_members(child_pid).await? {
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -736,20 +744,42 @@ impl Drop for WorkflowProcessGroupGuard {
 }
 
 #[cfg(not(windows))]
-async fn workflow_process_group_exists(child_pid: Option<u32>) -> Result<bool> {
+async fn workflow_process_group_has_live_members(child_pid: Option<u32>) -> Result<bool> {
     let Some(pid) = child_pid else {
         return Ok(false);
     };
-    let group = format!("-{pid}");
-    let status = tokio::process::Command::new("kill")
-        .args(["-0", &group])
+    let output = tokio::process::Command::new("ps")
+        .args(["-A", "-o", "pgid=,stat="])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .output()
         .await
-        .context("checking workflow process group")?;
-    Ok(status.success())
+        .context("listing workflow process group")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "could not inspect workflow process group: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(process_listing_has_live_group(&output.stdout, pid))
+}
+
+#[cfg(not(windows))]
+fn process_listing_has_live_group(output: &[u8], pid: u32) -> bool {
+    // `kill -0` also succeeds for an unreaped zombie on Linux. A zombie cannot
+    // issue requests or retain pipes, so residue means a non-zombie member of
+    // the workflow's process group; the direct child is reaped separately.
+    let target = pid.to_string();
+    String::from_utf8_lossy(output).lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let Some(group) = fields.next() else {
+            return false;
+        };
+        let Some(state) = fields.next() else {
+            return false;
+        };
+        group == target && !state.starts_with('Z')
+    })
 }
 
 pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<String, String>> {
@@ -912,6 +942,7 @@ pub fn collect_variant_evidence(
     })
 }
 
+#[cfg(not(windows))]
 async fn drain_bounded(
     mut reader: impl tokio::io::AsyncRead + Unpin,
     maximum_bytes: usize,
@@ -1101,10 +1132,12 @@ mod tests {
     use bitrouter_sdk::config::AdequacyConfig;
 
     use super::{
-        PrivateDaemonPaths, RouteObservation, WorkflowExecution, WorkflowRunRequest,
-        build_experiment_lock, collect_variant_evidence, private_daemon_config,
-        run_workflow_command, select_target_request_key, workflow_environment,
+        PrivateDaemonPaths, RouteObservation, WorkflowExecution, build_experiment_lock,
+        collect_variant_evidence, private_daemon_config, select_target_request_key,
+        workflow_environment,
     };
+    #[cfg(not(windows))]
+    use super::{WorkflowRunRequest, run_workflow_command};
     use crate::eval::types::{
         EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvidenceItem, evidence_digest,
     };
@@ -1362,6 +1395,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn workflow_runner_uses_exact_argv_env_and_timeout_without_retry() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -1422,6 +1456,19 @@ mod tests {
         assert_eq!(timeout.launches, 1);
         assert_eq!(PathBuf::from(timeout.cwd), dir.path());
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn process_group_listing_ignores_zombies_but_not_live_descendants() {
+        assert!(!super::process_listing_has_live_group(
+            b" 4312 Z\n 9000 Ss\n",
+            4312,
+        ));
+        assert!(super::process_listing_has_live_group(
+            b" 4312 Z\n 4312 S\n",
+            4312,
+        ));
     }
 
     #[test]

@@ -1,10 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[cfg(not(windows))]
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
+#[cfg(not(windows))]
+use super::{EvaluatorLock, ResolvedEvaluator, WorkflowCommand};
 use super::{
-    EvaluatorLock, EvaluatorRoute, OptimizationIntent, OptimizationLock, OptimizationPaths,
-    OptimizationPreference, ResolvedEvaluator, WorkflowCommand,
+    EvaluatorRoute, OptimizationIntent, OptimizationLock, OptimizationPaths, OptimizationPreference,
 };
 
 pub struct SetupOptimizationRequest {
@@ -32,13 +36,19 @@ pub struct SetupOptimizationOutcome {
     pub lock: OptimizationLock,
 }
 
+#[cfg(windows)]
+pub async fn setup_optimization(
+    _request: SetupOptimizationRequest,
+) -> Result<SetupOptimizationOutcome> {
+    anyhow::bail!(
+        "controlled workflow optimization is not supported on Windows until Job Object process-tree isolation is available"
+    )
+}
+
+#[cfg(not(windows))]
 pub async fn setup_optimization(
     request: SetupOptimizationRequest,
 ) -> Result<SetupOptimizationOutcome> {
-    #[cfg(windows)]
-    anyhow::bail!(
-        "controlled workflow optimization is not supported on Windows until Job Object process-tree isolation is available"
-    );
     let paths = OptimizationPaths::for_intent(request.intent_path);
     let root = paths
         .intent
@@ -274,6 +284,7 @@ pub async fn setup_optimization(
 /// Restores every setup-owned write if setup errors, is cancelled, or
 /// unwinds. The CLI holds the project operation lock while this guard exists,
 /// so these exact preflight bytes cannot race another optimization command.
+#[cfg(not(windows))]
 struct SetupRollback {
     source_config: PathBuf,
     source_original: Vec<u8>,
@@ -290,6 +301,7 @@ struct SetupRollback {
     committed: bool,
 }
 
+#[cfg(not(windows))]
 impl SetupRollback {
     fn new(
         source_config: PathBuf,
@@ -406,6 +418,7 @@ impl SetupRollback {
     }
 }
 
+#[cfg(not(windows))]
 impl Drop for SetupRollback {
     fn drop(&mut self) {
         if !self.committed {
@@ -414,6 +427,7 @@ impl Drop for SetupRollback {
     }
 }
 
+#[cfg(not(windows))]
 fn resolve(root: &Path, value: &Path) -> PathBuf {
     if value.is_absolute() {
         value.to_path_buf()
@@ -422,6 +436,7 @@ fn resolve(root: &Path, value: &Path) -> PathBuf {
     }
 }
 
+#[cfg(not(windows))]
 fn path_relative_to(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root)
         .map(Path::to_path_buf)
@@ -451,6 +466,7 @@ pub fn validate_catalog_model(route: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn resolve_evaluator_model(
     route: EvaluatorRoute,
     requested: Option<String>,
@@ -487,6 +503,7 @@ fn validate_direct_model(model: String) -> Result<String> {
     Ok(model)
 }
 
+#[cfg(not(windows))]
 fn detect_codex_model() -> Result<String> {
     if let Some(model) = std::env::var_os("CODEX_MODEL").filter(|value| !value.is_empty()) {
         return validate_direct_model(model.to_string_lossy().into_owned());
@@ -524,6 +541,7 @@ fn detect_codex_model() -> Result<String> {
     })
 }
 
+#[cfg(not(windows))]
 fn codex_model_from_config(raw: &str) -> Result<String> {
     let config: toml::Value = toml::from_str(raw).context("parsing Codex config")?;
     let model = config
@@ -533,6 +551,7 @@ fn codex_model_from_config(raw: &str) -> Result<String> {
     validate_direct_model(model.to_string())
 }
 
+#[cfg(not(windows))]
 fn detect_claude_model() -> Result<String> {
     if let Some(model) = std::env::var_os("ANTHROPIC_MODEL").filter(|value| !value.is_empty()) {
         return validate_direct_model(model.to_string_lossy().into_owned());
@@ -570,6 +589,7 @@ fn detect_claude_model() -> Result<String> {
     })
 }
 
+#[cfg(not(windows))]
 fn claude_model_from_settings(raw: &str) -> Result<String> {
     let settings: serde_json::Value =
         serde_json::from_str(raw).context("parsing Claude settings")?;
@@ -580,7 +600,7 @@ fn claude_model_from_settings(raw: &str) -> Result<String> {
     validate_direct_model(model.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::{claude_model_from_settings, codex_model_from_config, validate_catalog_model};
 
