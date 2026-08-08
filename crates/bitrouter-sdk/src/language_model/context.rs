@@ -936,7 +936,8 @@ impl StreamContext {
                     self.response_id = Some(id.clone());
                 }
                 self.terminal_assistant_turn_commitment = response_output_commitment
-                    .as_deref()
+                    .as_ref()
+                    .map(crate::language_model::types::ResponseOutputCommitment::as_str)
                     .and_then(AssistantTurnCommitment::parse);
                 self.finish_reason = Some(match status.as_str() {
                     "completed" => FinishReason::Stop,
@@ -1427,7 +1428,11 @@ mod tests {
                     text: terminal_text.into(),
                     provider_metadata: Default::default(),
                 }])
-                .map(|commitment| commitment.as_str().to_owned())
+                .map(|commitment| {
+                    crate::language_model::types::ResponseOutputCommitment::new(
+                        commitment.as_str().to_owned(),
+                    )
+                })
             });
             stream.observe_downstream_part(&StreamPart::ResponseCompleted {
                 id: "resp-terminal".into(),

@@ -32,9 +32,9 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool,
-    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
-    set_provider_metadata,
+    Prompt, ProviderMetadata, ResponseFormat, ResponseOutputCommitment, Role, RoutingTarget,
+    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
+    UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
@@ -524,10 +524,6 @@ fn fold_causal_messages(
     let mut index = 0;
     while index < messages.len() {
         let role = causal_message_role(&messages[index])?;
-        if role == Role::System {
-            index += 1;
-            continue;
-        }
         let mut end = index + 1;
         let mut turn = TurnAccumulator::default();
         for content in &messages[index].content {
@@ -550,8 +546,10 @@ fn fold_causal_messages(
 }
 
 /// Extend an authenticated prior causal root with the current visible suffix
-/// and the newly delivered assistant turn. System/developer envelope content is
-/// excluded so clients that resend it do not change the conversation chain.
+/// and the newly delivered assistant turn. Canonical system/developer messages
+/// are causal Responses input items and are therefore committed like other turns;
+/// top-level prompt instructions are not part of `messages` and remain request
+/// envelope state.
 pub fn extend_causal_prefix(
     prior: Option<&CausalPrefixCommitment>,
     messages: &[Message],
@@ -1210,35 +1208,45 @@ mod assistant_turn_commitment_tests {
     }
 
     #[test]
-    fn repeated_system_envelope_does_not_change_the_causal_root() {
-        let system = Message::text(Role::System, "stable instructions");
+    fn canonical_system_messages_are_bound_into_the_causal_root() {
+        let system = Message::text(Role::System, "system one");
+        let changed_system = Message::text(Role::System, "system two");
         let opening = Message::text(Role::User, "opening request");
         let parent = Message::text(Role::Assistant, "parent response");
         let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
         let root = extend_causal_prefix(None, &[system.clone(), opening.clone()], &parent_output)
             .expect("root commitment");
-        let second_output =
-            assistant_turn_commitment(&[text("second response")]).expect("second commitment");
+        let exact = vec![
+            system,
+            opening.clone(),
+            parent.clone(),
+            Message::text(Role::User, "follow up"),
+        ];
+        let changed = vec![
+            changed_system,
+            opening,
+            parent,
+            Message::text(Role::User, "follow up"),
+        ];
 
-        let hidden = extend_causal_prefix(
-            Some(&root),
-            &[system.clone(), Message::text(Role::User, "follow up")],
-            &second_output,
-        )
-        .expect("hidden root");
-        let visible = extend_causal_prefix(
-            None,
-            &[
-                system,
-                opening,
-                parent,
-                Message::text(Role::User, "follow up"),
-            ],
-            &second_output,
-        )
-        .expect("visible root");
+        assert_eq!(find_unique_causal_prefix(&exact, &root), Some(3));
+        assert_eq!(find_unique_causal_prefix(&changed, &root), None);
+    }
 
-        assert_eq!(hidden, visible);
+    #[test]
+    fn terminal_stream_part_debug_redacts_internal_commitment() {
+        let sentinel = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let terminal = StreamPart::ResponseCompleted {
+            id: "resp-debug".into(),
+            source_protocol: ApiProtocol::Responses,
+            status: "completed".into(),
+            usage: None,
+            response_output_commitment: Some(ResponseOutputCommitment::new(sentinel.to_owned())),
+        };
+
+        let rendered = format!("{terminal:?}");
+        assert!(!rendered.contains(sentinel));
+        assert!(rendered.contains("<redacted>"));
     }
 }
 
@@ -3596,7 +3604,9 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
                 let response_output_commitment = response
                     .and_then(terminal_assistant_turn_commitment)
-                    .map(|commitment| commitment.as_str().to_owned());
+                    .map(|commitment| {
+                        ResponseOutputCommitment::new(commitment.as_str().to_owned())
+                    });
                 let id = response
                     .and_then(|r| r.get("id"))
                     .and_then(|i| i.as_str())
