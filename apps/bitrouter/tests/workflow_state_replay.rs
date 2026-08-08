@@ -394,6 +394,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
     PolicyDecisionRecord {
         captured_at: None,
         request_id: Some(request_id.to_string()),
+        ingress_request_id_sha256: None,
         input_model: "inbound".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|opening|normal".to_string(),
@@ -2083,6 +2084,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -2373,6 +2375,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -2498,6 +2501,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-success-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),

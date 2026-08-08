@@ -600,13 +600,12 @@ impl PolicyTableRouter {
         invocation: Option<&EvalInvocation>,
     ) -> Option<String> {
         let baseline_tier = self.eval_baseline_tier(&decision);
-        let request_id = request_id_override.or_else(|| {
-            headers
-                .get("x-bitrouter-request-id")
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
+        let ingress_request_id = headers
+            .get("x-bitrouter-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let request_id = request_id_override.or(ingress_request_id);
         let request_id_for_log = request_id.unwrap_or("-");
         tracing::info!(
             request_id = request_id_for_log,
@@ -685,6 +684,8 @@ impl PolicyTableRouter {
             let record = PolicyDecisionRecord {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
+                ingress_request_id_sha256: ingress_request_id
+                    .map(crate::workflow_state::decision::ingress_request_id_sha256),
                 input_model,
                 key_strategy: key_strategy_name().to_string(),
                 request_key: decision.request_key.clone(),
@@ -1401,7 +1402,7 @@ mod tests {
         let decision = router.decision_for_bound_policy(&routed, &headers);
 
         let selected = router.record_bound_policy_decision(
-            "request-2",
+            "trajectory-request-opaque",
             &invocation,
             routed.model.clone(),
             decision,
@@ -1416,6 +1417,19 @@ mod tests {
         assert_eq!(pending_decision.baseline_tier.as_deref(), Some("reference"));
         let records = PolicyDecisionRecord::load_jsonl(&path).expect("decision record");
         assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].request_id.as_deref(),
+            Some("trajectory-request-opaque")
+        );
+        assert_eq!(
+            records[0].ingress_request_id_sha256.as_deref(),
+            Some(crate::workflow_state::decision::ingress_request_id_sha256("request-2").as_str())
+        );
+        assert!(
+            !serde_json::to_string(&records[0])
+                .expect("decision record serializes")
+                .contains("request-2")
+        );
         assert_eq!(records[0].static_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].selected_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].baseline_tier.as_deref(), Some("reference"));

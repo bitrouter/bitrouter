@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::workflow_state::ir::WorkflowIdentity;
 
@@ -18,6 +19,11 @@ pub struct PolicyDecisionRecord {
     pub captured_at: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Domain-separated commitment to the ingress HTTP request identity.
+    /// Guarded policies keep `request_id` owner-opaque; this commitment lets
+    /// external evidence perform an exact join without persisting the raw ID.
+    #[serde(default)]
+    pub ingress_request_id_sha256: Option<String>,
     pub input_model: String,
     pub key_strategy: String,
     pub request_key: String,
@@ -92,6 +98,13 @@ pub struct PolicyDecisionRecord {
     pub semantic_success_threshold: u32,
     pub locked: bool,
     pub trialed: bool,
+}
+
+pub fn ingress_request_id_sha256(request_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bitrouter.ingress-request-id.v1\0");
+    digest.update(request_id.as_bytes());
+    format!("sha256:{}", hex::encode(digest.finalize()))
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,6 +370,7 @@ mod tests {
         PolicyDecisionRecord {
             captured_at: None,
             request_id: Some("request-1".to_string()),
+            ingress_request_id_sha256: None,
             input_model: "inbound".to_string(),
             key_strategy: "agent_trace".to_string(),
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -441,6 +455,18 @@ mod tests {
         assert_eq!(parsed.prediction_confidence_kind, None);
         assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
         assert_eq!(parsed.observed_route_projection, None);
+        assert_eq!(parsed.ingress_request_id_sha256, None);
+    }
+
+    #[test]
+    fn ingress_request_commitment_is_domain_separated_and_does_not_expose_raw_id() {
+        let raw = "br-bench-sensitive-request-id";
+        let digest = ingress_request_id_sha256(raw);
+
+        assert!(digest.starts_with("sha256:"));
+        assert_eq!(digest.len(), 71);
+        assert!(!digest.contains(raw));
+        assert_ne!(digest, ingress_request_id_sha256("other-request-id"));
     }
 
     #[test]

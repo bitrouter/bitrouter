@@ -122,6 +122,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let decision = PolicyDecisionRecord {
         captured_at: None,
         request_id: Some(request_id.to_string()),
+        ingress_request_id_sha256: None,
         input_model: "@smithers".to_string(),
         key_strategy: "agent_trace".to_string(),
         request_key: target_key.to_string(),
