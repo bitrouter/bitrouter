@@ -189,7 +189,7 @@ pub async fn setup_optimization(
                 &source_raw,
                 &source_with_providers,
             )?;
-            rollback.record_source_policy_owned()?;
+            rollback.record_source_owned()?;
         }
         let source_raw = tokio::fs::read_to_string(&source_config).await?;
         let source_parsed = bitrouter_sdk::config::parse(&source_raw)
@@ -385,8 +385,13 @@ impl SetupRollback {
         self.committed = true;
     }
 
-    fn record_source_policy_owned(&mut self) -> Result<()> {
+    fn record_source_owned(&mut self) -> Result<()> {
         self.source_owned = Some(std::fs::read(&self.source_config)?);
+        Ok(())
+    }
+
+    fn record_source_policy_owned(&mut self) -> Result<()> {
+        self.record_source_owned()?;
         self.policy_owned = Some(std::fs::read(&self.policy_path)?);
         Ok(())
     }
@@ -686,10 +691,31 @@ fn claude_model_from_settings(raw: &str) -> Result<String> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::{
-        claude_model_from_settings, codex_model_from_config,
+        SetupRollback, claude_model_from_settings, codex_model_from_config,
         ensure_workflow_optimization_compatible, validate_cloud_catalog_model,
         validate_routable_model,
     };
+
+    #[test]
+    fn setup_can_record_a_source_edit_before_the_policy_exists() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("bitrouter.yaml");
+        let policy = directory.path().join("policy-lock.yaml");
+        std::fs::write(&source, b"inherit_defaults: true\n")?;
+        let mut rollback = SetupRollback::new(
+            source.clone(),
+            Vec::new(),
+            policy,
+            None,
+            directory.path().join("bitrouter.eval.md"),
+            directory.path().join("bitrouter.optimize.yaml"),
+            directory.path().join("bitrouter.optimize.lock.yaml"),
+        );
+
+        rollback.record_source_owned()?;
+        rollback.commit();
+        Ok(())
+    }
 
     #[test]
     fn detects_exact_local_codex_model_without_importing_agent_settings() -> anyhow::Result<()> {
