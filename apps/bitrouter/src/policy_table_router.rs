@@ -32,7 +32,9 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::continuation::ContinuationAdjustment;
-use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
+use crate::eval::settlement::{
+    EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
+};
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
@@ -561,6 +563,9 @@ impl PolicyTableRouter {
             ContinuationAdjustment::Detach => {
                 decision.continuation_adjustment = Some("detach".to_owned());
             }
+            ContinuationAdjustment::RejectLegacy => {
+                decision.continuation_adjustment = Some("reject_legacy".to_owned());
+            }
         }
         Ok(())
     }
@@ -650,6 +655,18 @@ impl PolicyTableRouter {
                     baseline_tier: baseline_tier.clone(),
                     preset: Some(observer.policy.clone()),
                     holdout: false,
+                    continuation_proposed_tier: bounded_continuation_label(
+                        decision.continuation_proposed_tier.as_deref(),
+                        128,
+                    ),
+                    continuation_proposed_model: bounded_continuation_label(
+                        decision.continuation_proposed_model.as_deref(),
+                        512,
+                    ),
+                    continuation_adjustment: bounded_continuation_label(
+                        decision.continuation_adjustment.as_deref(),
+                        32,
+                    ),
                     predicted_role: decision.predicted_role.clone(),
                     predicted_action: decision.predicted_action.clone(),
                     prediction_confidence_ppm: decision.prediction_confidence_ppm,
@@ -1713,6 +1730,48 @@ mod tests {
         assert_eq!(decision.continuation_adjustment.as_deref(), Some("detach"));
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert!(!decision.pinned);
+    }
+
+    #[test]
+    fn legacy_rejection_preserves_proposal_in_pending_eval_audit() {
+        let table = PolicyTable::from_config(&config()).expect("configured");
+        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let router = PolicyTableRouter::new(table).with_eval_observer(
+            pending.clone(),
+            "auto:cost",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            HashMap::new(),
+            Some("flagship".to_owned()),
+        );
+        let mut p = prompt("@auto");
+        p.messages = read_step();
+        let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
+        router
+            .apply_continuation_adjustment(&mut decision, &ContinuationAdjustment::RejectLegacy)
+            .expect("legacy rejection is auditable");
+        let invocation = EvalInvocation::new("local");
+
+        router.record_bound_policy_decision(
+            "request-legacy",
+            &invocation,
+            p.model,
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let pending = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
+        assert_eq!(pending.continuation_proposed_tier.as_deref(), Some("cheap"));
+        assert_eq!(
+            pending.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(
+            pending.continuation_adjustment.as_deref(),
+            Some("reject_legacy")
+        );
+        assert_eq!(pending.selected_tier, "cheap");
     }
 
     #[test]

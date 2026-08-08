@@ -82,6 +82,9 @@ pub struct PendingEvalDecision {
     pub baseline_tier: Option<String>,
     pub preset: Option<String>,
     pub holdout: bool,
+    pub continuation_proposed_tier: Option<String>,
+    pub continuation_proposed_model: Option<String>,
+    pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
@@ -91,6 +94,9 @@ pub struct PendingEvalDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PredictionObservationSnapshot {
+    continuation_proposed_tier: Option<String>,
+    continuation_proposed_model: Option<String>,
+    continuation_adjustment: Option<String>,
     predicted_role: Option<String>,
     predicted_action: Option<String>,
     prediction_confidence_ppm: Option<u32>,
@@ -100,6 +106,18 @@ pub(crate) struct PredictionObservationSnapshot {
 impl PendingEvalDecision {
     pub(crate) fn observation_snapshot(&self) -> PredictionObservationSnapshot {
         PredictionObservationSnapshot {
+            continuation_proposed_tier: bounded_continuation_label(
+                self.continuation_proposed_tier.as_deref(),
+                128,
+            ),
+            continuation_proposed_model: bounded_continuation_label(
+                self.continuation_proposed_model.as_deref(),
+                512,
+            ),
+            continuation_adjustment: bounded_continuation_label(
+                self.continuation_adjustment.as_deref(),
+                32,
+            ),
             predicted_role: self.predicted_role.as_deref().map(normalize_predicted_role),
             predicted_action: self
                 .predicted_action
@@ -118,6 +136,15 @@ impl PendingEvalDecision {
 impl PredictionObservationSnapshot {
     pub(crate) fn attributes(&self) -> BTreeMap<String, String> {
         let mut attributes = BTreeMap::new();
+        if let Some(value) = &self.continuation_proposed_tier {
+            attributes.insert("continuation_proposed_tier".into(), value.clone());
+        }
+        if let Some(value) = &self.continuation_proposed_model {
+            attributes.insert("continuation_proposed_model".into(), value.clone());
+        }
+        if let Some(value) = &self.continuation_adjustment {
+            attributes.insert("continuation_adjustment".into(), value.clone());
+        }
         if let Some(role) = &self.predicted_role {
             attributes.insert("predicted_role".into(), role.clone());
         }
@@ -147,6 +174,15 @@ impl PredictionObservationSnapshot {
         structural: &mut BTreeMap<String, u64>,
         categorical: &mut BTreeMap<String, String>,
     ) {
+        if let Some(value) = &self.continuation_proposed_tier {
+            categorical.insert("routing.continuation_proposed_tier".into(), value.clone());
+        }
+        if let Some(value) = &self.continuation_proposed_model {
+            categorical.insert("routing.continuation_proposed_model".into(), value.clone());
+        }
+        if let Some(value) = &self.continuation_adjustment {
+            categorical.insert("routing.continuation_adjustment".into(), value.clone());
+        }
         if let Some(role) = &self.predicted_role {
             categorical.insert("routing.predicted_role".into(), role.clone());
         }
@@ -166,6 +202,14 @@ impl PredictionObservationSnapshot {
             categorical.insert("routing.action_match".into(), action_match.clone());
         }
     }
+}
+
+pub(crate) fn bounded_continuation_label(value: Option<&str>, max_bytes: usize) -> Option<String> {
+    value
+        .filter(|value| {
+            !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
+        })
+        .map(ToOwned::to_owned)
 }
 
 fn normalize_predicted_role(value: &str) -> String {
@@ -493,6 +537,9 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 preset: Some("auto:cost".into()),
                 holdout: false,
+                continuation_proposed_tier: Some("balanced".into()),
+                continuation_proposed_model: Some("balanced:balanced-model".into()),
+                continuation_adjustment: Some("pin".into()),
                 predicted_role: None,
                 predicted_action: None,
                 prediction_confidence_ppm: None,
@@ -513,6 +560,22 @@ mod tests {
         assert_eq!(subject.policy_digest, DIGEST);
         assert_eq!(subject.decisions.len(), 1);
         assert!(subject.evidence.iter().all(|item| item.redacted));
+        let evidence = subject
+            .evidence
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("request outcome evidence missing"))?;
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_tier"),
+            Some(&"balanced".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_model"),
+            Some(&"balanced:balanced-model".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_adjustment"),
+            Some(&"pin".to_owned())
+        );
         assert_eq!(
             subject.requested_dimensions,
             BTreeSet::from([
@@ -544,6 +607,9 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 preset: Some("auto:cost".into()),
                 holdout: false,
+                continuation_proposed_tier: None,
+                continuation_proposed_model: None,
+                continuation_adjustment: None,
                 predicted_role: Some("implement".into()),
                 predicted_action: Some("mutate".into()),
                 prediction_confidence_ppm: Some(900_000),
@@ -603,6 +669,9 @@ mod tests {
             baseline_tier: Some("strong".into()),
             preset: Some("auto:cost".into()),
             holdout: false,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),

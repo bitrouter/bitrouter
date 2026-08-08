@@ -15,6 +15,7 @@ use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
+use crate::language_model::protocol::responses::AssistantTurnCommitment;
 use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
 
@@ -32,6 +33,8 @@ pub struct RequiredFinalizationContext {
     pub target: Option<RoutingTarget>,
     /// Public logical model selector resolved for the successful request.
     pub effective_model: String,
+    /// Fixed-size protocol-neutral commitment to the delivered assistant turn.
+    pub assistant_turn_commitment: Option<AssistantTurnCommitment>,
     /// Inbound client protocol.
     pub inbound_protocol: Option<ApiProtocol>,
     /// Final provider response id, when the serving protocol supplied one.

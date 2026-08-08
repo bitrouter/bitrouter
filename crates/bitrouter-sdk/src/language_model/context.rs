@@ -12,6 +12,9 @@ use std::time::Instant;
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
+use crate::language_model::protocol::responses::{
+    AssistantTurnCommitment, StreamingAssistantTurnCommitment, assistant_turn_commitment,
+};
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
@@ -178,6 +181,7 @@ pub struct PipelineContext {
     stream_terminal_succeeded: bool,
     stream_native_response_completed: bool,
     nonstream_native_response_completed: bool,
+    stream_assistant_turn_commitment: Option<AssistantTurnCommitment>,
     /// Stable redaction-safe authority returned atomically with the latest
     /// authenticated transport request. Server-tool prompt forks share this
     /// slot, so finalization sees the proof used by the actual final round.
@@ -229,6 +233,7 @@ impl PipelineContext {
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
             nonstream_native_response_completed: false,
+            stream_assistant_turn_commitment: None,
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions::default(),
@@ -262,6 +267,7 @@ impl PipelineContext {
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
             nonstream_native_response_completed: false,
+            stream_assistant_turn_commitment: None,
             credential_authority: self.credential_authority.clone(),
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
@@ -617,6 +623,7 @@ impl PipelineContext {
             finish_reason: None,
             terminal_succeeded: false,
             native_response_completed: false,
+            assistant_turn_commitment: StreamingAssistantTurnCommitment::default(),
             response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
@@ -640,6 +647,7 @@ impl PipelineContext {
         }
         self.stream_terminal_succeeded = stream.terminal_succeeded;
         self.stream_native_response_completed = stream.native_response_completed;
+        self.stream_assistant_turn_commitment = stream.assistant_turn_commitment.finish();
         self.first_token_timing = stream.first_token_timing;
         self.generation_duration_ms = stream.generation_duration_ms;
         self.events.merge_from(stream.events);
@@ -663,6 +671,11 @@ impl PipelineContext {
             caller: self.caller.clone(),
             target,
             effective_model: self.model.clone(),
+            assistant_turn_commitment: if streamed {
+                self.stream_assistant_turn_commitment.clone()
+            } else {
+                execution.and_then(|result| assistant_turn_commitment(&result.result.content))
+            },
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: execution.and_then(|result| result.result.response_id.clone()),
             finish_reason,
@@ -831,6 +844,7 @@ pub struct StreamContext {
     /// True only after a successful terminal emitted by a native Responses
     /// provider. Router-synthetic `Finish` parts deliberately cannot set it.
     native_response_completed: bool,
+    assistant_turn_commitment: StreamingAssistantTurnCommitment,
     /// Native Responses continuation id observed on `response.created`.
     /// Request-local only: settlement may derive an opaque owner-bound alias,
     /// but the raw value must never enter durable events or storage.
@@ -887,6 +901,7 @@ impl StreamContext {
         if self.finish_reason.is_some() {
             return;
         }
+        self.assistant_turn_commitment.observe(part);
         match part {
             StreamPart::Finish { reason } => {
                 self.finish_reason = Some(reason.clone());

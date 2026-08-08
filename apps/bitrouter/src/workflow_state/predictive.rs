@@ -856,6 +856,42 @@ pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
         })
 }
 
+pub(crate) fn has_authenticated_visible_parent(
+    prompt: &Prompt,
+    expected: &bitrouter_sdk::language_model::protocol::responses::AssistantTurnCommitment,
+) -> bool {
+    if !has_complete_visible_causal_history(prompt) {
+        return false;
+    }
+    let mut matching_index = None;
+    for (index, message) in prompt
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == Role::Assistant)
+    {
+        let matches =
+            bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment(
+                &message.content,
+            )
+            .is_some_and(|commitment| &commitment == expected);
+        if matches && matching_index.replace(index).is_some() {
+            return false;
+        }
+    }
+    let Some(matching_index) = matching_index else {
+        return false;
+    };
+    let last_assistant_index = prompt
+        .messages
+        .iter()
+        .rposition(|message| message.role == Role::Assistant);
+    last_assistant_index == Some(matching_index)
+        && prompt.messages[matching_index.saturating_add(1)..]
+            .iter()
+            .any(|message| message.role == Role::User)
+}
+
 fn bounded_signal_count(count: u8) -> u8 {
     count.saturating_add(1).min(MAX_HISTORY_SIGNAL_COUNT)
 }
@@ -1511,6 +1547,43 @@ mod tests {
         ] {
             assert!(!has_complete_visible_causal_history(&incomplete));
         }
+    }
+
+    #[test]
+    fn authenticated_parent_requires_one_exact_last_assistant_turn() -> anyhow::Result<()> {
+        use bitrouter_sdk::language_model::protocol::responses::assistant_turn_commitment;
+
+        let parent = Message::text(Role::Assistant, "the exact parent response");
+        let commitment = assistant_turn_commitment(&parent.content)
+            .ok_or_else(|| anyhow::anyhow!("parent commitment missing"))?;
+        let exact = prompt(vec![
+            Message::text(Role::User, "opening"),
+            parent.clone(),
+            Message::text(Role::User, "follow up"),
+        ]);
+        let unrelated = prompt(vec![
+            Message::text(Role::User, "opening"),
+            Message::text(Role::Assistant, "an unrelated response"),
+            Message::text(Role::User, "follow up"),
+        ]);
+        let tampered = prompt(vec![
+            Message::text(Role::User, "opening"),
+            Message::text(Role::Assistant, "the exact parent response!"),
+            Message::text(Role::User, "follow up"),
+        ]);
+        let ambiguous = prompt(vec![
+            Message::text(Role::User, "opening"),
+            parent.clone(),
+            Message::text(Role::User, "middle"),
+            parent,
+            Message::text(Role::User, "follow up"),
+        ]);
+
+        assert!(has_authenticated_visible_parent(&exact, &commitment));
+        for rejected in [unrelated, tampered, ambiguous] {
+            assert!(!has_authenticated_visible_parent(&rejected, &commitment));
+        }
+        Ok(())
     }
 
     #[test]

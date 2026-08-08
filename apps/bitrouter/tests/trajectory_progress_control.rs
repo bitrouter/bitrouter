@@ -386,6 +386,7 @@ impl Respond for NativeResponsesStream {
             .get("previous_response_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let streamed = body.get("stream").and_then(Value::as_bool) == Some(true);
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -425,6 +426,11 @@ impl Respond for NativeResponsesStream {
             "output": [item],
             "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
         });
+        if !streamed {
+            return ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(response);
+        }
         let events = [
             json!({
                 "type": "response.created",
@@ -724,6 +730,25 @@ async fn post_streaming_responses_body(
         "one stream exposed multiple continuation identities: {response_ids:?}"
     );
     Ok(terminal_id.to_owned())
+}
+
+async fn post_nonstream_responses_body(
+    server: &TestServer,
+    bearer: &str,
+    body: &Value,
+) -> anyhow::Result<Value> {
+    let response = server
+        .post(InboundProtocol::Responses.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"))
+        .json(body)
+        .await;
+    assert_eq!(
+        response.status_code().as_u16(),
+        200,
+        "nonstream Responses request failed: {}",
+        response.text()
+    );
+    Ok(response.json())
 }
 
 async fn trajectory_durable_surfaces(
@@ -1717,15 +1742,12 @@ async fn visible_responses_history_detaches_and_crosses_provider_once() -> anyho
             }]
         },
         {
-            "type": "function_call",
-            "call_id": "call-inspect",
-            "name": "inspect_repository",
-            "arguments": "{}"
-        },
-        {
-            "type": "function_call_output",
-            "call_id": "call-inspect",
-            "output": "repository structure inspected successfully"
+            "type": "message",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": ASSISTANT_REVIEW_ACTION
+            }]
         },
         {
             "type": "message",
@@ -1802,6 +1824,221 @@ async fn visible_responses_history_detaches_and_crosses_provider_once() -> anyho
             .unwrap_or_default()
             .len(),
         1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn nonstream_hidden_continuation_pins_with_one_exact_upstream() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "nonstream-hidden-pin").await?;
+    let opening = post_nonstream_responses_body(
+        &server,
+        &bearer,
+        &json!({
+            "model": "@auto",
+            "input": "Design the architecture and plan the implementation"
+        }),
+    )
+    .await?;
+    let opening_id = opening["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("nonstream opening id missing"))?;
+    assert!(opening_id.starts_with("brc_"));
+    assert_eq!(
+        opening["output"][0]["content"][0]["text"],
+        ASSISTANT_REVIEW_ACTION
+    );
+
+    let followup = post_nonstream_responses_body(
+        &server,
+        &bearer,
+        &json!({
+            "model": "@auto",
+            "previous_response_id": opening_id,
+            "input": "Continue with implementation"
+        }),
+    )
+    .await?;
+    assert_eq!(
+        followup["output"][0]["content"][0]["text"],
+        ASSISTANT_REVIEW_ACTION
+    );
+    let state = harness
+        .responses_state
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+    assert_eq!(state.served_models, ["strong-model", "strong-model"]);
+    assert_eq!(
+        state.forwarded_parents,
+        [None, Some("provider-only-response-0".to_owned())]
+    );
+    assert_eq!(state.forwarded_bodies.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nonstream_exact_parent_detaches_once_with_equal_body_and_response() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "nonstream-exact-detach").await?;
+    let opening = post_nonstream_responses_body(
+        &server,
+        &bearer,
+        &json!({
+            "model": "@auto",
+            "input": "Design the architecture and plan the implementation"
+        }),
+    )
+    .await?;
+    let opening_id = opening["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("nonstream opening id missing"))?;
+    let visible_history = json!([
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Design the architecture"}]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}]
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Implement the approved change"}]
+        }
+    ]);
+    let tools = json!([{
+        "type": "function",
+        "name": "inspect_repository",
+        "description": "Inspect repository state",
+        "parameters": {"type": "object", "properties": {}}
+    }]);
+    let followup = post_nonstream_responses_body(
+        &server,
+        &bearer,
+        &json!({
+            "model": "@auto",
+            "previous_response_id": opening_id,
+            "input": visible_history,
+            "tools": tools,
+            "parallel_tool_calls": false
+        }),
+    )
+    .await?;
+    assert_eq!(
+        followup["output"][0]["content"][0]["text"],
+        ASSISTANT_REVIEW_ACTION
+    );
+    assert_eq!(followup["object"], "response");
+    assert_eq!(followup["status"], "completed");
+    assert_eq!(followup["model"], "@auto");
+    assert_eq!(
+        followup["output"],
+        json!([{
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}]
+        }])
+    );
+    assert_eq!(
+        followup["usage"],
+        json!({
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "total_tokens": 18,
+            "output_tokens_details": {"reasoning_tokens": 0}
+        })
+    );
+
+    let state = harness
+        .responses_state
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+    assert_eq!(state.served_models, ["strong-model", "balanced-model"]);
+    assert_eq!(state.forwarded_parents, [None, None]);
+    assert_eq!(state.forwarded_bodies.len(), 2);
+    let forwarded = state
+        .forwarded_bodies
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("nonstream detached body missing"))?;
+    assert_eq!(forwarded.get("input"), Some(&visible_history));
+    assert_eq!(forwarded.get("tools"), Some(&tools));
+    assert_eq!(
+        forwarded.get("parallel_tool_calls"),
+        Some(&Value::Bool(false))
+    );
+    assert!(forwarded.get("previous_response_id").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn unrelated_visible_responses_history_pins_instead_of_detaching() -> anyhow::Result<()> {
+    assert_uncommitted_visible_history_pins("An unrelated assistant answer").await
+}
+
+#[tokio::test]
+async fn tampered_visible_responses_history_pins_instead_of_detaching() -> anyhow::Result<()> {
+    assert_uncommitted_visible_history_pins(&format!("{ASSISTANT_REVIEW_ACTION} tampered")).await
+}
+
+async fn assert_uncommitted_visible_history_pins(assistant_text: &str) -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "uncommitted-visible-continuation").await?;
+    let first_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "Design the architecture and plan the implementation",
+        None,
+    )
+    .await?;
+    let body = json!({
+        "model": "@auto",
+        "stream": true,
+        "previous_response_id": first_id,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Design the architecture"}]
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": assistant_text}]
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Implement the approved change"}]
+            }
+        ]
+    });
+
+    post_streaming_responses_body(&server, &bearer, &body).await?;
+
+    let state = harness
+        .responses_state
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+    assert_eq!(state.served_models, ["strong-model", "strong-model"]);
+    assert_eq!(
+        state.forwarded_parents,
+        [None, Some("provider-only-response-0".to_owned())]
     );
     Ok(())
 }
