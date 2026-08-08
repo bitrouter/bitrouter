@@ -719,7 +719,7 @@ impl FrozenWorkflowWorkspaces {
         command: &[String],
         declared_inputs: &[PathBuf],
     ) -> Result<Self> {
-        let source_cwd = std::fs::canonicalize(source_cwd)
+        let source_cwd = canonicalize_workflow_path(source_cwd)
             .with_context(|| format!("canonicalizing workflow cwd {}", source_cwd.display()))?;
         let git_root = git_output(&source_cwd, &["rev-parse", "--show-toplevel"])
             .await
@@ -729,6 +729,8 @@ impl FrozenWorkflowWorkspaces {
                 .context("decoding workflow Git root")?
                 .trim(),
         );
+        let git_root = canonicalize_workflow_path(&git_root)
+            .with_context(|| format!("canonicalizing Git root {}", git_root.display()))?;
         let relative_cwd = source_cwd.strip_prefix(&git_root).with_context(|| {
             format!(
                 "workflow cwd {} is outside Git root {}",
@@ -764,7 +766,7 @@ impl FrozenWorkflowWorkspaces {
                 source_cwd.join(&path)
             };
             if source.is_file() {
-                let canonical = std::fs::canonicalize(&source).with_context(|| {
+                let canonical = canonicalize_workflow_path(&source).with_context(|| {
                     format!("canonicalizing workflow input {}", source.display())
                 })?;
                 if canonical.starts_with(&git_root) {
@@ -848,8 +850,8 @@ impl FrozenWorkflowWorkspaces {
                         source.display()
                     );
                 }
-                let resolved = std::fs::canonicalize(
-                    source
+                let resolved = canonicalize_workflow_path(
+                    &source
                         .parent()
                         .ok_or_else(|| anyhow::anyhow!("workflow symlink has no parent"))?
                         .join(&target),
@@ -957,7 +959,7 @@ fn collect_declared_input(
     } else {
         source_cwd.join(input)
     };
-    let canonical = std::fs::canonicalize(&source)
+    let canonical = canonicalize_workflow_path(&source)
         .with_context(|| format!("resolving declared workflow input {}", source.display()))?;
     if !canonical.starts_with(git_root) {
         anyhow::bail!(
@@ -975,6 +977,27 @@ fn collect_declared_input(
         files.insert(canonical.strip_prefix(git_root)?.to_path_buf());
     }
     Ok(())
+}
+
+fn canonicalize_workflow_path(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(normalize_canonical_path)
+}
+
+#[cfg(not(windows))]
+fn normalize_canonical_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(windows)]
+fn normalize_canonical_path(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
 }
 
 async fn remove_snapshot_entry(path: &Path) -> Result<()> {
@@ -1572,6 +1595,19 @@ mod tests {
         let listed = git_output(source.path(), &["worktree", "list", "--porcelain"]).await?;
         assert!(!String::from_utf8(listed)?.contains(&private.path().display().to_string()));
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_canonical_paths_remove_only_the_verbatim_prefix() {
+        assert_eq!(
+            super::normalize_canonical_path(PathBuf::from(r"\\?\C:\work\repo")),
+            PathBuf::from(r"C:\work\repo")
+        );
+        assert_eq!(
+            super::normalize_canonical_path(PathBuf::from(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
     }
 
     fn active_policy() -> PolicyLock {
