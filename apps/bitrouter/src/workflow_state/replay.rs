@@ -42,6 +42,9 @@ pub struct ReplayRecord {
     pub predictive_projection: PredictiveRouteProjection,
     pub predictive_route_key: String,
     pub next_action_class: NextActionClass,
+    pub predictor_contract_digest: String,
+    pub prediction_confidence_kind: String,
+    pub prediction_confidence_ppm: u32,
     pub prediction_reason_codes: Vec<String>,
     pub prediction_matches_expected: Option<bool>,
 }
@@ -139,6 +142,9 @@ impl ReplayEvaluator {
                 predictive_projection,
                 predictive_route_key,
                 next_action_class: prediction.next_action_class,
+                predictor_contract_digest: prediction.predictor_contract_digest,
+                prediction_confidence_kind: prediction.confidence_kind,
+                prediction_confidence_ppm: confidence_ppm(prediction.confidence),
                 prediction_reason_codes,
                 prediction_matches_expected,
             });
@@ -156,6 +162,16 @@ impl ReplayEvaluator {
             .filter(|labels| labels.len() > 1)
             .count();
         summary
+    }
+}
+
+fn confidence_ppm(confidence: f32) -> u32 {
+    if !confidence.is_finite() || confidence <= 0.0 {
+        0
+    } else if confidence >= 1.0 {
+        1_000_000
+    } else {
+        (confidence * 1_000_000.0).round() as u32
     }
 }
 

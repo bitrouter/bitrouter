@@ -145,6 +145,8 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         predicted_role: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,

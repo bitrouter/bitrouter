@@ -36,6 +36,7 @@ pub enum ObservedActionClass {
     ExecuteOrTest,
     WaitOrPoll,
     AnswerOrSummarize,
+    Mixed,
     Unknown,
 }
 
@@ -48,25 +49,18 @@ impl ObservedActionClass {
             Self::ExecuteOrTest => "execute_or_test",
             Self::WaitOrPoll => "wait_or_poll",
             Self::AnswerOrSummarize => "answer_or_summarize",
+            Self::Mixed => "mixed",
             Self::Unknown => "unknown",
         }
     }
 
-    fn dominance(self) -> u8 {
-        match self {
-            Self::Unknown => 0,
-            Self::ReasonOrPlan | Self::WaitOrPoll | Self::AnswerOrSummarize => 1,
-            Self::InspectOrRead => 2,
-            Self::ExecuteOrTest => 3,
-            Self::Mutate => 4,
-        }
-    }
-
     fn dominant(self, other: Self) -> Self {
-        if other.dominance() > self.dominance() {
+        if self == Self::Unknown {
             other
-        } else {
+        } else if other == Self::Unknown || self == other {
             self
+        } else {
+            Self::Mixed
         }
     }
 
@@ -82,6 +76,7 @@ impl ObservedActionClass {
             "execute_or_test" => Some(Self::ExecuteOrTest),
             "wait_or_poll" => Some(Self::WaitOrPoll),
             "answer_or_summarize" => Some(Self::AnswerOrSummarize),
+            "mixed" => Some(Self::Mixed),
             "unknown" => Some(Self::Unknown),
             _ => None,
         }
@@ -91,15 +86,34 @@ impl ObservedActionClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PredictionObservation {
     pub observed_action: ObservedActionClass,
+    confidence_ppm: u32,
+    reason_code: &'static str,
 }
 
 impl PredictionObservation {
     pub fn new(observed_action: ObservedActionClass) -> Self {
-        Self { observed_action }
+        let (confidence_ppm, reason_code) = match observed_action {
+            ObservedActionClass::Unknown => (350_000, "no_supported_signal"),
+            ObservedActionClass::Mixed => (600_000, "multiple_action_classes"),
+            _ => (850_000, "canonical_response_signal"),
+        };
+        Self {
+            observed_action,
+            confidence_ppm,
+            reason_code,
+        }
     }
 
     pub fn merge(self, other: Self) -> Self {
         Self::new(self.observed_action.dominant(other.observed_action))
+    }
+
+    pub fn confidence_ppm(self) -> u32 {
+        self.confidence_ppm
+    }
+
+    pub fn reason_code(self) -> &'static str {
+        self.reason_code
     }
 }
 
@@ -328,7 +342,9 @@ impl StreamObservationBuffer {
                 )
             };
             if mutates || ambiguous_eviction {
-                self.dominant_tool_action = ObservedActionClass::Mutate;
+                self.dominant_tool_action = self
+                    .dominant_tool_action
+                    .dominant(ObservedActionClass::Mutate);
             }
             return;
         };
@@ -341,7 +357,9 @@ impl StreamObservationBuffer {
         let action = classify_tool_call(&call.name, &call.arguments, &self.tool_definitions);
         self.dominant_tool_action = self.dominant_tool_action.dominant(action);
         if streaming_mutation {
-            self.dominant_tool_action = ObservedActionClass::Mutate;
+            self.dominant_tool_action = self
+                .dominant_tool_action
+                .dominant(ObservedActionClass::Mutate);
         }
     }
 
@@ -873,12 +891,19 @@ fn classify_tool_call(
     if declared_action != ObservedActionClass::Unknown {
         return declared_action;
     }
-    if is_command_tool(name)
-        && let Some(command) = command_argument(arguments)
-    {
-        let command_action = classify_command(&command);
-        if command_action != ObservedActionClass::Unknown {
-            return command_action;
+    if is_command_tool(name) {
+        let mut bounded_classifier = CommandArgumentClassifier::new();
+        bounded_classifier.observe(arguments);
+        if bounded_classifier.mutates() {
+            return ObservedActionClass::Mutate;
+        }
+        if arguments.len() <= MAX_STREAM_BUFFER_BYTES
+            && let Some(command) = command_argument(arguments)
+        {
+            let command_action = classify_command(&command);
+            if command_action != ObservedActionClass::Unknown {
+                return command_action;
+            }
         }
     }
     ObservedActionClass::Unknown
@@ -1103,7 +1128,7 @@ mod tests {
                     tool_call("apply_patch", r#"{"patch":"private"}"#),
                 ],
                 Vec::new(),
-                ObservedActionClass::Mutate,
+                ObservedActionClass::Mixed,
             ),
             (
                 "definition",
@@ -1124,6 +1149,29 @@ mod tests {
             assert_eq!(observed, expected, "{name}");
         }
         Ok(())
+    }
+
+    #[test]
+    fn mixed_observations_are_explicit_and_heuristically_attributed() {
+        let observation = super::classify_content(
+            &[
+                tool_call("read_file", r#"{"path":"src/lib.rs"}"#),
+                tool_call("apply_patch", r#"{"patch":"private"}"#),
+            ],
+            &[],
+        );
+
+        assert_eq!(observation.observed_action, ObservedActionClass::Mixed);
+        assert_eq!(observation.confidence_ppm(), 600_000);
+        assert_eq!(observation.reason_code(), "multiple_action_classes");
+    }
+
+    #[test]
+    fn nonstream_command_classification_is_bounded_but_keeps_late_mutation_signals() {
+        let arguments = format!(r#"{{"padding":"{}","cmd":"rm target"}}"#, "x".repeat(8_192));
+        let observation = super::classify_content(&[tool_call("exec_command", &arguments)], &[]);
+
+        assert_eq!(observation.observed_action, ObservedActionClass::Mutate);
     }
 
     #[tokio::test]
@@ -1224,8 +1272,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_observer_keeps_mutation_dominance_after_thirty_two_read_calls()
-    -> anyhow::Result<()> {
+    async fn response_observer_marks_mutation_after_thirty_two_reads_as_mixed() -> anyhow::Result<()>
+    {
         let (pending, invocation) = pending("stream-call-limit");
         let observer = PredictiveResponseObserver::new(pending.clone());
         let context = pipeline_context("stream-call-limit", prompt(Vec::new()), &invocation);
@@ -1267,13 +1315,13 @@ mod tests {
                 .peek(&invocation, "local")
                 .and_then(|decision| decision.observation)
                 .map(|observation| observation.observed_action),
-            Some(ObservedActionClass::Mutate)
+            Some(ObservedActionClass::Mixed)
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn response_observer_classifies_fragmented_command_mutation_after_tool_call_limit()
+    async fn response_observer_marks_fragmented_mutation_after_read_limit_as_mixed()
     -> anyhow::Result<()> {
         let (pending, invocation) = pending("stream-command-call-limit");
         let observer = PredictiveResponseObserver::new(pending.clone());
@@ -1330,13 +1378,13 @@ mod tests {
                 .peek(&invocation, "local")
                 .and_then(|decision| decision.observation)
                 .map(|observation| observation.observed_action),
-            Some(ObservedActionClass::Mutate)
+            Some(ObservedActionClass::Mixed)
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn response_observer_conservatively_classifies_interleaved_overflow_command()
+    async fn response_observer_marks_interleaved_overflow_read_and_mutation_as_mixed()
     -> anyhow::Result<()> {
         let (pending, invocation) = pending("stream-interleaved-overflow");
         let observer = PredictiveResponseObserver::new(pending.clone());
@@ -1401,7 +1449,7 @@ mod tests {
                 .peek(&invocation, "local")
                 .and_then(|decision| decision.observation)
                 .map(|observation| observation.observed_action),
-            Some(ObservedActionClass::Mutate)
+            Some(ObservedActionClass::Mixed)
         );
         Ok(())
     }
@@ -2085,6 +2133,10 @@ mod tests {
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(800_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         }

@@ -63,6 +63,10 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub prediction_confidence_ppm: Option<u32>,
     #[serde(default)]
+    pub predictor_contract_digest: Option<String>,
+    #[serde(default)]
+    pub prediction_confidence_kind: Option<String>,
+    #[serde(default)]
     pub prediction_reason_codes: Vec<String>,
     #[serde(default)]
     pub observed_route_projection: Option<String>,
@@ -374,6 +378,8 @@ mod tests {
             predicted_role: None,
             predicted_action: None,
             prediction_confidence_ppm: None,
+            predictor_contract_digest: None,
+            prediction_confidence_kind: None,
             prediction_reason_codes: Vec::new(),
             observed_route_projection: None,
             trajectory_episode_id: None,
@@ -431,6 +437,8 @@ mod tests {
         assert_eq!(parsed.predicted_role, None);
         assert_eq!(parsed.predicted_action, None);
         assert_eq!(parsed.prediction_confidence_ppm, None);
+        assert_eq!(parsed.predictor_contract_digest, None);
+        assert_eq!(parsed.prediction_confidence_kind, None);
         assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
         assert_eq!(parsed.observed_route_projection, None);
     }

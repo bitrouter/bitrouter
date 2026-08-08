@@ -415,6 +415,8 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         predicted_role: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
@@ -1045,11 +1047,11 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_projection.next_step_role,
-        NextStepRole::Unknown
+        NextStepRole::Orchestrate
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "agent_route/v1|unknown|normal"
+        "agent_route/v1|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -2102,6 +2104,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         predicted_role: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
@@ -2390,6 +2394,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         predicted_role: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
@@ -2515,6 +2521,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         predicted_role: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,

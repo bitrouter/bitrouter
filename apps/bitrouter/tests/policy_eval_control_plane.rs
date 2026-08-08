@@ -252,6 +252,10 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         },
@@ -376,6 +380,34 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
     assert_eq!(
         evidence.attributes.get("action_match").map(String::as_str),
         Some("true")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("observation_confidence_ppm")
+            .map(String::as_str),
+        Some("850000")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("observation_reason_code")
+            .map(String::as_str),
+        Some("canonical_response_signal")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("predictor_contract_digest")
+            .map(String::as_str),
+        Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+    );
+    assert_eq!(
+        evidence
+            .attributes
+            .get("prediction_confidence_kind")
+            .map(String::as_str),
+        Some("heuristic_margin")
     );
     assert!(!evidence.attributes.contains_key("quality.pass"));
     assert!(!serde_json::to_string(&subject)?.contains("never-persist"));

@@ -188,7 +188,16 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     for (event_key, attribute_key) in [
         ("routing.predicted_role", "predicted_role"),
         ("routing.predicted_action", "predicted_action"),
+        (
+            "routing.predictor_contract_digest",
+            "predictor_contract_digest",
+        ),
+        (
+            "routing.prediction_confidence_kind",
+            "prediction_confidence_kind",
+        ),
         ("routing.observed_action", "observed_action"),
+        ("routing.observation_reason_code", "observation_reason_code"),
         ("routing.action_match", "action_match"),
         (
             "routing.continuation_proposed_tier",
@@ -211,6 +220,16 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     {
         attributes.insert(
             "prediction_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.observation_confidence_ppm")
+    {
+        attributes.insert(
+            "observation_confidence_ppm".to_owned(),
             confidence.to_string(),
         );
     }

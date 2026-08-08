@@ -100,20 +100,130 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     assert_eq!(decisions.len(), 7, "each HTTP request emits one decision");
     for decision in &decisions {
         assert_eq!(decision.key_strategy, "agent_trace");
-        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
+        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
         assert_eq!(
             decision.selected_tier.as_deref(),
-            Some("balanced"),
-            "unmatched opening traces use the template's balanced default: {decision:?}"
+            Some("strong"),
+            "broad repository openings stay on the orchestrator: {decision:?}"
         );
-        assert_eq!(
-            decision.selected_model.as_deref(),
-            Some(MOCK_BALANCED_MODEL)
-        );
+        assert_eq!(decision.selected_model.as_deref(), Some(MOCK_STRONG_MODEL));
         let serialized = serde_json::to_value(decision).expect("decision serializes");
         assert!(
             serialized.get("harness_id").is_none() && serialized.get("source").is_none(),
             "runtime source stays in the captured diagnostic trace, not decision policy fields: {serialized}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rewrites() {
+    let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
+    let upstream = mock_chat_upstream().await;
+    let temp = TempDir::new().expect("temporary decision directory");
+    let decisions_path = temp.path().join("decisions.jsonl");
+    let _decision_env = DecisionRecorderEnv::set(&decisions_path);
+    let (server, _, _config_dir) = generalization_server(&upstream.uri()).await;
+    let instruction = "Read src/parser.rs and report the current error enum.";
+    let schema = json!({
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"]
+    });
+    let cases = [
+        (
+            "/v1/chat/completions",
+            json!({
+                "model": "@auto",
+                "messages": [{"role": "user", "content": instruction}],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "description": "Read one file",
+                        "parameters": schema
+                    }
+                }]
+            }),
+            "/choices/0/message/content",
+        ),
+        (
+            "/v1/responses",
+            json!({
+                "model": "@auto",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": instruction
+                }],
+                "tools": [{
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read one file",
+                    "parameters": schema
+                }]
+            }),
+            "/output/0/content/0/text",
+        ),
+        (
+            "/v1/messages",
+            json!({
+                "model": "@auto",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": instruction}],
+                "tools": [{
+                    "name": "read_file",
+                    "description": "Read one file",
+                    "input_schema": schema
+                }]
+            }),
+            "/content/0/text",
+        ),
+    ];
+
+    for (path, body, response_pointer) in cases {
+        let response = server.post(path).json(&body).await;
+        response.assert_status_ok();
+        let response_body = response.json::<Value>();
+        assert_eq!(
+            response_body.pointer(response_pointer),
+            Some(&Value::String("ok".into())),
+            "{path} response semantics"
+        );
+    }
+
+    let requests = upstream
+        .received_requests()
+        .await
+        .expect("mock upstream request journal");
+    assert_eq!(
+        requests.len(),
+        3,
+        "one and only one upstream attempt per request"
+    );
+    for request in requests {
+        let body: Value = serde_json::from_slice(&request.body).expect("forwarded JSON body");
+        assert!(
+            body["input"].to_string().contains(instruction),
+            "canonical user input was rewritten: {body}"
+        );
+        assert_eq!(body["tools"][0]["name"], "read_file");
+        assert_eq!(body["tools"][0]["description"], "Read one file");
+        assert_eq!(body["tools"][0]["parameters"], schema);
+    }
+
+    let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
+        .expect("release requests emit policy decisions");
+    assert_eq!(decisions.len(), 3);
+    for decision in decisions {
+        assert_eq!(decision.request_key, "agent_route/v1|mechanical|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
+        assert_eq!(
+            decision.predictor_contract_digest.as_deref(),
+            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+        );
+        assert_eq!(
+            decision.prediction_confidence_kind.as_deref(),
+            Some("heuristic_margin")
         );
     }
 }
@@ -468,6 +578,15 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             "strong",
         ),
         (
+            SemanticHistory::NarrowRead,
+            NextStepRole::Mechanical,
+            NextActionClass::InspectOrRead,
+            "normal",
+            "agent_route/v1|mechanical|normal",
+            &["narrow_read_requested"],
+            "economy",
+        ),
+        (
             SemanticHistory::PostRead,
             NextStepRole::Implement,
             NextActionClass::Mutate,
@@ -521,6 +640,17 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
                 fixture.id
             );
             assert_eq!(
+                record.predictor_contract_digest,
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec",
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                record.prediction_confidence_kind, "heuristic_margin",
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
                 record.predictive_projection.risk.to_string(),
                 risk,
                 "{history:?} {}",
@@ -560,6 +690,7 @@ fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
     let router = predictive_matrix_router();
     for history in [
         SemanticHistory::Opening,
+        SemanticHistory::NarrowRead,
         SemanticHistory::PostRead,
         SemanticHistory::PostEdit,
         SemanticHistory::FailedTest,
@@ -701,6 +832,7 @@ fn full_decision_comparison_detects_projection_drift_with_the_same_tier() {
 #[derive(Debug, Clone, Copy)]
 enum SemanticHistory {
     Opening,
+    NarrowRead,
     PostRead,
     PostEdit,
     FailedTest,
@@ -778,6 +910,7 @@ fn semantic_history_body(
 ) -> Value {
     let root = match history {
         SemanticHistory::Opening => "Investigate the repository architecture.",
+        SemanticHistory::NarrowRead => "Read src/parser.rs and report the current error enum.",
         SemanticHistory::PostRead => "Implement the correction in src/parser.rs.",
         SemanticHistory::PostEdit | SemanticHistory::FailedTest | SemanticHistory::Finalization => {
             "Fix src/parser.rs."
@@ -787,7 +920,7 @@ fn semantic_history_body(
         return terminus_semantic_history_body(history, root);
     }
     let actions = match history {
-        SemanticHistory::Opening => Vec::new(),
+        SemanticHistory::Opening | SemanticHistory::NarrowRead => Vec::new(),
         SemanticHistory::PostRead => vec![(
             "read-1",
             "Bash",
@@ -889,7 +1022,7 @@ fn terminus_semantic_history_body(history: SemanticHistory, root: &str) -> Value
         json!({"role": "user", "content": root}),
     ];
     let actions = match history {
-        SemanticHistory::Opening => Vec::new(),
+        SemanticHistory::Opening | SemanticHistory::NarrowRead => Vec::new(),
         SemanticHistory::PostRead => vec![("cat src/parser.rs", "source contents")],
         SemanticHistory::PostEdit => vec![(
             "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH",
@@ -924,7 +1057,7 @@ fn terminus_semantic_history_body(history: SemanticHistory, root: &str) -> Value
 
 fn semantic_observed_state(history: SemanticHistory) -> &'static str {
     match history {
-        SemanticHistory::Opening => "opening",
+        SemanticHistory::Opening | SemanticHistory::NarrowRead => "opening",
         SemanticHistory::PostRead => "tool_followup",
         SemanticHistory::PostEdit => "edit",
         SemanticHistory::FailedTest => "test",
@@ -933,11 +1066,16 @@ fn semantic_observed_state(history: SemanticHistory) -> &'static str {
 }
 
 fn semantic_baseline(history: SemanticHistory, source: &str) -> &'static str {
-    if source == "terminus" && !matches!(history, SemanticHistory::Opening) {
+    if source == "terminus"
+        && !matches!(
+            history,
+            SemanticHistory::Opening | SemanticHistory::NarrowRead
+        )
+    {
         return "midstream";
     }
     match history {
-        SemanticHistory::Opening => "opening",
+        SemanticHistory::Opening | SemanticHistory::NarrowRead => "opening",
         SemanticHistory::PostRead | SemanticHistory::FailedTest | SemanticHistory::Finalization => {
             "after_Bash"
         }
@@ -960,6 +1098,10 @@ fn predictive_matrix_router() -> PolicyTableRouter {
             ),
             (
                 "agent_route/v1|implement|normal".to_string(),
+                "economy".to_string(),
+            ),
+            (
+                "agent_route/v1|mechanical|normal".to_string(),
                 "economy".to_string(),
             ),
             (

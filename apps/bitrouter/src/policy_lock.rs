@@ -28,6 +28,9 @@ use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition
 use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::RouteProjection;
+use crate::workflow_state::predictive::{
+    PredictorContract, compiled_predictor_contract, compiled_scorecard_digest,
+};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -234,6 +237,10 @@ pub struct PolicyDefinition {
     /// `policy_table:` config has no corresponding field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_guard: Option<ProgressGuardPolicy>,
+    /// Exact deterministic predictor admitted by this signed policy. Required
+    /// whenever a route uses the predictive `agent_route/v1` namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predictor: Option<PredictorContract>,
     pub adequacy: AdequacyConfig,
 }
 
@@ -247,6 +254,7 @@ impl Default for PolicyDefinition {
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
             progress_guard: None,
+            predictor: None,
             adequacy: AdequacyConfig::default(),
         }
     }
@@ -394,9 +402,43 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             }
             validate_progress_guard(name, policy, guard)?;
         }
+        validate_predictor_contract(name, policy, document.lockfile_version)?;
     }
     if document.lockfile_version == POLICY_LOCKFILE_VERSION {
         validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_predictor_contract(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    lockfile_version: u32,
+) -> Result<()> {
+    let uses_predictive_routes = policy
+        .routes
+        .keys()
+        .any(|key| key.starts_with("agent_route/v1|"));
+    if uses_predictive_routes && lockfile_version != POLICY_LOCKFILE_VERSION {
+        anyhow::bail!(
+            "policy '{policy_name}' agent_route/v1 routes require policy lock v{POLICY_LOCKFILE_VERSION} provenance metadata"
+        );
+    }
+    if !uses_predictive_routes && policy.predictor.is_none() {
+        return Ok(());
+    }
+    let expected = compiled_predictor_contract();
+    let Some(actual) = policy.predictor.as_ref() else {
+        anyhow::bail!(
+            "policy '{policy_name}' uses agent_route/v1 but is missing its signed predictor contract (expected {})",
+            compiled_scorecard_digest()
+        );
+    };
+    if actual != &expected {
+        anyhow::bail!(
+            "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
+            compiled_scorecard_digest()
+        );
     }
     Ok(())
 }
@@ -3285,6 +3327,10 @@ policies:
         assert_eq!(policy.default_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
+        assert_eq!(
+            policy.predictor.as_ref(),
+            Some(&compiled_predictor_contract())
+        );
         let guard = policy
             .progress_guard
             .as_ref()
@@ -3295,6 +3341,61 @@ policies:
         let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
+        Ok(())
+    }
+
+    #[test]
+    fn predictive_routes_require_the_exact_compiled_predictor_contract() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+
+        let mut missing = lock.clone();
+        if let Some(policy) = missing.policies.get_mut("auto") {
+            policy.predictor = None;
+        }
+        let missing_error = validate_document(&missing)
+            .expect_err("predictive routes without a predictor contract must be rejected");
+        assert!(missing_error.to_string().contains("predictor"));
+
+        let mut mismatched = lock;
+        if let Some(policy) = mismatched.policies.get_mut("auto")
+            && let Some(predictor) = &mut policy.predictor
+        {
+            predictor.config_digest = EMPTY_SHA256.to_owned();
+        }
+        let mismatch_error = validate_document(&mismatched)
+            .expect_err("a stale predictor contract must be rejected");
+        assert!(
+            mismatch_error
+                .to_string()
+                .contains(compiled_scorecard_digest())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn predictive_routes_require_v2_artifact_and_certificates() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let mut lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+        lock.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
+        lock.artifact = None;
+        lock.certificates.clear();
+        if let Some(policy) = lock.policies.get_mut("auto") {
+            policy.progress_guard = None;
+        }
+
+        let error = validate_document(&lock)
+            .expect_err("predictive routes must not bypass v2 provenance metadata");
+        assert!(
+            error.to_string().contains("require policy lock v2"),
+            "unexpected validation error: {error:#}"
+        );
         Ok(())
     }
 

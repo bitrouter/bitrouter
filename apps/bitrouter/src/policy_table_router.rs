@@ -94,6 +94,8 @@ pub struct PolicyDecision {
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
+    pub predictor_contract_digest: Option<String>,
+    pub prediction_confidence_kind: Option<String>,
     pub prediction_reason_codes: Vec<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
@@ -425,6 +427,8 @@ impl PolicyTableRouter {
             prediction_confidence_ppm: Some(prediction_confidence_ppm(
                 online.predictive.confidence,
             )),
+            predictor_contract_digest: Some(online.predictive.predictor_contract_digest.clone()),
+            prediction_confidence_kind: Some(online.predictive.confidence_kind.clone()),
             prediction_reason_codes: prediction_reason_codes(&online.predictive.evidence),
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
@@ -670,6 +674,8 @@ impl PolicyTableRouter {
                     predicted_role: decision.predicted_role.clone(),
                     predicted_action: decision.predicted_action.clone(),
                     prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                    predictor_contract_digest: decision.predictor_contract_digest.clone(),
+                    prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                     observation: None,
                     observed_at: chrono::Utc::now().to_rfc3339(),
                 },
@@ -706,6 +712,8 @@ impl PolicyTableRouter {
                 predicted_role: decision.predicted_role.clone(),
                 predicted_action: decision.predicted_action.clone(),
                 prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                predictor_contract_digest: decision.predictor_contract_digest.clone(),
+                prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                 prediction_reason_codes: decision.prediction_reason_codes.clone(),
                 observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
@@ -1225,6 +1233,14 @@ mod tests {
         assert_eq!(records[0].predicted_role.as_deref(), Some("unknown"));
         assert_eq!(records[0].predicted_action.as_deref(), Some("unknown"));
         assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
+        assert_eq!(
+            records[0].predictor_contract_digest.as_deref(),
+            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+        );
+        assert_eq!(
+            records[0].prediction_confidence_kind.as_deref(),
+            Some("heuristic_margin")
+        );
         assert_eq!(
             records[0].prediction_reason_codes,
             vec!["history_truncated"]

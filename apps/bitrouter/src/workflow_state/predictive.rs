@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
@@ -105,6 +108,24 @@ pub struct PredictiveRouteIR {
     pub route_risk: RouteRisk,
     pub confidence: f32,
     pub evidence: Vec<PredictiveEvidence>,
+    #[serde(default)]
+    pub predictor_contract_digest: String,
+    #[serde(default)]
+    pub confidence_kind: String,
+}
+
+/// Signed-lock descriptor for the deterministic predictor compiled into this
+/// BitRouter binary. Predictive locks are admitted only when this descriptor
+/// exactly matches the compiled scorecard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PredictorContract {
+    pub algorithm: String,
+    pub version: u8,
+    pub config_digest: String,
+    pub confidence_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +187,334 @@ impl CanonicalPolicyProjection {
 const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
+const COMPILED_SCORECARD_DIGEST: &str =
+    "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec";
+const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
+const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ConfidenceBand {
+    minimum_margin: i16,
+    confidence_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PredictorScorecardV1 {
+    weights: BTreeMap<String, i16>,
+    evidence_confidence_ppm: BTreeMap<String, u32>,
+    repeated_failure_count: u8,
+    minimum_top_score: i16,
+    minimum_margin: i16,
+    minimum_coverage: u8,
+    maximum_evidence: usize,
+    confidence_bands: Vec<ConfidenceBand>,
+    unknown_confidence_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PredictorBehaviorV1 {
+    scorecard: PredictorScorecardV1,
+    instruction_terms: BTreeMap<String, Vec<String>>,
+    concrete_terms: Vec<String>,
+    tool_name_terms: BTreeMap<String, Vec<String>>,
+    command_test_terms: Vec<String>,
+    command_read_prefixes: Vec<String>,
+    role_tie_order: Vec<NextStepRole>,
+    role_actions: BTreeMap<String, NextActionClass>,
+    narrow_read_action: NextActionClass,
+    algorithm_versions: BTreeMap<String, u8>,
+}
+
+impl PredictorScorecardV1 {
+    fn weight(&self, key: &str) -> i16 {
+        match self.weights.get(key) {
+            Some(weight) => *weight,
+            None => 0,
+        }
+    }
+
+    fn evidence_confidence(&self, code: PredictiveReasonCode) -> f32 {
+        match self.evidence_confidence_ppm.get(code.as_str()) {
+            Some(confidence) => *confidence as f32 / 1_000_000.0,
+            None => 0.0,
+        }
+    }
+
+    fn confidence_for_margin(&self, margin: i16) -> f32 {
+        self.confidence_bands
+            .iter()
+            .find(|band| margin >= band.minimum_margin)
+            .map_or(0.0, |band| band.confidence_ppm as f32 / 1_000_000.0)
+    }
+
+    fn unknown_confidence(&self) -> f32 {
+        self.unknown_confidence_ppm as f32 / 1_000_000.0
+    }
+}
+
+fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
+    static BEHAVIOR: OnceLock<PredictorBehaviorV1> = OnceLock::new();
+    BEHAVIOR.get_or_init(|| PredictorBehaviorV1 {
+        scorecard: PredictorScorecardV1 {
+            weights: BTreeMap::from([
+                ("opening_broad".into(), 9),
+                ("continuing_broad".into(), 5),
+                ("concrete_mutation".into(), 7),
+                ("mutation".into(), 4),
+                ("verification".into(), 4),
+                ("narrow_poll".into(), 9),
+                ("narrow_read".into(), 9),
+                ("finalize".into(), 3),
+                ("read_result".into(), 9),
+                ("mutation_result".into(), 9),
+                ("test_failed_once".into(), 9),
+                ("repeated_failure".into(), 12),
+                ("near_done".into(), 12),
+                ("test_succeeded".into(), 7),
+                ("action_failed_once".into(), 5),
+                ("recovery_pressure".into(), 4),
+                ("redo_penalty".into(), 2),
+                ("context_pressure".into(), 2),
+                ("output_precision".into(), 2),
+                ("tool_context".into(), 1),
+                ("trajectory_pressure".into(), 3),
+                ("incomplete_history".into(), -8),
+                ("low_margin".into(), -4),
+            ]),
+            evidence_confidence_ppm: BTreeMap::from([
+                ("instruction_contradiction".into(), 950_000),
+                ("history_ambiguous".into(), 950_000),
+                ("history_truncated".into(), 950_000),
+                ("history_bounded_prefix".into(), 950_000),
+                ("history_unknown".into(), 950_000),
+                ("opening_broad_goal".into(), 850_000),
+                ("concrete_mutation_requested".into(), 800_000),
+                ("mutation_requested".into(), 800_000),
+                ("verification_requested".into(), 750_000),
+                ("narrow_poll_requested".into(), 900_000),
+                ("narrow_read_requested".into(), 900_000),
+                ("final_answer_requested".into(), 650_000),
+                ("read_result_available".into(), 900_000),
+                ("mutation_result_available".into(), 900_000),
+                ("test_failed_once".into(), 900_000),
+                ("repeated_failure".into(), 950_000),
+                ("progress_near_done".into(), 950_000),
+                ("test_succeeded".into(), 800_000),
+                ("action_failed_once".into(), 700_000),
+                ("recovery_pressure".into(), 900_000),
+                ("redo_penalty_high".into(), 800_000),
+                ("context_pressure_high".into(), 700_000),
+                ("output_precision_high".into(), 750_000),
+                ("tool_context_available".into(), 650_000),
+                ("trajectory_pressure".into(), 850_000),
+                ("score_margin_low".into(), 800_000),
+            ]),
+            repeated_failure_count: 2,
+            minimum_top_score: 5,
+            minimum_margin: 2,
+            minimum_coverage: 2,
+            maximum_evidence: MAX_PREDICTIVE_EVIDENCE,
+            confidence_bands: vec![
+                ConfidenceBand {
+                    minimum_margin: 8,
+                    confidence_ppm: 900_000,
+                },
+                ConfidenceBand {
+                    minimum_margin: 5,
+                    confidence_ppm: 800_000,
+                },
+                ConfidenceBand {
+                    minimum_margin: 3,
+                    confidence_ppm: 700_000,
+                },
+                ConfidenceBand {
+                    minimum_margin: 0,
+                    confidence_ppm: 600_000,
+                },
+            ],
+            unknown_confidence_ppm: 350_000,
+        },
+        instruction_terms: BTreeMap::from([
+            (
+                "broad".into(),
+                string_terms(&[
+                    "plan",
+                    "investigate",
+                    "analyze",
+                    "architecture",
+                    "design",
+                    "understand",
+                    "decompose",
+                    "identify the affected",
+                    "choose a direction",
+                    "repository",
+                    "codebase",
+                    "whole project",
+                    "entire project",
+                ]),
+            ),
+            (
+                "mutate".into(),
+                string_terms(&[
+                    "fix",
+                    "implement",
+                    "update",
+                    "change",
+                    "add",
+                    "remove",
+                    "correct",
+                    "repair",
+                    "refactor",
+                ]),
+            ),
+            (
+                "verify".into(),
+                string_terms(&["verify", "test", "review", "check", "validate"]),
+            ),
+            (
+                "poll".into(),
+                string_terms(&["poll", "status", "wait", "watch", "monitor"]),
+            ),
+            (
+                "read".into(),
+                string_terms(&[
+                    "read ", "show ", "inspect ", "open ", "print ", "locate ", "find ",
+                ]),
+            ),
+            (
+                "finalize".into(),
+                string_terms(&[
+                    "summarize",
+                    "final answer",
+                    "report",
+                    "handoff",
+                    "explain the completed",
+                ]),
+            ),
+            (
+                "contradiction".into(),
+                string_terms(&[
+                    "make no changes",
+                    "do not make changes",
+                    "do not modify anything",
+                    "no changes are allowed",
+                    "only summarize",
+                ]),
+            ),
+        ]),
+        concrete_terms: string_terms(&[
+            "error:",
+            "failed",
+            "acceptance",
+            "expected ",
+            "actual ",
+            "line ",
+            ".rs",
+            ".py",
+            ".ts",
+            ".js",
+            ".go",
+            ".toml",
+            ".yaml",
+            ".json",
+            "src/",
+            "tests/",
+        ]),
+        tool_name_terms: BTreeMap::from([
+            (
+                "mutate".into(),
+                string_terms(&[
+                    "edit", "write", "patch", "create", "delete", "move", "rename",
+                ]),
+            ),
+            (
+                "read".into(),
+                string_terms(&[
+                    "read", "search", "find", "grep", "glob", "list", "view", "inspect",
+                ]),
+            ),
+            (
+                "test".into(),
+                string_terms(&["test", "check", "lint", "build"]),
+            ),
+            (
+                "command".into(),
+                string_terms(&["bash", "shell", "terminal", "exec", "command"]),
+            ),
+        ]),
+        command_test_terms: string_terms(&[
+            "cargo test",
+            "cargo check",
+            "cargo clippy",
+            "pytest",
+            "npm test",
+            "pnpm test",
+            "yarn test",
+            "go test",
+            "ctest",
+        ]),
+        command_read_prefixes: string_terms(&[
+            "cat ",
+            "sed ",
+            "rg ",
+            "grep ",
+            "ls",
+            "git diff",
+            "git status",
+        ]),
+        role_tie_order: vec![
+            NextStepRole::Orchestrate,
+            NextStepRole::Implement,
+            NextStepRole::Mechanical,
+            NextStepRole::Verify,
+            NextStepRole::Finalize,
+        ],
+        role_actions: BTreeMap::from([
+            ("orchestrate".into(), NextActionClass::ReasonOrPlan),
+            ("implement".into(), NextActionClass::Mutate),
+            ("mechanical".into(), NextActionClass::WaitOrPoll),
+            ("verify".into(), NextActionClass::ExecuteOrTest),
+            ("finalize".into(), NextActionClass::AnswerOrSummarize),
+            ("unknown".into(), NextActionClass::Unknown),
+        ]),
+        narrow_read_action: NextActionClass::InspectOrRead,
+        algorithm_versions: BTreeMap::from([
+            ("instruction_features".into(), 1),
+            ("history_pairing".into(), 1),
+            ("tool_result_failure".into(), 1),
+            ("visible_causal_history".into(), 1),
+            ("role_scoring".into(), 1),
+            ("task_complexity".into(), 1),
+            ("risk_mapping".into(), 1),
+        ]),
+    })
+}
+
+fn compiled_scorecard_v1() -> &'static PredictorScorecardV1 {
+    &compiled_predictor_behavior().scorecard
+}
+
+fn string_terms(terms: &[&str]) -> Vec<String> {
+    terms.iter().map(|term| (*term).to_owned()).collect()
+}
+
+fn behavior_terms<'a>(terms: &'a BTreeMap<String, Vec<String>>, key: &str) -> &'a [String] {
+    terms.get(key).map(Vec::as_slice).unwrap_or_default()
+}
+
+pub fn compiled_scorecard_digest() -> &'static str {
+    COMPILED_SCORECARD_DIGEST
+}
+
+pub fn compiled_predictor_contract() -> PredictorContract {
+    PredictorContract {
+        algorithm: PREDICTOR_ALGORITHM.to_owned(),
+        version: 1,
+        config_digest: COMPILED_SCORECARD_DIGEST.to_owned(),
+        confidence_kind: PREDICTOR_CONFIDENCE_KIND.to_owned(),
+        calibration_digest: None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PredictiveReasonCode {
@@ -179,6 +528,7 @@ enum PredictiveReasonCode {
     MutationRequested,
     VerificationRequested,
     NarrowPollRequested,
+    NarrowReadRequested,
     FinalAnswerRequested,
     ReadResultAvailable,
     MutationResultAvailable,
@@ -208,6 +558,7 @@ impl PredictiveReasonCode {
         Self::MutationRequested,
         Self::VerificationRequested,
         Self::NarrowPollRequested,
+        Self::NarrowReadRequested,
         Self::FinalAnswerRequested,
         Self::ReadResultAvailable,
         Self::MutationResultAvailable,
@@ -237,6 +588,7 @@ impl PredictiveReasonCode {
             Self::MutationRequested => "mutation_requested",
             Self::VerificationRequested => "verification_requested",
             Self::NarrowPollRequested => "narrow_poll_requested",
+            Self::NarrowReadRequested => "narrow_read_requested",
             Self::FinalAnswerRequested => "final_answer_requested",
             Self::ReadResultAvailable => "read_result_available",
             Self::MutationResultAvailable => "mutation_result_available",
@@ -277,6 +629,7 @@ struct InstructionFeatures {
     mutate: bool,
     verify: bool,
     poll: bool,
+    narrow_read: bool,
     finalize: bool,
     concrete: bool,
     contradictory: bool,
@@ -284,7 +637,13 @@ struct InstructionFeatures {
 
 impl InstructionFeatures {
     fn has_signal(&self) -> bool {
-        self.broad || self.mutate || self.verify || self.poll || self.finalize || self.concrete
+        self.broad
+            || self.mutate
+            || self.verify
+            || self.poll
+            || self.narrow_read
+            || self.finalize
+            || self.concrete
     }
 }
 
@@ -299,6 +658,7 @@ struct HistoryFeatures {
 }
 
 pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> PredictiveRouteIR {
+    let scorecard = compiled_scorecard_v1();
     let history = history_features(prompt, observed);
     let instruction = instruction_features(prompt, observed.normalized_action_history.is_some());
     let observed_projection = observed.route_projection();
@@ -324,7 +684,12 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         } else {
             PredictiveReasonCode::HistoryUnknown
         };
-        push_evidence(&mut evidence, code, -8, 0.95);
+        push_evidence(
+            &mut evidence,
+            code,
+            scorecard.weight("incomplete_history"),
+            scorecard.evidence_confidence(code),
+        );
         return unknown_prediction(observed_projection, history.completeness, evidence);
     }
 
@@ -332,59 +697,78 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     let opening = observed.state_kind == WorkflowStateKind::Opening && !history.has_trajectory;
 
     if instruction.broad {
-        let weight = if opening { 9 } else { 5 };
+        let weight = if opening {
+            scorecard.weight("opening_broad")
+        } else {
+            scorecard.weight("continuing_broad")
+        };
         add_score(
             &mut scores,
             NextStepRole::Orchestrate,
             weight,
             &mut evidence,
             PredictiveReasonCode::OpeningBroadGoal,
-            0.85,
+            scorecard.evidence_confidence(PredictiveReasonCode::OpeningBroadGoal),
         );
     }
     if instruction.mutate {
-        let weight = if instruction.concrete { 7 } else { 4 };
+        let weight = if instruction.concrete {
+            scorecard.weight("concrete_mutation")
+        } else {
+            scorecard.weight("mutation")
+        };
+        let code = if instruction.concrete {
+            PredictiveReasonCode::ConcreteMutationRequested
+        } else {
+            PredictiveReasonCode::MutationRequested
+        };
         add_score(
             &mut scores,
             NextStepRole::Implement,
             weight,
             &mut evidence,
-            if instruction.concrete {
-                PredictiveReasonCode::ConcreteMutationRequested
-            } else {
-                PredictiveReasonCode::MutationRequested
-            },
-            0.8,
+            code,
+            scorecard.evidence_confidence(code),
         );
     }
     if instruction.verify {
         add_score(
             &mut scores,
             NextStepRole::Verify,
-            4,
+            scorecard.weight("verification"),
             &mut evidence,
             PredictiveReasonCode::VerificationRequested,
-            0.75,
+            scorecard.evidence_confidence(PredictiveReasonCode::VerificationRequested),
         );
     }
     if instruction.poll {
         add_score(
             &mut scores,
             NextStepRole::Mechanical,
-            9,
+            scorecard.weight("narrow_poll"),
             &mut evidence,
             PredictiveReasonCode::NarrowPollRequested,
-            0.9,
+            scorecard.evidence_confidence(PredictiveReasonCode::NarrowPollRequested),
+        );
+    }
+    if instruction.narrow_read {
+        add_score(
+            &mut scores,
+            NextStepRole::Mechanical,
+            scorecard.weight("narrow_read"),
+            &mut evidence,
+            PredictiveReasonCode::NarrowReadRequested,
+            scorecard.evidence_confidence(PredictiveReasonCode::NarrowReadRequested),
         );
     }
     if instruction.finalize {
         add_score(
             &mut scores,
             NextStepRole::Finalize,
-            3,
+            scorecard.weight("finalize"),
             &mut evidence,
             PredictiveReasonCode::FinalAnswerRequested,
-            0.65,
+            scorecard.evidence_confidence(PredictiveReasonCode::FinalAnswerRequested),
         );
     }
 
@@ -392,95 +776,101 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         (Some(ObservedAction::Read), false) => add_score(
             &mut scores,
             NextStepRole::Implement,
-            9,
+            scorecard.weight("read_result"),
             &mut evidence,
             PredictiveReasonCode::ReadResultAvailable,
-            0.9,
+            scorecard.evidence_confidence(PredictiveReasonCode::ReadResultAvailable),
         ),
         (Some(ObservedAction::Mutate), false) => add_score(
             &mut scores,
             NextStepRole::Verify,
-            9,
+            scorecard.weight("mutation_result"),
             &mut evidence,
             PredictiveReasonCode::MutationResultAvailable,
-            0.9,
+            scorecard.evidence_confidence(PredictiveReasonCode::MutationResultAvailable),
         ),
-        (Some(ObservedAction::Test), true) if history.failure_count == 1 => add_score(
-            &mut scores,
-            NextStepRole::Implement,
-            9,
-            &mut evidence,
-            PredictiveReasonCode::TestFailedOnce,
-            0.9,
-        ),
+        (Some(ObservedAction::Test), true)
+            if history.failure_count < scorecard.repeated_failure_count =>
+        {
+            add_score(
+                &mut scores,
+                NextStepRole::Implement,
+                scorecard.weight("test_failed_once"),
+                &mut evidence,
+                PredictiveReasonCode::TestFailedOnce,
+                scorecard.evidence_confidence(PredictiveReasonCode::TestFailedOnce),
+            )
+        }
         (Some(ObservedAction::Test), true) => add_score(
             &mut scores,
             NextStepRole::Orchestrate,
-            12,
+            scorecard.weight("repeated_failure"),
             &mut evidence,
             PredictiveReasonCode::RepeatedFailure,
-            0.95,
+            scorecard.evidence_confidence(PredictiveReasonCode::RepeatedFailure),
         ),
         (Some(ObservedAction::Test), false) if history.successful_test_after_mutation => add_score(
             &mut scores,
             NextStepRole::Finalize,
-            12,
+            scorecard.weight("near_done"),
             &mut evidence,
             PredictiveReasonCode::ProgressNearDone,
-            0.95,
+            scorecard.evidence_confidence(PredictiveReasonCode::ProgressNearDone),
         ),
         (Some(ObservedAction::Test), false) => add_score(
             &mut scores,
             NextStepRole::Finalize,
-            7,
+            scorecard.weight("test_succeeded"),
             &mut evidence,
             PredictiveReasonCode::TestSucceeded,
-            0.8,
+            scorecard.evidence_confidence(PredictiveReasonCode::TestSucceeded),
         ),
         (Some(ObservedAction::Other), false) => {}
         (Some(ObservedAction::Read | ObservedAction::Mutate | ObservedAction::Other), true) => {
             add_score(
                 &mut scores,
                 NextStepRole::Implement,
-                5,
+                scorecard.weight("action_failed_once"),
                 &mut evidence,
                 PredictiveReasonCode::ActionFailedOnce,
-                0.7,
+                scorecard.evidence_confidence(PredictiveReasonCode::ActionFailedOnce),
             );
         }
         (None, _) => {}
     }
 
-    if history.failure_count >= 2 && observed.recovery_signal == RecoverySignal::LikelyRecovery {
-        add_score(
-            &mut scores,
-            NextStepRole::Orchestrate,
-            4,
-            &mut evidence,
-            PredictiveReasonCode::RecoveryPressure,
-            0.9,
-        );
-    }
-    if observed.capability_constraints.expected_redo_penalty == RequirementLevel::High
-        && history.failure_count >= 2
+    if history.failure_count >= scorecard.repeated_failure_count
+        && observed.recovery_signal == RecoverySignal::LikelyRecovery
     {
         add_score(
             &mut scores,
             NextStepRole::Orchestrate,
-            2,
+            scorecard.weight("recovery_pressure"),
+            &mut evidence,
+            PredictiveReasonCode::RecoveryPressure,
+            scorecard.evidence_confidence(PredictiveReasonCode::RecoveryPressure),
+        );
+    }
+    if observed.capability_constraints.expected_redo_penalty == RequirementLevel::High
+        && history.failure_count >= scorecard.repeated_failure_count
+    {
+        add_score(
+            &mut scores,
+            NextStepRole::Orchestrate,
+            scorecard.weight("redo_penalty"),
             &mut evidence,
             PredictiveReasonCode::RedoPenaltyHigh,
-            0.8,
+            scorecard.evidence_confidence(PredictiveReasonCode::RedoPenaltyHigh),
         );
     }
     if observed.capability_constraints.context_pressure == RequirementLevel::High {
         add_score(
             &mut scores,
             NextStepRole::Orchestrate,
-            2,
+            scorecard.weight("context_pressure"),
             &mut evidence,
             PredictiveReasonCode::ContextPressureHigh,
-            0.7,
+            scorecard.evidence_confidence(PredictiveReasonCode::ContextPressureHigh),
         );
     }
     if observed.capability_constraints.output_precision == RequirementLevel::High
@@ -489,10 +879,10 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         add_score(
             &mut scores,
             NextStepRole::Verify,
-            2,
+            scorecard.weight("output_precision"),
             &mut evidence,
             PredictiveReasonCode::OutputPrecisionHigh,
-            0.75,
+            scorecard.evidence_confidence(PredictiveReasonCode::OutputPrecisionHigh),
         );
     }
     if observed.tool_density == ToolDensity::High
@@ -501,10 +891,10 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         add_score(
             &mut scores,
             NextStepRole::Implement,
-            1,
+            scorecard.weight("tool_context"),
             &mut evidence,
             PredictiveReasonCode::ToolContextAvailable,
-            0.65,
+            scorecard.evidence_confidence(PredictiveReasonCode::ToolContextAvailable),
         );
     }
     if observed
@@ -515,10 +905,10 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         add_score(
             &mut scores,
             NextStepRole::Orchestrate,
-            3,
+            scorecard.weight("trajectory_pressure"),
             &mut evidence,
             PredictiveReasonCode::TrajectoryPressure,
-            0.85,
+            scorecard.evidence_confidence(PredictiveReasonCode::TrajectoryPressure),
         );
     }
 
@@ -527,12 +917,20 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         + u8::from(observed.confidence > 0.0);
     let (role, top_score, runner_up) = choose_role(scores);
     let margin = top_score.saturating_sub(runner_up);
-    if top_score < 5 || margin < 2 || coverage < 2 {
-        push_evidence(&mut evidence, PredictiveReasonCode::ScoreMarginLow, -4, 0.8);
+    if top_score < scorecard.minimum_top_score
+        || margin < scorecard.minimum_margin
+        || coverage < scorecard.minimum_coverage
+    {
+        push_evidence(
+            &mut evidence,
+            PredictiveReasonCode::ScoreMarginLow,
+            scorecard.weight("low_margin"),
+            scorecard.evidence_confidence(PredictiveReasonCode::ScoreMarginLow),
+        );
         return unknown_prediction(observed_projection, history.completeness, evidence);
     }
 
-    let next_action_class = action_for_role(role);
+    let next_action_class = action_for_role(role, instruction.narrow_read);
     let task_complexity = if role == NextStepRole::Mechanical {
         TaskComplexity::Mechanical
     } else if instruction.broad || instruction.concrete || history.failure_count > 0 {
@@ -551,7 +949,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     } else {
         ProgressState::Progressing
     };
-    let route_risk = if history.failure_count >= 2 {
+    let route_risk = if history.failure_count >= scorecard.repeated_failure_count {
         RouteRisk::Guarded
     } else {
         observed_projection.risk
@@ -566,8 +964,10 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         progress_state,
         history_completeness: history.completeness,
         route_risk,
-        confidence: confidence_band(margin),
+        confidence: scorecard.confidence_for_margin(margin),
         evidence,
+        predictor_contract_digest: compiled_scorecard_digest().to_owned(),
+        confidence_kind: PREDICTOR_CONFIDENCE_KIND.to_owned(),
     }
 }
 
@@ -575,6 +975,7 @@ fn instruction_features(
     prompt: &Prompt,
     normalized_plain_text_history: bool,
 ) -> InstructionFeatures {
+    let behavior = compiled_predictor_behavior();
     let messages = if normalized_plain_text_history {
         let boundary = prompt
             .messages
@@ -593,56 +994,24 @@ fn instruction_features(
         .or_else(|| prompt.system.clone())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let broad = contains_any(
-        &text,
-        &[
-            "plan",
-            "investigate",
-            "analyze",
-            "architecture",
-            "design",
-            "understand",
-            "decompose",
-            "identify the affected",
-            "choose a direction",
-        ],
-    );
-    let mutate = contains_any(
-        &text,
-        &[
-            "fix",
-            "implement",
-            "update",
-            "change",
-            "add",
-            "remove",
-            "correct",
-            "repair",
-            "refactor",
-        ],
-    );
-    let verify = contains_any(&text, &["verify", "test", "review", "check", "validate"]);
-    let poll = contains_any(&text, &["poll", "status", "wait", "watch", "monitor"]);
-    let finalize = contains_any(
-        &text,
-        &[
-            "summarize",
-            "final answer",
-            "report",
-            "handoff",
-            "explain the completed",
-        ],
-    );
+    let broad = contains_any(&text, behavior_terms(&behavior.instruction_terms, "broad"));
+    let mutate = contains_any(&text, behavior_terms(&behavior.instruction_terms, "mutate"));
+    let verify = contains_any(&text, behavior_terms(&behavior.instruction_terms, "verify"));
+    let poll = contains_any(&text, behavior_terms(&behavior.instruction_terms, "poll"));
+    let read_requested = contains_any(&text, behavior_terms(&behavior.instruction_terms, "read"));
+    let finalize = !mutate
+        && !verify
+        && !read_requested
+        && contains_any(
+            &text,
+            behavior_terms(&behavior.instruction_terms, "finalize"),
+        );
     let concrete = has_concrete_evidence(&text);
+    let narrow_read = read_requested && concrete && !broad && !mutate && !verify && !poll;
     let contradictory = mutate
         && contains_any(
             &text,
-            &[
-                "do not modify",
-                "without changing",
-                "only summarize",
-                "no changes",
-            ],
+            behavior_terms(&behavior.instruction_terms, "contradiction"),
         );
 
     InstructionFeatures {
@@ -650,6 +1019,7 @@ fn instruction_features(
         mutate,
         verify,
         poll,
+        narrow_read,
         finalize,
         concrete,
         contradictory,
@@ -670,31 +1040,11 @@ fn message_text(message: &bitrouter_sdk::language_model::types::Message) -> Opti
 }
 
 fn has_concrete_evidence(text: &str) -> bool {
-    contains_any(
-        text,
-        &[
-            "error:",
-            "failed",
-            "acceptance",
-            "expected ",
-            "actual ",
-            "line ",
-            ".rs",
-            ".py",
-            ".ts",
-            ".js",
-            ".go",
-            ".toml",
-            ".yaml",
-            ".json",
-            "src/",
-            "tests/",
-        ],
-    )
+    contains_any(text, &compiled_predictor_behavior().concrete_terms)
 }
 
-fn contains_any(text: &str, terms: &[&str]) -> bool {
-    terms.iter().any(|term| text.contains(term))
+fn contains_any<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
+    terms.iter().any(|term| text.contains(term.as_ref()))
 }
 
 fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatures {
@@ -874,27 +1224,18 @@ fn bounded_signal_count(count: u8) -> u8 {
 }
 
 fn classify_action(name: &str, arguments: &str, observed: &WorkflowStateIR) -> ObservedAction {
+    let behavior = compiled_predictor_behavior();
     let name = name.to_ascii_lowercase();
-    if contains_any(
-        &name,
-        &[
-            "edit", "write", "patch", "create", "delete", "move", "rename",
-        ],
-    ) {
+    if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "mutate")) {
         return ObservedAction::Mutate;
     }
-    if contains_any(
-        &name,
-        &[
-            "read", "search", "find", "grep", "glob", "list", "view", "inspect",
-        ],
-    ) {
+    if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "read")) {
         return ObservedAction::Read;
     }
-    if contains_any(&name, &["test", "check", "lint", "build"]) {
+    if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "test")) {
         return ObservedAction::Test;
     }
-    if contains_any(&name, &["bash", "shell", "terminal", "exec", "command"])
+    if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "command"))
         && let Some(command) = command_argument(arguments)
     {
         if command_is_test(&command) {
@@ -925,35 +1266,15 @@ fn command_argument(arguments: &str) -> Option<String> {
 }
 
 fn command_is_test(command: &str) -> bool {
-    contains_any(
-        command,
-        &[
-            "cargo test",
-            "cargo check",
-            "cargo clippy",
-            "pytest",
-            "npm test",
-            "pnpm test",
-            "yarn test",
-            "go test",
-            "ctest",
-        ],
-    )
+    contains_any(command, &compiled_predictor_behavior().command_test_terms)
 }
 
 fn command_is_read(command: &str) -> bool {
     let command = command.trim_start();
-    [
-        "cat ",
-        "sed ",
-        "rg ",
-        "grep ",
-        "ls",
-        "git diff",
-        "git status",
-    ]
-    .iter()
-    .any(|prefix| command.starts_with(prefix))
+    compiled_predictor_behavior()
+        .command_read_prefixes
+        .iter()
+        .any(|prefix| command.starts_with(prefix))
 }
 
 fn add_score(
@@ -982,13 +1303,7 @@ fn role_index(role: NextStepRole) -> Option<usize> {
 }
 
 fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStepRole, i16, i16) {
-    let roles = [
-        NextStepRole::Orchestrate,
-        NextStepRole::Implement,
-        NextStepRole::Mechanical,
-        NextStepRole::Verify,
-        NextStepRole::Finalize,
-    ];
+    let roles = &compiled_predictor_behavior().role_tie_order;
     let mut best_index = 0;
     let mut best_score = scores[0];
     let mut runner_up = i16::MIN;
@@ -1004,24 +1319,16 @@ fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStepRole, i16, i16) {
     (roles[best_index], best_score, runner_up.max(0))
 }
 
-fn action_for_role(role: NextStepRole) -> NextActionClass {
-    match role {
-        NextStepRole::Orchestrate => NextActionClass::ReasonOrPlan,
-        NextStepRole::Implement => NextActionClass::Mutate,
-        NextStepRole::Mechanical => NextActionClass::WaitOrPoll,
-        NextStepRole::Verify => NextActionClass::ExecuteOrTest,
-        NextStepRole::Finalize => NextActionClass::AnswerOrSummarize,
-        NextStepRole::Unknown => NextActionClass::Unknown,
+fn action_for_role(role: NextStepRole, narrow_read: bool) -> NextActionClass {
+    let behavior = compiled_predictor_behavior();
+    if role == NextStepRole::Mechanical && narrow_read {
+        return behavior.narrow_read_action;
     }
-}
-
-fn confidence_band(margin: i16) -> f32 {
-    match margin {
-        8.. => 0.9,
-        5..=7 => 0.8,
-        3..=4 => 0.7,
-        _ => 0.6,
-    }
+    behavior
+        .role_actions
+        .get(role.key())
+        .copied()
+        .unwrap_or(NextActionClass::Unknown)
 }
 
 fn push_evidence(
@@ -1030,7 +1337,7 @@ fn push_evidence(
     weight: i16,
     confidence: f32,
 ) {
-    if evidence.len() < MAX_PREDICTIVE_EVIDENCE
+    if evidence.len() < compiled_scorecard_v1().maximum_evidence
         && !evidence.iter().any(|item| item.code == code.as_str())
     {
         evidence.push(PredictiveEvidence {
@@ -1055,8 +1362,10 @@ fn unknown_prediction(
         task_complexity: TaskComplexity::Ambiguous,
         progress_state: ProgressState::Unknown,
         history_completeness,
-        confidence: 0.35,
+        confidence: compiled_scorecard_v1().unknown_confidence(),
         evidence,
+        predictor_contract_digest: compiled_scorecard_digest().to_owned(),
+        confidence_kind: PREDICTOR_CONFIDENCE_KIND.to_owned(),
     }
 }
 
@@ -1068,11 +1377,19 @@ mod tests {
     use bitrouter_sdk::language_model::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
+    use sha2::{Digest, Sha256};
 
     use crate::workflow_state::extractors::generic::GenericPromptExtractor;
     use crate::workflow_state::extractors::{
         ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
     };
+
+    fn predictor_behavior_digest(behavior: &PredictorBehaviorV1) -> anyhow::Result<String> {
+        Ok(format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(serde_json::to_vec(behavior)?))
+        ))
+    }
     use crate::workflow_state::fixture::WorkflowTraceFixture;
     use crate::workflow_state::ir::{Evidence, HarnessId, ProtocolKind};
 
@@ -1229,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn predicts_roles_from_http_native_history() {
+    fn predicts_roles_from_http_native_history() -> anyhow::Result<()> {
         let cases = [
             (
                 "broad complex opening",
@@ -1269,16 +1586,15 @@ mod tests {
         ];
 
         for (name, fixture_text, expected_role, expected_action, expected_risk) in cases {
-            let Some((ir, prompt)) = fixture_input(fixture_text) else {
-                assert!(false, "invalid prediction fixture: {name}");
-                continue;
-            };
+            let (ir, prompt) = fixture_input(fixture_text)
+                .ok_or_else(|| anyhow::anyhow!("invalid prediction fixture: {name}"))?;
             let prediction = predict_next_step(&ir, &prompt);
 
             assert_eq!(prediction.next_step_role, expected_role, "{name}");
             assert_eq!(prediction.next_action_class, expected_action, "{name}");
             assert_eq!(prediction.route_risk, expected_risk, "{name}");
         }
+        Ok(())
     }
 
     #[test]
@@ -1612,11 +1928,9 @@ mod tests {
     }
 
     #[test]
-    fn predictor_preserves_prompt_tools_and_excludes_private_evidence() {
-        let Some((ir, prompt)) = fixture_input(POST_EDIT_VERIFY_FIXTURE) else {
-            assert!(false, "invalid post-edit fixture");
-            return;
-        };
+    fn predictor_preserves_prompt_tools_and_excludes_private_evidence() -> anyhow::Result<()> {
+        let (ir, prompt) = fixture_input(POST_EDIT_VERIFY_FIXTURE)
+            .ok_or_else(|| anyhow::anyhow!("invalid post-edit fixture"))?;
         let original = prompt.clone();
 
         let prediction = predict_next_step(&ir, &prompt);
@@ -1632,6 +1946,101 @@ mod tests {
                 && !evidence.code.contains("src/")
                 && !evidence.code.contains("apply_patch")
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_predictor_contract_is_stable_and_heuristic() -> anyhow::Result<()> {
+        let contract = compiled_predictor_contract();
+        let recomputed_digest = predictor_behavior_digest(compiled_predictor_behavior())?;
+
+        assert_eq!(contract.algorithm, "deterministic_scorecard");
+        assert_eq!(contract.version, 1);
+        assert_eq!(contract.confidence_kind, "heuristic_margin");
+        assert_eq!(contract.calibration_digest, None);
+        assert_eq!(contract.config_digest, compiled_scorecard_digest());
+        assert_eq!(contract.config_digest, recomputed_digest);
+        assert!(contract.config_digest.starts_with("sha256:"));
+        assert_eq!(contract.config_digest.len(), 71);
+        Ok(())
+    }
+
+    #[test]
+    fn predictor_contract_digest_covers_behavior_lexicon_and_role_mapping() -> anyhow::Result<()> {
+        let mut changed_lexicon = compiled_predictor_behavior().clone();
+        changed_lexicon
+            .instruction_terms
+            .get_mut("broad")
+            .ok_or_else(|| anyhow::anyhow!("compiled broad lexicon is missing"))?
+            .push("new broad signal".into());
+        assert_ne!(
+            predictor_behavior_digest(&changed_lexicon)?,
+            compiled_scorecard_digest()
+        );
+
+        let mut changed_mapping = compiled_predictor_behavior().clone();
+        changed_mapping
+            .role_actions
+            .insert("mechanical".into(), NextActionClass::ReasonOrPlan);
+        assert_ne!(
+            predictor_behavior_digest(&changed_mapping)?,
+            compiled_scorecard_digest()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn predicts_only_specific_narrow_reads_as_mechanical_inspection() {
+        let cases = [
+            (
+                "Read src/parser.rs and report the current error enum.",
+                NextStepRole::Mechanical,
+                NextActionClass::InspectOrRead,
+            ),
+            (
+                "Inspect the repository and understand the architecture.",
+                NextStepRole::Orchestrate,
+                NextActionClass::ReasonOrPlan,
+            ),
+        ];
+
+        for (instruction, expected_role, expected_action) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+            assert_eq!(prediction.next_step_role, expected_role, "{instruction}");
+            assert_eq!(
+                prediction.next_action_class, expected_action,
+                "{instruction}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_constraints_are_not_misread_as_instruction_contradictions() {
+        let valid = prompt(vec![Message::text(
+            Role::User,
+            "Fix src/parser.rs without changing the public API or behavior.",
+        )]);
+        let contradictory = prompt(vec![Message::text(
+            Role::User,
+            "Fix src/parser.rs, but make no changes and only summarize it.",
+        )]);
+
+        let valid_prediction = predict_next_step(&observed(&valid), &valid);
+        let contradictory_prediction = predict_next_step(&observed(&contradictory), &contradictory);
+
+        assert_eq!(valid_prediction.next_step_role, NextStepRole::Implement);
+        assert_eq!(valid_prediction.next_action_class, NextActionClass::Mutate);
+        assert_eq!(
+            contradictory_prediction.next_step_role,
+            NextStepRole::Unknown
+        );
+        assert!(
+            contradictory_prediction
+                .evidence
+                .iter()
+                .any(|item| item.code == "instruction_contradiction")
+        );
     }
 
     #[test]

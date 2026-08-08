@@ -88,6 +88,8 @@ pub struct PendingEvalDecision {
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
+    pub predictor_contract_digest: Option<String>,
+    pub prediction_confidence_kind: Option<String>,
     pub observation: Option<PredictionObservation>,
     pub observed_at: String,
 }
@@ -100,7 +102,11 @@ pub(crate) struct PredictionObservationSnapshot {
     predicted_role: Option<String>,
     predicted_action: Option<String>,
     prediction_confidence_ppm: Option<u32>,
+    predictor_contract_digest: Option<String>,
+    prediction_confidence_kind: Option<String>,
     observed_action: Option<ObservedActionClass>,
+    observation_confidence_ppm: Option<u32>,
+    observation_reason_code: Option<String>,
 }
 
 impl PendingEvalDecision {
@@ -126,9 +132,23 @@ impl PendingEvalDecision {
             prediction_confidence_ppm: self
                 .prediction_confidence_ppm
                 .map(|confidence| confidence.min(1_000_000)),
+            predictor_contract_digest: bounded_continuation_label(
+                self.predictor_contract_digest.as_deref(),
+                71,
+            ),
+            prediction_confidence_kind: bounded_continuation_label(
+                self.prediction_confidence_kind.as_deref(),
+                32,
+            ),
             observed_action: self
                 .observation
                 .map(|observation| observation.observed_action),
+            observation_confidence_ppm: self
+                .observation
+                .map(|observation| observation.confidence_ppm().min(1_000_000)),
+            observation_reason_code: self
+                .observation
+                .map(|observation| observation.reason_code().to_owned()),
         }
     }
 }
@@ -154,8 +174,20 @@ impl PredictionObservationSnapshot {
         if let Some(confidence) = self.prediction_confidence_ppm {
             attributes.insert("prediction_confidence_ppm".into(), confidence.to_string());
         }
+        if let Some(digest) = &self.predictor_contract_digest {
+            attributes.insert("predictor_contract_digest".into(), digest.clone());
+        }
+        if let Some(kind) = &self.prediction_confidence_kind {
+            attributes.insert("prediction_confidence_kind".into(), kind.clone());
+        }
         if let Some(action) = self.observed_action {
             attributes.insert("observed_action".into(), action.as_str().into());
+        }
+        if let Some(confidence) = self.observation_confidence_ppm {
+            attributes.insert("observation_confidence_ppm".into(), confidence.to_string());
+        }
+        if let Some(reason) = &self.observation_reason_code {
+            attributes.insert("observation_reason_code".into(), reason.clone());
         }
         if let (Some(predicted), Some(observed)) = (
             self.predicted_action
@@ -195,8 +227,23 @@ impl PredictionObservationSnapshot {
                 u64::from(confidence),
             );
         }
+        if let Some(digest) = &self.predictor_contract_digest {
+            categorical.insert("routing.predictor_contract_digest".into(), digest.clone());
+        }
+        if let Some(kind) = &self.prediction_confidence_kind {
+            categorical.insert("routing.prediction_confidence_kind".into(), kind.clone());
+        }
         if let Some(action) = self.observed_action {
             categorical.insert("routing.observed_action".into(), action.as_str().into());
+        }
+        if let Some(confidence) = self.observation_confidence_ppm {
+            structural.insert(
+                "routing.observation_confidence_ppm".into(),
+                u64::from(confidence),
+            );
+        }
+        if let Some(reason) = &self.observation_reason_code {
+            categorical.insert("routing.observation_reason_code".into(), reason.clone());
         }
         if let Some(action_match) = self.attributes().get("action_match") {
             categorical.insert("routing.action_match".into(), action_match.clone());
@@ -231,28 +278,55 @@ fn normalize_predicted_action(value: &str) -> String {
 /// Bounded-lifetime request correlation used between model selection and
 /// settlement. Restarting BitRouter may lose in-flight observations, but can
 /// never alter the active routing policy.
-#[derive(Clone, Default)]
+const DEFAULT_PENDING_EVAL_CAPACITY: usize = 4_096;
+const DEFAULT_PENDING_EVAL_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+#[derive(Clone)]
 pub struct PendingEvalDecisionStore {
     entries: Arc<Mutex<BTreeMap<Uuid, PendingEvalEntry>>>,
+    capacity: usize,
+    ttl: std::time::Duration,
 }
 
 struct PendingEvalEntry {
     owner_user_id: String,
     decision: PendingEvalDecision,
+    inserted_at: std::time::Instant,
+}
+
+impl Default for PendingEvalDecisionStore {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(BTreeMap::new())),
+            capacity: DEFAULT_PENDING_EVAL_CAPACITY,
+            ttl: DEFAULT_PENDING_EVAL_TTL,
+        }
+    }
 }
 
 impl PendingEvalDecisionStore {
     pub fn insert(&self, invocation: &EvalInvocation, decision: PendingEvalDecision) {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                invocation.token(),
-                PendingEvalEntry {
-                    owner_user_id: invocation.owner_user_id().to_owned(),
-                    decision,
-                },
-            );
+        let now = std::time::Instant::now();
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        self.prune_expired(&mut entries, now);
+        let token = invocation.token();
+        if entries.len() >= self.capacity
+            && !entries.contains_key(&token)
+            && let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(token, entry)| (entry.inserted_at, **token))
+                .map(|(token, _)| *token)
+        {
+            entries.remove(&oldest);
+        }
+        entries.insert(
+            token,
+            PendingEvalEntry {
+                owner_user_id: invocation.owner_user_id().to_owned(),
+                decision,
+                inserted_at: now,
+            },
+        );
     }
 
     pub fn peek(
@@ -260,9 +334,9 @@ impl PendingEvalDecisionStore {
         invocation: &EvalInvocation,
         owner_user_id: &str,
     ) -> Option<PendingEvalDecision> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        self.prune_expired(&mut entries, std::time::Instant::now());
+        entries
             .get(&invocation.token())
             .filter(|entry| entry.owner_user_id == owner_user_id)
             .map(|entry| entry.decision.clone())
@@ -275,6 +349,7 @@ impl PendingEvalDecisionStore {
         observation: PredictionObservation,
     ) -> bool {
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        self.prune_expired(&mut entries, std::time::Instant::now());
         let Some(entry) = entries
             .get_mut(&invocation.token())
             .filter(|entry| entry.owner_user_id == owner_user_id)
@@ -294,6 +369,7 @@ impl PendingEvalDecisionStore {
         owner_user_id: &str,
     ) -> Option<PendingEvalDecision> {
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        self.prune_expired(&mut entries, std::time::Instant::now());
         if entries
             .get(&invocation.token())
             .is_none_or(|entry| entry.owner_user_id != owner_user_id)
@@ -309,6 +385,30 @@ impl PendingEvalDecisionStore {
         self.take(invocation, owner_user_id).is_some()
     }
 
+    fn prune_expired(
+        &self,
+        entries: &mut BTreeMap<Uuid, PendingEvalEntry>,
+        now: std::time::Instant,
+    ) {
+        entries.retain(|_, entry| now.duration_since(entry.inserted_at) < self.ttl);
+    }
+
+    #[cfg(test)]
+    fn with_limits_for_test(capacity: usize, ttl: std::time::Duration) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(BTreeMap::new())),
+            capacity: capacity.max(1),
+            ttl,
+        }
+    }
+
+    #[cfg(test)]
+    fn len_for_test(&self) -> usize {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        self.prune_expired(&mut entries, std::time::Instant::now());
+        entries.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn get(
         &self,
@@ -320,10 +420,7 @@ impl PendingEvalDecisionStore {
 
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_empty()
+        self.len_for_test() == 0
     }
 }
 
@@ -543,12 +640,17 @@ mod tests {
                 predicted_role: None,
                 predicted_action: None,
                 prediction_confidence_ppm: None,
+                predictor_contract_digest: None,
+                prediction_confidence_kind: None,
                 observation: None,
                 observed_at: "2026-08-08T00:00:00Z".into(),
             },
         );
-        let recorder =
-            EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
+        let recorder = EvalSettlementRecorder::new(
+            store.clone(),
+            pending.clone(),
+            Arc::new(PricingTable::new()),
+        );
         let mut context = settlement_context_with(&invocation);
 
         recorder.record(&mut context).await?;
@@ -584,6 +686,7 @@ mod tests {
                 "quality.pass".to_string(),
             ])
         );
+        assert!(pending.peek(&invocation, "local").is_none());
         Ok(())
     }
 
@@ -613,6 +716,11 @@ mod tests {
                 predicted_role: Some("implement".into()),
                 predicted_action: Some("mutate".into()),
                 prediction_confidence_ppm: Some(900_000),
+                predictor_contract_digest: Some(
+                    "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec"
+                        .into(),
+                ),
+                prediction_confidence_kind: Some("heuristic_margin".into()),
                 observation: Some(
                     crate::workflow_state::response_observer::PredictionObservation::new(
                         crate::workflow_state::response_observer::ObservedActionClass::Mutate,
@@ -675,6 +783,10 @@ mod tests {
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         };
@@ -684,6 +796,58 @@ mod tests {
 
         assert_eq!(first.semantic_digest()?, second.semantic_digest()?);
         Ok(())
+    }
+
+    #[test]
+    fn pending_eval_store_prunes_expired_entries_and_caps_capacity() {
+        let store =
+            PendingEvalDecisionStore::with_limits_for_test(2, std::time::Duration::from_secs(60));
+        let first = EvalInvocation::new("local");
+        let second = EvalInvocation::new("local");
+        let third = EvalInvocation::new("local");
+        for (invocation, request_id) in [(&first, "first"), (&second, "second"), (&third, "third")]
+        {
+            let mut decision = test_decision(request_id);
+            decision.request_id = request_id.to_owned();
+            store.insert(invocation, decision);
+        }
+
+        assert!(store.peek(&first, "local").is_none());
+        assert!(store.peek(&second, "local").is_some());
+        assert!(store.peek(&third, "local").is_some());
+        assert_eq!(store.len_for_test(), 2);
+
+        let expiring = PendingEvalDecisionStore::with_limits_for_test(1, std::time::Duration::ZERO);
+        let invocation = EvalInvocation::new("local");
+        expiring.insert(&invocation, test_decision("expired"));
+        assert!(expiring.peek(&invocation, "local").is_none());
+        assert_eq!(expiring.len_for_test(), 0);
+    }
+
+    fn test_decision(request_id: &str) -> PendingEvalDecision {
+        PendingEvalDecision {
+            request_id: request_id.to_owned(),
+            decision_id: format!("decision-{request_id}"),
+            policy: "auto:cost".into(),
+            policy_digest: DIGEST.into(),
+            request_key: "opening".into(),
+            selected_tier: "economy".into(),
+            baseline_tier: Some("strong".into()),
+            preset: Some("auto:cost".into()),
+            holdout: false,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
+            predicted_role: Some("implement".into()),
+            predicted_action: Some("mutate".into()),
+            prediction_confidence_ppm: Some(900_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
+            observation: None,
+            observed_at: "2026-08-08T00:00:00Z".into(),
+        }
     }
 
     fn settlement_context() -> SettlementContext {

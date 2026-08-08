@@ -1563,6 +1563,10 @@ mod tests {
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
             observation: Some(PredictionObservation::new(ObservedActionClass::Mutate)),
             observed_at: "2026-08-08T00:00:00Z".into(),
         }
