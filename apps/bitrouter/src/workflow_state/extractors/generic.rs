@@ -89,6 +89,7 @@ impl WorkflowStateExtractor for GenericPromptExtractor {
             tool_density,
             context_size,
             recovery_signal,
+            normalized_action_history: None,
             capability_constraints,
             session: resolved_session.signal,
             identity: Default::default(),
@@ -397,7 +398,7 @@ fn terminal_output(message: &bitrouter_sdk::language_model::types::Message) -> O
     plain_result
 }
 
-fn plain_output_reports_failure(text: &str) -> bool {
+pub(crate) fn plain_output_reports_failure(text: &str) -> bool {
     text.lines().any(|line| {
         let line = line.trim();
         if line.is_empty() || is_shell_echo_line(line) {

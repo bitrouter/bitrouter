@@ -128,12 +128,12 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
         projections,
         [
             "agent_route/v1|unknown|normal",
-            "agent_route/v1|unknown|guarded",
-            "agent_route/v1|unknown|guarded",
-            "agent_route/v1|unknown|guarded",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|unknown|normal",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|normal",
+            "agent_route/v1|implement|normal",
+            "agent_route/v1|implement|normal",
         ]
     );
     Ok(())

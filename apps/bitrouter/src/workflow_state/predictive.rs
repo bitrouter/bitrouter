@@ -4,8 +4,8 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::ir::{
-    RecoverySignal, RequirementLevel, RouteProjection, RouteRisk, ToolDensity, WorkflowStateIR,
-    WorkflowStateKind, parse_route_risk,
+    NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection, RouteRisk,
+    ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,8 +299,8 @@ struct HistoryFeatures {
 }
 
 pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> PredictiveRouteIR {
-    let instruction = instruction_features(prompt);
     let history = history_features(prompt, observed);
+    let instruction = instruction_features(prompt, observed.normalized_action_history.is_some());
     let observed_projection = observed.route_projection();
     let mut evidence = Vec::new();
 
@@ -571,9 +571,21 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     }
 }
 
-fn instruction_features(prompt: &Prompt) -> InstructionFeatures {
-    let text = prompt
-        .messages
+fn instruction_features(
+    prompt: &Prompt,
+    normalized_plain_text_history: bool,
+) -> InstructionFeatures {
+    let messages = if normalized_plain_text_history {
+        let boundary = prompt
+            .messages
+            .iter()
+            .position(|message| message.role == Role::Assistant)
+            .unwrap_or(prompt.messages.len());
+        &prompt.messages[..boundary]
+    } else {
+        &prompt.messages
+    };
+    let text = messages
         .iter()
         .rev()
         .filter(|message| matches!(message.role, Role::User | Role::System))
@@ -739,6 +751,30 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
             WorkflowStateKind::Edit => Some(ObservedAction::Mutate),
             WorkflowStateKind::Test => Some(ObservedAction::Test),
             _ => Some(ObservedAction::Other),
+        };
+    }
+    if calls.is_empty()
+        && let Some(normalized) = observed.normalized_action_history.as_ref()
+    {
+        let last_action = normalized.last_action.map(|action| match action {
+            NormalizedActionKind::Read => ObservedAction::Read,
+            NormalizedActionKind::Mutate => ObservedAction::Mutate,
+            NormalizedActionKind::Test => ObservedAction::Test,
+            NormalizedActionKind::Other => ObservedAction::Other,
+        });
+        return HistoryFeatures {
+            completeness: if normalized.complete {
+                PredictiveHistoryCompleteness::Complete
+            } else {
+                PredictiveHistoryCompleteness::Truncated
+            },
+            last_action,
+            last_failed: normalized.last_failed,
+            failure_count: normalized.failure_count,
+            successful_test_after_mutation: last_action == Some(ObservedAction::Test)
+                && !normalized.last_failed
+                && normalized.mutation_count > 0,
+            has_trajectory: true,
         };
     }
     let unmatched_call = calls.iter().any(|(_, _, matched)| !matched);

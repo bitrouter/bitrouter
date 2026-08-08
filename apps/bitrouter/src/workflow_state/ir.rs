@@ -86,6 +86,24 @@ pub enum RecoverySignal {
     LikelyRecovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormalizedActionKind {
+    Read,
+    Mutate,
+    Test,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedActionHistory {
+    pub last_action: Option<NormalizedActionKind>,
+    pub last_failed: bool,
+    pub failure_count: u8,
+    pub mutation_count: u8,
+    pub complete: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequirementLevel {
@@ -333,6 +351,8 @@ pub struct WorkflowStateIR {
     pub tool_density: ToolDensity,
     pub context_size: ContextSizeBucket,
     pub recovery_signal: RecoverySignal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_action_history: Option<NormalizedActionHistory>,
     pub capability_constraints: CapabilityConstraints,
     pub session: SessionSignal,
     #[serde(default)]
@@ -468,6 +488,7 @@ mod tests {
             tool_density: ToolDensity::High,
             context_size: ContextSizeBucket::Medium,
             recovery_signal: RecoverySignal::LikelyRecovery,
+            normalized_action_history: None,
             capability_constraints: CapabilityConstraints {
                 tool_reliability: RequirementLevel::High,
                 code_reasoning: RequirementLevel::Medium,

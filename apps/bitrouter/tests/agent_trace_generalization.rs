@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use axum_test::TestServer;
 use bitrouter::policy_lock::PolicyLock;
-use bitrouter::policy_table_router::PolicyTableRouter;
+use bitrouter::policy_table_router::{PolicyDecision, PolicyTableRouter};
 use bitrouter::workflow_state::decision::{POLICY_DECISION_JSONL_ENV, PolicyDecisionRecord};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::HarnessId;
+use bitrouter::workflow_state::ir::{AgentRole, HarnessId};
 use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
 use bitrouter::workflow_state::real_trace::{RealTraceCapture, TraceCaptureOptions};
 use bitrouter::workflow_state::replay::ReplayEvaluator;
@@ -37,6 +37,29 @@ struct NativeCase {
     path: &'static str,
     headers: &'static [(&'static str, &'static str)],
     body: Value,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RoutingDecisionView<'a> {
+    request_key: &'a str,
+    route_projection: &'a str,
+    observed_route_projection: &'a str,
+    predicted_role: Option<&'a str>,
+    predicted_action: Option<&'a str>,
+    prediction_reason_codes: &'a [String],
+    selected_tier: Option<&'a str>,
+}
+
+fn routing_decision_view(decision: &PolicyDecision) -> RoutingDecisionView<'_> {
+    RoutingDecisionView {
+        request_key: &decision.request_key,
+        route_projection: &decision.route_projection,
+        observed_route_projection: &decision.observed_route_projection,
+        predicted_role: decision.predicted_role.as_deref(),
+        predicted_action: decision.predicted_action.as_deref(),
+        prediction_reason_codes: &decision.prediction_reason_codes,
+        selected_tier: decision.selected_tier.as_deref(),
+    }
 }
 
 #[tokio::test]
@@ -518,6 +541,9 @@ fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
             .zip(&baseline_replay.records)
             .zip(&decorated_replay.records)
         {
+            let plain_decision = router.decision_for(&plain_fixture.prompt, &plain_fixture.headers);
+            let decorated_decision =
+                router.decision_for(&decorated_fixture.prompt, &decorated_fixture.headers);
             assert_eq!(
                 decorated.predictive_projection, plain.predictive_projection,
                 "{history:?} {}",
@@ -534,17 +560,107 @@ fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
                 plain_fixture.id
             );
             assert_eq!(
-                router
-                    .decision_for(&decorated_fixture.prompt, &decorated_fixture.headers)
-                    .selected_tier,
-                router
-                    .decision_for(&plain_fixture.prompt, &plain_fixture.headers)
-                    .selected_tier,
+                decorated_decision.request_key, plain_decision.request_key,
                 "{history:?} {}",
                 plain_fixture.id
             );
+            assert_eq!(
+                decorated_decision.route_projection, plain_decision.route_projection,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated_decision.observed_route_projection,
+                plain_decision.observed_route_projection,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated_decision.predicted_role, plain_decision.predicted_role,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated_decision.predicted_action, plain_decision.predicted_action,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated_decision.prediction_reason_codes, plain_decision.prediction_reason_codes,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated_decision.selected_tier, plain_decision.selected_tier,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                routing_decision_view(&decorated_decision),
+                routing_decision_view(&plain_decision),
+                "{history:?} {} full routing decision",
+                plain_fixture.id
+            );
+            assert_eq!(
+                plain_decision.request_key, plain.predictive_route_key,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_ne!(plain_decision.workflow_identity.source, "explicit_headers");
+            assert_eq!(
+                decorated_decision.workflow_identity.role,
+                AgentRole::Answers
+            );
+            assert_eq!(
+                decorated_decision.workflow_identity.source,
+                "explicit_headers"
+            );
         }
     }
+}
+
+#[test]
+fn full_decision_comparison_detects_projection_drift_with_the_same_tier() {
+    let router = predictive_matrix_router();
+    let post_read = equivalent_history_fixtures(SemanticHistory::PostRead, false)
+        .into_iter()
+        .next()
+        .expect("post-read matrix has a generic fixture");
+    let post_edit = equivalent_history_fixtures(SemanticHistory::PostEdit, false)
+        .into_iter()
+        .next()
+        .expect("post-edit matrix has a generic fixture");
+
+    let post_read_decision = router.decision_for(&post_read.prompt, &post_read.headers);
+    let post_edit_decision = router.decision_for(&post_edit.prompt, &post_edit.headers);
+
+    assert_eq!(post_read_decision.selected_tier.as_deref(), Some("economy"));
+    assert_eq!(post_edit_decision.selected_tier.as_deref(), Some("economy"));
+    assert_ne!(
+        routing_decision_view(&post_read_decision),
+        routing_decision_view(&post_edit_decision),
+        "the header comparator must detect projection drift even when the tier collides"
+    );
+    assert_ne!(
+        post_read_decision.request_key,
+        post_edit_decision.request_key
+    );
+    assert_ne!(
+        post_read_decision.observed_route_projection,
+        post_edit_decision.observed_route_projection
+    );
+    assert_ne!(
+        post_read_decision.predicted_role,
+        post_edit_decision.predicted_role
+    );
+    assert_ne!(
+        post_read_decision.predicted_action,
+        post_edit_decision.predicted_action
+    );
+    assert_ne!(
+        post_read_decision.prediction_reason_codes,
+        post_edit_decision.prediction_reason_codes
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -586,7 +702,7 @@ fn equivalent_history_fixtures(
             let object = headers
                 .as_object_mut()
                 .expect("matrix fixture headers are an object");
-            object.insert("x-bitrouter-agent-role".into(), json!("reviewer"));
+            object.insert("x-bitrouter-agent-role".into(), json!("answers"));
             object.insert("x-superpowers-phase".into(), json!("implementation"));
             object.insert("x-superpowers-skill".into(), json!("task-execution"));
             object.insert("x-superpowers-task".into(), json!("private-phase-task"));
@@ -611,7 +727,7 @@ fn equivalent_history_fixtures(
             "raw_body": semantic_history_body(history, protocol, source),
             "expected": {
                 "state_kind": semantic_observed_state(history),
-                "baseline_fingerprint": semantic_baseline(history),
+                "baseline_fingerprint": semantic_baseline(history, source),
                 "confidence_min": 0.0
             }
         }))
@@ -632,6 +748,9 @@ fn semantic_history_body(
             "Fix src/parser.rs."
         }
     };
+    if matches!(protocol, MatrixProtocol::Chat) && source == "terminus" {
+        return terminus_semantic_history_body(history, root);
+    }
     let actions = match history {
         SemanticHistory::Opening => Vec::new(),
         SemanticHistory::PostRead => vec![(
@@ -687,9 +806,6 @@ fn semantic_history_body(
                     "content": output
                 }));
             }
-            if source == "terminus" {
-                messages.insert(0, json!({"role": "system", "content": terminus_contract()}));
-            }
             let mut body = json!({"model": "inbound", "messages": messages});
             if source == "hermes" {
                 body["metadata"] = json!({"job_id": "matrix-hermes-job"});
@@ -732,6 +848,45 @@ fn semantic_history_body(
     }
 }
 
+fn terminus_semantic_history_body(history: SemanticHistory, root: &str) -> Value {
+    let mut messages = vec![
+        json!({"role": "system", "content": terminus_contract()}),
+        json!({"role": "user", "content": root}),
+    ];
+    let actions = match history {
+        SemanticHistory::Opening => Vec::new(),
+        SemanticHistory::PostRead => vec![("cat src/parser.rs", "source contents")],
+        SemanticHistory::PostEdit => vec![(
+            "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH",
+            "patch applied",
+        )],
+        SemanticHistory::FailedTest => vec![("cargo test -p parser", "error: parser test failed")],
+        SemanticHistory::Finalization => vec![
+            (
+                "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH",
+                "patch applied",
+            ),
+            (
+                "cargo test -p parser",
+                "test result: ok. 12 passed; 0 failed",
+            ),
+        ],
+    };
+    for (command, output) in actions {
+        messages.push(json!({
+            "role": "assistant",
+            "content": json!({
+                "analysis": "current state",
+                "plan": "next command",
+                "commands": [{"keystrokes": command, "duration": 0.1}],
+                "task_complete": false
+            }).to_string()
+        }));
+        messages.push(json!({"role": "user", "content": output}));
+    }
+    json!({"model": "inbound", "messages": messages})
+}
+
 fn semantic_observed_state(history: SemanticHistory) -> &'static str {
     match history {
         SemanticHistory::Opening => "opening",
@@ -742,7 +897,10 @@ fn semantic_observed_state(history: SemanticHistory) -> &'static str {
     }
 }
 
-fn semantic_baseline(history: SemanticHistory) -> &'static str {
+fn semantic_baseline(history: SemanticHistory, source: &str) -> &'static str {
+    if source == "terminus" && !matches!(history, SemanticHistory::Opening) {
+        return "midstream";
+    }
     match history {
         SemanticHistory::Opening => "opening",
         SemanticHistory::PostRead | SemanticHistory::FailedTest | SemanticHistory::Finalization => {
