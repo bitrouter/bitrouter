@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login as cloud_login};
@@ -888,15 +888,7 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
     eprintln!("Workflow optimization — generic agentic evaluation");
     let workflow_command = match requested.workflow_command {
         Some(command) => command,
-        None => {
-            let raw = prompt_line("  Workflow argv as JSON (example: [\"npm\",\"test\"]): ")?;
-            let command: Vec<String> = serde_json::from_str(&raw)
-                .context("workflow command must be a JSON string array")?;
-            if command.is_empty() {
-                anyhow::bail!("workflow command must not be empty");
-            }
-            command
-        }
+        None => interactive_workflow_command(&flags.config)?,
     };
     let success_contract = match requested.success_contract {
         Some(contract) => contract,
@@ -944,14 +936,86 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
     }))
 }
 
+fn interactive_workflow_command(config: &Path) -> Result<Vec<String>> {
+    use crate::optimization::discovery::GuidedWorkflow;
+
+    let root = config.parent().unwrap_or_else(|| Path::new("."));
+    match crate::optimization::discovery::resolve_guided_workflow(root, None, Vec::new())? {
+        GuidedWorkflow::Resolved { command, evidence } => {
+            note(&format!("using discovered workflow: {evidence}"));
+            Ok(command)
+        }
+        GuidedWorkflow::Choose(candidates) => {
+            eprintln!("  Candidate agent workflows:");
+            for (index, candidate) in candidates.iter().enumerate() {
+                eprintln!(
+                    "    {}) {}  [{}]",
+                    index + 1,
+                    candidate.command.join(" "),
+                    candidate.evidence
+                );
+            }
+            let answer = prompt_line("  Select workflow [1]: ")?;
+            let selected = if answer.is_empty() {
+                1
+            } else {
+                answer
+                    .parse::<usize>()
+                    .context("workflow selection must be a candidate number")?
+            };
+            candidates
+                .get(selected.saturating_sub(1))
+                .map(|candidate| candidate.command.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("workflow selection {selected} is outside the candidate list")
+                })
+        }
+        GuidedWorkflow::Missing => {
+            let raw =
+                prompt_line("  Workflow argv as JSON (example: [\"npm\",\"run\",\"eval\"]): ")?;
+            let command: Vec<String> = serde_json::from_str(&raw)
+                .context("workflow command must be a JSON string array")?;
+            crate::optimization::WorkflowCommand {
+                command: command.clone(),
+                inputs: Vec::new(),
+                timeout_secs: 1,
+            }
+            .validate()?;
+            Ok(command)
+        }
+    }
+}
+
 async fn configure_optimization(
     config: &std::path::Path,
     requested: OnboardingOptimization,
     installed: &[String],
 ) -> Result<OptimizationOnboardingReport> {
-    let workflow_command = requested.workflow_command.ok_or_else(|| {
-        anyhow::anyhow!("headless optimization onboarding requires --optimize-workflow-command")
-    })?;
+    let workflow_command = match requested.workflow_command {
+        Some(command) => command,
+        None => {
+            let root = config.parent().unwrap_or_else(|| Path::new("."));
+            match crate::optimization::discovery::resolve_guided_workflow(root, None, Vec::new())? {
+                crate::optimization::discovery::GuidedWorkflow::Resolved { command, evidence } => {
+                    note(&format!("using discovered workflow: {evidence}"));
+                    command
+                }
+                crate::optimization::discovery::GuidedWorkflow::Choose(candidates) => {
+                    let choices = candidates
+                        .iter()
+                        .map(|candidate| candidate.command.join(" "))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    anyhow::bail!(
+                        "multiple optimization workflows were discovered ({choices}); pass --optimize-workflow-command and repeated --optimize-workflow-arg values"
+                    );
+                }
+                crate::optimization::discovery::GuidedWorkflow::Missing => anyhow::bail!(
+                    "no optimization workflow was discovered; pass --optimize-workflow-command and repeated --optimize-workflow-arg values"
+                ),
+            }
+        }
+    };
     let success_contract = requested.success_contract.ok_or_else(|| {
         anyhow::anyhow!("headless optimization onboarding requires --optimize-success")
     })?;

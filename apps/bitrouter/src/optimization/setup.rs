@@ -37,6 +37,24 @@ pub struct SetupOptimizationOutcome {
     pub lock: OptimizationLock,
 }
 
+pub fn ensure_workflow_optimization_compatible(
+    policy_lock: &crate::policy_lock::PolicyLock,
+) -> Result<()> {
+    let guarded = policy_lock
+        .policies
+        .iter()
+        .filter_map(|(name, definition)| definition.progress_guard.is_some().then_some(name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !guarded.is_empty() {
+        anyhow::bail!(
+            "workflow optimization cannot preserve the active progress guard for policies [{}] in its exact two-tier experiment; use an unguarded @auto policy for this optimization lineage",
+            guarded.join(", ")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub async fn setup_optimization(
     _request: SetupOptimizationRequest,
@@ -139,6 +157,11 @@ pub async fn setup_optimization(
     let policy_path = crate::policy_lock::resolve_path(&source_parsed, Some(&source_config))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
     let _policy_lock = crate::policy_lock::acquire_publication_lock(&policy_path)?;
+    if let Some(active) =
+        crate::policy_lock::load_for_config(&source_parsed, Some(&source_config)).await?
+    {
+        ensure_workflow_optimization_compatible(&active.document)?;
+    }
     let policy_original = if policy_path.is_file() {
         Some(
             std::fs::read(&policy_path)
@@ -662,7 +685,8 @@ fn claude_model_from_settings(raw: &str) -> Result<String> {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::{
-        claude_model_from_settings, codex_model_from_config, validate_cloud_catalog_model,
+        claude_model_from_settings, codex_model_from_config,
+        ensure_workflow_optimization_compatible, validate_cloud_catalog_model,
         validate_routable_model,
     };
 
@@ -719,5 +743,34 @@ inherit_defaults: false
         );
         assert_eq!(claude_model_from_settings("{}")?, "claude-sonnet-4-6");
         Ok(())
+    }
+
+    #[test]
+    fn progress_guard_is_rejected_by_setup_preflight() {
+        let mut document = crate::policy_lock::PolicyLock::default();
+        let mut definition = crate::policy_lock::PolicyDefinition::default();
+        definition.progress_guard = Some(crate::trajectory::guard::ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: std::collections::BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: None,
+            max_recovery_count: None,
+            max_episode_requests: None,
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: None,
+            hold_for_requests: 2,
+            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+        });
+        document.policies.insert("auto".into(), definition);
+
+        let error = ensure_workflow_optimization_compatible(&document);
+
+        assert!(error.is_err());
+        assert!(
+            error
+                .err()
+                .map(|value| value.to_string())
+                .is_some_and(|message| message.contains("progress guard"))
+        );
     }
 }

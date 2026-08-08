@@ -369,9 +369,9 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 ### `bitrouter optimize`
 
 ```text
-bitrouter optimize setup --workflow-command CMD [--workflow-arg ARG ...] \
+bitrouter optimize setup [--workflow-command CMD] [--workflow-arg ARG ...] \
   [--workflow-input PATH ...] \
-  --strong PROVIDER:MODEL --economy PROVIDER:MODEL \
+  [--strong PROVIDER:MODEL] [--economy PROVIDER:MODEL] \
   [--normalized-price PROVIDER:MODEL=INPUT,CACHE_READ,CACHE_WRITE,OUTPUT] \
   [--preference PROFILE]
 bitrouter optimize resolve [--config bitrouter.optimize.yaml]
@@ -385,7 +385,12 @@ bitrouter optimize status [--config bitrouter.optimize.yaml]
 `optimize` is the version-controlled quality/cost loop for an arbitrary agent
 workflow. `setup` creates `bitrouter.optimize.yaml`,
 `bitrouter.optimize.lock.yaml`, and a success-contract starter without
-overwriting existing files. The workflow is launched without shell parsing;
+overwriting existing files. With omitted workflow flags, interactive setup
+discovers project-owned eval/benchmark package scripts and executable
+entrypoints, selects a unique candidate automatically, and prompts when more
+than one is plausible. It reuses an existing `@auto` strong/economy ladder;
+otherwise a TTY asks for both routes. Non-interactive ambiguity fails before
+any file mutation and reports the exact flags to supply. The workflow is launched without shell parsing;
 user argv boundaries are preserved after any catalog-owned routing prefix for
 a recognized agent. Common OpenAI, Anthropic, Gemini, and BitRouter client
 variables are pointed at a fresh private daemon using the configured preset.
@@ -435,8 +440,9 @@ the exact report, snapshot, candidate, parent policy, and lock lineage before
 using the atomic policy publication and daemon-reload path. Publication is
 idempotent: if the policy write succeeded before an interrupted lock update,
 rerunning the command completes that lock transition. The first publication
-from the default frozen mode requires explicit `--enable-adaptive`; setup does
-not silently widen policy permissions. `optimize rollback`
+from the default frozen mode asks for explicit confirmation on a TTY;
+headless/CI publication requires `--enable-adaptive`. Setup does not silently
+widen policy permissions. `optimize rollback`
 restores an archived policy digest and updates the optimization lock so the
 next cycle starts from the restored parent; it can also reconcile a matching
 rollback previously made through `bitrouter policy rollback`.
@@ -446,6 +452,8 @@ automation supplies `--optimize-workflow-command`, repeated
 `--optimize-workflow-arg`/`--optimize-workflow-input`, and
 `--optimize-success`; model and preference flags remain optional. Optimization
 setup is currently Unix-only.
+Setup also rejects an active progress guard before mutation because the exact
+two-tier experiment cannot preserve guard semantics yet.
 
 ### `bitrouter trajectory`
 

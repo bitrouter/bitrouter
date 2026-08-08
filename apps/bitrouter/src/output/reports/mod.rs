@@ -11,6 +11,7 @@ pub mod daemon;
 pub mod eval;
 pub mod mcp;
 pub mod observe;
+pub mod optimization;
 pub mod policy;
 pub mod routing;
 pub mod skills;
