@@ -169,6 +169,46 @@ fn init_yes_cloud_login_without_key_is_reported_and_skipped() {
 }
 
 #[test]
+fn init_yes_optimization_requires_routes_before_scaffolding() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let cfg = home.path().join("bitrouter.yaml");
+    let cfg_arg = cfg
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("temporary config path is not UTF-8"))?;
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &[
+            "init",
+            "--yes",
+            "--optimize",
+            "--optimize-workflow-command",
+            "/usr/bin/true",
+            "--optimize-success",
+            "the workflow exits",
+            "--after",
+            "exit",
+            "-c",
+            cfg_arg,
+        ],
+        &[],
+    );
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stderr.contains("--optimize-strong") || stdout.contains("--optimize-strong"),
+        "unexpected optimization preflight error: stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        !cfg.exists(),
+        "route preflight must fail before creating the source config"
+    );
+    Ok(())
+}
+
+#[test]
 fn init_yes_refuses_overwrite_without_force() {
     let home = TempDir::new().unwrap();
     let data = TempDir::new().unwrap();

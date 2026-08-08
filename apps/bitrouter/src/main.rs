@@ -283,11 +283,11 @@ enum Command {
         #[arg(long)]
         optimize_success: Option<String>,
         /// Provider-qualified strong route for optimization onboarding.
-        #[arg(long, default_value = "openai-codex:gpt-5.6-sol")]
-        optimize_strong: String,
+        #[arg(long)]
+        optimize_strong: Option<String>,
         /// Provider-qualified economy route for optimization onboarding.
-        #[arg(long, default_value = "bitrouter:deepseek/deepseek-v4-flash-0731")]
-        optimize_economy: String,
+        #[arg(long)]
+        optimize_economy: Option<String>,
         /// Frozen normalized-showback price override. Repeat for unpriced
         /// subscription routes.
         #[arg(long = "optimize-normalized-price")]
@@ -1632,14 +1632,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_normalized_prices,
             optimize_preference,
         } => {
-            let optimize_normalized_prices = if optimize_normalized_prices.is_empty()
-                && optimize_strong == "openai-codex:gpt-5.6-sol"
+            let optimization = if optimize
+                || optimize_workflow_command.is_some()
+                || optimize_strong.is_some()
+                || optimize_economy.is_some()
+                || optimize_success.is_some()
+                || !optimize_workflow_input.is_empty()
+                || !optimize_normalized_prices.is_empty()
             {
-                vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()]
-            } else {
-                optimize_normalized_prices
-            };
-            let optimization = if optimize || optimize_workflow_command.is_some() {
                 Some(bitrouter::onboarding::OnboardingOptimization {
                     workflow_command: optimize_workflow_command.map(|command| {
                         std::iter::once(command)
@@ -3824,28 +3824,6 @@ fn select_guided_workflow(
     }
 }
 
-async fn existing_optimization_routes(
-    source_config: &Path,
-    policy: &str,
-) -> Result<(Option<String>, Option<String>)> {
-    let raw = tokio::fs::read_to_string(source_config)
-        .await
-        .with_context(|| format!("reading source config {}", source_config.display()))?;
-    let parsed = config::parse(&raw).context("parsing source BitRouter config")?;
-    let Some(active) =
-        bitrouter::policy_lock::load_for_config(&parsed, Some(source_config)).await?
-    else {
-        return Ok((None, None));
-    };
-    let Some(definition) = active.document.policies.get(policy) else {
-        return Ok((None, None));
-    };
-    Ok((
-        definition.tiers.get("strong").cloned(),
-        definition.tiers.get("economy").cloned(),
-    ))
-}
-
 fn select_optimization_route(
     label: &str,
     requested: Option<String>,
@@ -3941,7 +3919,8 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let workflow_command =
                 select_guided_workflow(project_root, workflow_command, workflow_arg)?;
             let (existing_strong, existing_economy) =
-                existing_optimization_routes(&source_config_path, &policy).await?;
+                bitrouter::optimization::setup::existing_tier_routes(&source_config_path, &policy)
+                    .await?;
             let strong = select_optimization_route("strong", strong, existing_strong)?;
             let economy = select_optimization_route("economy", economy, existing_economy)?;
             let operation_path = setup_paths.operation_lock_target();
@@ -6765,6 +6744,25 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["bitrouter", "optimize", "rollback"]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn init_optimization_routes_have_no_model_specific_defaults() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let parsed = Cli::try_parse_from(["bitrouter", "init", "--optimize"])?;
+        match parsed.command {
+            Some(Command::Init {
+                optimize_strong,
+                optimize_economy,
+                ..
+            }) => {
+                assert!(optimize_strong.is_none());
+                assert!(optimize_economy.is_none());
+            }
+            _ => anyhow::bail!("expected init command"),
+        }
         Ok(())
     }
 

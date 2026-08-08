@@ -37,6 +37,28 @@ pub struct SetupOptimizationOutcome {
     pub lock: OptimizationLock,
 }
 
+/// Resolve the current strong/economy routes for a named policy, when one is active.
+pub async fn existing_tier_routes(
+    source_config: &std::path::Path,
+    policy: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let raw = tokio::fs::read_to_string(source_config)
+        .await
+        .with_context(|| format!("reading source config {}", source_config.display()))?;
+    let parsed = bitrouter_sdk::config::parse(&raw).context("parsing source BitRouter config")?;
+    let Some(active) = crate::policy_lock::load_for_config(&parsed, Some(source_config)).await?
+    else {
+        return Ok((None, None));
+    };
+    let Some(definition) = active.document.policies.get(policy) else {
+        return Ok((None, None));
+    };
+    Ok((
+        definition.tiers.get("strong").cloned(),
+        definition.tiers.get("economy").cloned(),
+    ))
+}
+
 pub fn ensure_workflow_optimization_compatible(
     policy_lock: &crate::policy_lock::PolicyLock,
 ) -> Result<()> {
