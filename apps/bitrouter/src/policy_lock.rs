@@ -1442,6 +1442,18 @@ pub async fn initialize_files_unlocked(
         anyhow::bail!("strong and economy tiers must use different models");
     }
 
+    let mut capability_config = config.clone();
+    crate::merge_registry_into(&mut capability_config).await;
+    bitrouter_providers::apply_builtin_defaults(&mut capability_config);
+    let mut tool_safe_tiers = vec!["strong".to_string()];
+    if route_supports_capability(
+        &capability_config,
+        economy_model,
+        bitrouter_sdk::language_model::types::Capability::Tools,
+    ) {
+        tool_safe_tiers.push("economy".to_string());
+    }
+
     let lock_path = resolve_path(&config, Some(config_path))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve policy lock path"))?;
     if lock_path == config_path {
@@ -1476,7 +1488,7 @@ pub async fn initialize_files_unlocked(
             ]),
             default_tier: Some("strong".into()),
             tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into()],
+            tool_safe_tiers,
             adequacy,
             ..PolicyDefinition::default()
         },
@@ -1523,6 +1535,19 @@ pub async fn initialize_files_unlocked(
             format!("bound preset '@{preset_name}'"),
         ],
         conflicts: Vec::new(),
+    })
+}
+
+fn route_supports_capability(
+    config: &bitrouter_sdk::config::Config,
+    route: &str,
+    capability: bitrouter_sdk::language_model::types::Capability,
+) -> bool {
+    let Some((provider_id, model_id)) = route.split_once(':') else {
+        return false;
+    };
+    config.providers.get(provider_id).is_some_and(|provider| {
+        provider.active && provider.model_supports_capability(model_id, capability)
     })
 }
 
@@ -3886,6 +3911,50 @@ presets:
         assert_eq!(policy.tiers["economy"], "moonshotai/kimi-k2.7-code");
         assert_eq!(policy.default_tier.as_deref(), Some("strong"));
         assert_eq!(policy.adequacy.explore_tier.as_deref(), Some("economy"));
+    }
+
+    #[tokio::test]
+    async fn initialize_marks_only_declared_tool_capable_tiers_safe() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"inherit_defaults: false
+providers:
+  strong-provider:
+    api_base: https://strong.example/v1
+    api_key: strong
+    models:
+      - id: strong-model
+        capabilities: [reasoning, tools]
+  economy-provider:
+    api_base: https://economy.example/v1
+    api_key: economy
+    models:
+      - id: economy-model
+        capabilities: [tools]
+presets:
+  auto:
+    model: strong-provider:strong-model
+"#,
+        )
+        .await?;
+
+        let update = initialize_files(
+            &config_path,
+            "auto",
+            "auto",
+            None,
+            "economy-provider:economy-model",
+        )
+        .await?;
+        let loaded = load(&update.path).await?;
+
+        assert_eq!(
+            loaded.document.policies["auto"].tool_safe_tiers,
+            ["strong", "economy"]
+        );
+        Ok(())
     }
 
     #[tokio::test]

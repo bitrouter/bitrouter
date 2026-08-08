@@ -244,6 +244,25 @@ fn provider_matches_tags(provider: &crate::config::ProviderConfig, require: &[St
     require.iter().all(|t| provider.tags.contains(t))
 }
 
+/// Whether a concrete provider/model pair positively advertises every
+/// capability required by this request. Empty requirements preserve legacy
+/// routing. A legacy empty capability list remains permissive for backwards
+/// compatibility, while a non-empty declaration is authoritative and filters
+/// requests that need a capability it omits.
+fn model_matches_capabilities(
+    provider: &crate::config::ProviderConfig,
+    model_id: &str,
+    require: &[crate::language_model::types::Capability],
+) -> bool {
+    require.is_empty()
+        || provider.model_config(model_id).is_none_or(|model| {
+            model.capabilities.is_empty()
+                || require
+                    .iter()
+                    .all(|capability| model.capabilities.contains(capability))
+        })
+}
+
 /// Build the fallback chain for an explicit virtual model (Strategy 2),
 /// honouring its [`VirtualModelStrategy`].
 ///
@@ -291,6 +310,10 @@ fn resolve_virtual_model(
             if !provider_matches_tags(provider, &prefs.require_tags) {
                 continue;
             }
+        }
+        if !model_matches_capabilities(provider, &endpoint.service_id, &prefs.require_capabilities)
+        {
+            continue;
         }
         endpoints.push((
             endpoint.provider.clone(),
@@ -353,6 +376,11 @@ fn resolve_clean_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
+        if !model_matches_capabilities(provider, model_id, &prefs.require_capabilities) {
+            return Err(BitrouterError::NotFound(format!(
+                "provider model '{clean}' does not advertise the required capabilities"
+            )));
+        }
         return Ok(build_targets(
             provider_id,
             provider,
@@ -383,6 +411,9 @@ fn resolve_clean_route_chain(
             continue;
         }
         if !provider_matches_tags(provider, &prefs.require_tags) {
+            continue;
+        }
+        if !model_matches_capabilities(provider, clean, &prefs.require_capabilities) {
             continue;
         }
         // Subscription providers (a caller's own plan, reached by a local OAuth
@@ -610,6 +641,11 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
             base.ignore.push(p.clone());
         }
     }
+    for capability in &extra.require_capabilities {
+        if !base.require_capabilities.contains(capability) {
+            base.require_capabilities.push(*capability);
+        }
+    }
     // The inbound protocol is a per-request fact set by the pipeline (not a
     // preset knob); carry it so target construction can route natively.
     if extra.inbound_protocol.is_some() {
@@ -621,9 +657,49 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 mod tests {
     use super::*;
     use crate::config::parse;
+    use crate::language_model::types::Capability;
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
+    }
+
+    #[tokio::test]
+    async fn required_capabilities_filter_direct_and_cascade_routes()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let table = table(
+            r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: alpha
+    models:
+      - id: shared
+        capabilities: [tools]
+  beta:
+    api_base: https://beta.example/v1
+    api_key: beta
+    models:
+      - id: shared
+        capabilities: [reasoning]
+"#,
+        );
+        let prefs = RoutingPrefs {
+            require_capabilities: vec![Capability::Tools],
+            ..RoutingPrefs::default()
+        };
+
+        let cascade = table
+            .route_chain("shared", &prefs, &CallerContext::local())
+            .await?;
+        assert_eq!(cascade.len(), 1);
+        assert_eq!(cascade[0].provider_name, "alpha");
+        assert!(
+            table
+                .route_chain("beta:shared", &prefs, &CallerContext::local())
+                .await
+                .is_err()
+        );
+        Ok(())
     }
 
     const PROVIDERS: &str = r#"

@@ -284,6 +284,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             api_protocol: Some(m.api_protocol.to_protocol_list()),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
+            capabilities: m.capabilities.clone(),
             compatibility: m.compatibility.clone(),
         })
         .collect()
@@ -361,6 +362,7 @@ mod tests {
                     context_tiers: Vec::new(),
                 }),
                 rate_limits: None,
+                capabilities: Vec::new(),
                 compatibility: Default::default(),
             }],
             status: "active".to_string(),
@@ -376,8 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn model_compatibility_reaches_provider_model() {
+    fn model_capabilities_and_compatibility_reach_provider_model() {
         let mut registry_provider = provider("regtestprov");
+        registry_provider.models[0].capabilities = vec![
+            bitrouter_sdk::language_model::types::Capability::Reasoning,
+            bitrouter_sdk::language_model::types::Capability::Tools,
+        ];
         registry_provider.models[0]
             .compatibility
             .chat_completions
@@ -387,6 +393,13 @@ mod tests {
         assert_eq!(
             models[0].compatibility.chat_completions.token_limit_field,
             Some(ChatTokenLimitField::MaxCompletionTokens)
+        );
+        assert_eq!(
+            models[0].capabilities,
+            [
+                bitrouter_sdk::language_model::types::Capability::Reasoning,
+                bitrouter_sdk::language_model::types::Capability::Tools,
+            ]
         );
     }
 
@@ -767,6 +780,7 @@ mod tests {
             api_protocol: None,
             rate_limits: None,
             pricing: None,
+            capabilities: Vec::new(),
             compatibility: Default::default(),
         }];
         config.providers.insert("regtestprov".to_string(), user);

@@ -614,6 +614,14 @@
             }
           ]
         },
+        "capabilities": {
+          "description": "Features this concrete provider/model route explicitly advertises.\nAn empty list means unknown, not unsupported; capability-constrained\nrouting admits only positive declarations.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          },
+          "default": []
+        },
         "compatibility": {
           "description": "Provider/model request-shape quirks that do not change model semantics.",
           "$ref": "#/$defs/ModelCompatibility",
@@ -728,6 +736,66 @@
       },
       "required": [
         "above_input_tokens"
+      ]
+    },
+    "Capability": {
+      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware [`RoutingTable`](crate::language_model::routing::RoutingTable)\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
+      "oneOf": [
+        {
+          "description": "JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].",
+          "type": "string",
+          "const": "structured_outputs"
+        },
+        {
+          "description": "Tool / function calling — the request supplies a non-empty tool list.",
+          "type": "string",
+          "const": "tools"
+        },
+        {
+          "description": "Extended reasoning / thinking — the request sets a reasoning-effort hint.",
+          "type": "string",
+          "const": "reasoning"
+        },
+        {
+          "description": "Provider-side web search / browsing.",
+          "type": "string",
+          "const": "web_search"
+        },
+        {
+          "description": "Token log-probabilities in the response.",
+          "type": "string",
+          "const": "logprobs"
+        },
+        {
+          "description": "Image input (vision) — a message carries an `image/*` file part.",
+          "type": "string",
+          "const": "image_input"
+        },
+        {
+          "description": "Audio input — a message carries an `audio/*` file part.",
+          "type": "string",
+          "const": "audio_input"
+        },
+        {
+          "description": "Video input — a message carries a `video/*` file part.",
+          "type": "string",
+          "const": "video_input"
+        },
+        {
+          "description": "Document / file input — a message carries a non-image/audio/video file\npart (e.g. `application/pdf`).",
+          "type": "string",
+          "const": "file_input"
+        },
+        {
+          "description": "Image output (generation) — the request asks for an `image` output\nmodality.",
+          "type": "string",
+          "const": "image_output"
+        },
+        {
+          "description": "Audio output (speech) — the request asks for an `audio` output modality.",
+          "type": "string",
+          "const": "audio_output"
+        }
       ]
     },
     "ModelCompatibility": {

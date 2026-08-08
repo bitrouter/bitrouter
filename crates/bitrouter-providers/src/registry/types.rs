@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use bitrouter_sdk::language_model::types::ModelCompatibility;
-use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
+use bitrouter_sdk::language_model::types::{ApiProtocol, Capability, ProtocolList};
 
 /// The distribution envelope shared by both dist files: `{ "data": [ … ] }`.
 #[derive(Debug, Clone, Deserialize)]
@@ -342,6 +342,9 @@ pub struct RegistryModel {
     /// Resolved rate limits for this (provider, model) pair, if any.
     #[serde(default)]
     pub rate_limits: Option<RegistryRateLimits>,
+    /// Positively verified model features from the public registry.
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
     /// Provider/model request-shape compatibility settings.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -509,6 +512,7 @@ mod tests {
         let m = &anthropic.models[0];
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");
         assert_eq!(m.provider_model_id, "claude-sonnet-4-6");
+        assert_eq!(m.capabilities, [Capability::Reasoning, Capability::Tools]);
         // Resolved per-model protocol + rate limits (no glob to resolve here).
         assert_eq!(
             m.api_protocol,
