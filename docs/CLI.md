@@ -370,10 +370,13 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 
 ```text
 bitrouter optimize setup --workflow-command CMD [--workflow-arg ARG ...] \
+  [--workflow-input PATH ...] \
   --strong bitrouter:MODEL --economy bitrouter:MODEL [--preference PROFILE]
+bitrouter optimize resolve [--config bitrouter.optimize.yaml]
 bitrouter optimize run [--config bitrouter.optimize.yaml]
-bitrouter optimize review [--run ID] [--config bitrouter.optimize.yaml]
-bitrouter optimize publish [--run ID] [--config bitrouter.optimize.yaml]
+bitrouter optimize review [--config bitrouter.optimize.yaml]
+bitrouter optimize publish [--run ID] [--enable-adaptive] [--config bitrouter.optimize.yaml]
+bitrouter optimize rollback DIGEST [--config bitrouter.optimize.yaml] [--socket PATH]
 bitrouter optimize status [--config bitrouter.optimize.yaml]
 ```
 
@@ -381,8 +384,11 @@ bitrouter optimize status [--config bitrouter.optimize.yaml]
 workflow. `setup` creates `bitrouter.optimize.yaml`,
 `bitrouter.optimize.lock.yaml`, and a success-contract starter without
 overwriting existing files. The workflow is always launched as exact argv—no
-shell parsing—and common OpenAI, Anthropic, and BitRouter client variables are
-pointed at a fresh private daemon using the configured preset.
+shell parsing—and common OpenAI, Anthropic, Gemini, and BitRouter client
+variables are pointed at a fresh private daemon using the configured preset.
+Baseline and candidate run in separate detached Git worktrees. Repeat
+`--workflow-input` for ignored dependencies or fixtures such as `node_modules`
+or `.venv` that the command requires.
 
 By default BitRouter detects the selected local coding agent, pins the exact
 ACP adapter and configured judge model in the lock, and uses that agent's own
@@ -392,26 +398,36 @@ either mode. The maintained Codex adapter is
 `@agentclientprotocol/codex-acp` and is installed on demand by `npx` at its
 locked version.
 
-One `run` executes one baseline command and one one-route-key candidate. There
-are no hidden retries. If the command itself represents a multi-case eval
-suite, its aggregate output is the measurement unit. Non-zero exits are
+One `run` executes one baseline command and one one-route-key candidate. Those
+workflow identities are never retried; the judge has at most one schema-repair
+turn and settlement has bounded polling. If the command itself represents a
+multi-case eval suite, its aggregate output is the measurement unit. Non-zero exits are
 preserved as quality evidence; missing identity, policy, settlement, or
 single-variable attribution fails the run as infrastructure ambiguity.
 Referenced argv files and the resolved executable are fingerprinted before and
 after both variants.
 
 The qualitative profiles are intentionally loose in this release:
-`quality-first` permits no observed regression; `balanced` and
-`savings-first` produce conclusive positive candidates for explicit review;
-`custom` accepts version-controlled PPM gates. Latency is reported as
+`quality-first`, `balanced`, and `savings-first` choose different eligible
+route keys, while every publishable candidate still requires one agentic pass
+and lower authoritative settled cost. They are not percentage quality-loss
+budgets. Latency is reported as
 `observe_only` and is not a gate. `run` never publishes. `publish` revalidates
 the exact report, snapshot, candidate, parent policy, and lock lineage before
-using the atomic policy publication path.
+using the atomic policy publication and daemon-reload path. Publication is
+idempotent: if the policy write succeeded before an interrupted lock update,
+rerunning the command completes that lock transition. The first publication
+from the default frozen mode requires explicit `--enable-adaptive`; setup does
+not silently widen policy permissions. `optimize rollback`
+restores an archived policy digest and updates the optimization lock so the
+next cycle starts from the restored parent; it can also reconcile a matching
+rollback previously made through `bitrouter policy rollback`.
 
 `bitrouter init --optimize` folds the same setup into onboarding. Headless
 automation supplies `--optimize-workflow-command`, repeated
-`--optimize-workflow-arg`, and `--optimize-success`; model and preference flags
-remain optional.
+`--optimize-workflow-arg`/`--optimize-workflow-input`, and
+`--optimize-success`; model and preference flags remain optional. Optimization
+setup is currently Unix-only.
 
 ### `bitrouter trajectory`
 

@@ -27,6 +27,7 @@ bitrouter init --yes --write-config --use-detected --harness codex \
   --optimize-workflow-command ./run-agent-eval \
   --optimize-workflow-arg --suite \
   --optimize-workflow-arg smoke.jsonl \
+  --optimize-workflow-input .venv \
   --optimize-success 'The eval command exits successfully and reports its required checks.'
 ```
 
@@ -39,7 +40,9 @@ overwriting existing files:
 
 The default evaluator is BitRouter's embedded generic agentic eval protocol,
 run in a fresh ACP session. BitRouter prefers the detected local agent's own
-subscription and pins its adapter/model. Pass `--evaluator-via-cloud` to
+subscription and pins its adapter integrity, runtime executable digest, and
+model. The installed adapter/runtime is a trusted executor, not an OS sandbox.
+Pass `--evaluator-via-cloud` to
 `bitrouter optimize setup` only when the user explicitly wants Cloud judging.
 ORI is not required.
 
@@ -48,7 +51,9 @@ ORI is not required.
 ```bash
 bitrouter optimize run
 bitrouter optimize review
-bitrouter optimize publish
+bitrouter optimize publish --enable-adaptive # first publication from frozen mode
+# Optional: restore a prior policy while keeping the optimization lock aligned.
+bitrouter optimize rollback sha256:<digest>
 ```
 
 `run` launches the same exact argv once for the active baseline and once for a
@@ -68,7 +73,16 @@ Profiles:
 - `quality-first`: no observed quality regression;
 - `balanced`: prioritize frequently used route keys and require manual review;
 - `savings-first`: prioritize greatest settled cost and require manual review;
-- `custom`: explicit pass-rate and quality-loss PPM gates in source control.
+
+These profiles control search order. This version still requires one explicit
+agentic pass and lower authoritative settled cost; it does not claim a
+statistical percentage quality-loss budget.
+
+If the workflow uses ignored/generated inputs (for example `node_modules`,
+`.venv`, or fixtures), declare each one with repeated `--workflow-input` during
+setup or `--optimize-workflow-input` during onboarding. BitRouter freezes the
+same manifest into two detached Git worktrees. Controlled execution is
+currently Unix-only.
 
 ## Failure interpretation
 
@@ -80,7 +94,10 @@ Profiles:
 - Workflow argv or referenced file changed between variants: source drift; fail
   closed.
 - `publishable: false`: inspect `review`; do not force publication.
+- Intent/contract changed: run `bitrouter optimize resolve`, then start a new run.
 
 Raw workflow output and model replies remain under the BitRouter home. Commit
-only the intent, lock, success contract, and policy lock. Never put API keys in
-commands, configs, reports, or repository files.
+only the intent, lock, success contract, and policy lock. Inject the Cloud API
+key from an environment/secret manager; never put it in commands, configs,
+reports, or repository files. Known secrets are redacted best-effort, so eval
+commands must not intentionally print credentials.

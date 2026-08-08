@@ -249,6 +249,7 @@ pub fn compile_candidate_with_quality(
             source_snapshot_time_unix_ms: source_snapshot_time(&input)?,
             migration: Some(LegacyMigration {
                 legacy_adequacy_digest: legacy_evidence_root,
+                source: crate::policy_lock::LegacyEvidenceSource::DatabaseAtSnapshot,
             }),
             compiler: CompilerIdentity {
                 id: POLICY_COMPILER_ID.to_string(),
@@ -435,11 +436,10 @@ pub fn compile_candidate_with_quality(
                 && selected_owner == RouteOwner::Compiler
                 && let Some(prior) = prior_certificate
             {
-                let mut certificate = prior.clone();
-                certificate.selected_tier = selected_tier;
-                certificate.verdict = verdict;
-                certificate.compiler_config_digest = compiler_config_digest.clone();
-                certificates.insert(request_key, certificate);
+                // No new authority exists for this route. Carry its complete
+                // certificate forward byte-for-byte so compiling a different
+                // route cannot rewrite prior provenance or ownership.
+                certificates.insert(request_key, prior.clone());
                 continue;
             }
             let evidence_digest = if uses_eval {
@@ -1303,6 +1303,18 @@ mod tests {
                 .as_ref()
                 .map(|q| q.candidate_pass_rate_ppm),
             Some(1_000_000)
+        );
+        let first_certificate = certificate.clone();
+        let second = super::compile_candidate(super::CompileInput {
+            current: &compiled.document,
+            parent_digest: None,
+            legacy: &snapshot(false, None),
+            eval: None,
+            proposed_progress_guards: None,
+        })?;
+        assert_eq!(
+            second.document.certificates["auto"][EDIT_KEY], first_certificate,
+            "a later compile with no new route evidence must preserve prior provenance exactly"
         );
         Ok(())
     }

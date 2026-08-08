@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -19,6 +18,7 @@ const GENERIC_EVAL_REFERENCE: &str =
 const MAX_CONTRACT_BYTES: usize = 32 * 1024;
 const MAX_STREAM_BYTES: usize = 48 * 1024;
 const MAX_REASON_BYTES: usize = 2 * 1024;
+const MAX_EVALUATOR_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub const AGENTIC_RESULT_SCHEMA: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -113,18 +113,14 @@ pub trait AgenticEvaluatorBackend: Send + Sync {
 #[derive(Clone)]
 pub struct AcpAgenticEvaluatorBackend {
     source: crate::paths::ConfigSource,
-    config: Config,
     evaluator: super::EvaluatorLock,
-    base_repo: PathBuf,
     turn_timeout: Duration,
 }
 
 impl AcpAgenticEvaluatorBackend {
     pub fn new(
         source: crate::paths::ConfigSource,
-        config: Config,
         evaluator: super::EvaluatorLock,
-        base_repo: PathBuf,
         turn_timeout: Duration,
     ) -> Result<Self> {
         evaluator.validate()?;
@@ -133,9 +129,7 @@ impl AcpAgenticEvaluatorBackend {
         }
         Ok(Self {
             source,
-            config,
             evaluator,
-            base_repo,
             turn_timeout,
         })
     }
@@ -148,8 +142,12 @@ impl AcpAgenticEvaluatorBackend {
         evaluate_agentic(self, input).await
     }
 
-    async fn launch(&self) -> Result<Session> {
-        let mut config = self.config.clone();
+    async fn launch(&self, isolated_cwd: &std::path::Path) -> Result<Session> {
+        verify_catalog_evaluator_identity(&self.evaluator).await?;
+        // Evaluators never inherit a project-authored ACP transport. A clean
+        // catalog invocation prevents source `agents:` env/args from silently
+        // routing a supposedly direct judge back through the candidate.
+        let mut config = Config::default();
         let routing = match self.evaluator.route {
             super::EvaluatorRoute::Cloud => crate::acp_cli::RoutingOptions {
                 direct: false,
@@ -180,11 +178,14 @@ impl AcpAgenticEvaluatorBackend {
             apply_direct_model_pin(&mut config, &self.evaluator.agent, &self.evaluator.model)?;
         }
         let catalog = crate::acp_cli::catalog_from_config(&config)?;
+        let strip_inherited_env =
+            evaluator_stripped_credentials(self.evaluator.route, &self.evaluator.agent);
         Session::launch(
             &catalog,
             &self.evaluator.agent,
-            self.base_repo.clone(),
+            isolated_cwd.to_path_buf(),
             LaunchOptions {
+                strip_inherited_env,
                 turn_timeout: Some(self.turn_timeout),
                 ..Default::default()
             },
@@ -192,11 +193,46 @@ impl AcpAgenticEvaluatorBackend {
         .await
         .with_context(|| {
             format!(
-                "launching isolated agentic evaluator '{}'",
+                "launching dedicated agentic evaluator '{}'",
                 self.evaluator.agent
             )
         })
     }
+}
+
+fn evaluator_stripped_credentials(route: super::EvaluatorRoute, agent: &str) -> Vec<String> {
+    let allowed = match (route, agent) {
+        (super::EvaluatorRoute::Direct, "codex-acp") => &["OPENAI_API_KEY"][..],
+        (super::EvaluatorRoute::Direct, "claude-acp") => &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+        ][..],
+        _ => &[][..],
+    };
+    let mut stripped = super::restricted_child_environment_names()
+        .into_iter()
+        .filter(|name| !allowed.contains(&name.as_str()))
+        .chain(
+            [
+                "BITROUTER_BASE_URL",
+                "BITROUTER_API_BASE",
+                "BITROUTER_MODEL",
+                "OPENAI_BASE_URL",
+                "OPENAI_API_BASE",
+                "OPENAI_MODEL",
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_MODEL",
+                "GOOGLE_GEMINI_BASE_URL",
+                "GEMINI_MODEL",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .collect::<Vec<_>>();
+    stripped.sort();
+    stripped.dedup();
+    stripped
 }
 
 fn pin_catalog_adapter_version(config: &mut Config, agent_id: &str, version: &str) -> Result<()> {
@@ -227,45 +263,161 @@ fn pin_catalog_adapter_version(config: &mut Config, agent_id: &str, version: &st
 }
 
 pub async fn resolve_catalog_adapter_version(agent_id: &str) -> Result<String> {
-    let package = match agent_id {
+    let package = catalog_adapter_package(agent_id)?;
+    npm_view_string(package, "version").await
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedEvaluatorIdentity {
+    pub adapter_version: String,
+    pub adapter_integrity: String,
+    pub runtime_executable: String,
+    pub runtime_version: String,
+    pub runtime_digest: String,
+}
+
+pub async fn resolve_catalog_evaluator_identity(
+    agent_id: &str,
+) -> Result<ResolvedEvaluatorIdentity> {
+    resolve_catalog_evaluator_identity_at(agent_id, None).await
+}
+
+async fn resolve_catalog_evaluator_identity_at(
+    agent_id: &str,
+    locked_adapter_version: Option<&str>,
+) -> Result<ResolvedEvaluatorIdentity> {
+    let package = catalog_adapter_package(agent_id)?;
+    let adapter_version = match locked_adapter_version {
+        Some(version) => version.to_string(),
+        None => npm_view_string(package, "version").await?,
+    };
+    let adapter_integrity =
+        npm_view_string(&format!("{package}@{adapter_version}"), "dist.integrity").await?;
+    let runtime_executable = match agent_id {
+        "codex-acp" => "codex",
+        "claude-acp" => "claude",
+        _ => anyhow::bail!("unsupported automatic evaluator '{agent_id}'"),
+    };
+    let executable = executable_in_path(runtime_executable).ok_or_else(|| {
+        anyhow::anyhow!("evaluator runtime '{runtime_executable}' is not available on PATH")
+    })?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new(&executable)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("evaluator runtime version check timed out")?
+    .context("running evaluator runtime version check")?;
+    if !output.status.success() {
+        anyhow::bail!("evaluator runtime '{runtime_executable} --version' failed");
+    }
+    let runtime_version = String::from_utf8(output.stdout)
+        .context("decoding evaluator runtime version")?
+        .trim()
+        .to_string();
+    if runtime_version.is_empty() || runtime_version.len() > 512 {
+        anyhow::bail!("evaluator runtime returned an invalid version");
+    }
+    let runtime_digest = format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(
+            tokio::fs::read(&executable)
+                .await
+                .with_context(|| format!("reading evaluator runtime {}", executable.display()))?
+        ))
+    );
+    Ok(ResolvedEvaluatorIdentity {
+        adapter_version,
+        adapter_integrity,
+        runtime_executable: runtime_executable.into(),
+        runtime_version,
+        runtime_digest,
+    })
+}
+
+pub async fn verify_catalog_evaluator_identity(lock: &super::EvaluatorLock) -> Result<()> {
+    let actual =
+        resolve_catalog_evaluator_identity_at(&lock.agent, Some(&lock.agent_version)).await?;
+    if actual.adapter_integrity != lock.adapter_integrity
+        || actual.runtime_executable != lock.runtime_executable
+        || actual.runtime_version != lock.runtime_version
+        || actual.runtime_digest != lock.runtime_digest
+    {
+        anyhow::bail!(
+            "evaluator adapter or runtime changed; run `bitrouter optimize resolve` before collecting new evidence"
+        );
+    }
+    Ok(())
+}
+
+fn catalog_adapter_package(agent_id: &str) -> Result<&'static str> {
+    Ok(match agent_id {
         "codex-acp" => "@agentclientprotocol/codex-acp",
         "claude-acp" => "@zed-industries/claude-code-acp",
         _ => anyhow::bail!(
             "automatic evaluator setup supports codex-acp or claude-acp; configure a pinned custom agent explicitly"
         ),
-    };
-    let output = tokio::process::Command::new("npm")
-        .args(["view", package, "version", "--json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .with_context(|| format!("resolving exact {agent_id} adapter version from npm"))?;
+    })
+}
+
+fn executable_in_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return std::fs::canonicalize(&candidate).ok().or(Some(candidate));
+        }
+        #[cfg(windows)]
+        {
+            let candidate = directory.join(format!("{name}.exe"));
+            if candidate.is_file() {
+                return std::fs::canonicalize(&candidate).ok().or(Some(candidate));
+            }
+        }
+    }
+    None
+}
+
+async fn npm_view_string(package: &str, field: &str) -> Result<String> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("npm")
+            .args(["view", package, field, "--json"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .with_context(|| format!("resolving exact npm metadata for {package} timed out"))?
+    .with_context(|| format!("resolving exact npm metadata for {package}"))?;
     if !output.status.success() {
-        anyhow::bail!("could not resolve the exact {agent_id} adapter version from npm");
+        anyhow::bail!("could not resolve exact npm metadata for {package}");
     }
     let raw = String::from_utf8(output.stdout).context("decoding evaluator adapter version")?;
-    let version = match serde_json::from_str::<String>(&raw) {
+    let value = match serde_json::from_str::<String>(&raw) {
         Ok(version) => version,
         Err(_) => raw.trim().trim_matches('"').to_string(),
     };
-    if version.trim().is_empty()
-        || version.chars().any(|character| {
-            !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+'))
-        })
-    {
-        anyhow::bail!("npm returned an invalid evaluator adapter version");
+    if value.trim().is_empty() || value.len() > 1024 || value.chars().any(char::is_control) {
+        anyhow::bail!("npm returned invalid metadata for {package} {field}");
     }
-    Ok(version)
+    Ok(value)
 }
 
 #[async_trait]
 impl AgenticEvaluatorBackend for AcpAgenticEvaluatorBackend {
     async fn evaluate(&self, prompt: &str, schema: &str) -> Result<serde_json::Value> {
         let contract = crate::result_contract::ResultContract::from_flag(schema)?;
-        let session = self.launch().await?;
+        let dedicated = tempfile::tempdir().context("creating dedicated evaluator directory")?;
+        let session = self.launch(dedicated.path()).await?;
         let mut permissions = session.permissions();
         tokio::spawn(async move {
             while let Some(pending) = permissions.next().await {
@@ -277,7 +429,7 @@ impl AgenticEvaluatorBackend for AcpAgenticEvaluatorBackend {
         let shutdown = session
             .shutdown()
             .await
-            .context("shutting down isolated agentic evaluator");
+            .context("shutting down dedicated agentic evaluator");
         match (outcome, shutdown) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), _) => Err(error),
@@ -321,20 +473,33 @@ async fn capture_turn(session: &Session, prompt: &str) -> Result<String> {
                     updates.next(),
                 ).await {
                     if let SessionUpdateKind::MessageChunk { text, .. } = update {
-                        reply.push_str(&text);
+                        append_evaluator_chunk(&mut reply, &text)?;
                     }
                 }
                 return Ok(reply);
             }
             update = updates.next() => {
                 match update {
-                    Some(SessionUpdateKind::MessageChunk { text, .. }) => reply.push_str(&text),
+                    Some(SessionUpdateKind::MessageChunk { text, .. }) => {
+                        append_evaluator_chunk(&mut reply, &text)?;
+                    }
                     Some(_) => {}
                     None => anyhow::bail!("agentic evaluator ACP update stream ended before the prompt"),
                 }
             }
         }
     }
+}
+
+fn append_evaluator_chunk(output: &mut String, chunk: &str) -> Result<()> {
+    if output.len().saturating_add(chunk.len()) > MAX_EVALUATOR_OUTPUT_BYTES {
+        anyhow::bail!(
+            "agentic evaluator output exceeded the {}-byte safety limit",
+            MAX_EVALUATOR_OUTPUT_BYTES
+        );
+    }
+    output.push_str(chunk);
+    Ok(())
 }
 
 fn cloud_model(model: &str) -> Result<&str> {
@@ -388,13 +553,13 @@ pub fn verify_evaluator_lock(
     let embedded_digest = embedded_evaluator_digest()?;
     if evaluator.skill_digest != embedded_digest {
         anyhow::bail!(
-            "pinned evaluator skill digest does not match this BitRouter binary; run optimize setup again"
+            "pinned evaluator skill digest does not match this BitRouter binary; run `bitrouter optimize resolve`"
         );
     }
     let contract_digest = content_digest(&input.success_contract);
     if evaluator.contract_digest != contract_digest {
         anyhow::bail!(
-            "pinned evaluator contract digest does not match the workflow success contract"
+            "pinned evaluator contract digest does not match the workflow success contract; run `bitrouter optimize resolve`"
         );
     }
     Ok(())
@@ -445,7 +610,7 @@ pub fn build_evaluator_prompt(input: &AgenticEvaluationInput) -> Result<String> 
     let packet = serde_json::to_string_pretty(&input.redacted()?)
         .context("serializing redacted workflow evidence")?;
     Ok(format!(
-        "You are BitRouter's isolated agentic quality evaluator. Apply the generic evaluation \
+        "You are BitRouter's dedicated agentic quality evaluator. Apply the generic evaluation \
          rules below, but return only the bounded quality opinion requested by the result \
          schema. BitRouter itself owns identities, routing, cost, latency, attribution, Eval \
          Exchange submission, compilation, and publication. Do not claim or infer those \
@@ -459,8 +624,19 @@ pub fn build_evaluator_prompt(input: &AgenticEvaluationInput) -> Result<String> 
     ))
 }
 
-fn redact_and_bound(value: &str, maximum_bytes: usize) -> String {
-    let bounded = bounded_prefix(value, maximum_bytes);
+pub(crate) fn redact_and_bound(value: &str, maximum_bytes: usize) -> String {
+    let mut value = value.to_string();
+    let mut sensitive_values = super::restricted_child_environment_names()
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .filter(|secret| secret.len() >= 4)
+        .collect::<Vec<_>>();
+    sensitive_values.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    sensitive_values.dedup();
+    for secret in sensitive_values {
+        value = value.replace(&secret, "<redacted>");
+    }
+    let bounded = bounded_prefix(&value, maximum_bytes);
     bounded
         .lines()
         .map(redact_line)
@@ -525,7 +701,8 @@ mod tests {
     use super::{
         AGENTIC_RESULT_SCHEMA, AgenticEvaluation, AgenticEvaluationInput, AgenticEvaluatorBackend,
         AgenticVerdict, WorkflowEvidence, build_evaluator_prompt, embedded_evaluator_digest,
-        evaluate_agentic, pin_catalog_adapter_version, verify_evaluator_lock,
+        evaluate_agentic, evaluator_stripped_credentials, pin_catalog_adapter_version,
+        verify_evaluator_lock,
     };
     use crate::optimization::{EvaluatorLock, EvaluatorRoute};
     use async_trait::async_trait;
@@ -651,6 +828,11 @@ mod tests {
         let mut evaluator = EvaluatorLock {
             agent: "codex-acp".into(),
             agent_version: "codex-acp 1.0.0".into(),
+            adapter_integrity: "sha512-test".into(),
+            runtime_executable: "codex".into(),
+            runtime_version: "codex 1.0.0".into(),
+            runtime_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             model: "bitrouter:openai/gpt-5.6".into(),
             route: EvaluatorRoute::Cloud,
             skill_digest: embedded_evaluator_digest()?,
@@ -688,5 +870,33 @@ mod tests {
         assert_eq!(args[1], "@agentclientprotocol/codex-acp@0.9.1");
         assert!(pin_catalog_adapter_version(&mut config, "codex-acp", "latest bad").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn evaluator_stream_is_hard_bounded_across_chunks() -> anyhow::Result<()> {
+        let mut output = "a".repeat(super::MAX_EVALUATOR_OUTPUT_BYTES - 1);
+        super::append_evaluator_chunk(&mut output, "b")?;
+        let error = super::append_evaluator_chunk(&mut output, "c")
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("oversized evaluator output was accepted"))?;
+        assert!(error.to_string().contains("safety limit"));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_evaluator_keeps_only_its_selected_provider_authority() {
+        let codex = evaluator_stripped_credentials(EvaluatorRoute::Direct, "codex-acp");
+        assert!(!codex.contains(&"OPENAI_API_KEY".to_string()));
+        assert!(codex.contains(&"BITROUTER_API_KEY".to_string()));
+        assert!(codex.contains(&"ANTHROPIC_API_KEY".to_string()));
+
+        let claude = evaluator_stripped_credentials(EvaluatorRoute::Direct, "claude-acp");
+        assert!(!claude.contains(&"ANTHROPIC_API_KEY".to_string()));
+        assert!(!claude.contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_string()));
+        assert!(claude.contains(&"OPENAI_API_KEY".to_string()));
+
+        let cloud = evaluator_stripped_credentials(EvaluatorRoute::Cloud, "codex-acp");
+        assert!(cloud.contains(&"OPENAI_API_KEY".to_string()));
+        assert!(cloud.contains(&"BITROUTER_API_KEY".to_string()));
     }
 }

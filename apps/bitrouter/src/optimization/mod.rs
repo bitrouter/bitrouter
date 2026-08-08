@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 
 pub mod evaluator;
 pub mod orchestrator;
@@ -21,7 +20,6 @@ pub enum OptimizationPreference {
     QualityFirst,
     Balanced,
     SavingsFirst,
-    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +33,8 @@ pub enum EvaluatorRoute {
 #[serde(deny_unknown_fields)]
 pub struct WorkflowCommand {
     pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<PathBuf>,
     pub timeout_secs: u64,
 }
 
@@ -51,18 +51,14 @@ impl WorkflowCommand {
         if self.command.len() > 256 || self.command.iter().any(|part| part.len() > 4096) {
             anyhow::bail!("workflow command exceeds the bounded argv contract");
         }
+        if self.inputs.len() > 256 || self.inputs.iter().any(|path| path.as_os_str().is_empty()) {
+            anyhow::bail!("workflow inputs exceed the bounded manifest contract");
+        }
         if self.timeout_secs == 0 {
             anyhow::bail!("workflow timeout must be positive");
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CustomQualityGate {
-    pub minimum_pass_rate_ppm: u32,
-    pub maximum_quality_loss_ppm: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,8 +81,6 @@ pub struct OptimizationIntent {
     pub strong: String,
     pub economy: String,
     pub preference: OptimizationPreference,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_quality: Option<CustomQualityGate>,
     pub evaluator: ResolvedEvaluator,
 }
 
@@ -114,16 +108,6 @@ impl OptimizationIntent {
         if self.strong == self.economy {
             anyhow::bail!("strong and economy routes must be distinct");
         }
-        match (self.preference, self.custom_quality.as_ref()) {
-            (OptimizationPreference::Custom, None) => {
-                anyhow::bail!("custom preference requires custom_quality gates")
-            }
-            (OptimizationPreference::Custom, Some(gate)) => gate.validate()?,
-            (_, Some(_)) => {
-                anyhow::bail!("custom_quality is valid only with the custom preference")
-            }
-            (_, None) => {}
-        }
         Ok(())
     }
 
@@ -144,26 +128,47 @@ impl OptimizationIntent {
             OptimizationPreference::Balanced | OptimizationPreference::SavingsFirst => {
                 Ok(crate::policy_compile::PromotionQualityCriteria::manual_review())
             }
-            OptimizationPreference::Custom => {
-                let gate = self.custom_quality.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("custom preference requires custom_quality gates")
-                })?;
-                crate::policy_compile::PromotionQualityCriteria::custom(
-                    i64::from(gate.minimum_pass_rate_ppm),
-                    i64::from(gate.maximum_quality_loss_ppm),
-                )
-            }
         }
     }
 }
 
-impl CustomQualityGate {
-    fn validate(&self) -> Result<()> {
-        if self.minimum_pass_rate_ppm > 1_000_000 || self.maximum_quality_loss_ppm > 1_000_000 {
-            anyhow::bail!("custom quality gates must be between 0 and 1000000 ppm");
-        }
-        Ok(())
+pub fn validate_policy_contract(
+    intent: &OptimizationIntent,
+    config: &bitrouter_sdk::config::Config,
+    policy_lock: &crate::policy_lock::PolicyLock,
+) -> Result<()> {
+    intent.validate()?;
+    crate::policy_lock::validate_document(policy_lock)?;
+    let preset = config
+        .presets
+        .get(&intent.preset)
+        .ok_or_else(|| anyhow::anyhow!("optimization preset '{}' is missing", intent.preset))?;
+    if preset.policy.as_deref() != Some(intent.policy.as_str()) {
+        anyhow::bail!(
+            "optimization preset '{}' is no longer bound to policy '{}'",
+            intent.preset,
+            intent.policy
+        );
     }
+    let policy = policy_lock
+        .policies
+        .get(&intent.policy)
+        .ok_or_else(|| anyhow::anyhow!("optimization policy '{}' is missing", intent.policy))?;
+    if policy.tiers.get("strong") != Some(&intent.strong)
+        || policy.tiers.get("economy") != Some(&intent.economy)
+    {
+        anyhow::bail!("active strong/economy tiers no longer match optimization intent");
+    }
+    if policy_lock
+        .policies
+        .values()
+        .any(|definition| definition.progress_guard.is_some())
+    {
+        anyhow::bail!(
+            "workflow optimization does not yet support active progress guards because a temporary v1 experiment could not preserve their runtime semantics"
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,9 +207,18 @@ impl OptimizationPaths {
 
     fn with_intent_paths(mut self, value: &OptimizationIntent) -> Self {
         let root = self.intent.parent().unwrap_or(Path::new("."));
-        self.contract = resolve_relative(root, &value.contract);
-        self.source_config = resolve_relative(root, &value.source_config);
+        self.contract = absolute_path(resolve_relative(root, &value.contract));
+        self.source_config = absolute_path(resolve_relative(root, &value.source_config));
         self
+    }
+
+    /// Target used for the project-scoped optimization operation lock. The
+    /// sibling lock file lives in private runtime state, never in the repo.
+    pub fn operation_lock_target(&self) -> PathBuf {
+        self.private_runs
+            .parent()
+            .unwrap_or(&self.private_runs)
+            .join("operation")
     }
 }
 
@@ -219,7 +233,12 @@ pub struct LoadedIntent {
 #[serde(deny_unknown_fields)]
 pub struct EvaluatorLock {
     pub agent: String,
+    /// Exact npm ACP adapter package version.
     pub agent_version: String,
+    pub adapter_integrity: String,
+    pub runtime_executable: String,
+    pub runtime_version: String,
+    pub runtime_digest: String,
     pub model: String,
     pub route: EvaluatorRoute,
     pub skill_digest: String,
@@ -250,6 +269,7 @@ pub struct OutcomeSummary {
 pub struct OptimizationRunLock {
     pub run_id: String,
     pub source_policy_digest: String,
+    pub source_config_digest: String,
     pub target_request_key: String,
     pub baseline: OutcomeSummary,
     pub candidate: OutcomeSummary,
@@ -307,12 +327,16 @@ impl EvaluatorLock {
         for (label, value) in [
             ("agent", self.agent.as_str()),
             ("agent_version", self.agent_version.as_str()),
+            ("adapter_integrity", self.adapter_integrity.as_str()),
+            ("runtime_executable", self.runtime_executable.as_str()),
+            ("runtime_version", self.runtime_version.as_str()),
             ("model", self.model.as_str()),
         ] {
             validate_identifier(label, value)?;
         }
         validate_sha256("skill_digest", &self.skill_digest)?;
         validate_sha256("contract_digest", &self.contract_digest)?;
+        validate_sha256("runtime_digest", &self.runtime_digest)?;
         Ok(())
     }
 }
@@ -332,6 +356,10 @@ impl OptimizationRunLock {
         validate_sha256(
             "latest_run.source_policy_digest",
             &self.source_policy_digest,
+        )?;
+        validate_sha256(
+            "latest_run.source_config_digest",
+            &self.source_config_digest,
         )?;
         validate_sha256(
             "latest_run.eval_snapshot_digest",
@@ -372,25 +400,7 @@ pub async fn write_intent_create_new(path: &Path, intent: &OptimizationIntent) -
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .await
-        .with_context(|| {
-            if path.exists() {
-                format!("{} already exists; refusing to overwrite", path.display())
-            } else {
-                format!("creating {}", path.display())
-            }
-        })?;
-    file.write_all(rendered.as_bytes())
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    file.flush()
-        .await
-        .with_context(|| format!("flushing {}", path.display()))?;
-    Ok(())
+    crate::policy_lock::write_new_file_atomic(path, rendered.as_bytes())
 }
 
 pub async fn load_lock(path: &Path) -> Result<LoadedOptimizationLock> {
@@ -420,25 +430,7 @@ pub async fn write_lock_compare_and_swap(
         rendered.push('\n');
     }
     let Some(expected_digest) = expected_digest else {
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .await
-            .with_context(|| {
-                if path.exists() {
-                    format!("{} already exists; refusing to overwrite", path.display())
-                } else {
-                    format!("creating {}", path.display())
-                }
-            })?;
-        file.write_all(rendered.as_bytes())
-            .await
-            .with_context(|| format!("writing {}", path.display()))?;
-        file.flush()
-            .await
-            .with_context(|| format!("flushing {}", path.display()))?;
-        return Ok(());
+        return crate::policy_lock::write_new_file_atomic(path, rendered.as_bytes());
     };
 
     validate_sha256("expected optimization lock digest", expected_digest)?;
@@ -496,13 +488,108 @@ fn resolve_relative(root: &Path, value: &Path) -> PathBuf {
 }
 
 fn absolute_path(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
+    let absolute = if path.is_absolute() {
         path
     } else {
         std::env::current_dir()
             .map(|cwd| cwd.join(&path))
             .unwrap_or(path)
+    };
+    if absolute.exists() {
+        return std::fs::canonicalize(&absolute).unwrap_or(absolute);
     }
+    let Some(file_name) = absolute.file_name() else {
+        return absolute;
+    };
+    absolute
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .map(|parent| parent.join(file_name))
+        .unwrap_or(absolute)
+}
+
+pub(crate) fn model_credential_environment_names() -> Vec<String> {
+    let mut names = bitrouter_providers::zero_config_env_var_providers()
+        .into_iter()
+        .map(|(_, name)| name)
+        .chain(
+            [
+                "BITROUTER_API_KEY",
+                "BITROUTER_TOKEN",
+                "BITROUTER_TELEMETRY_TOKEN",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "GEMINI_API_KEY",
+                "MINIMAX_API_KEY",
+                "OPENCODE_ZEN_API_KEY",
+                "X_API_KEY",
+                "CUSTOM_API_KEY",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Credentials that an infrastructure child (private daemon or evaluator
+/// adapter) has no reason to inherit. Workflow commands intentionally use the
+/// narrower model-only filter so their business environment remains real.
+pub(crate) fn restricted_child_environment_names() -> Vec<String> {
+    let mut names = model_credential_environment_names();
+    names.extend(std::env::vars_os().filter_map(|(name, _)| {
+        let name = name.to_string_lossy().to_string();
+        sensitive_infrastructure_environment_name(&name).then_some(name)
+    }));
+    names.sort();
+    names.dedup();
+    names
+}
+
+pub(crate) async fn secure_private_directory(path: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .with_context(|| format!("creating private directory {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .await
+            .with_context(|| format!("securing private directory {}", path.display()))?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn secure_private_file(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .await
+            .with_context(|| format!("securing private file {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn sensitive_infrastructure_environment_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper.ends_with("_TOKEN")
+        || upper.ends_with("_SECRET")
+        || upper.ends_with("_PASSWORD")
+        || upper.ends_with("_CREDENTIAL")
+        || upper.ends_with("_CREDENTIALS")
+        || upper.ends_with("_API_KEY")
+        || upper == "DATABASE_URL"
+        || upper == "SSH_AUTH_SOCK"
+        || [
+            "AWS_", "AZURE_", "GCP_", "GOOGLE_", "GH_", "GITHUB_", "NPM_", "DOCKER_", "KUBE_",
+        ]
+        .iter()
+        .any(|prefix| upper.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -512,6 +599,7 @@ mod tests {
     use super::{
         EvaluatorLock, EvaluatorRoute, OptimizationIntent, OptimizationLock, OptimizationPaths,
         OptimizationPreference, ResolvedEvaluator, WorkflowCommand, load_intent, load_lock,
+        model_credential_environment_names, sensitive_infrastructure_environment_name,
         write_intent_create_new, write_lock_compare_and_swap,
     };
 
@@ -520,6 +608,7 @@ mod tests {
             version: 1,
             workflow: WorkflowCommand {
                 command: vec!["python3".into(), "eval.py".into()],
+                inputs: Vec::new(),
                 timeout_secs: 900,
             },
             contract: PathBuf::from("bitrouter.eval.md"),
@@ -529,7 +618,6 @@ mod tests {
             strong: "bitrouter:openai/gpt-5.6".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
             preference: OptimizationPreference::Balanced,
-            custom_quality: None,
             evaluator: ResolvedEvaluator {
                 agent: "codex-acp".into(),
                 model: "bitrouter:openai/gpt-5.6".into(),
@@ -545,16 +633,14 @@ mod tests {
         write_intent_create_new(&path, &intent()).await?;
 
         let loaded = load_intent(&path).await?;
+        let canonical = std::fs::canonicalize(dir.path())?;
 
         assert_eq!(loaded.intent, intent());
-        assert_eq!(
-            loaded.paths.source_config,
-            dir.path().join("bitrouter.yaml")
-        );
-        assert_eq!(loaded.paths.contract, dir.path().join("bitrouter.eval.md"));
+        assert_eq!(loaded.paths.source_config, canonical.join("bitrouter.yaml"));
+        assert_eq!(loaded.paths.contract, canonical.join("bitrouter.eval.md"));
         assert_eq!(
             loaded.paths.lock,
-            dir.path().join("bitrouter.optimize.lock.yaml")
+            canonical.join("bitrouter.optimize.lock.yaml")
         );
         assert_eq!(loaded.digest, loaded.intent.semantic_digest()?);
         assert!(loaded.digest.starts_with("sha256:"));
@@ -567,7 +653,10 @@ mod tests {
         let path = dir.path().join("bitrouter.optimize.yaml");
         tokio::fs::write(&path, "owned: true\n").await?;
 
-        let error = write_intent_create_new(&path, &intent()).await.unwrap_err();
+        let error = write_intent_create_new(&path, &intent())
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("existing intent was overwritten"))?;
 
         assert!(error.to_string().contains("already exists"));
         assert_eq!(tokio::fs::read_to_string(path).await?, "owned: true\n");
@@ -575,46 +664,31 @@ mod tests {
     }
 
     #[test]
-    fn intent_rejects_ambiguous_or_unsafe_optimization_inputs() {
+    fn intent_rejects_ambiguous_or_unsafe_optimization_inputs() -> anyhow::Result<()> {
         let mut value = intent();
         value.workflow.command.clear();
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("workflow")
-        );
+        let error = value
+            .validate()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("empty workflow was accepted"))?;
+        assert!(error.to_string().contains("workflow"));
 
         let mut value = intent();
         value.economy = value.strong.clone();
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("distinct")
-        );
-
-        let mut value = intent();
-        value.preference = OptimizationPreference::Custom;
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("custom_quality")
-        );
+        let error = value
+            .validate()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("identical routes were accepted"))?;
+        assert!(error.to_string().contains("distinct"));
 
         let mut value = intent();
         value.workflow.timeout_secs = 0;
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("timeout")
-        );
+        let error = value
+            .validate()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("zero timeout was accepted"))?;
+        assert!(error.to_string().contains("timeout"));
+        Ok(())
     }
 
     #[test]
@@ -637,15 +711,6 @@ mod tests {
             crate::policy_compile::PromotionQualityCriteria::manual_review()
         );
 
-        value.preference = OptimizationPreference::Custom;
-        value.custom_quality = Some(super::CustomQualityGate {
-            minimum_pass_rate_ppm: 700_000,
-            maximum_quality_loss_ppm: 200_000,
-        });
-        assert_eq!(
-            value.promotion_quality_criteria()?,
-            crate::policy_compile::PromotionQualityCriteria::custom(700_000, 200_000)?
-        );
         Ok(())
     }
 
@@ -653,14 +718,46 @@ mod tests {
     fn default_paths_are_version_controlled_and_private_runs_are_external() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let paths = OptimizationPaths::for_intent(directory.path().join("bitrouter.optimize.yaml"));
+        let canonical = std::fs::canonicalize(directory.path())?;
 
-        assert_eq!(
-            paths.lock,
-            directory.path().join("bitrouter.optimize.lock.yaml")
-        );
-        assert_eq!(paths.contract, directory.path().join("bitrouter.eval.md"));
-        assert!(!paths.private_runs.starts_with(directory.path()));
+        assert_eq!(paths.lock, canonical.join("bitrouter.optimize.lock.yaml"));
+        assert_eq!(paths.contract, canonical.join("bitrouter.eval.md"));
+        assert!(!paths.private_runs.starts_with(&canonical));
         Ok(())
+    }
+
+    #[test]
+    fn child_process_filter_removes_model_credentials_but_keeps_workflow_secrets() {
+        let names = model_credential_environment_names();
+        for name in [
+            "BITROUTER_API_KEY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CUSTOM_API_KEY",
+        ] {
+            assert!(names.iter().any(|candidate| candidate == name), "{name}");
+        }
+        for name in ["GH_TOKEN", "DB_PASSWORD", "AWS_ACCESS_KEY_ID", "PATH"] {
+            assert!(!names.iter().any(|candidate| candidate == name), "{name}");
+        }
+    }
+
+    #[test]
+    fn infrastructure_child_filter_recognizes_business_and_cloud_credentials() {
+        for name in [
+            "GH_TOKEN",
+            "DB_PASSWORD",
+            "AWS_ACCESS_KEY_ID",
+            "DATABASE_URL",
+            "NPM_CONFIG_TOKEN",
+            "SSH_AUTH_SOCK",
+        ] {
+            assert!(sensitive_infrastructure_environment_name(name), "{name}");
+        }
+        for name in ["PATH", "HOME", "LANG", "RUST_LOG"] {
+            assert!(!sensitive_infrastructure_environment_name(name), "{name}");
+        }
     }
 
     fn lock(intent_digest: &str) -> OptimizationLock {
@@ -672,6 +769,11 @@ mod tests {
             evaluator: EvaluatorLock {
                 agent: "codex-acp".into(),
                 agent_version: "codex 1.2.3".into(),
+                adapter_integrity: "sha512-test".into(),
+                runtime_executable: "codex".into(),
+                runtime_version: "codex 1.2.3".into(),
+                runtime_digest:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
                 model: "bitrouter:openai/gpt-5.6".into(),
                 route: EvaluatorRoute::Cloud,
                 skill_digest:
@@ -703,7 +805,8 @@ mod tests {
             &second,
         )
         .await
-        .unwrap_err();
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("stale lock update was accepted"))?;
         assert!(stale.to_string().contains("changed concurrently"));
         assert_eq!(load_lock(&path).await?.document, first);
 
@@ -713,25 +816,22 @@ mod tests {
     }
 
     #[test]
-    fn optimization_lock_rejects_unpinned_or_malformed_evaluator_identity() {
+    fn optimization_lock_rejects_unpinned_or_malformed_evaluator_identity() -> anyhow::Result<()> {
         let mut value =
             lock("sha256:3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
         value.evaluator.agent_version.clear();
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("agent_version")
-        );
+        let error = value
+            .validate()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("unpinned evaluator was accepted"))?;
+        assert!(error.to_string().contains("agent_version"));
 
         let value = lock("not-a-digest");
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("intent_digest")
-        );
+        let error = value
+            .validate()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("malformed intent digest was accepted"))?;
+        assert!(error.to_string().contains("intent_digest"));
+        Ok(())
     }
 }

@@ -46,6 +46,7 @@ erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
+tempfile.workspace = true
 thiserror.workspace = true
 http.workspace = true
 axum.workspace = true

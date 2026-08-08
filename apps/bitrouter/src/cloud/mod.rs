@@ -29,7 +29,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::BitrouterCloudAuthApplier;
-use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
+use bitrouter_cloud_sdk::auth::credentials::{
+    CredentialKind, CredentialsStore, default_credentials_path,
+};
 use bitrouter_cloud_sdk::auth::metadata::AsMetadata;
 use bitrouter_cloud_sdk::provider::PROVIDER_ID;
 use bitrouter_observe::otel::TelemetryBearer;
@@ -156,6 +158,26 @@ pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
 pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
     let store = CredentialsStore::default_path().ok()?;
     cloud_bearer_for_base_url_from_store(store, target_base_url).await
+}
+
+/// Resolve only a static inference API key for an exact Cloud origin. OAuth
+/// access tokens use `Authorization: Bearer`; settlement receipts are scoped
+/// by `x-api-key`, so silently coercing OAuth into that header is invalid.
+pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String> {
+    let store = CredentialsStore::default_path().ok()?;
+    cloud_api_key_for_base_url_from_store(store, target_base_url).await
+}
+
+async fn cloud_api_key_for_base_url_from_store(
+    store: CredentialsStore,
+    target_base_url: &str,
+) -> Option<String> {
+    let current = store.current()?;
+    if current.kind() != CredentialKind::ApiKey || !same_origin(current.base_url(), target_base_url)
+    {
+        return None;
+    }
+    cloud_bearer_source_from_store(store).await?.bearer().await
 }
 
 async fn cloud_bearer_for_base_url_from_store(
@@ -318,15 +340,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() {
+    async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() -> anyhow::Result<()> {
         let path = fresh_tmp_creds_path("gateway-origin");
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .unwrap();
+        let mut store = CredentialsStore::load(&path)?;
+        store.save(StoredCredential::api_key(
+            "brk_gateway.secret".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        ))?;
 
         assert_eq!(
             cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai/v1/responses")
@@ -335,18 +355,46 @@ mod tests {
             Some("brk_gateway.secret")
         );
 
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .unwrap();
+        let mut store = CredentialsStore::load(&path)?;
+        store.save(StoredCredential::api_key(
+            "brk_gateway.secret".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        ))?;
         assert!(
             cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai.evil/v1")
                 .await
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settlement_resolver_rejects_oauth_but_accepts_same_origin_api_key()
+    -> anyhow::Result<()> {
+        let oauth = store_with_token(
+            "settlement-oauth",
+            "oauth-access-token",
+            "2999-01-01T00:00:00Z",
+        );
+        assert!(
+            cloud_api_key_for_base_url_from_store(oauth, "https://api.bitrouter.ai")
+                .await
+                .is_none()
+        );
+
+        let path = fresh_tmp_creds_path("settlement-api-key");
+        let mut api_key = CredentialsStore::load(&path)?;
+        api_key.save(StoredCredential::api_key(
+            "brk_gateway.secret".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        ))?;
+        assert_eq!(
+            cloud_api_key_for_base_url_from_store(api_key, "https://api.bitrouter.ai/v1")
+                .await
+                .as_deref(),
+            Some("brk_gateway.secret")
+        );
+        Ok(())
     }
 
     #[test]

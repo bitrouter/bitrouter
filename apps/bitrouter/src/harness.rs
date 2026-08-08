@@ -1065,8 +1065,9 @@ mod tests {
     }
 
     #[test]
-    fn direct_model_overlay_pins_without_changing_provider_authority() {
-        let codex = by_id("codex-acp").unwrap();
+    fn direct_model_overlay_pins_without_changing_provider_authority() -> anyhow::Result<()> {
+        let codex = by_id("codex-acp")
+            .ok_or_else(|| anyhow::anyhow!("codex-acp harness is unavailable"))?;
         let overlay = codex.direct_model_overlay("gpt-5.6");
         assert!(overlay.args.contains(&"model=\"gpt-5.6\"".to_string()));
         assert!(
@@ -1077,13 +1078,15 @@ mod tests {
         );
         assert!(overlay.env.is_empty());
 
-        let claude = by_id("claude-acp").unwrap();
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp harness is unavailable"))?;
         let overlay = claude.direct_model_overlay("claude-opus-5");
         assert_eq!(
             overlay.env,
             vec![("ANTHROPIC_MODEL".into(), "claude-opus-5".into())]
         );
         assert!(overlay.args.is_empty());
+        Ok(())
     }
 
     #[test]

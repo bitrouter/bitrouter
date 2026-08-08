@@ -10,7 +10,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::optimization::OptimizationPreference;
 use crate::policy_lock::{
-    LEGACY_POLICY_LOCKFILE_VERSION, PolicyLock, semantic_digest, validate_document,
+    LEGACY_POLICY_LOCKFILE_VERSION, PolicyLock, RouteOwner, semantic_digest, validate_document,
 };
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
@@ -88,6 +88,11 @@ pub struct PrivateVariantRequest<'a> {
 struct PrivateDaemon {
     child: tokio::process::Child,
     control_socket: PathBuf,
+}
+
+struct PrivateDaemonSupervisor {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    completion: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
 }
 
 impl PrivateDaemonPaths {
@@ -174,31 +179,26 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
     if semantic_digest(request.policy)? != request.policy_digest {
         anyhow::bail!("private variant policy digest does not match its frozen document");
     }
-    tokio::fs::create_dir(&request.paths.root)
-        .await
-        .with_context(|| {
-            format!(
-                "creating private run directory {}",
-                request.paths.root.display()
-            )
-        })?;
+    super::secure_private_directory(&request.paths.root).await?;
     let port = reserve_loopback_port()?;
     let config = private_daemon_config(request.paths, request.intent, port)?;
     tokio::fs::write(&request.paths.config, config)
         .await
         .with_context(|| format!("writing private config {}", request.paths.config.display()))?;
+    super::secure_private_file(&request.paths.config).await?;
     tokio::fs::write(
         &request.paths.policy,
         crate::policy_lock::deterministic_yaml(request.policy)?,
     )
     .await
     .with_context(|| format!("writing private policy {}", request.paths.policy.display()))?;
+    super::secure_private_file(&request.paths.policy).await?;
 
-    let mut daemon = PrivateDaemon::start(
-        request.bitrouter_executable,
-        request.paths,
+    let mut daemon = PrivateDaemonSupervisor::start(
+        request.bitrouter_executable.to_path_buf(),
+        request.paths.clone(),
         port,
-        request.settlement_bearer,
+        request.settlement_bearer.to_string(),
     )
     .await?;
     let run_result = async {
@@ -214,17 +214,28 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
     }
     .await;
     let cleanup_result = daemon.stop().await;
-    let execution = match (run_result, cleanup_result) {
+    let mut execution = match (run_result, cleanup_result) {
         (Ok(execution), Ok(())) => execution,
-        (Err(error), _) => return Err(error),
+        (Err(error), Err(cleanup)) => {
+            return Err(error.context(format!("private daemon cleanup also failed: {cleanup:#}")));
+        }
+        (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error),
     };
+    execution.stdout =
+        super::evaluator::redact_and_bound(&execution.stdout, request.maximum_output_bytes);
+    execution.stderr =
+        super::evaluator::redact_and_bound(&execution.stderr, request.maximum_output_bytes);
     tokio::fs::write(
         &request.paths.workflow_evidence,
         serde_json::to_vec_pretty(&execution).context("serializing private workflow evidence")?,
     )
     .await
     .context("writing private workflow evidence")?;
+    super::secure_private_file(&request.paths.workflow_evidence).await?;
+    if tokio::fs::try_exists(&request.paths.database).await? {
+        super::secure_private_file(&request.paths.database).await?;
+    }
 
     let db = crate::db::connect(&request.paths.database_url())
         .await
@@ -260,7 +271,7 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
         request.settlement_bearer,
     )
     .context("building Cloud settlement client")?;
-    let summary = crate::metering::reconcile_authoritative_requests(
+    let summary = crate::metering::reconciliation::reconcile_authoritative_requests(
         &metering,
         &settlement,
         &request_ids,
@@ -315,7 +326,17 @@ impl PrivateDaemon {
             .open(&paths.log)
             .with_context(|| format!("creating private daemon log {}", paths.log.display()))?;
         let stderr = log.try_clone().context("cloning private daemon log")?;
-        let mut child = tokio::process::Command::new(executable)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&paths.log, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("securing private daemon log {}", paths.log.display()))?;
+        }
+        let mut command = tokio::process::Command::new(executable);
+        for name in super::restricted_child_environment_names() {
+            command.env_remove(name);
+        }
+        let mut child = command
             .arg("serve")
             .arg("--config")
             .arg(&paths.config)
@@ -389,33 +410,135 @@ impl PrivateDaemon {
     }
 
     async fn stop(&mut self) -> Result<()> {
-        let response =
-            crate::daemon::send_command(&self.control_socket, &crate::daemon::DaemonCommand::Stop)
-                .await
-                .context("stopping private daemon")?;
-        if !matches!(response, crate::daemon::DaemonResponse::Ok) {
-            anyhow::bail!("private daemon rejected its stop command");
-        }
-        match tokio::time::timeout(Duration::from_secs(15), self.child.wait()).await {
-            Ok(status) => {
-                let status = status.context("waiting for private daemon")?;
-                if !status.success() {
-                    anyhow::bail!("private daemon exited unsuccessfully: {status}");
+        let mut failures = Vec::new();
+        let graceful = match crate::daemon::send_command(
+            &self.control_socket,
+            &crate::daemon::DaemonCommand::Stop,
+        )
+        .await
+        {
+            Ok(crate::daemon::DaemonResponse::Ok) => true,
+            Ok(_) => {
+                failures.push("private daemon rejected its stop command".to_string());
+                false
+            }
+            Err(error) => {
+                failures.push(format!("stopping private daemon: {error:#}"));
+                false
+            }
+        };
+        if graceful {
+            match tokio::time::timeout(Duration::from_secs(15), self.child.wait()).await {
+                Ok(Ok(status)) if status.success() => {}
+                Ok(Ok(status)) => {
+                    failures.push(format!("private daemon exited unsuccessfully: {status}"));
+                }
+                Ok(Err(error)) => failures.push(format!("waiting for private daemon: {error}")),
+                Err(_) => {
+                    failures.push(
+                        "private daemon did not stop within its cleanup deadline".to_string(),
+                    );
+                    if let Err(error) = self.force_reap().await {
+                        failures.push(format!("forcing private daemon cleanup: {error:#}"));
+                    }
                 }
             }
-            Err(_) => {
-                self.child
-                    .start_kill()
-                    .context("terminating stuck private daemon")?;
-                self.child
-                    .wait()
-                    .await
-                    .context("reaping stuck private daemon")?;
-                anyhow::bail!("private daemon did not stop within its cleanup deadline");
-            }
+        } else if let Err(error) = self.force_reap().await {
+            failures.push(format!("forcing private daemon cleanup: {error:#}"));
         }
-        remove_control_socket(&self.control_socket).await?;
+        if let Err(error) = remove_control_socket(&self.control_socket).await {
+            failures.push(format!("removing private daemon socket: {error:#}"));
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(failures.join("; "))
+        }
+    }
+
+    async fn force_reap(&mut self) -> Result<()> {
+        if self
+            .child
+            .try_wait()
+            .context("polling private daemon")?
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.child
+            .start_kill()
+            .context("terminating private daemon")?;
+        tokio::time::timeout(Duration::from_secs(5), self.child.wait())
+            .await
+            .context("timed out reaping private daemon")?
+            .context("reaping private daemon")?;
         Ok(())
+    }
+}
+
+impl PrivateDaemonSupervisor {
+    async fn start(
+        executable: PathBuf,
+        paths: PrivateDaemonPaths,
+        port: u16,
+        cloud_api_key: String,
+    ) -> Result<Self> {
+        let (readiness_tx, readiness_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut daemon =
+                match PrivateDaemon::start(&executable, &paths, port, &cloud_api_key).await {
+                    Ok(daemon) => daemon,
+                    Err(error) => {
+                        let _ = readiness_tx.send(Err(format!("{error:#}")));
+                        return;
+                    }
+                };
+            if readiness_tx.send(Ok(())).is_err() {
+                let _ = daemon.stop().await;
+                return;
+            }
+            let _ = stop_rx.await;
+            let _ = completion_tx.send(daemon.stop().await);
+        });
+        readiness_rx
+            .await
+            .context("private daemon supervisor stopped before readiness")?
+            .map_err(anyhow::Error::msg)?;
+        Ok(Self {
+            stop: Some(stop_tx),
+            completion: Some(completion_rx),
+        })
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let completion = self
+            .completion
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("private daemon supervisor was already stopped"))?;
+        tokio::time::timeout(Duration::from_secs(25), completion)
+            .await
+            .context("private daemon supervisor cleanup timed out")?
+            .context("private daemon supervisor exited without a cleanup receipt")?
+    }
+}
+
+impl Drop for PrivateDaemonSupervisor {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
+impl Drop for PrivateDaemon {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = std::fs::remove_file(&self.control_socket);
     }
 }
 
@@ -429,6 +552,18 @@ async fn remove_control_socket(path: &Path) -> Result<()> {
 }
 
 pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<WorkflowExecution> {
+    #[cfg(windows)]
+    anyhow::bail!(
+        "controlled workflow optimization is not supported on Windows until Job Object process-tree isolation is available"
+    );
+    #[cfg(not(windows))]
+    run_workflow_command_isolated(request).await
+}
+
+#[cfg(not(windows))]
+async fn run_workflow_command_isolated(
+    request: WorkflowRunRequest<'_>,
+) -> Result<WorkflowExecution> {
     request.workflow.validate()?;
     if request.maximum_output_bytes == 0 {
         anyhow::bail!("maximum workflow output bytes must be positive");
@@ -439,7 +574,13 @@ pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<Wor
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("workflow command is empty"))?;
     let started = Instant::now();
-    let mut child = tokio::process::Command::new(program)
+    let mut command = tokio::process::Command::new(program);
+    for name in super::model_credential_environment_names() {
+        command.env_remove(name);
+    }
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .args(arguments)
         .current_dir(request.cwd)
         .envs(request.env)
@@ -449,6 +590,8 @@ pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<Wor
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("launching workflow program '{program}'"))?;
+    let child_pid = child.id();
+    let mut group_guard = WorkflowProcessGroupGuard::new(child_pid);
     let stdout = child
         .stdout
         .take()
@@ -461,27 +604,49 @@ pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<Wor
     let stderr_task = tokio::spawn(drain_bounded(stderr, request.maximum_output_bytes));
     let deadline = Duration::from_secs(request.workflow.timeout_secs);
     let (exit_code, timed_out) = match tokio::time::timeout(deadline, child.wait()).await {
-        Ok(status) => (
-            status.context("waiting for workflow program")?.code(),
-            false,
-        ),
+        Ok(status) => {
+            let exit_code = status.context("waiting for workflow program")?.code();
+            if workflow_process_group_exists(child_pid).await? {
+                terminate_workflow_tree(&mut child, child_pid)
+                    .await
+                    .context("terminating workflow background descendants")?;
+                group_guard.disarm();
+                anyhow::bail!("workflow exited while background descendants were still running");
+            }
+            group_guard.disarm();
+            (exit_code, false)
+        }
         Err(_) => {
-            child
-                .start_kill()
-                .context("terminating timed-out workflow program")?;
-            child
-                .wait()
+            terminate_workflow_tree(&mut child, child_pid)
                 .await
-                .context("reaping timed-out workflow program")?;
+                .context("terminating timed-out workflow process tree")?;
+            group_guard.disarm();
             (None, true)
         }
     };
-    let stdout = stdout_task
-        .await
-        .context("joining workflow stdout reader")??;
-    let stderr = stderr_task
-        .await
-        .context("joining workflow stderr reader")??;
+    let mut stdout_task = stdout_task;
+    let mut stderr_task = stderr_task;
+    let streams = tokio::time::timeout(Duration::from_secs(5), async {
+        let stdout = (&mut stdout_task)
+            .await
+            .context("joining workflow stdout reader")??;
+        let stderr = (&mut stderr_task)
+            .await
+            .context("joining workflow stderr reader")??;
+        Ok::<_, anyhow::Error>((stdout, stderr))
+    })
+    .await;
+    let (stdout, stderr) = match streams {
+        Ok(result) => result?,
+        Err(_) => {
+            let cleanup = terminate_workflow_tree(&mut child, child_pid).await;
+            stdout_task.abort();
+            stderr_task.abort();
+            cleanup.context("terminating workflow descendants that retained output pipes")?;
+            group_guard.disarm();
+            anyhow::bail!("workflow process tree retained output pipes after its deadline");
+        }
+    };
     Ok(WorkflowExecution {
         exit_code,
         timed_out,
@@ -491,6 +656,100 @@ pub async fn run_workflow_command(request: WorkflowRunRequest<'_>) -> Result<Wor
         launches: 1,
         cwd: request.cwd.to_string_lossy().into_owned(),
     })
+}
+
+async fn terminate_workflow_tree(
+    child: &mut tokio::process::Child,
+    child_pid: Option<u32>,
+) -> Result<()> {
+    if let Some(pid) = child_pid {
+        let group = format!("-{pid}");
+        let status = tokio::process::Command::new("kill")
+            .args(["-KILL", &group])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .context("launching workflow process-group kill")?;
+        if !status.success() && workflow_process_group_exists(child_pid).await? {
+            anyhow::bail!("could not terminate workflow process group {pid}");
+        }
+    }
+    if child
+        .try_wait()
+        .context("polling workflow process")?
+        .is_none()
+    {
+        let _ = child.start_kill();
+        tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .context("timed out reaping workflow process")?
+            .context("reaping workflow process")?;
+    }
+    let gone = async {
+        loop {
+            if !workflow_process_group_exists(child_pid).await? {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(2), gone)
+        .await
+        .context("workflow process group remained alive after termination")??;
+    Ok(())
+}
+
+#[cfg(unix)]
+struct WorkflowProcessGroupGuard {
+    pid: Option<u32>,
+    armed: bool,
+}
+
+#[cfg(unix)]
+impl WorkflowProcessGroupGuard {
+    fn new(pid: Option<u32>) -> Self {
+        Self { pid, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for WorkflowProcessGroupGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(pid) = self.pid {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+async fn workflow_process_group_exists(child_pid: Option<u32>) -> Result<bool> {
+    let Some(pid) = child_pid else {
+        return Ok(false);
+    };
+    let group = format!("-{pid}");
+    let status = tokio::process::Command::new("kill")
+        .args(["-0", &group])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("checking workflow process group")?;
+    Ok(status.success())
 }
 
 pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<String, String>> {
@@ -507,6 +766,7 @@ pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<Str
     Ok(BTreeMap::from([
         ("BITROUTER_BASE_URL".into(), base.into()),
         ("BITROUTER_API_BASE".into(), v1.clone()),
+        ("BITROUTER_API_KEY".into(), "bitrouter-local".into()),
         ("BITROUTER_MODEL".into(), model.clone()),
         ("OPENAI_BASE_URL".into(), v1.clone()),
         ("OPENAI_API_BASE".into(), v1),
@@ -514,7 +774,10 @@ pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<Str
         ("OPENAI_MODEL".into(), model.clone()),
         ("ANTHROPIC_BASE_URL".into(), base.into()),
         ("ANTHROPIC_AUTH_TOKEN".into(), "bitrouter-local".into()),
-        ("ANTHROPIC_MODEL".into(), model),
+        ("ANTHROPIC_MODEL".into(), model.clone()),
+        ("GOOGLE_GEMINI_BASE_URL".into(), base.into()),
+        ("GEMINI_API_KEY".into(), "bitrouter-local".into()),
+        ("GEMINI_MODEL".into(), model),
     ]))
 }
 
@@ -575,6 +838,10 @@ pub fn collect_variant_evidence(
                 != format!("{request_id}:{}", subject.decisions[0].policy)
             || decision.policy.as_deref() != Some(subject.decisions[0].policy.as_str())
             || subject.decisions[0].request_key != decision.request_key
+            || decision.selected_tier.as_deref()
+                != Some(subject.decisions[0].selected_tier.as_str())
+            || decision.baseline_tier != subject.decisions[0].baseline_tier
+            || subject.decisions[0].policy_digest != expected_policy_digest
         {
             anyhow::bail!("{variant} request {request_id} has an ambiguous decision join");
         }
@@ -670,12 +937,13 @@ struct ObservationSummary {
     count: u64,
     settled_cost_micro_usd: u64,
     priced_count: u64,
-    already_economy: bool,
+    selected_tiers: std::collections::BTreeSet<String>,
 }
 
 pub fn select_target_request_key(
     active: &PolicyLock,
     policy_name: &str,
+    strong_tier: &str,
     economy_tier: &str,
     preference: OptimizationPreference,
     observations: &[RouteObservation],
@@ -685,6 +953,11 @@ pub fn select_target_request_key(
         .policies
         .get(policy_name)
         .ok_or_else(|| anyhow::anyhow!("optimization policy '{policy_name}' does not exist"))?;
+    if !policy.tiers.contains_key(strong_tier) {
+        anyhow::bail!(
+            "optimization strong tier '{strong_tier}' is absent from policy '{policy_name}'"
+        );
+    }
     if !policy.tiers.contains_key(economy_tier) {
         anyhow::bail!(
             "optimization economy tier '{economy_tier}' is absent from policy '{policy_name}'"
@@ -703,7 +976,9 @@ pub fn select_target_request_key(
             .entry(observation.request_key.clone())
             .or_default();
         summary.count = summary.count.saturating_add(1);
-        summary.already_economy |= observation.selected_tier == economy_tier;
+        summary
+            .selected_tiers
+            .insert(observation.selected_tier.clone());
         if let Some(cost) = observation.settled_cost_micro_usd {
             summary.settled_cost_micro_usd = summary.settled_cost_micro_usd.saturating_add(cost);
             summary.priced_count = summary.priced_count.saturating_add(1);
@@ -711,10 +986,28 @@ pub fn select_target_request_key(
     }
     let mut eligible = summaries
         .into_iter()
-        .filter(|(_, summary)| summary.count > 0 && !summary.already_economy)
+        .filter(|(_, summary)| {
+            summary.count > 0
+                && summary.selected_tiers.len() == 1
+                && summary.selected_tiers.contains(strong_tier)
+        })
+        .filter(|(request_key, _)| {
+            if active.is_v2() {
+                active
+                    .certificate(policy_name, request_key)
+                    .is_none_or(|certificate| certificate.owner == RouteOwner::Compiler)
+            } else {
+                // Without the legacy compiler ledger, every explicit v1
+                // route is conservatively operator-owned. An implicit route
+                // may still be added by the evidence compiler.
+                !policy.routes.contains_key(request_key)
+            }
+        })
         .collect::<Vec<_>>();
     if eligible.is_empty() {
-        anyhow::bail!("baseline produced no eligible non-economy route key to optimize");
+        anyhow::bail!(
+            "baseline produced no compiler-owned strong route key to optimize; operator-owned routes remain unchanged"
+        );
     }
 
     match preference {
@@ -729,15 +1022,13 @@ pub fn select_target_request_key(
                 })
                 .then_with(|| left.0.cmp(&right.0))
         }),
-        OptimizationPreference::Balanced | OptimizationPreference::Custom => {
-            eligible.sort_by(|left, right| {
-                right
-                    .1
-                    .count
-                    .cmp(&left.1.count)
-                    .then_with(|| left.0.cmp(&right.0))
-            })
-        }
+        OptimizationPreference::Balanced => eligible.sort_by(|left, right| {
+            right
+                .1
+                .count
+                .cmp(&left.1.count)
+                .then_with(|| left.0.cmp(&right.0))
+        }),
         OptimizationPreference::SavingsFirst => {
             eligible.retain(|(_, summary)| summary.priced_count > 0);
             eligible.sort_by(|left, right| {
@@ -771,13 +1062,19 @@ pub fn build_experiment_lock(
     if RouteProjection::parse_key(target_request_key).is_none() {
         anyhow::bail!("controlled experiment target is not a canonical route key");
     }
+    if active
+        .policies
+        .values()
+        .any(|policy| policy.progress_guard.is_some())
+    {
+        anyhow::bail!(
+            "workflow optimization does not yet support active progress guards; removing one would violate the single-variable experiment contract"
+        );
+    }
     let mut experiment = active.clone();
     experiment.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
     experiment.artifact = None;
     experiment.certificates.clear();
-    for policy in experiment.policies.values_mut() {
-        policy.progress_guard = None;
-    }
     let policy = experiment
         .policies
         .get_mut(policy_name)
@@ -834,10 +1131,7 @@ mod tests {
                         "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
                     ),
                 ]),
-                routes: BTreeMap::from([
-                    ("agent_trace/v2|edit|normal".into(), "strong".into()),
-                    ("agent_trace/v2|test|normal".into(), "strong".into()),
-                ]),
+                routes: BTreeMap::new(),
                 default_tier: Some("strong".into()),
                 tool_use_tier: Some("strong".into()),
                 tool_safe_tiers: vec!["strong".into(), "economy".into()],
@@ -963,6 +1257,7 @@ mod tests {
             select_target_request_key(
                 &active,
                 "auto",
+                "strong",
                 "economy",
                 OptimizationPreference::QualityFirst,
                 &observations,
@@ -973,6 +1268,7 @@ mod tests {
             select_target_request_key(
                 &active,
                 "auto",
+                "strong",
                 "economy",
                 OptimizationPreference::Balanced,
                 &observations,
@@ -983,6 +1279,7 @@ mod tests {
             select_target_request_key(
                 &active,
                 "auto",
+                "strong",
                 "economy",
                 OptimizationPreference::SavingsFirst,
                 &observations,
@@ -1012,15 +1309,10 @@ mod tests {
             experiment.policies["auto"].routes["agent_trace/v2|edit|normal"],
             "economy"
         );
-        assert_eq!(
-            experiment.policies["auto"].routes["agent_trace/v2|test|normal"],
-            "strong"
-        );
         assert!(
-            experiment
-                .policies
-                .values()
-                .all(|policy| policy.progress_guard.is_none())
+            !experiment.policies["auto"]
+                .routes
+                .contains_key("agent_trace/v2|test|normal")
         );
         assert_ne!(semantic_digest(&experiment)?, active_digest);
         Ok(())
@@ -1038,12 +1330,36 @@ mod tests {
             select_target_request_key(
                 &active,
                 "auto",
+                "strong",
                 "economy",
                 OptimizationPreference::Balanced,
                 &observations,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn selection_skips_operator_owned_v1_routes() -> anyhow::Result<()> {
+        let mut active = active_lock();
+        active
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("auto policy is unavailable"))?
+            .routes
+            .insert("agent_trace/v2|edit|normal".into(), "strong".into());
+        assert_eq!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                "economy",
+                OptimizationPreference::Balanced,
+                &observations(),
+            )?,
+            "agent_trace/v2|test|normal"
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -1066,6 +1382,7 @@ mod tests {
         let success = run_workflow_command(WorkflowRunRequest {
             workflow: &WorkflowCommand {
                 command: success_command,
+                inputs: Vec::new(),
                 timeout_secs: 2,
             },
             cwd: dir.path(),
@@ -1090,6 +1407,7 @@ mod tests {
         let timeout = run_workflow_command(WorkflowRunRequest {
             workflow: &WorkflowCommand {
                 command: timeout_command,
+                inputs: Vec::new(),
                 timeout_secs: 1,
             },
             cwd: dir.path(),
@@ -1184,6 +1502,7 @@ mod tests {
             version: 1,
             workflow: WorkflowCommand {
                 command: vec!["workflow".into()],
+                inputs: Vec::new(),
                 timeout_secs: 60,
             },
             contract: PathBuf::from("bitrouter.eval.md"),
@@ -1193,7 +1512,6 @@ mod tests {
             strong: "bitrouter:openai/gpt-5.6".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
             preference: OptimizationPreference::Balanced,
-            custom_quality: None,
             evaluator: ResolvedEvaluator {
                 agent: "codex-acp".into(),
                 model: "bitrouter:openai/gpt-5.6".into(),

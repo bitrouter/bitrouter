@@ -198,6 +198,8 @@ pub struct OnboardingFlags {
 pub struct OnboardingOptimization {
     /// Exact argv when already supplied; interactive onboarding fills it in.
     pub workflow_command: Option<Vec<String>>,
+    /// Ignored/generated dependency or fixture roots frozen for each variant.
+    pub workflow_inputs: Vec<PathBuf>,
     /// Observable success criteria; interactive onboarding fills it in.
     pub success_contract: Option<String>,
     pub strong: String,
@@ -860,6 +862,7 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
         }
         None => OnboardingOptimization {
             workflow_command: None,
+            workflow_inputs: Vec::new(),
             success_contract: None,
             strong: "bitrouter:openai/gpt-5.6-terra".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
@@ -884,6 +887,19 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
         Some(contract) => contract,
         None => prompt_line("  What observable output means the workflow succeeded? ")?,
     };
+    let workflow_inputs = if flags.optimization.is_some() {
+        requested.workflow_inputs
+    } else {
+        let raw = prompt_line(
+            "  Ignored dependency/input paths as JSON (example: [\"node_modules\"]) [[]]: ",
+        )?;
+        if raw.trim().is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str::<Vec<PathBuf>>(&raw)
+                .context("workflow inputs must be a JSON string array")?
+        }
+    };
     if success_contract.trim().is_empty() {
         anyhow::bail!("workflow success criteria must not be empty");
     }
@@ -902,13 +918,9 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
             _ => crate::optimization::OptimizationPreference::Balanced,
         }
     };
-    if preference == crate::optimization::OptimizationPreference::Custom {
-        anyhow::bail!(
-            "custom PPM gates are available through `bitrouter optimize setup`; onboarding keeps profiles qualitative"
-        );
-    }
     Ok(Some(OnboardingOptimization {
         workflow_command: Some(workflow_command),
+        workflow_inputs,
         success_contract: Some(success_contract),
         strong: requested.strong,
         economy: requested.economy,
@@ -927,15 +939,27 @@ async fn configure_optimization(
     let success_contract = requested.success_contract.ok_or_else(|| {
         anyhow::anyhow!("headless optimization onboarding requires --optimize-success")
     })?;
-    if requested.preference == crate::optimization::OptimizationPreference::Custom {
-        anyhow::bail!("custom PPM gates require the explicit `bitrouter optimize setup` command");
+    let has_cloud_api_key = std::env::var(crate::harness::BITROUTER_API_KEY_ENV)
+        .ok()
+        .is_some_and(|key| !key.trim().is_empty())
+        || crate::cloud::cloud_api_key_for_base_url(
+            bitrouter_cloud_sdk::auth::settings::DEFAULT_AS,
+        )
+        .await
+        .is_some();
+    if !has_cloud_api_key {
+        anyhow::bail!(
+            "workflow optimization requires a BitRouter Cloud inference API key before setup; export BITROUTER_API_KEY in this shell or sign in through the interactive API-key prompt, then rerun onboarding"
+        );
     }
     let evaluator_agent = if installed.iter().any(|agent| agent.contains("codex")) {
         "codex-acp"
     } else if installed.iter().any(|agent| agent.contains("claude")) {
         "claude-acp"
     } else {
-        "codex-acp"
+        anyhow::bail!(
+            "workflow optimization requires a detected Codex or Claude ACP evaluator; install one and rerun onboarding, or use `bitrouter optimize setup` explicitly"
+        )
     };
     let intent_path = config.with_file_name(crate::optimization::DEFAULT_INTENT_FILENAME);
     let contract_path = config.with_file_name(crate::optimization::DEFAULT_CONTRACT_FILENAME);
@@ -944,6 +968,7 @@ async fn configure_optimization(
             intent_path,
             source_config: config.to_path_buf(),
             workflow_command,
+            workflow_inputs: requested.workflow_inputs,
             timeout_secs: 1800,
             contract: contract_path,
             contract_contents: Some(format!(
@@ -954,7 +979,6 @@ async fn configure_optimization(
             strong: requested.strong,
             economy: requested.economy,
             preference: requested.preference,
-            custom_quality: None,
             evaluator_agent: evaluator_agent.into(),
             evaluator_model: None,
             evaluator_route: crate::optimization::EvaluatorRoute::Direct,

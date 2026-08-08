@@ -22,7 +22,7 @@ The primary flow is:
 bitrouter init
 bitrouter optimize run
 bitrouter optimize review
-bitrouter optimize publish
+bitrouter optimize publish --enable-adaptive
 ```
 
 `bitrouter init` can create two version-controlled files after the user opts
@@ -45,7 +45,11 @@ The onboarding trade-off choices are qualitative:
   the measured trade-off for manual review.
 - `savings_first`: explore the eligible route key with the greatest settled
   cost and expose the measured trade-off for manual review.
-- `custom`: use explicit version-controlled quality gates.
+
+All three profiles require the candidate workflow's single agentic evaluation
+to pass and its authoritative settled cost to improve. They are search-order
+preferences, not statistical quality-loss promises. Case-level quality budgets
+remain a future extension once BitRouter has a host-verifiable task denominator.
 
 Latency is collected and displayed but is `observe_only`; it is not an
 optimization objective in this version.
@@ -86,15 +90,23 @@ onboarding. `codex-acp` is preferred when Codex is installed; otherwise
 `claude-acp` is selected when available. Direct use of the detected agent's
 own subscription is the default; Cloud judging is an explicit opt-in. The
 maintained Codex adapter is `@agentclientprotocol/codex-acp`, installed on
-demand and pinned to an exact version. The resolved agent id, executable
-version, concrete judge model, result schema, success-contract digest, and
-generic-eval skill digest are pinned in the optimization lock.
+demand. Its exact package version and registry integrity, plus the resolved
+Codex/Claude runtime version and executable digest, are pinned and rechecked.
+The concrete judge model, result schema, success-contract digest, and
+generic-eval skill digest are pinned in the optimization lock as well.
 
 Each evaluation uses a fresh session. The generic eval skill and protocol
 reference are compiled into the BitRouter binary and supplied as immutable
 context, so the flow does not depend on a project-local skill installation.
 The workflow evidence packet is bounded, redacted, and supplied directly; the
 judge does not need repository write or shell permission.
+
+The ACP adapter and installed Codex/Claude runtime are a trusted executor
+boundary, not an OS sandbox: they can use the user's own subscription and
+global agent configuration. BitRouter removes unrelated inherited credentials,
+uses a dedicated cwd, denies ACP tool permissions, and never treats the judge
+as an authority for cost or publication. Users who do not trust the installed
+runtime should not select it as an evaluator.
 
 The judge route is independent of the candidate being measured. It either uses
 a concrete BitRouter Cloud model or the detected agent's own direct
@@ -109,7 +121,10 @@ One `optimize run` performs these steps:
 2. Create a unique run directory under the BitRouter home.
 3. Derive a minimal private daemon config with a unique loopback port, control
    socket, database, and the active policy lock.
-4. Run the configured workflow without a shell while pointing common OpenAI,
+4. Create two detached Git worktrees from one frozen source manifest, overlay
+   the same dirty/untracked files, and include any explicitly declared ignored
+   dependencies or fixtures (`workflow.inputs`). Run the configured workflow
+   without a shell while pointing common OpenAI,
    Anthropic, and BitRouter base-url variables at the private daemon.
    Fingerprint exact argv, its resolved executable, and referenced regular-file
    arguments before and after both variants.
@@ -130,8 +145,10 @@ One `optimize run` performs these steps:
 12. Save the report, candidate, and lock transition. Never publish as part of
     `run`.
 
-Long or failed workflow commands occupy only their own run. There are no hidden
-retries. A non-zero exit remains quality evidence for the generic evaluator;
+Long or failed workflow commands occupy only their own run. Baseline and
+candidate workflow identities are never retried. The evaluator may use one
+schema-repair turn, and authoritative settlement may poll up to eight times;
+both are bounded and do not relaunch the workflow. A non-zero exit remains quality evidence for the generic evaluator;
 it is not mislabeled as a routing-infrastructure error. A timed-out,
 source-drifted, or structurally ambiguous run is terminal and cannot produce a
 publishable candidate. Users who need statistical power configure their
@@ -147,11 +164,12 @@ Request cost and latency come from settled request subjects emitted by the
 private daemon. The host submits those metrics with generic operational
 authority. The agentic evaluator submits only `quality.pass` semantics.
 
-When the candidate changes exactly one request key, quality credit may be
-assigned to decisions for that key. Other decisions receive only their own
-request-scoped cost and latency credit. If the observed candidate does not
-preserve that single-variable condition, quality credit is withheld and the
-run is inconclusive.
+When the candidate changes exactly one request key, the workflow-level quality
+outcome and workflow-level settled cost/latency delta are causally credited,
+with exact weights, only to decisions for that treatment key. They are not
+represented as per-request measurements. If the observed candidate does not
+preserve that single-variable condition, credit is withheld and the run is
+inconclusive.
 
 ### Publication
 
@@ -166,16 +184,24 @@ run is inconclusive.
 
 `optimize publish` revalidates the candidate parent digest, optimization lock,
 Eval snapshot, and source config. It then delegates to the existing atomic
-policy publication path. No interactive prompt is required, but publication is
-always a distinct command.
+policy/config publication and daemon reload path. A frozen project requires
+the explicit first-publication consent `--enable-adaptive`; setup never changes
+that safety mode. The transition is idempotently
+recoverable if the process exits after the policy write but before the
+optimization-lock compare-and-swap. No interactive prompt is required, but
+publication is always a distinct command. `optimize rollback` restores an
+archived policy and changes the optimization lock's active digest in the same
+recoverable workflow, keeping the next experiment's parent lineage usable.
 
 ## CLI surface
 
 ```text
 bitrouter optimize setup [options]
+bitrouter optimize resolve [--config FILE]
 bitrouter optimize run [--config FILE]
-bitrouter optimize review [--run ID] [--config FILE]
-bitrouter optimize publish [--run ID] [--config FILE]
+bitrouter optimize review [--config FILE]
+bitrouter optimize publish [--run ID] [--enable-adaptive] [--config FILE]
+bitrouter optimize rollback DIGEST [--config FILE] [--socket PATH]
 bitrouter optimize status [--config FILE]
 ```
 
@@ -186,15 +212,19 @@ bitrouter optimize setup \
   --workflow-command ./run-eval \
   --workflow-arg --case-set \
   --workflow-arg smoke.jsonl \
+  --workflow-input .venv \
   --strong bitrouter:<strong-model> \
   --economy bitrouter:<economy-model> \
-  --preference balanced \
-  --yes
+  --preference balanced
 ```
 
 Interactive onboarding presents agentic review as the default evaluator. It
-does not display unvalidated percentage promises. `custom` exposes exact
-integer PPM gates in the version-controlled intent.
+does not display unvalidated percentage promises. `review` is intentionally
+latest-only; editing intent/contract is reconciled with `optimize resolve`,
+which starts a fresh lineage.
+
+Controlled execution is Unix-only in this version. Windows setup fails before
+creating files until Job Object process-tree cleanup is implemented.
 
 ## Failure behavior
 
@@ -210,10 +240,13 @@ The optimizer fails closed when any of these are missing or inconsistent:
 - Eval admission or snapshot integrity;
 - private daemon cleanup.
 
-Secrets are never written to intent, lock, reports, process arguments, or
-version-controlled artifacts. Cloud credentials are resolved from the existing
-credential store or environment and passed only through child-process
-environment.
+BitRouter never intentionally writes credentials to intent, lock, reports,
+process arguments, or version-controlled artifacts. Cloud credentials are
+resolved from the API-key credential store or environment and passed only
+through child-process environment. Workflow output is untrusted: known token
+forms and the exact values of recognized sensitive environment variables are
+redacted before evaluator/report persistence, but users must still keep secret
+values out of eval output and treat the selected ACP runtime as trusted.
 
 ## Acceptance tests
 
@@ -245,8 +278,8 @@ The implementation is complete only when all of the following are proven:
 
 1. Add optimization intent/lock types, deterministic serialization, path
    resolution, validation, and reports with failing tests first.
-2. Parameterize candidate compilation with quality-first, manual-review, and
-   explicit custom gates while preserving the legacy compiler default.
+2. Parameterize candidate compilation with quality-first and manual-review
+   search preferences while preserving the legacy compiler default.
 3. Add the embedded-skill evaluator prompt, ACP execution, Cloud credential
    reuse, result validation, and fake-agent tests.
 4. Add private daemon/workflow supervision, experiment-lock generation,

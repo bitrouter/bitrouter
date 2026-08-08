@@ -266,9 +266,14 @@ fn agent_command(
     command: &str,
     args: &[String],
     env: &HashMap<String, String>,
+    strip_inherited_env: &[String],
 ) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(command);
-    for key in STRIPPED_INHERITED_ENV {
+    for key in STRIPPED_INHERITED_ENV
+        .iter()
+        .copied()
+        .chain(strip_inherited_env.iter().map(String::as_str))
+    {
         cmd.env_remove(key);
     }
     cmd.args(args)
@@ -298,8 +303,9 @@ fn spawn_agent_process(
     command: &str,
     args: &[String],
     env: &HashMap<String, String>,
+    strip_inherited_env: &[String],
 ) -> anyhow::Result<(AgentTransport, tokio::process::Child)> {
-    let mut cmd = agent_command(command, args, env);
+    let mut cmd = agent_command(command, args, env, strip_inherited_env);
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("spawning agent '{command}': {e}"))?;
@@ -380,9 +386,19 @@ impl UpstreamConnection {
         args: &[String],
         env: &HashMap<String, String>,
     ) -> anyhow::Result<Self> {
+        Self::spawn_with_stripped_env(command, args, env, &[]).await
+    }
+
+    pub async fn spawn_with_stripped_env(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        strip_inherited_env: &[String],
+    ) -> anyhow::Result<Self> {
         let command = command.to_string();
         let args = args.to_vec();
         let env = env.clone();
+        let strip_inherited_env = strip_inherited_env.to_vec();
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
@@ -412,6 +428,7 @@ impl UpstreamConnection {
                     command,
                     args,
                     env,
+                    strip_inherited_env,
                     cmd_rx,
                     CallbackPlane {
                         updates_tx: updates_for_thread,
@@ -606,13 +623,15 @@ async fn drive(
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
+    strip_inherited_env: Vec<String>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     plane: CallbackPlane,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
     // Spawn the agent child ourselves (own process group) and hand its stdio
     // to the SDK as a ByteStreams transport; the reaper owns the child.
-    let (transport, child) = match spawn_agent_process(&command, &args, &env) {
+    let (transport, child) = match spawn_agent_process(&command, &args, &env, &strip_inherited_env)
+    {
         Ok(spawned) => spawned,
         Err(e) => {
             let _ = handshake_tx.send(Err(e));
@@ -903,7 +922,7 @@ async fn health_check_inner(
     env: &HashMap<String, String>,
 ) -> Result<std::time::Duration, String> {
     let (transport, child) =
-        spawn_agent_process(command, args, env).map_err(|e| format!("spawn failed: {e}"))?;
+        spawn_agent_process(command, args, env, &[]).map_err(|e| format!("spawn failed: {e}"))?;
     // Reaper teardown: explicitly ordered (and awaited) below so the group is
     // gone before `agents check` moves on; if the caller's 10s timeout cancels
     // this future mid-await instead, `kill_tx` drops and the receiver resolves
@@ -969,7 +988,7 @@ mod tests {
 
     #[test]
     fn agent_child_never_inherits_nested_session_markers() {
-        let cmd = agent_command("echo", &[], &HashMap::new());
+        let cmd = agent_command("echo", &[], &HashMap::new(), &[]);
         let removed: Vec<_> = cmd
             .as_std()
             .get_envs()
@@ -984,13 +1003,32 @@ mod tests {
         // An explicitly configured env value still wins over the strip.
         let mut env = HashMap::new();
         env.insert("CLAUDECODE".to_string(), "1".to_string());
-        let cmd = agent_command("echo", &[], &env);
+        let cmd = agent_command("echo", &[], &env, &[]);
         let explicit = cmd
             .as_std()
             .get_envs()
             .find(|(k, _)| k.to_string_lossy() == "CLAUDECODE")
             .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()));
         assert_eq!(explicit.as_deref(), Some("1"), "explicit config env wins");
+
+        let stripped = vec!["BITROUTER_API_KEY".to_string()];
+        let cmd = agent_command("echo", &[], &HashMap::new(), &stripped);
+        let removed: Vec<_> = cmd
+            .as_std()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        assert!(removed.contains(&"BITROUTER_API_KEY".to_string()));
+
+        let env = HashMap::from([("BITROUTER_API_KEY".to_string(), "explicit".to_string())]);
+        let cmd = agent_command("echo", &[], &env, &stripped);
+        let explicit = cmd
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == "BITROUTER_API_KEY")
+            .and_then(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()));
+        assert_eq!(explicit.as_deref(), Some("explicit"));
     }
 
     #[cfg(unix)]
