@@ -116,6 +116,22 @@ impl PolicyArtifact {
 #[serde(deny_unknown_fields)]
 pub struct LegacyMigration {
     pub legacy_adequacy_digest: String,
+    #[serde(default, skip_serializing_if = "LegacyEvidenceSource::is_database")]
+    pub source: LegacyEvidenceSource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacyEvidenceSource {
+    #[default]
+    DatabaseAtSnapshot,
+    SealedEmpty,
+}
+
+impl LegacyEvidenceSource {
+    fn is_database(&self) -> bool {
+        *self == Self::DatabaseAtSnapshot
+    }
 }
 
 /// Compiler implementation and deterministic configuration identity.
@@ -897,8 +913,19 @@ pub fn publish_candidate(
     candidate: &PolicyLock,
     history_dir: &Path,
 ) -> Result<PromotionRecord> {
+    let _publication_lock = acquire_publication_lock(active_path)?;
+    publish_candidate_unlocked(active_path, expected_digest, candidate, history_dir)
+}
+
+/// Publish while the caller holds [`acquire_publication_lock`] for `active_path`.
+pub fn publish_candidate_unlocked(
+    active_path: &Path,
+    expected_digest: &str,
+    candidate: &PolicyLock,
+    history_dir: &Path,
+) -> Result<PromotionRecord> {
     let candidate_bytes = deterministic_yaml(candidate)?.into_bytes();
-    publish_bytes(
+    publish_bytes_unlocked(
         active_path,
         expected_digest,
         &candidate_bytes,
@@ -910,6 +937,17 @@ pub fn publish_candidate(
 
 /// Restore the exact bytes previously archived for a semantic digest.
 pub fn rollback_to_digest(
+    active_path: &Path,
+    expected_digest: &str,
+    target_digest: &str,
+    history_dir: &Path,
+) -> Result<PromotionRecord> {
+    let _publication_lock = acquire_publication_lock(active_path)?;
+    rollback_to_digest_unlocked(active_path, expected_digest, target_digest, history_dir)
+}
+
+/// Restore history while the caller holds [`acquire_publication_lock`] for `active_path`.
+pub fn rollback_to_digest_unlocked(
     active_path: &Path,
     expected_digest: &str,
     target_digest: &str,
@@ -930,7 +968,7 @@ pub fn rollback_to_digest(
             target_path.display()
         );
     }
-    publish_bytes(
+    publish_bytes_unlocked(
         active_path,
         expected_digest,
         &target_bytes,
@@ -940,7 +978,7 @@ pub fn rollback_to_digest(
     )
 }
 
-fn publish_bytes(
+fn publish_bytes_unlocked(
     active_path: &Path,
     expected_digest: &str,
     target_bytes: &[u8],
@@ -948,7 +986,6 @@ fn publish_bytes(
     history_dir: &Path,
     action: &str,
 ) -> Result<PromotionRecord> {
-    let _publication_lock = acquire_publication_lock(active_path)?;
     let parent_bytes = std::fs::read(active_path)
         .with_context(|| format!("reading active policy lock {}", active_path.display()))?;
     let parent_raw =
@@ -965,7 +1002,7 @@ fn publish_bytes(
     let child_digest = semantic_digest(target)?;
     archive_policy_bytes(history_dir, &parent_digest, &parent_bytes)?;
     archive_policy_bytes(history_dir, &child_digest, target_bytes)?;
-    write_bytes_atomic(active_path, target_bytes)?;
+    write_bytes_atomic_unlocked(active_path, target_bytes)?;
     let record = PromotionRecord {
         action: action.to_string(),
         parent_digest,
@@ -974,6 +1011,26 @@ fn publish_bytes(
     };
     append_promotion_record(history_dir, &record)?;
     Ok(record)
+}
+
+/// Load and verify one immutable policy history snapshot.
+pub fn load_history_snapshot(history_dir: &Path, digest: &str) -> Result<PolicyLock> {
+    validate_sha256_digest(digest, "policy history digest")?;
+    let path = history_snapshot_path(history_dir, digest)?;
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("reading policy history {}", path.display()))?;
+    let raw = std::str::from_utf8(&bytes).context("policy history is not UTF-8")?;
+    let target: PolicyLock = serde_saphyr::from_str(raw)
+        .with_context(|| format!("parsing policy history {}", path.display()))?;
+    validate_document(&target)?;
+    let actual = semantic_digest(&target)?;
+    if actual != digest {
+        anyhow::bail!(
+            "policy history digest mismatch for {} (expected {digest}, found {actual})",
+            path.display()
+        );
+    }
+    Ok(target)
 }
 
 fn history_snapshot_path(history_dir: &Path, digest: &str) -> Result<PathBuf> {
@@ -1079,6 +1136,69 @@ pub fn edit_config_mode(raw: &str, mode: PolicyRuntimeMode) -> Result<String> {
     set_policy_mode(&mut lines, mode)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
     bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
+    Ok(edited)
+}
+
+/// Ensure provider-qualified policy tiers remain routable after setup by
+/// adding empty registry-backed provider stubs without reserializing the
+/// operator's config. Existing provider bodies and comments are untouched.
+pub fn edit_config_provider_stubs(raw: &str, providers: &[String]) -> Result<String> {
+    let parsed = bitrouter_sdk::config::parse_with(raw, |_| {
+        Some("bitrouter-provider-stub-validation".into())
+    })
+    .context("parsing bitrouter.yaml")?;
+    let mut missing = providers
+        .iter()
+        .filter(|provider| !parsed.providers.contains_key(provider.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if missing.is_empty() {
+        return Ok(raw.to_string());
+    }
+    if missing.iter().any(|provider| {
+        provider.is_empty()
+            || provider.len() > 128
+            || !provider
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    }) {
+        anyhow::bail!("provider ids must use ASCII letters, digits, '.', '_' or '-'");
+    }
+
+    let mut lines = source_lines(raw);
+    if let Some((start, end)) = block_range(&lines, "providers", 0) {
+        let inline_empty = lines[start]
+            .split_once(':')
+            .is_some_and(|(_, value)| matches!(value.trim(), "{}" | "{ }"));
+        if inline_empty {
+            lines[start] = "providers:".into();
+        } else {
+            require_block_header(&lines[start], "providers")?;
+        }
+        let insert_at = if inline_empty { start + 1 } else { end };
+        for (offset, provider) in std::mem::take(&mut missing).into_iter().enumerate() {
+            lines.insert(insert_at + offset, format!("  {provider}: {{}}"));
+        }
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("providers:".into());
+        for provider in missing {
+            lines.push(format!("  {provider}: {{}}"));
+        }
+    }
+    let edited = render_source_lines(lines, raw.ends_with('\n'));
+    let checked = bitrouter_sdk::config::parse_with(&edited, |_| {
+        Some("bitrouter-provider-stub-validation".into())
+    })
+    .context("validating provider stubs in bitrouter.yaml")?;
+    if providers
+        .iter()
+        .any(|provider| !checked.providers.contains_key(provider))
+    {
+        anyhow::bail!("edited config did not retain every optimization provider");
+    }
     Ok(edited)
 }
 
@@ -1271,6 +1391,32 @@ pub async fn initialize_files(
     strong_model: Option<&str>,
     economy_model: &str,
 ) -> Result<PolicyFileUpdate> {
+    let _config_lock = acquire_publication_lock(config_path)?;
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let lock_path = resolve_path(&config, Some(config_path))
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve policy lock path"))?;
+    let _policy_lock = acquire_publication_lock(&lock_path)?;
+    initialize_files_unlocked(
+        config_path,
+        policy_name,
+        preset_name,
+        strong_model,
+        economy_model,
+    )
+    .await
+}
+
+/// Initialize while the caller holds both config and policy publication locks.
+pub async fn initialize_files_unlocked(
+    config_path: &Path,
+    policy_name: &str,
+    preset_name: &str,
+    strong_model: Option<&str>,
+    economy_model: &str,
+) -> Result<PolicyFileUpdate> {
     validate_name(policy_name)?;
     validate_name(preset_name).context("validating preset name")?;
     validate_tier_model(economy_model, "economy")?;
@@ -1320,6 +1466,7 @@ pub async fn initialize_files(
         min_semantic_successes_for_lock: 1,
         ..AdequacyConfig::default()
     };
+    let original_document = document.clone();
     document.policies.insert(
         policy_name.to_string(),
         PolicyDefinition {
@@ -1346,8 +1493,27 @@ pub async fn initialize_files(
         bitrouter_sdk::config::parse(&edited_config).context("validating candidate config")?;
     validate_for_config(&candidate_config, &document)?;
 
-    let digest = write_atomic(&lock_path, expected_digest.as_deref(), &document)?;
-    write_text_atomic(config_path, &raw, &edited_config)?;
+    let digest = write_atomic_unlocked(&lock_path, expected_digest.as_deref(), &document)?;
+    if let Err(config_error) = write_text_atomic_unlocked(config_path, &raw, &edited_config) {
+        let policy_recovery = if expected_digest.is_some() {
+            write_atomic_unlocked(&lock_path, Some(&digest), &original_document).map(|_| ())
+        } else {
+            match load(&lock_path).await {
+                Ok(current) if current.digest == digest => std::fs::remove_file(&lock_path)
+                    .with_context(|| format!("removing {}", lock_path.display())),
+                Ok(_) => Err(anyhow::anyhow!(
+                    "created policy changed before initialization recovery"
+                )),
+                Err(error) => Err(error.context("loading created policy for recovery")),
+            }
+        };
+        return match policy_recovery {
+            Ok(()) => Err(config_error.context("restored policy after config update failed")),
+            Err(recovery) => Err(config_error.context(format!(
+                "config update failed and policy recovery also failed: {recovery:#}"
+            ))),
+        };
+    }
     Ok(PolicyFileUpdate {
         path: lock_path,
         digest,
@@ -1448,6 +1614,22 @@ pub async fn publish_candidate_file(
     config_path: &Path,
     candidate_path: &Path,
 ) -> Result<PolicyFileUpdate> {
+    publish_candidate_file_inner(config_path, candidate_path, false).await
+}
+
+/// Publish a candidate while the caller holds the active policy publication lock.
+pub async fn publish_candidate_file_unlocked(
+    config_path: &Path,
+    candidate_path: &Path,
+) -> Result<PolicyFileUpdate> {
+    publish_candidate_file_inner(config_path, candidate_path, true).await
+}
+
+async fn publish_candidate_file_inner(
+    config_path: &Path,
+    candidate_path: &Path,
+    lock_held: bool,
+) -> Result<PolicyFileUpdate> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
@@ -1488,12 +1670,21 @@ pub async fn publish_candidate_file(
     }
     let differences = diff_explanations(&active.document, &candidate.document);
     let history_dir = default_history_dir(&active.path);
-    let record = publish_candidate(
-        &active.path,
-        parent_digest,
-        &candidate.document,
-        &history_dir,
-    )?;
+    let record = if lock_held {
+        publish_candidate_unlocked(
+            &active.path,
+            parent_digest,
+            &candidate.document,
+            &history_dir,
+        )?
+    } else {
+        publish_candidate(
+            &active.path,
+            parent_digest,
+            &candidate.document,
+            &history_dir,
+        )?
+    };
     Ok(PolicyFileUpdate {
         path: active.path,
         digest: record.child_digest,
@@ -1522,8 +1713,39 @@ pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerific
     let loaded = load_for_config(&config, Some(config_path))
         .await?
         .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    let artifact = loaded
-        .document
+    verify_document_evidence_with_config(config_path, &config, &loaded.document, loaded.digest)
+        .await
+}
+
+/// Reconstruct evidence for a reviewed candidate before it becomes active.
+pub async fn verify_document_evidence(
+    config_path: &Path,
+    document: &PolicyLock,
+) -> Result<EvidenceVerification> {
+    validate_for_config(
+        &bitrouter_sdk::config::parse(
+            &tokio::fs::read_to_string(config_path)
+                .await
+                .with_context(|| format!("reading {}", config_path.display()))?,
+        )
+        .context("parsing bitrouter.yaml")?,
+        document,
+    )?;
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    verify_document_evidence_with_config(config_path, &config, document, semantic_digest(document)?)
+        .await
+}
+
+async fn verify_document_evidence_with_config(
+    config_path: &Path,
+    config: &Config,
+    document: &PolicyLock,
+    policy_digest: String,
+) -> Result<EvidenceVerification> {
+    let artifact = document
         .artifact
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("policy lock v1 has no verifiable evidence artifact"))?;
@@ -1531,11 +1753,26 @@ pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerific
     let db = crate::db::connect(&database_url)
         .await
         .map_err(anyhow::Error::from)?;
-    let legacy = crate::policy_compile::LegacyAdequacySnapshot::load(
-        &AdequacyStore::new(db.clone()),
-        artifact.source_snapshot_time_unix_ms,
-    )
-    .await?;
+    let legacy = match artifact
+        .migration
+        .as_ref()
+        .map(|migration| migration.source)
+    {
+        Some(LegacyEvidenceSource::SealedEmpty) => crate::policy_compile::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: artifact.source_snapshot_time_unix_ms,
+            pins: Vec::new(),
+            exploration: Vec::new(),
+            semantic_successes: Vec::new(),
+            reliability_events: Vec::new(),
+        },
+        _ => {
+            crate::policy_compile::LegacyAdequacySnapshot::load(
+                &AdequacyStore::new(db.clone()),
+                artifact.source_snapshot_time_unix_ms,
+            )
+            .await?
+        }
+    };
     let legacy_evidence_root = legacy.semantic_digest()?;
     if artifact
         .migration
@@ -1566,7 +1803,7 @@ pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerific
         anyhow::bail!("policy artifact evidence_root does not match local evidence");
     }
     Ok(EvidenceVerification {
-        policy_digest: loaded.digest,
+        policy_digest,
         evidence_root: reconstructed,
         legacy_evidence_root,
         eval_snapshot_root: eval.as_ref().map(|snapshot| snapshot.evidence_root.clone()),
@@ -1667,6 +1904,11 @@ fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
 /// snapshot. File permissions are retained across the atomic replacement.
 pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<()> {
     let _publication_lock = acquire_publication_lock(path)?;
+    write_text_atomic_unlocked(path, expected, updated)
+}
+
+/// Replace text while the caller holds the target publication lock.
+pub fn write_text_atomic_unlocked(path: &Path, expected: &str, updated: &str) -> Result<()> {
     let current = std::fs::read_to_string(path)
         .with_context(|| format!("reading current config {}", path.display()))?;
     if current != expected {
@@ -1688,12 +1930,7 @@ pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<(
             .with_context(|| format!("writing config temp file {}", tmp.display()))?;
         file.sync_all()
             .with_context(|| format!("syncing config temp file {}", tmp.display()))?;
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)
-                .with_context(|| format!("replacing config {}", path.display()))?;
-        }
-        std::fs::rename(&tmp, path)
+        replace_file_atomic(&tmp, path)
             .with_context(|| format!("publishing config {}", path.display()))?;
         sync_parent(path)?;
         Ok(())
@@ -1704,7 +1941,7 @@ pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<(
     result
 }
 
-fn write_bytes_atomic(path: &Path, updated: &[u8]) -> Result<()> {
+pub fn write_bytes_atomic_unlocked(path: &Path, updated: &[u8]) -> Result<()> {
     let permissions = std::fs::metadata(path)
         .with_context(|| format!("reading permissions for {}", path.display()))?
         .permissions();
@@ -1718,12 +1955,7 @@ fn write_bytes_atomic(path: &Path, updated: &[u8]) -> Result<()> {
             .with_context(|| format!("writing policy temp file {}", tmp.display()))?;
         file.sync_all()
             .with_context(|| format!("syncing policy temp file {}", tmp.display()))?;
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)
-                .with_context(|| format!("replacing policy lock {}", path.display()))?;
-        }
-        std::fs::rename(&tmp, path)
+        replace_file_atomic(&tmp, path)
             .with_context(|| format!("publishing policy lock {}", path.display()))?;
         sync_parent(path)
     })();
@@ -1741,18 +1973,45 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()))
 }
 
-fn acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
+/// Durably create a file without ever exposing partial contents or replacing
+/// an existing owner-controlled file.
+pub fn write_new_file_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating directory {}", parent.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temporary file in {}", parent.display()))?;
+    temporary
+        .write_all(contents)
+        .with_context(|| format!("writing temporary file for {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing temporary file for {}", path.display()))?;
+    temporary.persist_noclobber(path).map_err(|error| {
+        if path.exists() {
+            anyhow::anyhow!("{} already exists; refusing to overwrite", path.display())
+        } else {
+            anyhow::Error::new(error.error)
+                .context(format!("publishing new file {}", path.display()))
+        }
+    })?;
+    sync_parent(path)
+}
+
+pub fn acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating policy directory {}", parent.display()))?;
     }
-    let file_name = path
+    let canonical = canonical_lock_target(path)?;
+    let file_name = canonical
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("policy-lock.yaml");
-    let lock_path = path.with_file_name(format!(".{file_name}.bitrouter.lock"));
+    let lock_path = canonical.with_file_name(format!(".{file_name}.bitrouter.lock"));
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1763,6 +2022,56 @@ fn acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
     lock.lock()
         .with_context(|| format!("acquiring publication lock {}", lock_path.display()))?;
     Ok(lock)
+}
+
+pub fn try_acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating policy directory {}", parent.display()))?;
+    }
+    let canonical = canonical_lock_target(path)?;
+    let file_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("policy-lock.yaml");
+    let lock_path = canonical.with_file_name(format!(".{file_name}.bitrouter.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening publication lock {}", lock_path.display()))?;
+    lock.try_lock().with_context(|| {
+        format!(
+            "another operation is already running for {}",
+            canonical.display()
+        )
+    })?;
+    Ok(lock)
+}
+
+fn canonical_lock_target(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return std::fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing lock target {}", path.display()));
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = std::fs::canonicalize(parent)
+        .with_context(|| format!("canonicalizing lock parent {}", parent.display()))?;
+    Ok(parent.join(path.file_name().unwrap_or_default()))
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
+    atomicwrites::replace_atomic(source, destination)
 }
 
 #[cfg(unix)]
@@ -1790,6 +2099,15 @@ pub fn write_atomic(
     document: &PolicyLock,
 ) -> Result<String> {
     let _publication_lock = acquire_publication_lock(path)?;
+    write_atomic_unlocked(path, expected_digest, document)
+}
+
+/// Replace a policy document while the caller holds its publication lock.
+pub fn write_atomic_unlocked(
+    path: &Path,
+    expected_digest: Option<&str>,
+    document: &PolicyLock,
+) -> Result<String> {
     if let Some(expected) = expected_digest {
         let current = std::fs::read_to_string(path)
             .with_context(|| format!("reading current policy lock {}", path.display()))?;
@@ -1818,12 +2136,7 @@ pub fn write_atomic(
             .with_context(|| format!("writing policy temp file {}", tmp.display()))?;
         file.sync_all()
             .with_context(|| format!("syncing policy temp file {}", tmp.display()))?;
-        #[cfg(windows)]
-        if path.exists() {
-            std::fs::remove_file(path)
-                .with_context(|| format!("replacing policy lock {}", path.display()))?;
-        }
-        std::fs::rename(&tmp, path)
+        replace_file_atomic(&tmp, path)
             .with_context(|| format!("publishing policy lock {}", path.display()))?;
         sync_parent(path)?;
         Ok(())
@@ -3491,6 +3804,28 @@ presets:
             Some("terminal-bench")
         );
         assert_eq!(parsed.policy.mode, PolicyRuntimeMode::Frozen);
+    }
+
+    #[test]
+    fn config_provider_stubs_preserve_existing_provider_bodies() -> anyhow::Result<()> {
+        let raw = r#"# operator-owned config
+providers:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+inherit_defaults: true
+"#;
+        let edited = edit_config_provider_stubs(
+            raw,
+            &["openai-codex".into(), "bitrouter".into(), "openai".into()],
+        )?;
+        let parsed = bitrouter_sdk::config::parse_with(&edited, |_| Some("test".into()))?;
+
+        assert!(edited.contains("# operator-owned config"));
+        assert!(edited.contains("    api_key: ${OPENAI_API_KEY}"));
+        assert!(parsed.providers.contains_key("openai-codex"));
+        assert!(parsed.providers.contains_key("bitrouter"));
+        assert!(parsed.providers.contains_key("openai"));
+        Ok(())
     }
 
     #[test]

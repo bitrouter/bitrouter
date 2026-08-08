@@ -39,6 +39,48 @@ pub async fn reconcile_requests(
     max_attempts: u32,
     poll_interval: Duration,
 ) -> Result<ReconciliationSummary> {
+    reconcile_requests_inner(
+        store,
+        client,
+        request_ids,
+        prices,
+        max_attempts,
+        poll_interval,
+        false,
+    )
+    .await
+}
+
+/// Reconcile product traffic directly from authenticated final-charge
+/// receipts, without requiring a second caller-supplied price table.
+pub async fn reconcile_authoritative_requests(
+    store: &MeteringStore,
+    client: &SettlementClient,
+    request_ids: &[String],
+    max_attempts: u32,
+    poll_interval: Duration,
+) -> Result<ReconciliationSummary> {
+    reconcile_requests_inner(
+        store,
+        client,
+        request_ids,
+        &[],
+        max_attempts,
+        poll_interval,
+        true,
+    )
+    .await
+}
+
+async fn reconcile_requests_inner(
+    store: &MeteringStore,
+    client: &SettlementClient,
+    request_ids: &[String],
+    prices: &[UsagePriceOverride],
+    max_attempts: u32,
+    poll_interval: Duration,
+    accept_receipt_charge: bool,
+) -> Result<ReconciliationSummary> {
     if request_ids.is_empty() {
         return Err(BitrouterError::bad_request(
             "reconciliation requires at least one request id",
@@ -118,7 +160,11 @@ pub async fn reconcile_requests(
                     }
                 }
                 Ok(receipt) => {
-                    store.apply_authoritative_receipt(&receipt, prices).await?;
+                    if accept_receipt_charge {
+                        store.apply_authoritative_receipt_charge(&receipt).await?;
+                    } else {
+                        store.apply_authoritative_receipt(&receipt, prices).await?;
+                    }
                 }
                 Err(error) => {
                     store

@@ -31,6 +31,7 @@ pub mod harness;
 pub mod mcp_registry;
 pub mod metering;
 pub mod onboarding;
+pub mod optimization;
 pub mod output;
 pub mod paths;
 pub mod policy;

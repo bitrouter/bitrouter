@@ -1,6 +1,6 @@
 //! Append-only persistence for generic evaluation exchange records.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use sea_orm::{
@@ -380,7 +380,7 @@ impl EvalStore {
     }
 
     pub async fn freeze_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
-        self.freeze_snapshot_scoped(frozen_at, None).await
+        self.freeze_snapshot_scoped(frozen_at, None, None).await
     }
 
     pub async fn freeze_snapshot_for_owner(
@@ -389,7 +389,25 @@ impl EvalStore {
         owner_user_id: &str,
     ) -> Result<EvalSnapshot> {
         validate_owner(owner_user_id)?;
-        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id))
+        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id), None)
+            .await
+    }
+
+    /// Freeze exactly the named admitted results for one owner. This is the
+    /// controlled-experiment path: unrelated historical evidence must not be
+    /// able to enter the candidate compiler through a process-wide snapshot.
+    pub async fn freeze_snapshot_for_result_ids(
+        &self,
+        frozen_at: &str,
+        owner_user_id: &str,
+        result_ids: &[String],
+    ) -> Result<EvalSnapshot> {
+        validate_owner(owner_user_id)?;
+        let selected = result_ids.iter().cloned().collect::<BTreeSet<_>>();
+        if selected.is_empty() || selected.len() != result_ids.len() {
+            anyhow::bail!("snapshot result ids must be a non-empty unique set");
+        }
+        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id), Some(&selected))
             .await
     }
 
@@ -397,6 +415,7 @@ impl EvalStore {
         &self,
         frozen_at: &str,
         owner_user_id: Option<&str>,
+        selected_result_ids: Option<&BTreeSet<String>>,
     ) -> Result<EvalSnapshot> {
         chrono::DateTime::parse_from_rfc3339(frozen_at)
             .context("snapshot frozen_at must be RFC3339")?;
@@ -405,16 +424,22 @@ impl EvalStore {
         if let Some(owner_user_id) = owner_user_id {
             query = query.filter(result_entity::Column::OwnerUserId.eq(owner_user_id));
         }
+        if let Some(result_ids) = selected_result_ids {
+            query = query.filter(result_entity::Column::ResultId.is_in(result_ids.iter().cloned()));
+        }
         let rows = query
             .order_by_asc(result_entity::Column::ResultId)
             .all(&self.db)
             .await?;
         let mut entries = Vec::new();
         for row in rows {
-            if latest
+            let admitted = latest
                 .get(&row.result_id)
-                .is_none_or(|event| event.status != AdmissionStatus::Admitted)
-            {
+                .is_some_and(|event| event.status == AdmissionStatus::Admitted);
+            if !admitted && selected_result_ids.is_some() {
+                anyhow::bail!("selected eval result '{}' is not admitted", row.result_id);
+            }
+            if !admitted {
                 continue;
             }
             let subject = subject_entity::Entity::find_by_id(&row.eval_id)
@@ -427,12 +452,24 @@ impl EvalStore {
                         row.eval_id
                     )
                 })?;
+            if subject.owner_user_id != row.owner_user_id {
+                anyhow::bail!(
+                    "eval result '{}' and subject '{}' have different owners",
+                    row.result_id,
+                    row.eval_id
+                );
+            }
             entries.push(EvalSnapshotEntry {
                 result_id: row.result_id,
                 content_digest: row.content_digest,
                 subject_content_digest: subject.content_digest,
                 eval_id: row.eval_id,
             });
+        }
+        if let Some(result_ids) = selected_result_ids
+            && entries.len() != result_ids.len()
+        {
+            anyhow::bail!("one or more selected eval results do not exist for this owner");
         }
         let snapshot_owner = owner_user_id.unwrap_or("*");
         let evidence_root = canonical_digest(&(snapshot_owner, frozen_at, &entries))?;
@@ -700,6 +737,61 @@ mod tests {
         }
 
         assert_ne!(root_for("economy").await?, root_for("strong").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn selected_snapshot_excludes_other_admitted_local_results() -> anyhow::Result<()> {
+        let store = store().await?;
+        let historical_subject = subject()?;
+        store.insert_subject(&historical_subject).await?;
+        let historical = store.insert_result(&result(EvalVerdict::Pass)).await?;
+        store
+            .append_admission_event(
+                historical.result_id(),
+                AdmissionStatus::Admitted,
+                "admitted",
+                "local",
+            )
+            .await?;
+
+        let mut current_subject = subject()?;
+        current_subject.eval_id = "eval-current".into();
+        current_subject.subject_id = "request-current".into();
+        store.insert_subject(&current_subject).await?;
+        let mut current_result = result(EvalVerdict::Pass);
+        current_result.eval_id = current_subject.eval_id.clone();
+        current_result.idempotency_key = "submission-current".into();
+        let current = store.insert_result(&current_result).await?;
+        store
+            .append_admission_event(
+                current.result_id(),
+                AdmissionStatus::Admitted,
+                "admitted",
+                "local",
+            )
+            .await?;
+
+        let snapshot = store
+            .freeze_snapshot_for_result_ids(
+                "2026-07-30T00:02:00Z",
+                "local",
+                &[current.result_id().to_string()],
+            )
+            .await?;
+
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].result_id, current.result_id());
+        assert!(
+            store
+                .freeze_snapshot_for_result_ids(
+                    "2026-07-30T00:03:00Z",
+                    "local",
+                    &["sha256:missing".into()],
+                )
+                .await
+                .is_err()
+        );
         Ok(())
     }
 

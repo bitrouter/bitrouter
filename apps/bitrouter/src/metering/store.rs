@@ -631,6 +631,28 @@ impl MeteringStore {
         receipt: &SettlementReceipt,
         prices: &[UsagePriceOverride],
     ) -> Result<ReconciliationStatus> {
+        self.apply_authoritative_receipt_inner(receipt, prices, false)
+            .await
+    }
+
+    /// Apply an authenticated Cloud receipt using its final charge directly.
+    /// This is the zero-configuration product path; benchmark/export callers
+    /// keep using [`Self::apply_authoritative_receipt`] to independently
+    /// reconstruct the charge from a frozen price table.
+    pub async fn apply_authoritative_receipt_charge(
+        &self,
+        receipt: &SettlementReceipt,
+    ) -> Result<ReconciliationStatus> {
+        self.apply_authoritative_receipt_inner(receipt, &[], true)
+            .await
+    }
+
+    async fn apply_authoritative_receipt_inner(
+        &self,
+        receipt: &SettlementReceipt,
+        prices: &[UsagePriceOverride],
+        accept_receipt_charge: bool,
+    ) -> Result<ReconciliationStatus> {
         let row = requests::Entity::find_by_id(&receipt.request_id)
             .one(&self.db)
             .await
@@ -710,53 +732,78 @@ impl MeteringStore {
                         )
                         .await;
                 };
-                let candidates = prices
-                    .iter()
-                    .filter(|price| price.provider_id == provider_id && price.model_id == model_id);
-                if candidates.clone().next().is_none() {
-                    return self
-                        .persist_unknown_reconciliation(
-                            row,
-                            &usage,
-                            receipt_json,
-                            "authoritative_pricing_not_found",
+                let evidence = if accept_receipt_charge {
+                    let charge = receipt.final_charge_micro_usd.ok_or_else(|| {
+                        BitrouterError::bad_request(
+                            "computed authoritative receipt has no final charge",
                         )
-                        .await;
-                }
-                let mut matching = candidates
-                    .map(|price| {
-                        let pricing = ModelPricing::cache_aware(
-                            Some(price.input_micro_usd_per_token),
-                            price.cache_read_micro_usd_per_token,
-                            price.cache_write_micro_usd_per_token,
-                            Some(price.output_micro_usd_per_token),
-                        );
-                        calculate_charge_evidence(&usage, &pricing, PricingSource::Override)
-                    })
-                    .filter(|evidence| {
-                        evidence.status == ChargeStatus::Computed
-                            && evidence.charge_micro_usd == receipt.final_charge_micro_usd
+                    })?;
+                    ChargeEvidence {
+                        status: ChargeStatus::Computed,
+                        charge_micro_usd: Some(charge),
+                        normalized_usage: usage.normalized_buckets().map_err(|error| {
+                            BitrouterError::bad_request(format!(
+                                "authoritative usage normalization failed: {error:?}"
+                            ))
+                        })?,
+                        effective_rates: Default::default(),
+                        pricing_source: PricingSource::AuthoritativeReceipt,
+                        pricing_version: crate::eval::types::canonical_digest(receipt)
+                            .map_err(|error| BitrouterError::internal(error.to_string()))?,
+                        unknown_reason: None,
+                    }
+                } else {
+                    let candidates = prices.iter().filter(|price| {
+                        price.provider_id == provider_id && price.model_id == model_id
                     });
-                let Some(evidence) = matching.next() else {
-                    return self
-                        .persist_unknown_reconciliation(
-                            row,
-                            &usage,
-                            receipt_json,
-                            "authoritative_charge_mismatch",
-                        )
-                        .await;
+                    if candidates.clone().next().is_none() {
+                        return self
+                            .persist_unknown_reconciliation(
+                                row,
+                                &usage,
+                                receipt_json,
+                                "authoritative_pricing_not_found",
+                            )
+                            .await;
+                    }
+                    let mut matching = candidates
+                        .map(|price| {
+                            let pricing = ModelPricing::cache_aware(
+                                Some(price.input_micro_usd_per_token),
+                                price.cache_read_micro_usd_per_token,
+                                price.cache_write_micro_usd_per_token,
+                                Some(price.output_micro_usd_per_token),
+                            );
+                            calculate_charge_evidence(&usage, &pricing, PricingSource::Override)
+                        })
+                        .filter(|evidence| {
+                            evidence.status == ChargeStatus::Computed
+                                && evidence.charge_micro_usd == receipt.final_charge_micro_usd
+                        });
+                    let Some(evidence) = matching.next() else {
+                        return self
+                            .persist_unknown_reconciliation(
+                                row,
+                                &usage,
+                                receipt_json,
+                                "authoritative_charge_mismatch",
+                            )
+                            .await;
+                    };
+                    if matching
+                        .any(|candidate| candidate.pricing_version != evidence.pricing_version)
+                    {
+                        return self
+                            .persist_unknown_reconciliation(
+                                row,
+                                &usage,
+                                receipt_json,
+                                "authoritative_pricing_ambiguous",
+                            )
+                            .await;
+                    }
+                    evidence
                 };
-                if matching.any(|candidate| candidate.pricing_version != evidence.pricing_version) {
-                    return self
-                        .persist_unknown_reconciliation(
-                            row,
-                            &usage,
-                            receipt_json,
-                            "authoritative_pricing_ambiguous",
-                        )
-                        .await;
-                }
                 (
                     ReconciliationStatus::Computed,
                     ChargeStatus::Computed,

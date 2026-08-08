@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
@@ -263,6 +263,35 @@ enum Command {
         /// write).
         #[arg(long)]
         write_config: bool,
+        /// Configure the version-controlled workflow optimization loop.
+        #[arg(long)]
+        optimize: bool,
+        /// Exact workflow executable for headless optimization onboarding.
+        #[arg(long)]
+        optimize_workflow_command: Option<String>,
+        /// One exact workflow argument; repeat to preserve argv boundaries.
+        #[arg(long, allow_hyphen_values = true)]
+        optimize_workflow_arg: Vec<String>,
+        /// Ignored or generated workflow input to freeze into both variants;
+        /// repeat for dependency roots such as node_modules or .venv.
+        #[arg(long)]
+        optimize_workflow_input: Vec<PathBuf>,
+        /// Observable workflow success contract text.
+        #[arg(long)]
+        optimize_success: Option<String>,
+        /// Provider-qualified strong route for optimization onboarding.
+        #[arg(long, default_value = "openai-codex:gpt-5.6-sol")]
+        optimize_strong: String,
+        /// Provider-qualified economy route for optimization onboarding.
+        #[arg(long, default_value = "bitrouter:deepseek/deepseek-v4-flash-0731")]
+        optimize_economy: String,
+        /// Frozen normalized-showback price override. Repeat for unpriced
+        /// subscription routes.
+        #[arg(long = "optimize-normalized-price")]
+        optimize_normalized_prices: Vec<String>,
+        /// Qualitative optimization trade-off; latency is observe-only.
+        #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
+        optimize_preference: OptimizePreferenceArg,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -307,6 +336,11 @@ enum Command {
     Eval {
         #[command(subcommand)]
         action: EvalAction,
+    },
+    /// Optimize an agent workflow against measured quality and normalized cost.
+    Optimize {
+        #[command(subcommand)]
+        action: OptimizeAction,
     },
     /// Inspect, replay, and retain durable trajectory history in the local database.
     Trajectory {
@@ -1079,6 +1113,126 @@ enum EvalAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum OptimizePreferenceArg {
+    QualityFirst,
+    Balanced,
+    SavingsFirst,
+}
+
+impl From<OptimizePreferenceArg> for bitrouter::optimization::OptimizationPreference {
+    fn from(value: OptimizePreferenceArg) -> Self {
+        match value {
+            OptimizePreferenceArg::QualityFirst => Self::QualityFirst,
+            OptimizePreferenceArg::Balanced => Self::Balanced,
+            OptimizePreferenceArg::SavingsFirst => Self::SavingsFirst,
+        }
+    }
+}
+
+#[derive(Args)]
+struct OptimizeSetupArgs {
+    /// Optimization intent path.
+    #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+    config: PathBuf,
+    /// Source BitRouter config used by the workflow.
+    #[arg(long, default_value = "bitrouter.yaml")]
+    source_config: PathBuf,
+    /// Exact workflow executable (no shell parsing).
+    #[arg(long)]
+    workflow_command: String,
+    /// One exact workflow argument; repeat to preserve argv boundaries.
+    #[arg(long, allow_hyphen_values = true)]
+    workflow_arg: Vec<String>,
+    /// Project file or directory copied into both frozen variants. Repeat for
+    /// ignored fixtures or dependencies the workflow needs.
+    #[arg(long = "workflow-input")]
+    workflow_input: Vec<PathBuf>,
+    /// Hard deadline for each baseline or candidate workflow invocation.
+    #[arg(long, default_value_t = 1800)]
+    timeout_secs: u64,
+    /// Success contract path. A starter is created when absent.
+    #[arg(long, default_value = "bitrouter.eval.md")]
+    contract: PathBuf,
+    /// Named routing policy.
+    #[arg(long, default_value = "auto")]
+    policy: String,
+    /// Preset passed to the workflow as `@preset`.
+    #[arg(long, default_value = "auto")]
+    preset: String,
+    /// Provider-qualified strong route used by the baseline.
+    #[arg(long)]
+    strong: String,
+    /// Provider-qualified economy route tested as the one-variable candidate.
+    #[arg(long)]
+    economy: String,
+    /// Frozen normalized-showback price as
+    /// provider:model=uncached,cache_read,cache_write,output. Repeat for
+    /// subscription or otherwise unpriced routes.
+    #[arg(long = "normalized-price")]
+    normalized_price_overrides: Vec<String>,
+    /// Qualitative quality/cost trade-off. Latency remains observe-only.
+    #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
+    preference: OptimizePreferenceArg,
+    /// ACP evaluator id. Codex is the default generic agentic evaluator.
+    #[arg(long, default_value = "codex-acp")]
+    evaluator_agent: String,
+    /// Concrete judge model, independent from the workflow candidate.
+    #[arg(long)]
+    evaluator_model: Option<String>,
+    /// Route judge traffic through BitRouter Cloud instead of the detected
+    /// agent's own subscription. Workflow traffic always uses the private
+    /// BitRouter daemon and may select any configured provider.
+    #[arg(long)]
+    evaluator_via_cloud: bool,
+}
+
+#[derive(Subcommand)]
+enum OptimizeAction {
+    /// Create version-controlled optimization intent and lock files.
+    Setup(Box<OptimizeSetupArgs>),
+    /// Accept edited version-controlled intent and start a fresh lineage.
+    Resolve {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+    },
+    /// Run one baseline and one controlled candidate, then compile a report.
+    Run {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+    },
+    /// Show the immutable report for the latest or named run.
+    Review {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Atomically publish the reviewed candidate policy.
+    Publish {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        run: Option<String>,
+        /// Explicitly enable adaptive publication at the reviewed commit point.
+        #[arg(long)]
+        enable_adaptive: bool,
+    },
+    /// Restore a policy digest and keep optimization lineage in sync.
+    Rollback {
+        digest: String,
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Show resolved optimization state without running the workflow.
+    Status {
+        #[arg(short, long, default_value = "bitrouter.optimize.yaml")]
+        config: PathBuf,
+    },
+}
+
 #[derive(Subcommand)]
 enum TrajectoryAction {
     /// Inspect one episode's structural health, route intents, and event digests.
@@ -1465,7 +1619,40 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             after,
             model,
             write_config,
+            optimize,
+            optimize_workflow_command,
+            optimize_workflow_arg,
+            optimize_workflow_input,
+            optimize_success,
+            optimize_strong,
+            optimize_economy,
+            optimize_normalized_prices,
+            optimize_preference,
         } => {
+            let optimize_normalized_prices = if optimize_normalized_prices.is_empty()
+                && optimize_strong == "openai-codex:gpt-5.6-sol"
+            {
+                vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()]
+            } else {
+                optimize_normalized_prices
+            };
+            let optimization = if optimize || optimize_workflow_command.is_some() {
+                Some(bitrouter::onboarding::OnboardingOptimization {
+                    workflow_command: optimize_workflow_command.map(|command| {
+                        std::iter::once(command)
+                            .chain(optimize_workflow_arg)
+                            .collect()
+                    }),
+                    workflow_inputs: optimize_workflow_input,
+                    success_contract: optimize_success,
+                    strong: optimize_strong,
+                    economy: optimize_economy,
+                    normalized_price_overrides: optimize_normalized_prices,
+                    preference: optimize_preference.into(),
+                })
+            } else {
+                None
+            };
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
                 yes,
@@ -1481,6 +1668,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 after,
                 model,
                 write_config,
+                optimization,
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -1506,6 +1694,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => policy(action, output).await,
         Command::Eval { action } => eval(action, output).await,
+        Command::Optimize { action } => optimize(action, output).await,
         Command::Trajectory { config, action } => {
             trajectory(config.as_deref(), action, output).await
         }
@@ -3506,6 +3695,9 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let config_path = require_policy_config_path(&source)?;
             let cfg = config::load(config_path).await?;
             if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                anyhow::bail!("policy runtime mode is frozen; rollback requires adaptive mode");
+            }
+            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
                 anyhow::bail!(
                     "policy runtime mode is frozen; use adaptive mode for policy publication"
                 );
@@ -3543,6 +3735,771 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
+    match action {
+        OptimizeAction::Setup(args) => {
+            let OptimizeSetupArgs {
+                config,
+                source_config,
+                workflow_command,
+                workflow_arg,
+                workflow_input,
+                timeout_secs,
+                contract,
+                policy,
+                preset,
+                strong,
+                economy,
+                normalized_price_overrides,
+                preference,
+                evaluator_agent,
+                evaluator_model,
+                evaluator_via_cloud,
+            } = *args;
+            let operation_path =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
+                    .operation_lock_target();
+            let _operation_lock =
+                bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
+            let preference: bitrouter::optimization::OptimizationPreference = preference.into();
+            let evaluator_route = if evaluator_via_cloud {
+                bitrouter::optimization::EvaluatorRoute::Cloud
+            } else {
+                bitrouter::optimization::EvaluatorRoute::Direct
+            };
+            let outcome = bitrouter::optimization::setup::setup_optimization(
+                bitrouter::optimization::setup::SetupOptimizationRequest {
+                    intent_path: config,
+                    source_config,
+                    workflow_command: std::iter::once(workflow_command)
+                        .chain(workflow_arg)
+                        .collect(),
+                    workflow_inputs: workflow_input,
+                    timeout_secs,
+                    contract,
+                    contract_contents: None,
+                    policy,
+                    preset,
+                    strong,
+                    economy,
+                    normalized_price_overrides,
+                    preference,
+                    evaluator_agent,
+                    evaluator_model,
+                    evaluator_route,
+                },
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.setup".into(),
+                data: serde_json::json!({
+                    "intent": outcome.paths.intent,
+                    "lock": outcome.paths.lock,
+                    "contract": outcome.contract_path,
+                    "active_policy_digest": outcome.lock.active_policy_digest,
+                    "evaluator": outcome.lock.evaluator,
+                    "strong": outcome.intent.strong,
+                    "economy": outcome.intent.economy,
+                    "normalized_price_overrides": outcome.intent.normalized_price_overrides,
+                    "preference": outcome.intent.preference,
+                    "latency": "observe_only",
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Resolve { config } => {
+            let operation_path =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
+                    .operation_lock_target();
+            let _operation_lock =
+                bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let old_lock = if loaded.paths.lock.is_file() {
+                Some(bitrouter::optimization::load_lock(&loaded.paths.lock).await?)
+            } else {
+                None
+            };
+            bitrouter::optimization::setup::validate_resolved_evaluator_model(
+                loaded.intent.evaluator.route,
+                &loaded.intent.evaluator.model,
+            )?;
+            let _config_lock =
+                bitrouter::policy_lock::acquire_publication_lock(&loaded.paths.source_config)?;
+            let source_raw = tokio::fs::read_to_string(&loaded.paths.source_config)
+                .await
+                .with_context(|| {
+                    format!(
+                        "reading source config {}",
+                        loaded.paths.source_config.display()
+                    )
+                })?;
+            let source_config = config::parse(&source_raw).context("parsing source config")?;
+            bitrouter::optimization::setup::validate_routable_model(
+                &source_config,
+                &loaded.intent.strong,
+            )
+            .await?;
+            bitrouter::optimization::setup::validate_routable_model(
+                &source_config,
+                &loaded.intent.economy,
+            )
+            .await?;
+            let policy_path = bitrouter::policy_lock::resolve_path(
+                &source_config,
+                Some(&loaded.paths.source_config),
+            )
+            .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
+            let _policy_lock = bitrouter::policy_lock::acquire_publication_lock(&policy_path)?;
+            let active = bitrouter::policy_lock::load_for_config(
+                &source_config,
+                Some(&loaded.paths.source_config),
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("source config has no active policy lock"))?;
+            bitrouter::optimization::validate_policy_contract(
+                &loaded.intent,
+                &source_config,
+                &active.document,
+            )?;
+            let contract = tokio::fs::read_to_string(&loaded.paths.contract)
+                .await
+                .with_context(|| format!("reading {}", loaded.paths.contract.display()))?;
+            if contract.trim().is_empty() {
+                anyhow::bail!("workflow success contract must not be empty");
+            }
+            let evaluator_identity =
+                bitrouter::optimization::evaluator::resolve_catalog_evaluator_identity(
+                    &loaded.intent.evaluator.agent,
+                )
+                .await?;
+            let resolved = bitrouter::optimization::OptimizationLock {
+                lockfile_version: bitrouter::optimization::OPTIMIZATION_SCHEMA_VERSION,
+                intent_digest: loaded.digest.clone(),
+                active_policy_digest: active.digest.clone(),
+                evaluator: bitrouter::optimization::EvaluatorLock {
+                    agent: loaded.intent.evaluator.agent.clone(),
+                    agent_version: evaluator_identity.adapter_version,
+                    adapter_integrity: evaluator_identity.adapter_integrity,
+                    runtime_executable: evaluator_identity.runtime_executable,
+                    runtime_version: evaluator_identity.runtime_version,
+                    runtime_digest: evaluator_identity.runtime_digest,
+                    model: loaded.intent.evaluator.model.clone(),
+                    route: loaded.intent.evaluator.route,
+                    skill_digest: bitrouter::optimization::evaluator::embedded_evaluator_digest()?,
+                    contract_digest: bitrouter::optimization::evaluator::content_digest(&contract),
+                },
+                latest_run: None,
+            };
+            bitrouter::optimization::write_lock_compare_and_swap(
+                &loaded.paths.lock,
+                old_lock.as_ref().map(|lock| lock.digest.as_str()),
+                &resolved,
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.resolve".into(),
+                data: serde_json::json!({
+                    "intent": loaded.paths.intent,
+                    "intent_digest": loaded.digest,
+                    "active_policy_digest": active.digest,
+                    "latest_run": serde_json::Value::Null,
+                    "evaluator": resolved.evaluator,
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Run { config } => {
+            let operation_path =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
+                    .operation_lock_target();
+            let _operation_lock =
+                bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            let source = bitrouter::paths::resolve_config(Some(&loaded.paths.source_config))?;
+            let backend = bitrouter::optimization::evaluator::AcpAgenticEvaluatorBackend::new(
+                source,
+                lock.document.evaluator.clone(),
+                std::time::Duration::from_secs(300),
+            )?;
+            let executable = std::env::current_exe().context("resolving BitRouter executable")?;
+            let workflow_cwd = loaded
+                .paths
+                .intent
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("optimization intent has no parent directory"))?
+                .to_path_buf();
+            let outcome = bitrouter::optimization::orchestrator::run_optimization(
+                bitrouter::optimization::orchestrator::RunOptimizationRequest {
+                    loaded: &loaded,
+                    optimization_lock: &lock,
+                    workflow_cwd: &workflow_cwd,
+                    bitrouter_executable: &executable,
+                    evaluator: &backend,
+                },
+            )
+            .await?;
+            let _config_lock =
+                bitrouter::policy_lock::acquire_publication_lock(&loaded.paths.source_config)?;
+            let source_raw = tokio::fs::read_to_string(&loaded.paths.source_config).await?;
+            if bitrouter::optimization::evaluator::content_digest(&source_raw)
+                != outcome.report.source_config_digest
+            {
+                anyhow::bail!(
+                    "source config changed before the optimization result could be committed"
+                );
+            }
+            let source_config = config::parse(&source_raw).context("parsing source config")?;
+            let policy_path = bitrouter::policy_lock::resolve_path(
+                &source_config,
+                Some(&loaded.paths.source_config),
+            )
+            .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
+            let _policy_lock = bitrouter::policy_lock::acquire_publication_lock(&policy_path)?;
+            let active = bitrouter::policy_lock::load_for_config(
+                &source_config,
+                Some(&loaded.paths.source_config),
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("source config has no active policy lock"))?;
+            if active.digest != lock.document.active_policy_digest {
+                anyhow::bail!(
+                    "active policy changed before the optimization result could be committed"
+                );
+            }
+            bitrouter::optimization::validate_policy_contract(
+                &loaded.intent,
+                &source_config,
+                &active.document,
+            )?;
+            bitrouter::optimization::write_lock_compare_and_swap(
+                &loaded.paths.lock,
+                Some(&lock.digest),
+                &outcome.updated_lock,
+            )
+            .await?;
+            output.emit(&EvalReport {
+                action: "optimize.run".into(),
+                data: serde_json::to_value(outcome.report)?,
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Review { config, run } => {
+            let (report, _) = load_optimization_report(&config, run.as_deref()).await?;
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            let active = lock.document.active_policy_digest == report.candidate_digest;
+            let rolled_back = lock
+                .document
+                .latest_run
+                .as_ref()
+                .is_some_and(|latest| latest.published && !active);
+            let mut data = serde_json::to_value(report)?;
+            if let Some(object) = data.as_object_mut() {
+                object.insert("active".into(), serde_json::Value::Bool(active));
+                object.insert("rolled_back".into(), serde_json::Value::Bool(rolled_back));
+            }
+            output.emit(&EvalReport {
+                action: "optimize.review".into(),
+                data,
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Publish {
+            config,
+            run,
+            enable_adaptive,
+        } => {
+            let operation_path =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
+                    .operation_lock_target();
+            let _operation_lock =
+                bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            if lock.document.intent_digest != loaded.digest {
+                anyhow::bail!("optimization intent changed; run `bitrouter optimize resolve`");
+            }
+            let latest = lock
+                .document
+                .latest_run
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no reviewed optimization run is available"))?
+                .clone();
+            if run.as_deref().is_some_and(|run| run != latest.run_id) {
+                anyhow::bail!("only the latest lock-pinned optimization run can be published");
+            }
+            if !latest.publishable {
+                anyhow::bail!("latest optimization candidate is not publishable");
+            }
+            let (report, report_digest) =
+                load_optimization_report(&config, Some(&latest.run_id)).await?;
+            if report_digest != latest.report_digest
+                || report.candidate_digest != latest.candidate_digest
+                || report.eval_snapshot_digest != latest.eval_snapshot_digest
+                || report.source_policy_digest != latest.source_policy_digest
+                || report.source_config_digest != latest.source_config_digest
+            {
+                anyhow::bail!("reviewed optimization report no longer matches the lock");
+            }
+            let candidate = bitrouter::policy_lock::load(&report.candidate_path).await?;
+            if candidate.digest != latest.candidate_digest {
+                anyhow::bail!("compiled candidate content changed after review");
+            }
+            let candidate_parent = candidate
+                .document
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.parent_digest.as_deref())
+                .ok_or_else(|| anyhow::anyhow!("compiled candidate has no parent digest"))?;
+            if candidate_parent != latest.source_policy_digest {
+                anyhow::bail!("compiled candidate parent no longer matches the reviewed run");
+            }
+
+            let source = bitrouter::paths::resolve_config(Some(&loaded.paths.source_config))?;
+            let config_path = require_policy_config_path(&source)?;
+            let _config_lock = bitrouter::policy_lock::acquire_publication_lock(config_path)?;
+            let source_raw = tokio::fs::read_to_string(config_path).await?;
+            let cfg = config::parse(&source_raw).context("parsing source config")?;
+            let source_matches_review =
+                bitrouter::optimization::evaluator::content_digest(&source_raw)
+                    == latest.source_config_digest;
+            let exact_adaptive_successor = if !source_matches_review
+                && cfg.policy.mode == config::PolicyRuntimeMode::Adaptive
+            {
+                let frozen = bitrouter::policy_lock::edit_config_mode(
+                    &source_raw,
+                    config::PolicyRuntimeMode::Frozen,
+                )?;
+                bitrouter::optimization::evaluator::content_digest(&frozen)
+                    == latest.source_config_digest
+            } else {
+                false
+            };
+            if !source_matches_review && !exact_adaptive_successor {
+                anyhow::bail!(
+                    "source config changed after review; run `bitrouter optimize resolve`"
+                );
+            }
+            let reviewed_source_raw = if exact_adaptive_successor {
+                bitrouter::policy_lock::edit_config_mode(
+                    &source_raw,
+                    config::PolicyRuntimeMode::Frozen,
+                )?
+            } else {
+                source_raw.clone()
+            };
+            let enable_adaptive =
+                cfg.policy.mode == config::PolicyRuntimeMode::Frozen && enable_adaptive;
+            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen && !enable_adaptive {
+                anyhow::bail!(
+                    "policy runtime mode is frozen; rerun this explicit publication with --enable-adaptive"
+                );
+            }
+            let policy_path = bitrouter::policy_lock::resolve_path(&cfg, Some(config_path))
+                .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
+            let _policy_lock = bitrouter::policy_lock::acquire_publication_lock(&policy_path)?;
+            let active = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+            bitrouter::optimization::validate_policy_contract(
+                &loaded.intent,
+                &cfg,
+                &active.document,
+            )?;
+            bitrouter::policy_lock::validate_for_config(&cfg, &candidate.document)?;
+            let evidence =
+                bitrouter::policy_lock::verify_document_evidence(config_path, &candidate.document)
+                    .await
+                    .context("revalidating reviewed candidate evidence")?;
+            if evidence.eval_snapshot_root.as_deref() != Some(latest.eval_snapshot_digest.as_str())
+            {
+                anyhow::bail!("reviewed candidate Eval snapshot no longer matches the lock");
+            }
+            let source_after_evidence = tokio::fs::read_to_string(config_path).await?;
+            if source_after_evidence != source_raw {
+                anyhow::bail!("source config changed while candidate evidence was revalidated");
+            }
+            let recovering = active.digest == candidate.digest;
+            let published = if recovering {
+                if latest.published {
+                    reload_policy_if_reachable(&source, None).await?;
+                }
+                bitrouter::policy_lock::PolicyFileUpdate {
+                    path: active.path,
+                    digest: active.digest,
+                    document: candidate.document.clone(),
+                    changes: Vec::new(),
+                    conflicts: Vec::new(),
+                }
+            } else {
+                if latest.published {
+                    anyhow::bail!(
+                        "optimization lock records the candidate as published, but the active policy differs"
+                    );
+                }
+                if active.digest != latest.source_policy_digest {
+                    anyhow::bail!(
+                        "active policy changed after review; refusing to publish a stale candidate"
+                    );
+                }
+                let history_dir = bitrouter::policy_lock::default_history_dir(&active.path);
+                let record = bitrouter::policy_lock::publish_candidate_unlocked(
+                    &active.path,
+                    &active.digest,
+                    &candidate.document,
+                    &history_dir,
+                )?;
+                if record.child_digest != latest.candidate_digest {
+                    bitrouter::policy_lock::rollback_to_digest_unlocked(
+                        &active.path,
+                        &record.child_digest,
+                        &record.parent_digest,
+                        &history_dir,
+                    )?;
+                    anyhow::bail!("published candidate digest did not match the reviewed run");
+                }
+                bitrouter::policy_lock::PolicyFileUpdate {
+                    path: active.path.clone(),
+                    digest: record.child_digest,
+                    document: candidate.document.clone(),
+                    changes: Vec::new(),
+                    conflicts: Vec::new(),
+                }
+            };
+            let desired_source_raw = if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                bitrouter::policy_lock::edit_config_mode(
+                    &reviewed_source_raw,
+                    config::PolicyRuntimeMode::Adaptive,
+                )?
+            } else {
+                source_raw.clone()
+            };
+            if desired_source_raw != source_raw
+                && let Err(error) = bitrouter::policy_lock::write_text_atomic_unlocked(
+                    config_path,
+                    &source_raw,
+                    &desired_source_raw,
+                )
+            {
+                let recovery = restore_optimization_publication(
+                    &source,
+                    &published,
+                    &latest.source_policy_digest,
+                    config_path,
+                    &desired_source_raw,
+                    &reviewed_source_raw,
+                    None,
+                )
+                .await;
+                return match recovery {
+                    Ok(()) => Err(error.context(
+                        "enabling adaptive mode failed; restored the reviewed policy and config",
+                    )),
+                    Err(recovery) => Err(error.context(format!(
+                        "enabling adaptive mode failed and recovery also failed: {recovery:#}"
+                    ))),
+                };
+            }
+            if let Err(error) = reload_policy_if_reachable(&source, None).await {
+                if latest.published {
+                    return Err(error.context(
+                        "published policy and config are durable, but the live daemon did not accept them; rerun optimize publish to converge the daemon",
+                    ));
+                }
+                let recovery = restore_optimization_publication(
+                    &source,
+                    &published,
+                    &latest.source_policy_digest,
+                    config_path,
+                    &desired_source_raw,
+                    &reviewed_source_raw,
+                    None,
+                )
+                .await;
+                return match recovery {
+                    Ok(()) => Err(error.context(
+                        "daemon rejected the reviewed publication; restored policy and config",
+                    )),
+                    Err(recovery) => Err(error.context(format!(
+                        "daemon rejected the reviewed publication and recovery failed: {recovery:#}"
+                    ))),
+                };
+            }
+            if !latest.published {
+                let mut updated = lock.document.clone();
+                updated.active_policy_digest = published.digest.clone();
+                let updated_latest = updated
+                    .latest_run
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("latest optimization run disappeared"))?;
+                updated_latest.published = true;
+                if let Err(error) = bitrouter::optimization::write_lock_compare_and_swap(
+                    &loaded.paths.lock,
+                    Some(&lock.digest),
+                    &updated,
+                )
+                .await
+                {
+                    let recovery = restore_optimization_publication(
+                        &source,
+                        &published,
+                        &latest.source_policy_digest,
+                        config_path,
+                        &desired_source_raw,
+                        &reviewed_source_raw,
+                        None,
+                    )
+                    .await;
+                    return match recovery {
+                        Ok(()) => Err(error.context(
+                            "optimization lock changed concurrently; restored the reviewed policy and config",
+                        )),
+                        Err(recovery) => Err(error.context(format!(
+                            "optimization lock changed concurrently and recovery failed: {recovery:#}"
+                        ))),
+                    };
+                }
+            }
+            output.emit(&EvalReport {
+                action: "optimize.publish".into(),
+                data: serde_json::json!({
+                    "run_id": latest.run_id,
+                    "published": true,
+                    "recovered": recovering && !latest.published,
+                    "adaptive_enabled": enable_adaptive || exact_adaptive_successor,
+                    "active_policy_digest": published.digest,
+                    "policy_path": published.path,
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Rollback {
+            digest,
+            config,
+            socket,
+        } => {
+            let operation_path =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
+                    .operation_lock_target();
+            let _operation_lock =
+                bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            if lock.document.intent_digest != loaded.digest {
+                anyhow::bail!("optimization intent changed; run `bitrouter optimize resolve`");
+            }
+            let source = bitrouter::paths::resolve_config(Some(&loaded.paths.source_config))?;
+            let config_path = require_policy_config_path(&source)?;
+            let _config_lock = bitrouter::policy_lock::acquire_publication_lock(config_path)?;
+            let cfg = config::load(config_path).await?;
+            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                anyhow::bail!(
+                    "policy runtime mode is frozen; optimization rollback is disabled until publication has been explicitly enabled"
+                );
+            }
+            let active = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+            let policy_path = active.path.clone();
+            let _policy_lock = bitrouter::policy_lock::acquire_publication_lock(&policy_path)?;
+            let active = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+            let history_dir = bitrouter::policy_lock::default_history_dir(&active.path);
+            let target = bitrouter::policy_lock::load_history_snapshot(&history_dir, &digest)?;
+            bitrouter::policy_lock::validate_for_config(&cfg, &target)?;
+            bitrouter::optimization::validate_policy_contract(&loaded.intent, &cfg, &target)?;
+            let recovering = active.digest == digest;
+            if !recovering && active.digest != lock.document.active_policy_digest {
+                anyhow::bail!(
+                    "active policy and optimization lock already diverged; refusing an ambiguous rollback"
+                );
+            }
+            if recovering {
+                reload_policy_if_reachable(&source, socket.as_deref()).await?;
+            } else {
+                let record = bitrouter::policy_lock::rollback_to_digest_unlocked(
+                    &active.path,
+                    &active.digest,
+                    &digest,
+                    &history_dir,
+                )?;
+                if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
+                    let restore = bitrouter::policy_lock::rollback_to_digest_unlocked(
+                        &active.path,
+                        &record.child_digest,
+                        &record.parent_digest,
+                        &history_dir,
+                    );
+                    let restore_reload = if restore.is_ok() {
+                        reload_policy_if_reachable(&source, socket.as_deref()).await
+                    } else {
+                        Ok(())
+                    };
+                    return match (restore, restore_reload) {
+                        (Ok(_), Ok(())) => Err(error.context(
+                            "daemon rejected optimization rollback; restored previous policy",
+                        )),
+                        (restore, restore_reload) => Err(error.context(format!(
+                            "daemon rejected optimization rollback and recovery failed (policy: {}; reload: {})",
+                            restore
+                                .err()
+                                .map(|value| format!("{value:#}"))
+                                .unwrap_or_else(|| "ok".into()),
+                            restore_reload
+                                .err()
+                                .map(|value| format!("{value:#}"))
+                                .unwrap_or_else(|| "ok".into()),
+                        ))),
+                    };
+                }
+            }
+            if lock.document.active_policy_digest != digest {
+                let mut updated = lock.document.clone();
+                updated.active_policy_digest = digest.clone();
+                if let Err(error) = bitrouter::optimization::write_lock_compare_and_swap(
+                    &loaded.paths.lock,
+                    Some(&lock.digest),
+                    &updated,
+                )
+                .await
+                {
+                    let rollback = bitrouter::policy_lock::rollback_to_digest_unlocked(
+                        &active.path,
+                        &digest,
+                        &lock.document.active_policy_digest,
+                        &history_dir,
+                    );
+                    let reload = if rollback.is_ok() {
+                        reload_policy_if_reachable(&source, socket.as_deref()).await
+                    } else {
+                        Ok(())
+                    };
+                    return match (rollback, reload) {
+                        (Ok(_), Ok(())) => Err(error.context(
+                            "optimization lock changed concurrently; restored the previous policy",
+                        )),
+                        (rollback, reload) => Err(error.context(format!(
+                            "optimization lock changed concurrently and rollback recovery failed (policy: {}; reload: {})",
+                            rollback
+                                .err()
+                                .map(|value| format!("{value:#}"))
+                                .unwrap_or_else(|| "ok".into()),
+                            reload
+                                .err()
+                                .map(|value| format!("{value:#}"))
+                                .unwrap_or_else(|| "ok".into()),
+                        ))),
+                    };
+                }
+            }
+            output.emit(&EvalReport {
+                action: "optimize.rollback".into(),
+                data: serde_json::json!({
+                    "active_policy_digest": digest,
+                    "recovered": recovering,
+                }),
+            })?;
+            Ok(())
+        }
+        OptimizeAction::Status { config } => {
+            let loaded = bitrouter::optimization::load_intent(&config).await?;
+            let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+            let source_raw = tokio::fs::read_to_string(&loaded.paths.source_config).await?;
+            let source_config = config::parse(&source_raw).context("parsing source config")?;
+            let active = bitrouter::policy_lock::load_for_config(
+                &source_config,
+                Some(&loaded.paths.source_config),
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("source config has no active policy lock"))?;
+            let intent_matches = lock.document.intent_digest == loaded.digest;
+            let active_matches = lock.document.active_policy_digest == active.digest;
+            let latest_active = lock
+                .document
+                .latest_run
+                .as_ref()
+                .is_some_and(|run| run.candidate_digest == active.digest);
+            let rolled_back = lock
+                .document
+                .latest_run
+                .as_ref()
+                .is_some_and(|run| run.published && run.candidate_digest != active.digest);
+            let repair_hint = if !intent_matches {
+                Some("run `bitrouter optimize resolve`")
+            } else if !active_matches {
+                Some(
+                    "active policy diverged from the optimization lock; inspect policy history before continuing",
+                )
+            } else {
+                None
+            };
+            output.emit(&EvalReport {
+                action: "optimize.status".into(),
+                data: serde_json::json!({
+                    "intent": loaded.paths.intent,
+                    "intent_digest": loaded.digest,
+                    "lock_active_policy_digest": lock.document.active_policy_digest,
+                    "actual_active_policy_digest": active.digest,
+                    "policy_mode": source_config.policy.mode,
+                    "lineage_consistent": intent_matches && active_matches,
+                    "latest_candidate_active": latest_active,
+                    "rolled_back": rolled_back,
+                    "repair_hint": repair_hint,
+                    "preference": loaded.intent.preference,
+                    "evaluator": lock.document.evaluator,
+                    "latest_run": lock.document.latest_run,
+                    "latency": "observe_only",
+                }),
+            })?;
+            Ok(())
+        }
+    }
+}
+
+async fn load_optimization_report(
+    config: &Path,
+    requested_run: Option<&str>,
+) -> Result<(
+    bitrouter::optimization::orchestrator::OptimizationReport,
+    String,
+)> {
+    let loaded = bitrouter::optimization::load_intent(config).await?;
+    let lock = bitrouter::optimization::load_lock(&loaded.paths.lock).await?;
+    if lock.document.intent_digest != loaded.digest {
+        anyhow::bail!("optimization intent changed; run `bitrouter optimize resolve`");
+    }
+    let latest = lock
+        .document
+        .latest_run
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no optimization run is available"))?;
+    let run_id = requested_run.unwrap_or(&latest.run_id);
+    if run_id != latest.run_id {
+        anyhow::bail!("only the latest content-addressed optimization report can be reviewed");
+    }
+    if run_id.contains('/') || run_id.contains('\\') || run_id == "." || run_id == ".." {
+        anyhow::bail!("invalid optimization run id");
+    }
+    let path = loaded.paths.private_runs.join(run_id).join("report.json");
+    let raw = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("reading private optimization report {}", path.display()))?;
+    use sha2::Digest;
+    let digest = format!("sha256:{}", hex::encode(sha2::Sha256::digest(&raw)));
+    let report: bitrouter::optimization::orchestrator::OptimizationReport =
+        serde_json::from_slice(&raw)
+            .with_context(|| format!("parsing private optimization report {}", path.display()))?;
+    if report.run_id != run_id {
+        anyhow::bail!("optimization report identity mismatch");
+    }
+    if latest.report_digest != digest {
+        anyhow::bail!("optimization report changed after it was locked");
+    }
+    Ok((report, digest))
 }
 
 async fn eval(action: EvalAction, output: &Output) -> Result<()> {
@@ -3751,16 +4708,103 @@ async fn reload_published_policy_or_restore(
             .and_then(|artifact| artifact.parent_digest.as_deref())
             .ok_or_else(|| anyhow::anyhow!("published policy has no parent digest"))?;
         let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
-        bitrouter::policy_lock::rollback_to_digest(
+        let restore = bitrouter::policy_lock::rollback_to_digest(
             &update.path,
             &update.digest,
             parent_digest,
             &history_dir,
-        )?;
-        let _ = reload_policy_if_reachable(source, socket_override).await;
-        return Err(error.context("daemon rejected candidate; restored previous lock"));
+        );
+        let restore_reload = if restore.is_ok() {
+            reload_policy_if_reachable(source, socket_override).await
+        } else {
+            Ok(())
+        };
+        return match (restore, restore_reload) {
+            (Ok(_), Ok(())) => {
+                Err(error.context("daemon rejected candidate; restored previous lock"))
+            }
+            (restore, restore_reload) => Err(error.context(format!(
+                "daemon rejected candidate and recovery failed (policy: {}; reload: {})",
+                restore
+                    .err()
+                    .map(|value| format!("{value:#}"))
+                    .unwrap_or_else(|| "ok".into()),
+                restore_reload
+                    .err()
+                    .map(|value| format!("{value:#}"))
+                    .unwrap_or_else(|| "ok".into()),
+            ))),
+        };
     }
     Ok(())
+}
+
+/// Restore the exact reviewed parent after a partially applied optimization
+/// publication. The caller holds both config and policy publication locks.
+async fn restore_optimization_publication(
+    source: &bitrouter::paths::ConfigSource,
+    update: &bitrouter::policy_lock::PolicyFileUpdate,
+    parent_digest: &str,
+    config_path: &Path,
+    desired_config: &str,
+    reviewed_config: &str,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    let config_restore = match std::fs::read_to_string(config_path) {
+        Ok(current) if current == reviewed_config => Ok(()),
+        Ok(current) if current == desired_config => {
+            bitrouter::policy_lock::write_text_atomic_unlocked(
+                config_path,
+                desired_config,
+                reviewed_config,
+            )
+        }
+        Ok(_) => Err(anyhow::anyhow!(
+            "source config changed outside the optimization transaction"
+        )),
+        Err(error) => Err(error).context("reading source config for publication recovery"),
+    };
+    let policy_restore = match bitrouter::policy_lock::load(&update.path).await {
+        Ok(current) if current.digest == parent_digest => Ok(()),
+        Ok(current) if current.digest == update.digest => {
+            let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
+            bitrouter::policy_lock::rollback_to_digest_unlocked(
+                &update.path,
+                &update.digest,
+                parent_digest,
+                &history_dir,
+            )
+            .map(|_| ())
+        }
+        Ok(current) => Err(anyhow::anyhow!(
+            "active policy changed outside recovery (found {})",
+            current.digest
+        )),
+        Err(error) => Err(error.context("loading active policy for publication recovery")),
+    };
+    let reload_restore = if config_restore.is_ok() && policy_restore.is_ok() {
+        reload_policy_if_reachable(source, socket_override).await
+    } else {
+        Ok(())
+    };
+    match (config_restore, policy_restore, reload_restore) {
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (config_restore, policy_restore, reload_restore) => anyhow::bail!(
+            "publication recovery was incomplete (config: {}; policy: {}; reload: {})",
+            config_restore
+                .err()
+                .map(|value| format!("{value:#}"))
+                .unwrap_or_else(|| "ok".into()),
+            policy_restore
+                .err()
+                .map(|value| format!("{value:#}"))
+                .unwrap_or_else(|| "ok".into()),
+            reload_restore
+                .err()
+                .map(|value| format!("{value:#}"))
+                .unwrap_or_else(|| "ok".into()),
+        ),
+    }
 }
 
 fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result<&Path> {
@@ -5438,6 +6482,122 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
+    }
+
+    #[test]
+    fn workflow_optimization_commands_parse_with_direct_judge_default() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let setup = Cli::try_parse_from([
+            "bitrouter",
+            "optimize",
+            "setup",
+            "--workflow-command",
+            "./run-eval",
+            "--workflow-arg",
+            "--smoke",
+            "--workflow-input",
+            ".venv",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--economy",
+            "bitrouter:deepseek/deepseek-v4-flash-0731",
+            "--normalized-price",
+            "openai-codex:gpt-5.6-sol=5,0.5,6.25,30",
+        ])?;
+        assert!(matches!(
+            setup.command,
+            Some(Command::Optimize {
+                action: OptimizeAction::Setup(args)
+            }) if !args.evaluator_via_cloud
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "optimize",
+                "setup",
+                "--workflow-command",
+                "./run-eval",
+                "--strong",
+                "openai-codex:gpt-5.6-sol",
+                "--economy",
+                "bitrouter:deepseek/deepseek-v4-flash-0731",
+                "--evaluator-via-cloud",
+            ])
+            .is_ok()
+        );
+        for action in ["resolve", "run", "review", "publish", "status"] {
+            assert!(Cli::try_parse_from(["bitrouter", "optimize", action]).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from(["bitrouter", "optimize", "publish", "--enable-adaptive",]).is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "optimize",
+                "rollback",
+                "sha256:0123456789abcdef",
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["bitrouter", "optimize", "rollback"]).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimization_publication_recovery_restores_policy_and_mode() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        let policy_path = directory.path().join("policy-lock.yaml");
+        let reviewed_config = "policy:\n  mode: frozen\n  path: policy-lock.yaml\n";
+        let desired_config = bitrouter::policy_lock::edit_config_mode(
+            reviewed_config,
+            config::PolicyRuntimeMode::Adaptive,
+        )?;
+        std::fs::write(&config_path, &desired_config)?;
+
+        let parent = bitrouter::policy_lock::PolicyLock::default();
+        let parent_digest =
+            bitrouter::policy_lock::write_atomic_unlocked(&policy_path, None, &parent)?;
+        let mut candidate = parent;
+        let artifact = candidate
+            .artifact
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("default v2 policy has no artifact"))?;
+        artifact.parent_digest = Some(parent_digest.clone());
+        artifact.source_snapshot_time_unix_ms = 1;
+        let history = bitrouter::policy_lock::default_history_dir(&policy_path);
+        let record = bitrouter::policy_lock::publish_candidate_unlocked(
+            &policy_path,
+            &parent_digest,
+            &candidate,
+            &history,
+        )?;
+        let update = bitrouter::policy_lock::PolicyFileUpdate {
+            path: policy_path.clone(),
+            digest: record.child_digest,
+            document: candidate,
+            changes: Vec::new(),
+            conflicts: Vec::new(),
+        };
+        restore_optimization_publication(
+            &bitrouter::paths::ConfigSource::File(config_path.clone()),
+            &update,
+            &parent_digest,
+            &config_path,
+            &desired_config,
+            reviewed_config,
+            None,
+        )
+        .await?;
+
+        assert_eq!(std::fs::read_to_string(config_path)?, reviewed_config);
+        assert_eq!(
+            bitrouter::policy_lock::load(&policy_path).await?.digest,
+            parent_digest
+        );
+        Ok(())
     }
 
     #[test]

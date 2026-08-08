@@ -369,7 +369,7 @@ agents:
     transport:
       type: stdio
       command: npx
-      args: ["-y", "@zed-industries/codex-acp@latest"]
+      args: ["-y", "@agentclientprotocol/codex-acp@latest"]
 
   pi-acp:
     name: pi-acp

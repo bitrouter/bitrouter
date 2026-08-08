@@ -434,7 +434,7 @@ agents:
     transport:
       type: stdio
       command: npx
-      args: ["-y", "@zed-industries/codex-acp@latest"]
+      args: ["-y", "@agentclientprotocol/codex-acp@latest"]
       env: {}            # user env — injection overlays on top (see §5.3)
 ```
 
