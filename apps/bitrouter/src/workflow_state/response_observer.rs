@@ -13,6 +13,21 @@ use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 const MAX_STREAM_BUFFER_BYTES: usize = 4_096;
 const MAX_STREAM_TOOL_CALLS: usize = 32;
 const MAX_TOOL_DEFINITIONS: usize = 64;
+const COMMAND_TOOL_MARKERS: [&str; 6] = ["bash", "shell", "terminal", "exec", "command", "process"];
+const COMMAND_ARGUMENT_KEY_MARKERS: [&str; 3] = ["\"cmd\"", "\"command\"", "\"script\""];
+const MUTATING_COMMAND_MARKERS: [&str; 11] = [
+    "apply_patch",
+    "sed -i",
+    "git add",
+    "git commit",
+    "mkdir ",
+    "touch ",
+    "rm ",
+    "mv ",
+    "cp ",
+    " > ",
+    " >> ",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObservedActionClass {
@@ -224,6 +239,13 @@ struct StreamToolCall {
     id_digest: [u8; 32],
     name: String,
     arguments: String,
+    command_classifier: StreamingCommandClassifier,
+}
+
+#[derive(Debug)]
+struct OverflowToolCall {
+    id_digest: [u8; 32],
+    command_classifier: StreamingCommandClassifier,
 }
 
 #[derive(Debug)]
@@ -234,6 +256,7 @@ struct StreamObservationBuffer {
     saw_text: bool,
     saw_tool: bool,
     dominant_tool_action: ObservedActionClass,
+    overflow_call: Option<OverflowToolCall>,
 }
 
 impl StreamObservationBuffer {
@@ -245,6 +268,7 @@ impl StreamObservationBuffer {
             saw_text: false,
             saw_tool: false,
             dominant_tool_action: ObservedActionClass::Unknown,
+            overflow_call: None,
         }
     }
 
@@ -281,19 +305,40 @@ impl StreamObservationBuffer {
                     id_digest,
                     name: String::new(),
                     arguments: String::new(),
+                    command_classifier: StreamingCommandClassifier::new(),
                 });
                 self.calls.len().checked_sub(1)
             });
         let Some(call_index) = call_index else {
+            let mutates = {
+                let overflow = self.overflow_call.get_or_insert_with(|| OverflowToolCall {
+                    id_digest,
+                    command_classifier: StreamingCommandClassifier::new(),
+                });
+                if overflow.id_digest != id_digest {
+                    *overflow = OverflowToolCall {
+                        id_digest,
+                        command_classifier: StreamingCommandClassifier::new(),
+                    };
+                }
+                overflow.command_classifier.observe(name, arguments)
+            };
+            if mutates {
+                self.dominant_tool_action = ObservedActionClass::Mutate;
+            }
             return;
         };
         let call = &mut self.calls[call_index];
+        let streaming_mutation = call.command_classifier.observe(name, arguments);
         if let Some(name) = name {
             append_bounded(&mut call.name, name, &mut self.buffered_bytes);
         }
         append_bounded(&mut call.arguments, arguments, &mut self.buffered_bytes);
         let action = classify_tool_call(&call.name, &call.arguments, &self.tool_definitions);
         self.dominant_tool_action = self.dominant_tool_action.dominant(action);
+        if streaming_mutation {
+            self.dominant_tool_action = ObservedActionClass::Mutate;
+        }
     }
 
     fn finalize(&self) -> PredictionObservation {
@@ -305,6 +350,181 @@ impl StreamObservationBuffer {
             ObservedActionClass::Unknown
         };
         PredictionObservation::new(observed_action)
+    }
+}
+
+#[derive(Debug)]
+struct StreamingCommandClassifier {
+    command_tool: StreamingPatternSetState<6>,
+    arguments: CommandArgumentClassifier,
+}
+
+impl StreamingCommandClassifier {
+    fn new() -> Self {
+        Self {
+            command_tool: StreamingPatternSetState::new(),
+            arguments: CommandArgumentClassifier::new(),
+        }
+    }
+
+    fn observe(&mut self, name: Option<&str>, arguments: &str) -> bool {
+        if let Some(name) = name {
+            self.command_tool
+                .observe_fragment(name, &COMMAND_TOOL_MARKERS);
+        }
+        self.arguments.observe(arguments);
+        self.command_tool.matched() && self.arguments.mutates()
+    }
+}
+
+#[derive(Debug)]
+struct CommandArgumentClassifier {
+    state: CommandArgumentState,
+    mutates: bool,
+}
+
+impl CommandArgumentClassifier {
+    fn new() -> Self {
+        Self {
+            state: CommandArgumentState::seeking_key(),
+            mutates: false,
+        }
+    }
+
+    fn observe(&mut self, fragment: &str) {
+        for byte in fragment.bytes() {
+            self.state = self.state.advance(byte, &mut self.mutates);
+        }
+    }
+
+    fn mutates(&self) -> bool {
+        self.mutates
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommandArgumentState {
+    SeekingKey(StreamingPatternSetState<3>),
+    SeekingColon,
+    SeekingValue,
+    ReadingValue {
+        escaped: bool,
+        mutation: StreamingPatternSetState<11>,
+    },
+}
+
+impl CommandArgumentState {
+    fn seeking_key() -> Self {
+        Self::SeekingKey(StreamingPatternSetState::new())
+    }
+
+    fn seeking_key_after(byte: u8) -> Self {
+        let mut matcher = StreamingPatternSetState::new();
+        matcher.observe(byte, &COMMAND_ARGUMENT_KEY_MARKERS);
+        Self::SeekingKey(matcher)
+    }
+
+    fn advance(self, byte: u8, mutates: &mut bool) -> Self {
+        match self {
+            Self::SeekingKey(mut matcher) => {
+                matcher.observe(byte, &COMMAND_ARGUMENT_KEY_MARKERS);
+                if matcher.matched() {
+                    Self::SeekingColon
+                } else {
+                    Self::SeekingKey(matcher)
+                }
+            }
+            Self::SeekingColon => {
+                if byte == b':' {
+                    Self::SeekingValue
+                } else if byte.is_ascii_whitespace() {
+                    Self::SeekingColon
+                } else {
+                    Self::seeking_key_after(byte)
+                }
+            }
+            Self::SeekingValue => {
+                if byte.is_ascii_whitespace() {
+                    Self::SeekingValue
+                } else if byte == b'"' {
+                    Self::ReadingValue {
+                        escaped: false,
+                        mutation: StreamingPatternSetState::new(),
+                    }
+                } else {
+                    Self::seeking_key_after(byte)
+                }
+            }
+            Self::ReadingValue {
+                escaped,
+                mut mutation,
+            } => {
+                if escaped {
+                    Self::ReadingValue {
+                        escaped: false,
+                        mutation,
+                    }
+                } else if byte == b'\\' {
+                    Self::ReadingValue {
+                        escaped: true,
+                        mutation,
+                    }
+                } else if byte == b'"' {
+                    *mutates |= mutation.matched();
+                    Self::seeking_key()
+                } else {
+                    mutation.observe(byte, &MUTATING_COMMAND_MARKERS);
+                    Self::ReadingValue {
+                        escaped: false,
+                        mutation,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamingPatternSetState<const N: usize> {
+    progress: [u8; N],
+    matched: bool,
+}
+
+impl<const N: usize> StreamingPatternSetState<N> {
+    fn new() -> Self {
+        Self {
+            progress: [0; N],
+            matched: false,
+        }
+    }
+
+    fn observe_fragment(&mut self, fragment: &str, patterns: &[&str; N]) {
+        for byte in fragment.bytes() {
+            self.observe(byte, patterns);
+        }
+    }
+
+    fn observe(&mut self, byte: u8, patterns: &[&str; N]) {
+        let byte = byte.to_ascii_lowercase();
+        for (index, pattern) in patterns.iter().enumerate() {
+            let pattern = pattern.as_bytes();
+            let progress = usize::from(self.progress[index]);
+            if byte == pattern[progress] {
+                let next = progress.saturating_add(1);
+                if next == pattern.len() {
+                    self.matched = true;
+                    self.progress[index] = 0;
+                } else {
+                    self.progress[index] = self.progress[index].saturating_add(1);
+                }
+            } else {
+                self.progress[index] = u8::from(byte == pattern[0]);
+            }
+        }
+    }
+
+    fn matched(&self) -> bool {
+        self.matched
     }
 }
 
@@ -464,22 +684,7 @@ fn classify_label(label: &str) -> ObservedActionClass {
 
 fn classify_command(command: &str) -> ObservedActionClass {
     let command = command.to_ascii_lowercase();
-    if contains_any(
-        &command,
-        &[
-            "apply_patch",
-            "sed -i",
-            "git add",
-            "git commit",
-            "mkdir ",
-            "touch ",
-            "rm ",
-            "mv ",
-            "cp ",
-        ],
-    ) || command.contains(" > ")
-        || command.contains(" >> ")
-    {
+    if contains_any(&command, &MUTATING_COMMAND_MARKERS) {
         return ObservedActionClass::Mutate;
     }
     if contains_any(
@@ -536,10 +741,7 @@ fn command_argument(arguments: &str) -> Option<String> {
 
 fn is_command_tool(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    contains_any(
-        &name,
-        &["bash", "shell", "terminal", "exec", "command", "process"],
-    )
+    contains_any(&name, &COMMAND_TOOL_MARKERS)
 }
 
 fn contains_any(value: &str, terms: &[&str]) -> bool {
@@ -800,6 +1002,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_observer_classifies_fragmented_command_mutation_after_tool_call_limit()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-command-call-limit");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context =
+            pipeline_context("stream-command-call-limit", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("read-{index}"),
+                        name: Some("read_file".into()),
+                        arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                    },
+                )
+                .await;
+        }
+        for (name, arguments) in [
+            (Some("exec_command".into()), r#"{"cmd":"r"#),
+            (None, r#"m private-file"}"#),
+        ] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: "command-mutation-after-limit".into(),
+                        name,
+                        arguments: arguments.into(),
+                    },
+                )
+                .await;
+        }
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn response_observer_classifies_mutation_after_raw_byte_limit() -> anyhow::Result<()> {
         let (pending, invocation) = pending("stream-byte-limit-mutation");
         let observer = PredictiveResponseObserver::new(pending.clone());
@@ -830,6 +1095,67 @@ mod tests {
                 },
             )
             .await;
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_classifies_fragmented_command_mutation_after_raw_byte_limit()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-command-byte-limit");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context =
+            pipeline_context("stream-command-byte-limit", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "unknown-large".into(),
+                    name: Some("opaque_capability".into()),
+                    arguments: "x".repeat(8_192),
+                },
+            )
+            .await;
+        for (name, arguments) in [
+            (Some("exec_command".into()), r#"{"cmd":"r"#),
+            (None, r#"m private-file"}"#),
+        ] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: "command-mutation-after-bytes".into(),
+                        name,
+                        arguments: arguments.into(),
+                    },
+                )
+                .await;
+        }
         let buffered = observer
             .streams
             .lock()
