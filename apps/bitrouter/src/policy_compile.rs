@@ -912,6 +912,7 @@ mod tests {
 
     #[test]
     fn admitted_negative_evidence_demotes_pretrained_economy_route() -> anyhow::Result<()> {
+        const TEMPLATE_ECONOMY_KEY: &str = "agent_route/v1|verify|normal";
         let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router/policy-lock.yaml");
@@ -932,7 +933,7 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-pretrained-demotion".into(),
                 policy: "auto".into(),
-                request_key: EDIT_KEY.into(),
+                request_key: TEMPLATE_ECONOMY_KEY.into(),
                 selected_tier: "economy".into(),
                 baseline_tier: Some("strong".into()),
                 policy_digest:
@@ -987,11 +988,11 @@ mod tests {
         })?;
 
         assert_eq!(
-            compiled.document.policies["auto"].routes[EDIT_KEY],
+            compiled.document.policies["auto"].routes[TEMPLATE_ECONOMY_KEY],
             "strong"
         );
         assert!(compiled.conflicts.is_empty());
-        let certificate = &compiled.document.certificates["auto"][EDIT_KEY];
+        let certificate = &compiled.document.certificates["auto"][TEMPLATE_ECONOMY_KEY];
         assert_eq!(certificate.owner, RouteOwner::Compiler);
         assert_eq!(certificate.source, CertificateSource::TaskNative);
         assert_eq!(certificate.verdict, PromotionVerdict::Demote);

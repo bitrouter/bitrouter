@@ -1,11 +1,11 @@
 lockfileVersion: 2
 artifact:
-  evidence_root: "sha256:fe8319381e94b97d2213d6ed21cfe0c42bb302f23c04ea8799a2a3143adcb01b"
+  evidence_root: "sha256:4897c0d59d3b7bb80703eed142d473064448c1422e09fa3cd161afc4a211a025"
   source_snapshot_time_unix_ms: 0
   compiler:
     id: bitrouter-template-compiler
     version: 2
-    config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
+    config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
 policies:
   auto:
     key_strategy: agent_trace
@@ -14,15 +14,22 @@ policies:
       economy: "bitrouter:deepseek/deepseek-v4-pro"
       strong: "openai-codex:gpt-5.6-sol"
     routes:
-      "agent_trace/v2|edit|normal": economy
-      "agent_trace/v2|test|normal": economy
-      "agent_trace/v2|tool_followup|normal": economy
-      "agent_trace/v2|review|normal": balanced
-      "agent_trace/v2|review|context": balanced
-      "agent_trace/v2|edit|context": balanced
-      "agent_trace/v2|test|context": balanced
-      "agent_trace/v2|tool_followup|context": balanced
-    default_tier: strong
+      "agent_route/v1|orchestrate|normal": strong
+      "agent_route/v1|orchestrate|context": strong
+      "agent_route/v1|orchestrate|guarded": strong
+      "agent_route/v1|implement|normal": balanced
+      "agent_route/v1|implement|context": balanced
+      "agent_route/v1|implement|guarded": balanced
+      "agent_route/v1|mechanical|normal": economy
+      "agent_route/v1|mechanical|context": balanced
+      "agent_route/v1|mechanical|guarded": balanced
+      "agent_route/v1|verify|normal": economy
+      "agent_route/v1|verify|context": balanced
+      "agent_route/v1|verify|guarded": strong
+      "agent_route/v1|finalize|normal": balanced
+      "agent_route/v1|finalize|context": balanced
+      "agent_route/v1|finalize|guarded": strong
+    default_tier: balanced
     tool_use_tier: strong
     tool_safe_tiers:
       - strong
@@ -51,7 +58,73 @@ policies:
       min_semantic_successes_for_opening: 1
 certificates:
   auto:
-    "agent_trace/v2|edit|normal":
+    "agent_route/v1|orchestrate|normal":
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:36d56e3fd19dea11b5e93d74f21f5d8771c9ddfb9ccdf50b39bf0779ae7605f6"
+    "agent_route/v1|orchestrate|context":
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:b7d51d6180a37a222cd25f77d1828f569e97b8def94242172b6ea8c5d2c528cf"
+    "agent_route/v1|orchestrate|guarded":
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:bb57e1d0cb2f3f78aa3cd6155466871775c104f80bf22978eed5562d064d69db"
+    "agent_route/v1|implement|normal":
+      owner: compiler
+      selected_tier: balanced
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:925022b350c51d7ae420ba6bd053014123bb44f425b1504ec16352d710c1fcb2"
+    "agent_route/v1|implement|context":
+      owner: compiler
+      selected_tier: balanced
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:be78311fc99cb9260406871d2b311b1398585d3a376c44a6020ccc19f27607c4"
+    "agent_route/v1|implement|guarded":
+      owner: compiler
+      selected_tier: balanced
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:c73d49e02734748d3befe20cbd91233bd4ec9f949dac81c0cb83e0a0f9df8170"
+    "agent_route/v1|mechanical|normal":
       owner: compiler
       selected_tier: economy
       baseline_tier: strong
@@ -60,9 +133,31 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:f89eb6856c550a1ce8e0d8f134294a7a43f50c58b367bd335a932ae9ad73e0fa"
-    "agent_trace/v2|test|normal":
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:f2d6ab2242d5215dabf5cbfd2a893cd3dc491088650547df28993649b40dd140"
+    "agent_route/v1|mechanical|context":
+      owner: compiler
+      selected_tier: balanced
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:f078a4f71b743fc364d4a1744642ebbe5031a18dd3f8b3de8f18029099d72093"
+    "agent_route/v1|mechanical|guarded":
+      owner: compiler
+      selected_tier: balanced
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:94189b3e5835126482db9c283d78b2a43686bff8042dab83226e7cec050df89b"
+    "agent_route/v1|verify|normal":
       owner: compiler
       selected_tier: economy
       baseline_tier: strong
@@ -71,20 +166,9 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:2a066520e701d6775705340773ba097c1f29af0b8572994e3860addf2377937d"
-    "agent_trace/v2|tool_followup|normal":
-      owner: compiler
-      selected_tier: economy
-      baseline_tier: strong
-      source: mixed
-      eligible_episodes: 0
-      independent_tasks: 0
-      critical_violations: 0
-      verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:b13fb4a76830d26a888d8609761ecacdca2c4c552c10f0fac48af36284b3481b"
-    "agent_trace/v2|review|normal":
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:07e619836bdee3fe6a53e2b9277ddacec2b35dc17bffc7a847b54ce763fd0fb3"
+    "agent_route/v1|verify|context":
       owner: compiler
       selected_tier: balanced
       baseline_tier: strong
@@ -93,9 +177,20 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:f1f20f5a669ba271f2e69f64ac3133d4af96e720419a0facfe808a4604575c91"
-    "agent_trace/v2|review|context":
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:8b2cdd9052d12d2f2893c769c0100e0906b0ea441ee5dff55aa394a5a7f9e4e4"
+    "agent_route/v1|verify|guarded":
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: mixed
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: experiment
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:bcafb51a0941e39bc48f01bfb05b506bc6d56f64726c43cc75872c82292a900b"
+    "agent_route/v1|finalize|normal":
       owner: compiler
       selected_tier: balanced
       baseline_tier: strong
@@ -104,9 +199,9 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:7e0f3df21c1d89a76d8cf46401a507d5292d3e2f06bd2440702eb6c3126f4910"
-    "agent_trace/v2|edit|context":
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:a9c76bb9ab5c6260957628108bfaa4967d7f9015465532e009bc86f4d6a27d96"
+    "agent_route/v1|finalize|context":
       owner: compiler
       selected_tier: balanced
       baseline_tier: strong
@@ -115,27 +210,16 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:df61766c3a5534bcfe78b839b9776a15b6c20dc4bb6014a513442b6b67cda564"
-    "agent_trace/v2|test|context":
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:3db39ff8c6cdbd8c90e90d400f1786835afa4ff146b8f569d3f2c2c1eb326fc1"
+    "agent_route/v1|finalize|guarded":
       owner: compiler
-      selected_tier: balanced
+      selected_tier: strong
       baseline_tier: strong
       source: mixed
       eligible_episodes: 0
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:57dab48bbdb7204119fcf8d44b55422e1c9faf2e12fb4520c86b26e478be945d"
-    "agent_trace/v2|tool_followup|context":
-      owner: compiler
-      selected_tier: balanced
-      baseline_tier: strong
-      source: mixed
-      eligible_episodes: 0
-      independent_tasks: 0
-      critical_violations: 0
-      verdict: experiment
-      compiler_config_digest: "sha256:7121d39ca7774be6f3411566fabd0aab163cd1ca21d2c42e8424d59bfdf21fb1"
-      evidence_digest: "sha256:02031c9aedbfa83119b9db14d22699ce5c8635a5a1f9a71e63e771200082581e"
+      compiler_config_digest: "sha256:fbdf13ec8f0e689bc0fd5edaf2706c33724ea3ebe7bbf9e0a90ea424cccef8d4"
+      evidence_digest: "sha256:04e13baa8c1f4a834a14eadcaba7ddef810a9c471dfc3b472ecad03a9f933a72"

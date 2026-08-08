@@ -2100,8 +2100,8 @@ async fn auto_template_recovery_at_strong_activates_hold_for_next_normal_route()
     let outcome = normalized_outcome(&assembled.db, "template-hold-owner").await?;
     assert_eq!(
         outcome.selected_tiers,
-        ["strong", "strong", "strong"],
-        "the template recovery is already statically strong but must activate hold for the next economy route"
+        ["balanced", "strong", "strong"],
+        "the balanced default precedes a statically strong recovery that must hold strong for the next economy route"
     );
     assert_eq!(outcome.recovery_count, 1);
     assert_eq!(outcome.active_hold_remaining, 1);
@@ -2138,6 +2138,14 @@ async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_follo
         .ok_or_else(|| anyhow::anyhow!("template auto policy has no progress guard"))?
         .protected_tiers
         .insert("balanced".into());
+    let unprotected_followup_key = "agent_route/v1|implement|normal";
+    auto.routes
+        .insert(unprotected_followup_key.into(), "economy".into());
+    lock.certificates
+        .get_mut("auto")
+        .and_then(|certificates| certificates.get_mut(unprotected_followup_key))
+        .ok_or_else(|| anyhow::anyhow!("template followup certificate is missing"))?
+        .selected_tier = "economy".into();
 
     let harness = HttpHarness::with_lock(lock).await?;
     let assembled = harness.assemble().await?;

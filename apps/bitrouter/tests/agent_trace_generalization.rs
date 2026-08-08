@@ -103,10 +103,13 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
         assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
         assert_eq!(
             decision.selected_tier.as_deref(),
-            Some("strong"),
-            "unmatched opening traces use the template's strong default: {decision:?}"
+            Some("balanced"),
+            "unmatched opening traces use the template's balanced default: {decision:?}"
         );
-        assert_eq!(decision.selected_model.as_deref(), Some(MOCK_STRONG_MODEL));
+        assert_eq!(
+            decision.selected_model.as_deref(),
+            Some(MOCK_BALANCED_MODEL)
+        );
         let serialized = serde_json::to_value(decision).expect("decision serializes");
         assert!(
             serialized.get("harness_id").is_none() && serialized.get("source").is_none(),
@@ -283,27 +286,27 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     assert_eq!(decisions.len(), 15);
     for decision in decisions.iter().step_by(2).take(7) {
         assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
-        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
             Some("complete")
         );
     }
     for (decision, key) in decisions[1..10].iter().step_by(2).zip([
-        "agent_trace/v2|edit|normal",
-        "agent_trace/v2|test|normal",
-        "agent_trace/v2|tool_followup|normal",
-        "agent_trace/v2|tool_followup|normal",
-        "agent_trace/v2|tool_followup|normal",
+        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|normal",
     ]) {
         assert_eq!(decision.request_key, key);
-        assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
+        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
             Some("complete")
         );
     }
-    assert_eq!(decisions[11].request_key, "agent_trace/v2|review|normal");
+    assert_eq!(decisions[11].request_key, "agent_route/v1|unknown|normal");
     assert_eq!(decisions[11].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[11].selected_model.as_deref(),
@@ -318,8 +321,8 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         decisions[13].selected_model.as_deref(),
         Some(MOCK_STRONG_MODEL)
     );
-    assert_eq!(decisions[14].request_key, "agent_trace/v2|edit|normal");
-    assert_eq!(decisions[14].static_tier.as_deref(), Some("economy"));
+    assert_eq!(decisions[14].request_key, "agent_route/v1|unknown|normal");
+    assert_eq!(decisions[14].static_tier.as_deref(), Some("balanced"));
     assert_eq!(decisions[14].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
         decisions[14].trajectory_completeness.as_deref(),
@@ -328,7 +331,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
 }
 
 #[tokio::test]
-async fn native_sources_share_template_projection_keys_and_tiers() {
+async fn native_literal_histories_receive_exact_template_decisions() {
     let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
     let upstream = mock_chat_upstream().await;
     let temp = TempDir::new().expect("temporary decision directory");
@@ -339,30 +342,40 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     let mut scenarios = [
         (
             "edit",
-            "agent_trace/v2|edit|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|verify|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
+            "balanced",
+            MOCK_BALANCED_MODEL,
             "economy",
             MOCK_ECONOMY_MODEL,
         ),
         (
             "test",
-            "agent_trace/v2|test|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|finalize|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
-            "economy",
-            MOCK_ECONOMY_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
         ),
         (
             "tool followup",
-            "agent_trace/v2|tool_followup|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|normal",
             terminus_tool_case("@auto", None),
             claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
-            "economy",
-            MOCK_ECONOMY_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
         ),
         (
             "recovery",
+            "agent_route/v1|implement|guarded",
             "agent_route/v1|implement|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
             claude_fixture_case(
@@ -372,10 +385,12 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             ),
             "strong",
             MOCK_STRONG_MODEL,
+            "strong",
+            MOCK_STRONG_MODEL,
         ),
     ];
 
-    for (name, _, first, second, _, _) in &mut scenarios {
+    for (name, _, _, first, second, _, _, _, _) in &mut scenarios {
         let first_root = complete_native_root(first, &format!("{name} terminus root"));
         post_native_body(&server, first, &first_root).await;
         post_native_case(&server, first).await;
@@ -402,18 +417,38 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("native HTTP traffic emits policy decisions");
     assert_eq!(decisions.len(), 16);
-    for ((name, key, _, _, tier, model), pair) in scenarios.iter().zip(decisions.chunks_exact(4)) {
+    for (
+        (name, first_key, second_key, _, _, first_tier, first_model, second_tier, second_model),
+        pair,
+    ) in scenarios.iter().zip(decisions.chunks_exact(4))
+    {
         for root in [&pair[0], &pair[2]] {
             assert_eq!(root.request_key, "agent_route/v1|unknown|normal");
-            assert_eq!(root.selected_tier.as_deref(), Some("strong"));
+            assert_eq!(root.selected_tier.as_deref(), Some("balanced"));
             assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
         }
-        assert_eq!(pair[1].request_key, *key, "{name} first source");
-        assert_eq!(pair[3].request_key, *key, "{name} second source");
-        assert_eq!(pair[1].selected_tier.as_deref(), Some(*tier), "{name}");
-        assert_eq!(pair[3].selected_tier.as_deref(), Some(*tier), "{name}");
-        assert_eq!(pair[1].selected_model.as_deref(), Some(*model), "{name}");
-        assert_eq!(pair[3].selected_model.as_deref(), Some(*model), "{name}");
+        assert_eq!(pair[1].request_key, *first_key, "{name} first source");
+        assert_eq!(pair[3].request_key, *second_key, "{name} second source");
+        assert_eq!(
+            pair[1].selected_tier.as_deref(),
+            Some(*first_tier),
+            "{name} first source"
+        );
+        assert_eq!(
+            pair[3].selected_tier.as_deref(),
+            Some(*second_tier),
+            "{name} second source"
+        );
+        assert_eq!(
+            pair[1].selected_model.as_deref(),
+            Some(*first_model),
+            "{name} first source"
+        );
+        assert_eq!(
+            pair[3].selected_model.as_deref(),
+            Some(*second_model),
+            "{name} second source"
+        );
         assert_eq!(pair[1].trajectory_completeness.as_deref(), Some("complete"));
         assert_eq!(pair[3].trajectory_completeness.as_deref(), Some("complete"));
     }
