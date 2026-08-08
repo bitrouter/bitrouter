@@ -157,8 +157,9 @@ pub async fn setup_optimization(
     let policy_path = crate::policy_lock::resolve_path(&source_parsed, Some(&source_config))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
     let _policy_lock = crate::policy_lock::acquire_publication_lock(&policy_path)?;
-    if let Some(active) =
-        crate::policy_lock::load_for_config(&source_parsed, Some(&source_config)).await?
+    if policy_path.is_file()
+        && let Some(active) =
+            crate::policy_lock::load_for_config(&source_parsed, Some(&source_config)).await?
     {
         ensure_workflow_optimization_compatible(&active.document)?;
     }
