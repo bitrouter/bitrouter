@@ -624,7 +624,7 @@ async fn run_workflow_command_isolated(
     let (exit_code, timed_out) = match tokio::time::timeout(deadline, child.wait()).await {
         Ok(status) => {
             let exit_code = status.context("waiting for workflow program")?.code();
-            if workflow_process_group_has_live_members(child_pid).await? {
+            if !wait_for_workflow_process_group_exit(child_pid, Duration::from_secs(2)).await? {
                 terminate_workflow_tree(&mut child, child_pid)
                     .await
                     .context("terminating workflow background descendants")?;
@@ -781,6 +781,24 @@ impl Drop for WorkflowProcessGroupGuard {
                 .stderr(Stdio::null())
                 .status();
         }
+    }
+}
+
+#[cfg(not(windows))]
+async fn wait_for_workflow_process_group_exit(
+    child_pid: Option<u32>,
+    grace: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if !workflow_process_group_has_live_members(child_pid).await? {
+            return Ok(true);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep((deadline - now).min(Duration::from_millis(25))).await;
     }
 }
 
@@ -1554,6 +1572,28 @@ mod tests {
             assert!(routed.stdout.contains("model=\"@auto\""));
             assert!(routed.stdout.contains("exec\nrun the eval"));
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workflow_runner_allows_short_lived_descendants_to_drain() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let execution = run_workflow_command(WorkflowRunRequest {
+            workflow: &WorkflowCommand {
+                command: vec!["/bin/sh".into(), "-c".into(), "(sleep 0.05) &".into()],
+                inputs: Vec::new(),
+                timeout_secs: 2,
+            },
+            cwd: dir.path(),
+            env: &BTreeMap::new(),
+            maximum_output_bytes: 1024,
+        })
+        .await?;
+
+        assert_eq!(execution.exit_code, Some(0));
+        assert!(!execution.timed_out);
+        assert!(execution.elapsed >= Duration::from_millis(40));
         Ok(())
     }
 
