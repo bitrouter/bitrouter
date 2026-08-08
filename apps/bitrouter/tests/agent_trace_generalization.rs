@@ -1,11 +1,16 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use axum_test::TestServer;
 use bitrouter::policy_lock::PolicyLock;
+use bitrouter::policy_table_router::PolicyTableRouter;
 use bitrouter::workflow_state::decision::{POLICY_DECISION_JSONL_ENV, PolicyDecisionRecord};
+use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::HarnessId;
+use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
 use bitrouter::workflow_state::real_trace::{RealTraceCapture, TraceCaptureOptions};
-use bitrouter_sdk::config::{self, resolve_presets};
+use bitrouter::workflow_state::replay::ReplayEvaluator;
+use bitrouter_sdk::config::{self, PolicyKeyStrategy, PolicyTableConfig, resolve_presets};
 use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -389,6 +394,400 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         assert_eq!(pair[1].trajectory_completeness.as_deref(), Some("complete"));
         assert_eq!(pair[3].trajectory_completeness.as_deref(), Some("complete"));
     }
+}
+
+#[test]
+fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
+    let router = predictive_matrix_router();
+    let cases = [
+        (
+            SemanticHistory::Opening,
+            NextStepRole::Orchestrate,
+            NextActionClass::ReasonOrPlan,
+            "normal",
+            "agent_route/v1|orchestrate|normal",
+            &["opening_broad_goal"] as &[&str],
+            "strong",
+        ),
+        (
+            SemanticHistory::PostRead,
+            NextStepRole::Implement,
+            NextActionClass::Mutate,
+            "normal",
+            "agent_route/v1|implement|normal",
+            &["concrete_mutation_requested", "read_result_available"],
+            "economy",
+        ),
+        (
+            SemanticHistory::PostEdit,
+            NextStepRole::Verify,
+            NextActionClass::ExecuteOrTest,
+            "normal",
+            "agent_route/v1|verify|normal",
+            &["concrete_mutation_requested", "mutation_result_available"],
+            "economy",
+        ),
+        (
+            SemanticHistory::FailedTest,
+            NextStepRole::Implement,
+            NextActionClass::Mutate,
+            "guarded",
+            "agent_route/v1|implement|guarded",
+            &["concrete_mutation_requested", "test_failed_once"],
+            "strong",
+        ),
+        (
+            SemanticHistory::Finalization,
+            NextStepRole::Finalize,
+            NextActionClass::AnswerOrSummarize,
+            "normal",
+            "agent_route/v1|finalize|normal",
+            &["concrete_mutation_requested", "progress_near_done"],
+            "balanced",
+        ),
+    ];
+
+    for (history, role, action, risk, key, reason_codes, tier) in cases {
+        let fixtures = equivalent_history_fixtures(history, false);
+        let summary = ReplayEvaluator.run(&fixtures);
+        assert_eq!(summary.records.len(), 5, "{history:?}");
+        for (fixture, record) in fixtures.iter().zip(&summary.records) {
+            assert_eq!(
+                record.predictive_projection.next_step_role, role,
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                record.next_action_class, action,
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                record.predictive_projection.risk.to_string(),
+                risk,
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                record.predictive_route_key.as_str(),
+                key,
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                record
+                    .prediction_reason_codes
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                reason_codes,
+                "{history:?} {}",
+                fixture.id
+            );
+            assert_eq!(
+                router
+                    .decision_for(&fixture.prompt, &fixture.headers)
+                    .selected_tier
+                    .as_deref(),
+                Some(tier),
+                "{history:?} {}",
+                fixture.id
+            );
+        }
+    }
+}
+
+#[test]
+fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
+    let router = predictive_matrix_router();
+    for history in [
+        SemanticHistory::Opening,
+        SemanticHistory::PostRead,
+        SemanticHistory::PostEdit,
+        SemanticHistory::FailedTest,
+        SemanticHistory::Finalization,
+    ] {
+        let baseline = equivalent_history_fixtures(history, false);
+        let decorated = equivalent_history_fixtures(history, true);
+        let baseline_replay = ReplayEvaluator.run(&baseline);
+        let decorated_replay = ReplayEvaluator.run(&decorated);
+
+        for (((plain_fixture, decorated_fixture), plain), decorated) in baseline
+            .iter()
+            .zip(&decorated)
+            .zip(&baseline_replay.records)
+            .zip(&decorated_replay.records)
+        {
+            assert_eq!(
+                decorated.predictive_projection, plain.predictive_projection,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated.next_action_class, plain.next_action_class,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                decorated.prediction_reason_codes, plain.prediction_reason_codes,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+            assert_eq!(
+                router
+                    .decision_for(&decorated_fixture.prompt, &decorated_fixture.headers)
+                    .selected_tier,
+                router
+                    .decision_for(&plain_fixture.prompt, &plain_fixture.headers)
+                    .selected_tier,
+                "{history:?} {}",
+                plain_fixture.id
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SemanticHistory {
+    Opening,
+    PostRead,
+    PostEdit,
+    FailedTest,
+    Finalization,
+}
+
+#[derive(Clone, Copy)]
+enum MatrixProtocol {
+    Chat,
+    Responses,
+    Messages,
+}
+
+fn equivalent_history_fixtures(
+    history: SemanticHistory,
+    private_headers: bool,
+) -> Vec<WorkflowTraceFixture> {
+    [
+        ("chat", MatrixProtocol::Chat, "generic"),
+        ("responses", MatrixProtocol::Responses, "codex"),
+        ("messages", MatrixProtocol::Messages, "claude_code"),
+        ("hermes", MatrixProtocol::Chat, "hermes"),
+        ("terminus", MatrixProtocol::Chat, "terminus_2"),
+    ]
+    .into_iter()
+    .map(|(source, protocol, harness)| {
+        let mut headers = match source {
+            "responses" => json!({"user-agent": "codex-cli/1.0"}),
+            "messages" => json!({"anthropic-beta": "claude-code-20250219"}),
+            "hermes" => json!({"user-agent": "hermes-cli/1.0"}),
+            _ => json!({}),
+        };
+        if private_headers {
+            let object = headers
+                .as_object_mut()
+                .expect("matrix fixture headers are an object");
+            object.insert("x-bitrouter-agent-role".into(), json!("reviewer"));
+            object.insert("x-superpowers-phase".into(), json!("implementation"));
+            object.insert("x-superpowers-skill".into(), json!("task-execution"));
+            object.insert("x-superpowers-task".into(), json!("private-phase-task"));
+            object.insert("x-superpowers-workflow".into(), json!("private-workflow"));
+            object.insert("x-bitrouter-benchmark-id".into(), json!("private-case"));
+            object.insert(
+                "x-bitrouter-benchmark-run-id".into(),
+                json!("private-bench"),
+            );
+            object.insert("x-bitrouter-task-id".into(), json!("private-task"));
+        }
+        let protocol_name = match protocol {
+            MatrixProtocol::Chat => "chat_completions",
+            MatrixProtocol::Responses => "responses",
+            MatrixProtocol::Messages => "messages",
+        };
+        WorkflowTraceFixture::from_value(json!({
+            "id": format!("{source}-{history:?}"),
+            "harness": harness,
+            "protocol": protocol_name,
+            "headers": headers,
+            "raw_body": semantic_history_body(history, protocol, source),
+            "expected": {
+                "state_kind": semantic_observed_state(history),
+                "baseline_fingerprint": semantic_baseline(history),
+                "confidence_min": 0.0
+            }
+        }))
+        .expect("equivalent native history fixture parses")
+    })
+    .collect()
+}
+
+fn semantic_history_body(
+    history: SemanticHistory,
+    protocol: MatrixProtocol,
+    source: &str,
+) -> Value {
+    let root = match history {
+        SemanticHistory::Opening => "Investigate the repository architecture.",
+        SemanticHistory::PostRead => "Implement the correction in src/parser.rs.",
+        SemanticHistory::PostEdit | SemanticHistory::FailedTest | SemanticHistory::Finalization => {
+            "Fix src/parser.rs."
+        }
+    };
+    let actions = match history {
+        SemanticHistory::Opening => Vec::new(),
+        SemanticHistory::PostRead => vec![(
+            "read-1",
+            "Bash",
+            r#"{"cmd":"cat src/parser.rs"}"#,
+            "source contents",
+        )],
+        SemanticHistory::PostEdit => vec![(
+            "edit-1",
+            "Edit",
+            r#"{"file_path":"src/parser.rs"}"#,
+            "patch applied",
+        )],
+        SemanticHistory::FailedTest => vec![(
+            "test-1",
+            "Bash",
+            r#"{"cmd":"cargo test -p parser"}"#,
+            "error: parser test failed",
+        )],
+        SemanticHistory::Finalization => vec![
+            (
+                "edit-1",
+                "Edit",
+                r#"{"file_path":"src/parser.rs"}"#,
+                "patch applied",
+            ),
+            (
+                "test-1",
+                "Bash",
+                r#"{"cmd":"cargo test -p parser"}"#,
+                "test result: ok. 12 passed; 0 failed",
+            ),
+        ],
+    };
+
+    match protocol {
+        MatrixProtocol::Chat => {
+            let mut messages = vec![json!({"role": "user", "content": root})];
+            for (id, name, arguments, output) in actions {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": arguments}
+                    }]
+                }));
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": output
+                }));
+            }
+            if source == "terminus" {
+                messages.insert(0, json!({"role": "system", "content": terminus_contract()}));
+            }
+            let mut body = json!({"model": "inbound", "messages": messages});
+            if source == "hermes" {
+                body["metadata"] = json!({"job_id": "matrix-hermes-job"});
+            }
+            body
+        }
+        MatrixProtocol::Responses => {
+            let mut input = vec![json!({"type": "message", "role": "user", "content": root})];
+            for (id, name, arguments, output) in actions {
+                input.push(json!({
+                    "type": "function_call",
+                    "call_id": id,
+                    "name": name,
+                    "arguments": arguments
+                }));
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": id,
+                    "output": output
+                }));
+            }
+            json!({"model": "inbound", "input": input})
+        }
+        MatrixProtocol::Messages => {
+            let mut messages = vec![json!({"role": "user", "content": root})];
+            for (id, name, arguments, output) in actions {
+                let input = serde_json::from_str::<Value>(arguments)
+                    .expect("literal tool arguments are JSON");
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": id, "name": name, "input": input}]
+                }));
+                messages.push(json!({
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": id, "content": output}]
+                }));
+            }
+            json!({"model": "inbound", "max_tokens": 64, "messages": messages})
+        }
+    }
+}
+
+fn semantic_observed_state(history: SemanticHistory) -> &'static str {
+    match history {
+        SemanticHistory::Opening => "opening",
+        SemanticHistory::PostRead => "tool_followup",
+        SemanticHistory::PostEdit => "edit",
+        SemanticHistory::FailedTest => "test",
+        SemanticHistory::Finalization => "test",
+    }
+}
+
+fn semantic_baseline(history: SemanticHistory) -> &'static str {
+    match history {
+        SemanticHistory::Opening => "opening",
+        SemanticHistory::PostRead | SemanticHistory::FailedTest | SemanticHistory::Finalization => {
+            "after_Bash"
+        }
+        SemanticHistory::PostEdit => "after_Edit",
+    }
+}
+
+fn predictive_matrix_router() -> PolicyTableRouter {
+    PolicyTableRouter::from_config(&PolicyTableConfig {
+        key_strategy: PolicyKeyStrategy::AgentTrace,
+        tiers: HashMap::from([
+            ("strong".to_string(), "vendor/strong".to_string()),
+            ("economy".to_string(), "vendor/economy".to_string()),
+            ("balanced".to_string(), "vendor/balanced".to_string()),
+        ]),
+        fingerprints: HashMap::from([
+            (
+                "agent_route/v1|orchestrate|normal".to_string(),
+                "strong".to_string(),
+            ),
+            (
+                "agent_route/v1|implement|normal".to_string(),
+                "economy".to_string(),
+            ),
+            (
+                "agent_route/v1|verify|normal".to_string(),
+                "economy".to_string(),
+            ),
+            (
+                "agent_route/v1|finalize|normal".to_string(),
+                "balanced".to_string(),
+            ),
+        ]),
+        default_tier: Some("strong".to_string()),
+        tool_use_tier: Some("strong".to_string()),
+        tool_safe_tiers: vec![
+            "strong".to_string(),
+            "economy".to_string(),
+            "balanced".to_string(),
+        ],
+        adequacy: Default::default(),
+    })
+    .expect("predictive matrix policy has tiers")
 }
 
 async fn post_native_case(server: &TestServer, case: &NativeCase) {

@@ -22,6 +22,7 @@ use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSu
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::online::OnlineWorkflowState;
+use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
@@ -945,6 +946,147 @@ fn replay_reports_coverage() {
     let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.total >= 6);
     assert!(summary.coverage >= 0.80, "{summary:#?}");
+}
+
+#[test]
+fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
+    let fixtures = WorkflowTraceFixture::load_dir(fixture_root().join("predictive")).unwrap();
+
+    let summary = ReplayEvaluator.run(&fixtures);
+
+    assert_eq!(summary.predictive_expectation_count, 5);
+    assert_eq!(summary.predictive_exact_count, 5);
+    assert_eq!(summary.records.len(), 5);
+    let records = summary
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.fixture_id.as_str(),
+                record.observed_route_key.clone(),
+                record.predictive_route_key.clone(),
+                record.next_action_class,
+                record.prediction_matches_expected,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        vec![
+            (
+                "predictive-near-done-finalize-001",
+                "agent_trace/v2|test|normal".to_string(),
+                "agent_route/v1|finalize|normal".to_string(),
+                NextActionClass::AnswerOrSummarize,
+                Some(true),
+            ),
+            (
+                "predictive-opening-plan-001",
+                "agent_trace/v2|opening|normal".to_string(),
+                "agent_route/v1|orchestrate|normal".to_string(),
+                NextActionClass::ReasonOrPlan,
+                Some(true),
+            ),
+            (
+                "predictive-post-edit-verify-001",
+                "agent_trace/v2|edit|normal".to_string(),
+                "agent_route/v1|verify|normal".to_string(),
+                NextActionClass::ExecuteOrTest,
+                Some(true),
+            ),
+            (
+                "predictive-post-read-implement-001",
+                "agent_trace/v2|tool_followup|normal".to_string(),
+                "agent_route/v1|implement|normal".to_string(),
+                NextActionClass::Mutate,
+                Some(true),
+            ),
+            (
+                "predictive-repeated-failure-replan-001",
+                "agent_trace/v2|test|guarded".to_string(),
+                "agent_route/v1|orchestrate|guarded".to_string(),
+                NextActionClass::ReasonOrPlan,
+                Some(true),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
+    let fixture = WorkflowTraceFixture::from_value(json!({
+        "id": "legacy-opening",
+        "harness": "generic",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{"role": "user", "content": "inspect this repository"}]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0
+        }
+    }))
+    .unwrap();
+
+    assert!(fixture.expected.prediction.is_none());
+    let summary = ReplayEvaluator.run(&[fixture]);
+    assert_eq!(summary.predictive_expectation_count, 0);
+    assert_eq!(summary.predictive_exact_count, 0);
+    assert_eq!(summary.records.len(), 1);
+    assert_eq!(
+        summary.records[0].observed_route_key.as_str(),
+        "agent_trace/v2|opening|normal"
+    );
+    assert_eq!(
+        summary.records[0].predictive_projection.next_step_role,
+        NextStepRole::Unknown
+    );
+    assert_eq!(
+        summary.records[0].predictive_route_key.as_str(),
+        "agent_route/v1|unknown|normal"
+    );
+    assert_eq!(summary.records[0].prediction_matches_expected, None);
+}
+
+#[test]
+fn new_fixture_prediction_is_compared_exactly() {
+    let fixture = WorkflowTraceFixture::from_value(json!({
+        "id": "new-mismatched-opening",
+        "harness": "generic",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{
+                "role": "user",
+                "content": "Investigate the repository architecture."
+            }]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0,
+            "prediction": {
+                "next_step_role": "implement",
+                "next_action_class": "mutate",
+                "route_risk": "normal"
+            }
+        }
+    }))
+    .unwrap();
+
+    let summary = ReplayEvaluator.run(&[fixture]);
+
+    assert_eq!(summary.predictive_expectation_count, 1);
+    assert_eq!(summary.predictive_exact_count, 0);
+    assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
+    assert_eq!(
+        summary.records[0].predictive_route_key,
+        "agent_route/v1|orchestrate|normal"
+    );
 }
 
 #[test]
