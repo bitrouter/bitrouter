@@ -14,7 +14,6 @@ const MAX_STREAM_BUFFER_BYTES: usize = 4_096;
 const MAX_STREAM_TOOL_CALLS: usize = 32;
 const MAX_TOOL_DEFINITIONS: usize = 64;
 const COMMAND_TOOL_MARKERS: [&str; 6] = ["bash", "shell", "terminal", "exec", "command", "process"];
-const COMMAND_ARGUMENT_KEY_MARKERS: [&str; 3] = ["\"cmd\"", "\"command\"", "\"script\""];
 const MUTATING_COMMAND_MARKERS: [&str; 11] = [
     "apply_patch",
     "sed -i",
@@ -310,20 +309,25 @@ impl StreamObservationBuffer {
                 self.calls.len().checked_sub(1)
             });
         let Some(call_index) = call_index else {
-            let mutates = {
+            let (mutates, ambiguous_eviction) = {
                 let overflow = self.overflow_call.get_or_insert_with(|| OverflowToolCall {
                     id_digest,
                     command_classifier: StreamingCommandClassifier::new(),
                 });
+                let mut ambiguous_eviction = false;
                 if overflow.id_digest != id_digest {
+                    ambiguous_eviction = overflow.command_classifier.ambiguous_if_evicted();
                     *overflow = OverflowToolCall {
                         id_digest,
                         command_classifier: StreamingCommandClassifier::new(),
                     };
                 }
-                overflow.command_classifier.observe(name, arguments)
+                (
+                    overflow.command_classifier.observe(name, arguments),
+                    ambiguous_eviction,
+                )
             };
-            if mutates {
+            if mutates || ambiguous_eviction {
                 self.dominant_tool_action = ObservedActionClass::Mutate;
             }
             return;
@@ -375,6 +379,10 @@ impl StreamingCommandClassifier {
         self.arguments.observe(arguments);
         self.command_tool.matched() && self.arguments.mutates()
     }
+
+    fn ambiguous_if_evicted(&self) -> bool {
+        self.command_tool.matched() && !self.arguments.is_complete()
+    }
 }
 
 #[derive(Debug)]
@@ -386,7 +394,7 @@ struct CommandArgumentClassifier {
 impl CommandArgumentClassifier {
     fn new() -> Self {
         Self {
-            state: CommandArgumentState::seeking_key(),
+            state: CommandArgumentState::SeekingRoot,
             mutates: false,
         }
     }
@@ -400,87 +408,278 @@ impl CommandArgumentClassifier {
     fn mutates(&self) -> bool {
         self.mutates
     }
+
+    fn is_complete(&self) -> bool {
+        matches!(self.state, CommandArgumentState::Complete)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum CommandArgumentState {
-    SeekingKey(StreamingPatternSetState<3>),
-    SeekingColon,
-    SeekingValue,
-    ReadingValue {
+    SeekingRoot,
+    SeekingRootKey,
+    ReadingRootKey {
+        matcher: CommandKeyMatcher,
+        escaped: bool,
+    },
+    SeekingColon {
+        command_key: bool,
+    },
+    SeekingValue {
+        command_key: bool,
+    },
+    ReadingStringValue {
+        command_value: bool,
         escaped: bool,
         mutation: StreamingPatternSetState<11>,
     },
+    SkippingNestedValue {
+        depth: u16,
+        root_value: bool,
+        in_string: bool,
+        escaped: bool,
+    },
+    SkippingPrimitiveValue,
+    AfterValue,
+    Complete,
 }
 
 impl CommandArgumentState {
-    fn seeking_key() -> Self {
-        Self::SeekingKey(StreamingPatternSetState::new())
-    }
-
-    fn seeking_key_after(byte: u8) -> Self {
-        let mut matcher = StreamingPatternSetState::new();
-        matcher.observe(byte, &COMMAND_ARGUMENT_KEY_MARKERS);
-        Self::SeekingKey(matcher)
-    }
-
     fn advance(self, byte: u8, mutates: &mut bool) -> Self {
         match self {
-            Self::SeekingKey(mut matcher) => {
-                matcher.observe(byte, &COMMAND_ARGUMENT_KEY_MARKERS);
-                if matcher.matched() {
-                    Self::SeekingColon
+            Self::SeekingRoot => {
+                if byte == b'{' {
+                    Self::SeekingRootKey
+                } else if byte == b'[' {
+                    Self::SkippingNestedValue {
+                        depth: 1,
+                        root_value: true,
+                        in_string: false,
+                        escaped: false,
+                    }
                 } else {
-                    Self::SeekingKey(matcher)
+                    Self::SeekingRoot
                 }
             }
-            Self::SeekingColon => {
-                if byte == b':' {
-                    Self::SeekingValue
-                } else if byte.is_ascii_whitespace() {
-                    Self::SeekingColon
-                } else {
-                    Self::seeking_key_after(byte)
-                }
-            }
-            Self::SeekingValue => {
-                if byte.is_ascii_whitespace() {
-                    Self::SeekingValue
+            Self::SeekingRootKey => match byte {
+                b'"' => Self::ReadingRootKey {
+                    matcher: CommandKeyMatcher::new(),
+                    escaped: false,
+                },
+                b'}' => Self::Complete,
+                _ => Self::SeekingRootKey,
+            },
+            Self::ReadingRootKey {
+                mut matcher,
+                escaped,
+            } => {
+                if escaped {
+                    matcher.invalidate();
+                    Self::ReadingRootKey {
+                        matcher,
+                        escaped: false,
+                    }
+                } else if byte == b'\\' {
+                    Self::ReadingRootKey {
+                        matcher,
+                        escaped: true,
+                    }
                 } else if byte == b'"' {
-                    Self::ReadingValue {
+                    Self::SeekingColon {
+                        command_key: matcher.is_command_key(),
+                    }
+                } else {
+                    matcher.observe(byte);
+                    Self::ReadingRootKey {
+                        matcher,
+                        escaped: false,
+                    }
+                }
+            }
+            Self::SeekingColon { command_key } => {
+                if byte == b':' {
+                    Self::SeekingValue { command_key }
+                } else if byte.is_ascii_whitespace() {
+                    Self::SeekingColon { command_key }
+                } else {
+                    Self::SeekingRootKey
+                }
+            }
+            Self::SeekingValue { command_key } => {
+                if byte.is_ascii_whitespace() {
+                    Self::SeekingValue { command_key }
+                } else if byte == b'"' {
+                    Self::ReadingStringValue {
+                        command_value: command_key,
                         escaped: false,
                         mutation: StreamingPatternSetState::new(),
                     }
+                } else if matches!(byte, b'{' | b'[') {
+                    Self::SkippingNestedValue {
+                        depth: 1,
+                        root_value: false,
+                        in_string: false,
+                        escaped: false,
+                    }
+                } else if byte == b'}' {
+                    Self::Complete
                 } else {
-                    Self::seeking_key_after(byte)
+                    Self::SkippingPrimitiveValue
                 }
             }
-            Self::ReadingValue {
+            Self::ReadingStringValue {
+                command_value,
                 escaped,
                 mut mutation,
             } => {
                 if escaped {
-                    Self::ReadingValue {
+                    Self::ReadingStringValue {
+                        command_value,
                         escaped: false,
                         mutation,
                     }
                 } else if byte == b'\\' {
-                    Self::ReadingValue {
+                    Self::ReadingStringValue {
+                        command_value,
                         escaped: true,
                         mutation,
                     }
                 } else if byte == b'"' {
-                    *mutates |= mutation.matched();
-                    Self::seeking_key()
+                    *mutates |= command_value && mutation.matched();
+                    Self::AfterValue
                 } else {
-                    mutation.observe(byte, &MUTATING_COMMAND_MARKERS);
-                    Self::ReadingValue {
+                    if command_value {
+                        mutation.observe(byte, &MUTATING_COMMAND_MARKERS);
+                    }
+                    Self::ReadingStringValue {
+                        command_value,
                         escaped: false,
                         mutation,
                     }
                 }
             }
+            Self::SkippingNestedValue {
+                mut depth,
+                root_value,
+                in_string,
+                escaped,
+            } => {
+                if in_string {
+                    if escaped {
+                        Self::SkippingNestedValue {
+                            depth,
+                            root_value,
+                            in_string: true,
+                            escaped: false,
+                        }
+                    } else if byte == b'\\' {
+                        Self::SkippingNestedValue {
+                            depth,
+                            root_value,
+                            in_string: true,
+                            escaped: true,
+                        }
+                    } else {
+                        Self::SkippingNestedValue {
+                            depth,
+                            root_value,
+                            in_string: byte != b'"',
+                            escaped: false,
+                        }
+                    }
+                } else {
+                    match byte {
+                        b'"' => Self::SkippingNestedValue {
+                            depth,
+                            root_value,
+                            in_string: true,
+                            escaped: false,
+                        },
+                        b'{' | b'[' => {
+                            depth = depth.saturating_add(1);
+                            Self::SkippingNestedValue {
+                                depth,
+                                root_value,
+                                in_string: false,
+                                escaped: false,
+                            }
+                        }
+                        b'}' | b']' => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                if root_value {
+                                    Self::Complete
+                                } else {
+                                    Self::AfterValue
+                                }
+                            } else {
+                                Self::SkippingNestedValue {
+                                    depth,
+                                    root_value,
+                                    in_string: false,
+                                    escaped: false,
+                                }
+                            }
+                        }
+                        _ => Self::SkippingNestedValue {
+                            depth,
+                            root_value,
+                            in_string: false,
+                            escaped: false,
+                        },
+                    }
+                }
+            }
+            Self::SkippingPrimitiveValue => match byte {
+                b',' => Self::SeekingRootKey,
+                b'}' => Self::Complete,
+                _ => Self::SkippingPrimitiveValue,
+            },
+            Self::AfterValue => match byte {
+                b',' => Self::SeekingRootKey,
+                b'}' => Self::Complete,
+                _ => Self::AfterValue,
+            },
+            Self::Complete => Self::Complete,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommandKeyMatcher {
+    candidates: u8,
+    index: u8,
+}
+
+impl CommandKeyMatcher {
+    const KEYS: [&'static [u8]; 3] = [b"cmd", b"command", b"script"];
+
+    fn new() -> Self {
+        Self {
+            candidates: 0b111,
+            index: 0,
+        }
+    }
+
+    fn observe(&mut self, byte: u8) {
+        let index = usize::from(self.index);
+        for (candidate_index, key) in Self::KEYS.iter().enumerate() {
+            if index >= key.len() || byte != key[index] {
+                self.candidates &= !(1 << candidate_index);
+            }
+        }
+        self.index = self.index.saturating_add(1);
+    }
+
+    fn invalidate(&mut self) {
+        self.candidates = 0;
+    }
+
+    fn is_command_key(self) -> bool {
+        let index = usize::from(self.index);
+        Self::KEYS.iter().enumerate().any(|(candidate_index, key)| {
+            self.candidates & (1 << candidate_index) != 0 && index == key.len()
+        })
     }
 }
 
@@ -1065,6 +1264,244 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_observer_conservatively_classifies_interleaved_overflow_command()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-interleaved-overflow");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context(
+            "stream-interleaved-overflow",
+            prompt(Vec::new()),
+            &invocation,
+        );
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("read-{index}"),
+                        name: Some("read_file".into()),
+                        arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                    },
+                )
+                .await;
+        }
+        for (id, name, arguments) in [
+            ("overflow-a", Some("exec_command".into()), r#"{"cmd":"r"#),
+            (
+                "overflow-b",
+                Some("opaque_capability".into()),
+                r#"{"value":"harmless"}"#,
+            ),
+            ("overflow-a", None, r#"m private-file"}"#),
+        ] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: id.into(),
+                        name,
+                        arguments: arguments.into(),
+                    },
+                )
+                .await;
+        }
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Mutate)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_keeps_complete_harmless_overflow_command_unknown()
+    -> anyhow::Result<()> {
+        let (pending, invocation) = pending("stream-harmless-overflow");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context("stream-harmless-overflow", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("unknown-{index}"),
+                        name: Some("opaque_capability".into()),
+                        arguments: r#"{}"#.into(),
+                    },
+                )
+                .await;
+        }
+        for id in ["harmless-command-a", "harmless-command-b"] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: id.into(),
+                        name: Some("exec_command".into()),
+                        arguments: r#"{"cmd":"echo harmless"}"#.into(),
+                    },
+                )
+                .await;
+        }
+        let buffered = observer
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&invocation.token())
+            .map(|buffer| buffer.buffered_bytes)
+            .ok_or_else(|| anyhow::anyhow!("stream buffer missing"))?;
+        assert!(buffered <= 4_096);
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(ObservedActionClass::Unknown)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_ignores_nested_command_keys_like_nonstream() -> anyhow::Result<()> {
+        let arguments = r#"{"cmd":"echo harmless","metadata":{"command":"rm private-file"}}"#;
+        let nonstream = observe_nonstream(
+            "nested-command-nonstream",
+            vec![tool_call("exec_command", arguments)],
+            Vec::new(),
+        )
+        .await?;
+        assert_eq!(nonstream, ObservedActionClass::Unknown);
+
+        let (pending, invocation) = pending("nested-command-stream");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context("nested-command-stream", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::ToolCallDelta {
+                    id: "nested-command".into(),
+                    name: Some("exec_command".into()),
+                    arguments: arguments.into(),
+                },
+            )
+            .await;
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(nonstream)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn response_observer_treats_complete_root_array_as_non_command_json() -> anyhow::Result<()>
+    {
+        let arguments = r#"[{"command":"rm private-file"}]"#;
+        let nonstream = observe_nonstream(
+            "root-array-nonstream",
+            vec![tool_call("exec_command", arguments)],
+            Vec::new(),
+        )
+        .await?;
+        assert_eq!(nonstream, ObservedActionClass::Unknown);
+
+        let (pending, invocation) = pending("root-array-stream");
+        let observer = PredictiveResponseObserver::new(pending.clone());
+        let context = pipeline_context("root-array-stream", prompt(Vec::new()), &invocation);
+        observer.after_phase(Phase::Route, &context).await;
+        let stream = context.stream_context();
+        for index in 0..32 {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: format!("unknown-{index}"),
+                        name: Some("opaque_capability".into()),
+                        arguments: r#"{}"#.into(),
+                    },
+                )
+                .await;
+        }
+        for (id, name, arguments) in [
+            ("root-array", Some("exec_command".into()), arguments),
+            ("next-overflow", Some("opaque_capability".into()), r#"{}"#),
+        ] {
+            observer
+                .on_stream_part(
+                    &stream,
+                    &StreamPart::ToolCallDelta {
+                        id: id.into(),
+                        name,
+                        arguments: arguments.into(),
+                    },
+                )
+                .await;
+        }
+        observer
+            .on_stream_part(
+                &stream,
+                &StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            pending
+                .peek(&invocation, "local")
+                .and_then(|decision| decision.observation)
+                .map(|observation| observation.observed_action),
+            Some(nonstream)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn response_observer_classifies_mutation_after_raw_byte_limit() -> anyhow::Result<()> {
         let (pending, invocation) = pending("stream-byte-limit-mutation");
         let observer = PredictiveResponseObserver::new(pending.clone());
@@ -1142,7 +1579,8 @@ mod tests {
             )
             .await;
         for (name, arguments) in [
-            (Some("exec_command".into()), r#"{"cmd":"r"#),
+            (Some("exec_command".into()), r#"{"com"#),
+            (None, r#"mand":"echo \"quoted\"; r"#),
             (None, r#"m private-file"}"#),
         ] {
             observer
