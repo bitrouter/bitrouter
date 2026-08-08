@@ -60,6 +60,11 @@ pub struct ProviderContinuation {
 #[derive(Debug, Default)]
 pub struct RequireContinuationAuthority;
 
+/// Request-scoped proof that the caller supplied a complete visible causal
+/// history, so a gateway continuation may be detached before provider dispatch.
+#[derive(Debug, Default)]
+pub struct SuppressProviderContinuation;
+
 impl ProviderContinuation {
     /// Bind a native response id to one exact effective routing target.
     pub fn new(
@@ -657,6 +662,7 @@ impl PipelineContext {
             delivery_attempt_id: self.delivery_attempt_id,
             caller: self.caller.clone(),
             target,
+            effective_model: self.model.clone(),
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: execution.and_then(|result| result.result.response_id.clone()),
             finish_reason,

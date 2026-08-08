@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
+use crate::continuation::ContinuationRequestPlan;
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
@@ -2121,6 +2122,11 @@ impl ModelSelector for PolicyRuntime {
                 .iter()
                 .map(|clause| clause.clause_id.clone())
                 .collect();
+            if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+                && let Some(adjustment) = plan.adjustment.as_ref()
+            {
+                router.apply_continuation_adjustment(&mut decision, adjustment)?;
+            }
             let selected = router.record_bound_policy_decision(
                 &correlated.request_id,
                 invocation.as_ref(),
@@ -2135,7 +2141,12 @@ impl ModelSelector for PolicyRuntime {
             return Ok(());
         }
         let input_model = ctx.model().to_string();
-        let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let mut decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+            && let Some(adjustment) = plan.adjustment.as_ref()
+        {
+            router.apply_continuation_adjustment(&mut decision, adjustment)?;
+        }
         let selected = router.record_bound_policy_decision(
             ctx.request_id(),
             invocation.as_ref(),

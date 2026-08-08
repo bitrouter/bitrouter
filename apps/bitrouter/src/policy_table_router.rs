@@ -31,6 +31,7 @@ use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
+use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
@@ -48,6 +49,7 @@ pub enum PolicyDecisionReason {
     ToolGuardrail,
     ProgressGuard,
     ProgressGuardToolGuardrail,
+    ContinuationPin,
     NoMatch,
 }
 
@@ -58,6 +60,7 @@ impl PolicyDecisionReason {
             Self::ToolGuardrail => "tool_guardrail",
             Self::ProgressGuard => "progress_guard",
             Self::ProgressGuardToolGuardrail => "progress_guard_tool_guardrail",
+            Self::ContinuationPin => "continuation_pin",
             Self::NoMatch => "no_match",
         }
     }
@@ -83,6 +86,9 @@ pub struct PolicyDecision {
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
     pub selected_model: Option<String>,
+    pub continuation_proposed_tier: Option<String>,
+    pub continuation_proposed_model: Option<String>,
+    pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
@@ -182,6 +188,13 @@ impl PolicyTable {
     /// The model id a tier routes to.
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
         self.tiers.get(tier).map(String::as_str)
+    }
+
+    fn stable_tier_of_model(&self, model: &str) -> Option<&str> {
+        self.tiers
+            .iter()
+            .filter_map(|(tier, candidate)| (candidate == model).then_some(tier.as_str()))
+            .min()
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -398,6 +411,9 @@ impl PolicyTableRouter {
             static_model: None,
             selected_tier: None,
             selected_model: None,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
             predicted_role: Some(
                 prediction_role_name(online.predictive.next_step_role).to_string(),
             ),
@@ -519,6 +535,36 @@ impl PolicyTableRouter {
         };
     }
 
+    pub(crate) fn apply_continuation_adjustment(
+        &self,
+        decision: &mut PolicyDecision,
+        adjustment: &ContinuationAdjustment,
+    ) -> bitrouter_sdk::Result<()> {
+        decision.continuation_proposed_tier = decision.selected_tier.clone();
+        decision.continuation_proposed_model = decision.selected_model.clone();
+        match adjustment {
+            ContinuationAdjustment::Pin { effective_model } => {
+                let selected_tier = self
+                    .table
+                    .stable_tier_of_model(effective_model)
+                    .ok_or_else(|| {
+                        bitrouter_sdk::BitrouterError::bad_request(
+                            "provider continuation model is unavailable in the active policy",
+                        )
+                    })?;
+                decision.selected_tier = Some(selected_tier.to_owned());
+                decision.selected_model = Some(effective_model.clone());
+                decision.continuation_adjustment = Some("pin".to_owned());
+                decision.reason = PolicyDecisionReason::ContinuationPin;
+                decision.pinned = true;
+            }
+            ContinuationAdjustment::Detach => {
+                decision.continuation_adjustment = Some("detach".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn record_bound_policy_decision(
         &self,
         request_id: &str,
@@ -567,6 +613,9 @@ impl PolicyTableRouter {
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
             selected_model = ?decision.selected_model,
+            continuation_proposed_tier = ?decision.continuation_proposed_tier,
+            continuation_proposed_model = ?decision.continuation_proposed_model,
+            continuation_adjustment = ?decision.continuation_adjustment,
             trajectory_episode_id = ?decision.trajectory_episode_id,
             trajectory_sequence = ?decision.trajectory_sequence,
             trajectory_completeness = ?decision.trajectory_completeness,
@@ -634,6 +683,9 @@ impl PolicyTableRouter {
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 selected_model: decision.selected_model.clone(),
+                continuation_proposed_tier: decision.continuation_proposed_tier.clone(),
+                continuation_proposed_model: decision.continuation_proposed_model.clone(),
+                continuation_adjustment: decision.continuation_adjustment.clone(),
                 predicted_role: decision.predicted_role.clone(),
                 predicted_action: decision.predicted_action.clone(),
                 prediction_confidence_ppm: decision.prediction_confidence_ppm,
@@ -1611,6 +1663,120 @@ mod tests {
         assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
+    }
+
+    #[test]
+    fn continuation_pin_records_the_predictive_proposal_and_serving_adjustment() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+
+        let applied = router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/flagship".to_owned(),
+            },
+        );
+
+        assert!(applied.is_ok());
+        assert_eq!(
+            decision.continuation_proposed_tier.as_deref(),
+            Some("cheap")
+        );
+        assert_eq!(
+            decision.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(decision.continuation_adjustment.as_deref(), Some("pin"));
+        assert_eq!(decision.reason, PolicyDecisionReason::ContinuationPin);
+        assert!(decision.pinned);
+    }
+
+    #[test]
+    fn continuation_detach_records_adjustment_without_rewriting_prediction() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+
+        let applied =
+            router.apply_continuation_adjustment(&mut decision, &ContinuationAdjustment::Detach);
+
+        assert!(applied.is_ok());
+        assert_eq!(
+            decision.continuation_proposed_model,
+            decision.selected_model
+        );
+        assert_eq!(decision.continuation_adjustment.as_deref(), Some("detach"));
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(!decision.pinned);
+    }
+
+    #[test]
+    fn continuation_adjustment_and_proposal_are_written_to_jsonl() -> anyhow::Result<()> {
+        let path = temp_path("continuation-adjustment-decisions.jsonl");
+        let table = PolicyTable::from_config(&config())
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone())?;
+        let router = PolicyTableRouter::new(table).with_decision_recorder(recorder);
+        let mut p = prompt("@auto");
+        p.messages = read_step();
+        let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/flagship".to_owned(),
+            },
+        )?;
+
+        router.record_bound_policy_decision(
+            "request-continuation",
+            &EvalInvocation::new("owner"),
+            "@auto".to_owned(),
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let records = PolicyDecisionRecord::load_jsonl(&path)?;
+        let record = records
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("continuation decision missing"))?;
+        assert_eq!(record.continuation_proposed_tier.as_deref(), Some("cheap"));
+        assert_eq!(
+            record.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(record.continuation_adjustment.as_deref(), Some("pin"));
+        assert_eq!(record.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(record.reason, "continuation_pin");
+        assert!(record.pinned);
+        Ok(())
+    }
+
+    #[test]
+    fn continuation_pin_fails_closed_when_the_active_lock_removed_its_model() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+        let original_selected = decision.selected_model.clone();
+
+        let error = router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "retired-provider:retired-model".to_owned(),
+            },
+        );
+
+        assert!(matches!(
+            error,
+            Err(bitrouter_sdk::BitrouterError::BadRequest { ref message })
+                if message.contains("unavailable in the active policy")
+        ));
+        assert_eq!(decision.selected_model, original_selected);
     }
 
     #[test]

@@ -4,8 +4,8 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
 use crate::workflow_state::ir::{
-    NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection, RouteRisk,
-    ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
+    EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
+    RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -779,7 +779,12 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
     }
     let unmatched_call = calls.iter().any(|(_, _, matched)| !matched);
     let first_role = prompt.messages.first().map(|message| message.role);
-    let completeness = if prompt.messages.is_empty() {
+    let server_side_context_gap = observed.evidence.iter().any(|evidence| {
+        evidence.kind == "server_side_context_gap" && evidence.level == EvidenceLevel::Missing
+    });
+    let completeness = if prompt.messages.is_empty()
+        || (server_side_context_gap && !has_complete_visible_causal_history(prompt))
+    {
         PredictiveHistoryCompleteness::Unknown
     } else if unmatched_result {
         PredictiveHistoryCompleteness::Ambiguous
@@ -801,6 +806,54 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
             && mutation_count > 0,
         has_trajectory: !calls.is_empty() || result_count > 0,
     }
+}
+
+pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
+    let mut unmatched_calls = Vec::<String>::new();
+    let mut completed_assistant_message = None;
+    let mut invalid_result = false;
+    for (message_index, message) in prompt.messages.iter().enumerate() {
+        for content in &message.content {
+            match content {
+                Content::Text { text, .. }
+                    if message.role == Role::Assistant && !text.trim().is_empty() =>
+                {
+                    completed_assistant_message = Some(message_index);
+                }
+                Content::ToolCall { id, .. } if message.role == Role::Assistant => {
+                    unmatched_calls.push(id.clone());
+                }
+                Content::ToolCall { .. } => invalid_result = true,
+                Content::ToolResult { call_id, .. } => {
+                    if message.role != Role::Tool {
+                        invalid_result = true;
+                        continue;
+                    }
+                    let Some(position) = unmatched_calls.iter().rposition(|id| id == call_id)
+                    else {
+                        invalid_result = true;
+                        continue;
+                    };
+                    unmatched_calls.remove(position);
+                    completed_assistant_message = Some(message_index);
+                }
+                _ => {}
+            }
+        }
+    }
+    prompt
+        .messages
+        .iter()
+        .find(|message| message.role != Role::System)
+        .map(|message| message.role)
+        == Some(Role::User)
+        && !invalid_result
+        && unmatched_calls.is_empty()
+        && completed_assistant_message.is_some_and(|assistant_index| {
+            prompt.messages[assistant_index.saturating_add(1)..]
+                .iter()
+                .any(|message| message.role == Role::User)
+        })
 }
 
 fn bounded_signal_count(count: u8) -> u8 {
@@ -1008,7 +1061,7 @@ mod tests {
         ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
     };
     use crate::workflow_state::fixture::WorkflowTraceFixture;
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::ir::{Evidence, HarnessId, ProtocolKind};
 
     const OPENING_PLAN_FIXTURE: &str =
         include_str!("../../tests/fixtures/workflow_state/predictive/opening-plan.json");
@@ -1357,6 +1410,107 @@ mod tests {
         );
         assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
         assert_eq!(prediction.next_action_class, NextActionClass::Unknown);
+    }
+
+    #[test]
+    fn hidden_server_history_is_unknown_until_causal_history_is_visible() {
+        let hidden = prompt(vec![Message::text(Role::User, "Continue implementation")]);
+        let mut hidden_ir = observed(&hidden);
+        hidden_ir.evidence.push(Evidence {
+            kind: "server_side_context_gap".to_owned(),
+            value: "previous response may hide ancestry".to_owned(),
+            confidence: 0.95,
+            level: EvidenceLevel::Missing,
+        });
+
+        let hidden_prediction = predict_next_step(&hidden_ir, &hidden);
+
+        assert_eq!(
+            hidden_prediction.history_completeness,
+            PredictiveHistoryCompleteness::Unknown
+        );
+        assert_eq!(hidden_prediction.next_step_role, NextStepRole::Unknown);
+        assert!(
+            hidden_prediction
+                .evidence
+                .iter()
+                .any(|item| item.code == "history_unknown")
+        );
+
+        let visible = prompt(vec![
+            Message::text(Role::User, "Inspect the repository"),
+            assistant_call("read-1", "read_file", r#"{"path":"src/lib.rs"}"#),
+            tool_result(
+                "read-1",
+                ToolResultOutput::Text {
+                    value: "source available".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Implement the approved change"),
+        ]);
+        let mut visible_ir = observed(&visible);
+        visible_ir.evidence = hidden_ir.evidence;
+
+        let visible_prediction = predict_next_step(&visible_ir, &visible);
+
+        assert_eq!(
+            visible_prediction.history_completeness,
+            PredictiveHistoryCompleteness::Complete
+        );
+        assert_eq!(visible_prediction.next_step_role, NextStepRole::Implement);
+    }
+
+    #[test]
+    fn visible_causal_history_accepts_text_turns_and_rejects_partial_prefixes() {
+        let text_history = prompt(vec![
+            Message::text(Role::User, "Design the change"),
+            Message::text(Role::Assistant, "Here is the approved design"),
+            Message::text(Role::User, "Implement it"),
+        ]);
+        let system_prefixed_text_history = prompt(vec![
+            Message::text(Role::System, "Follow the repository rules"),
+            Message::text(Role::User, "Design the change"),
+            Message::text(Role::Assistant, "Here is the approved design"),
+            Message::text(Role::User, "Implement it"),
+        ]);
+        let system_and_current_user = prompt(vec![
+            Message::text(Role::System, "Follow the repository rules"),
+            Message::text(Role::User, "Implement it"),
+        ]);
+        let only_current_user = prompt(vec![Message::text(Role::User, "Implement it")]);
+        let assistant_prefix = prompt(vec![
+            Message::text(Role::Assistant, "Earlier answer"),
+            Message::text(Role::User, "Continue"),
+        ]);
+        let unmatched_call = prompt(vec![
+            Message::text(Role::User, "Inspect"),
+            assistant_call("read-1", "read_file", r#"{"path":"src/lib.rs"}"#),
+            Message::text(Role::User, "Continue"),
+        ]);
+        let unmatched_result = prompt(vec![
+            Message::text(Role::User, "Inspect"),
+            tool_result(
+                "missing",
+                ToolResultOutput::Text {
+                    value: "source".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Continue"),
+        ]);
+
+        assert!(has_complete_visible_causal_history(&text_history));
+        assert!(has_complete_visible_causal_history(
+            &system_prefixed_text_history
+        ));
+        for incomplete in [
+            system_and_current_user,
+            only_current_user,
+            assistant_prefix,
+            unmatched_call,
+            unmatched_result,
+        ] {
+            assert!(!has_complete_visible_causal_history(&incomplete));
+        }
     }
 
     #[test]

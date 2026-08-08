@@ -51,6 +51,12 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub selected_model: Option<String>,
     #[serde(default)]
+    pub continuation_proposed_tier: Option<String>,
+    #[serde(default)]
+    pub continuation_proposed_model: Option<String>,
+    #[serde(default)]
+    pub continuation_adjustment: Option<String>,
+    #[serde(default)]
     pub predicted_role: Option<String>,
     #[serde(default)]
     pub predicted_action: Option<String>,
@@ -362,6 +368,9 @@ mod tests {
             static_model: Some("vendor/capable".to_string()),
             selected_tier: Some("cheap".to_string()),
             selected_model: Some("vendor/cheap".to_string()),
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
             predicted_role: None,
             predicted_action: None,
             prediction_confidence_ppm: None,

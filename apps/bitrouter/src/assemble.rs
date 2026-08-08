@@ -280,6 +280,7 @@ pub async fn build_app_with_path(
     // into the App pipeline, but the daemon's reloader needs the
     // concrete type to call `replace_config` in zero-config mode.
     let routing_table_for_reload = routing_table.clone();
+    let continuation_for_pre_request = continuation_runtime.clone();
     let continuation_for_route = continuation_runtime.clone();
     let continuation_for_finalization = continuation_runtime;
     // Upstream timeouts: the `upstream.timeouts` block layered over the
@@ -624,10 +625,12 @@ pub async fn build_app_with_path(
             if server_tools_enabled {
                 lm.pre_request_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → policy. The guardrail plugin appends its
-            // hooks after this closure (see `.plugin(...)` below), preserving the
-            // auth → policy → guardrail order.
+            // Stage 1, in order: auth → continuation → policy. The continuation
+            // hook resolves owner-scoped history before Stage 2 model selection.
+            // The guardrail plugin appends its hooks after this closure (see
+            // `.plugin(...)` below), preserving the policy → guardrail order.
             lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_request_hook(continuation_for_pre_request);
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),

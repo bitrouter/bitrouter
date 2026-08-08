@@ -13,8 +13,9 @@ use bitrouter_sdk::error::{BitrouterError, Result as PipelineResult};
 use bitrouter_sdk::language_model::auth::ContinuationAuthority;
 use bitrouter_sdk::language_model::context::{
     PipelineContext, ProviderContinuation, RequireContinuationAuthority,
+    SuppressProviderContinuation,
 };
-use bitrouter_sdk::language_model::hooks::RouteHook;
+use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook, RouteHook};
 use bitrouter_sdk::language_model::protocol::responses::{
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
@@ -29,7 +30,10 @@ use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use sea_orm::entity::prelude::*;
 use sea_orm::{ActiveValue::Set, DatabaseConnection, QueryOrder, QuerySelect};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+
+use crate::workflow_state::predictive::has_complete_visible_causal_history;
 
 const OWNER_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.owner.v1";
 const CONTINUATION_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.identity.v1";
@@ -51,6 +55,35 @@ const RECONCILIATION_DRAIN_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
+const CONTINUATION_PAYLOAD_VERSION: u8 = 1;
+const CONTINUATION_PAYLOAD_PREFIX: &str = "bitrouter-continuation-payload-v1:";
+const MAX_EFFECTIVE_MODEL_BYTES: usize = 512;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ContinuationPayload {
+    version: u8,
+    provider_response_id: String,
+    effective_model: Option<String>,
+}
+
+impl ContinuationPayload {
+    fn current(provider_response_id: &str, effective_model: &str) -> Result<Self> {
+        validate_effective_model(effective_model)?;
+        Ok(Self {
+            version: CONTINUATION_PAYLOAD_VERSION,
+            provider_response_id: provider_response_id.to_owned(),
+            effective_model: Some(effective_model.to_owned()),
+        })
+    }
+
+    fn legacy(provider_response_id: String) -> Self {
+        Self {
+            version: 0,
+            provider_response_id,
+            effective_model: None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ContinuationKey {
@@ -181,6 +214,7 @@ pub enum ContinuationResolution {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedContinuation {
     pub provider_response_id: String,
+    pub effective_model: Option<String>,
     target_fingerprint: String,
     key: ContinuationKey,
 }
@@ -190,6 +224,7 @@ impl std::fmt::Debug for ResolvedContinuation {
         formatter
             .debug_struct("ResolvedContinuation")
             .field("provider_response_id", &"<redacted>")
+            .field("effective_model", &self.effective_model)
             .field("target_fingerprint", &"<redacted>")
             .field("key", &self.key)
             .finish()
@@ -372,6 +407,13 @@ struct PendingBindAttempt {
     now: DateTime<Utc>,
     delivery_attempt_id: u64,
     receipt: Option<RequiredFinalizationReceipt>,
+}
+
+struct ContinuationBinding<'a> {
+    provider_response_id: &'a str,
+    effective_model: &'a str,
+    target: &'a RoutingTarget,
+    credential_authority: &'a ContinuationAuthority,
 }
 
 struct BindPublication {
@@ -1395,6 +1437,7 @@ impl ContinuationRegistry {
         credential_authority: &ContinuationAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        let effective_model = format!("{}:{}", target.provider_name, target.service_id);
         let key = self.inner.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
@@ -1403,9 +1446,12 @@ impl ContinuationRegistry {
             .bind_inner(
                 owner_user_id,
                 gateway_request_id,
-                provider_response_id,
-                target,
-                credential_authority,
+                ContinuationBinding {
+                    provider_response_id,
+                    effective_model: &effective_model,
+                    target,
+                    credential_authority,
+                },
                 BindPublication {
                     now,
                     state: PUBLICATION_ACTIVE,
@@ -1426,9 +1472,7 @@ impl ContinuationRegistry {
         &self,
         owner_user_id: &str,
         gateway_request_id: &str,
-        provider_response_id: &str,
-        target: &RoutingTarget,
-        credential_authority: &ContinuationAuthority,
+        binding: ContinuationBinding<'_>,
         attempt: PendingBindAttempt,
     ) -> Result<bool> {
         let PendingBindAttempt {
@@ -1477,9 +1521,7 @@ impl ContinuationRegistry {
             .bind_inner(
                 owner_user_id,
                 gateway_request_id,
-                provider_response_id,
-                target,
-                credential_authority,
+                binding,
                 BindPublication {
                     now,
                     state: PUBLICATION_PROVISIONAL,
@@ -1535,9 +1577,7 @@ impl ContinuationRegistry {
         &self,
         owner_user_id: &str,
         gateway_request_id: &str,
-        provider_response_id: &str,
-        target: &RoutingTarget,
-        credential_authority: &ContinuationAuthority,
+        binding: ContinuationBinding<'_>,
         publication: BindPublication,
     ) -> std::result::Result<BindOutcome, OwnershipFailure> {
         let BindPublication {
@@ -1562,8 +1602,16 @@ impl ContinuationRegistry {
             .continuation_identity(owner_user_id, gateway_request_id)
             .map_err(OwnershipFailure::lost_or_foreign)?;
         let target_fingerprint = key
-            .target_fingerprint(target, credential_authority)
+            .target_fingerprint(binding.target, binding.credential_authority)
             .map_err(OwnershipFailure::lost_or_foreign)?;
+        let payload =
+            ContinuationPayload::current(binding.provider_response_id, binding.effective_model)
+                .map_err(OwnershipFailure::lost_or_foreign)?;
+        let serialized = serde_json::to_vec(&payload)
+            .context("serializing continuation payload")
+            .map_err(OwnershipFailure::lost_or_foreign)?;
+        let mut plaintext = CONTINUATION_PAYLOAD_PREFIX.as_bytes().to_vec();
+        plaintext.extend_from_slice(&serialized);
         let created_at = timestamp(now);
         let expires_at = timestamp(
             now.checked_add_signed(self.inner.retention)
@@ -1588,8 +1636,8 @@ impl ContinuationRegistry {
             &instance_id,
             &lease_until,
         ]);
-        let (ciphertext, nonce) = encrypt(&key, provider_response_id.as_bytes(), &aad)
-            .map_err(OwnershipFailure::lost_or_foreign)?;
+        let (ciphertext, nonce) =
+            encrypt(&key, &plaintext, &aad).map_err(OwnershipFailure::lost_or_foreign)?;
         let model = continuation_entity::ActiveModel {
             continuation_identity: Set(continuation_identity.clone()),
             owner_identity: Set(owner_identity),
@@ -1652,9 +1700,9 @@ impl ContinuationRegistry {
                     && existing.publication_instance_id == instance_id
                     && existing.publication_lease_until == lease_until
                 {
-                    let existing_plaintext =
-                        decrypt_row(&key, &existing).map_err(OwnershipFailure::owned)?;
-                    if existing_plaintext != provider_response_id
+                    let existing_payload =
+                        decrypt_payload(&key, &existing).map_err(OwnershipFailure::owned)?;
+                    if existing_payload != payload
                         || existing.target_fingerprint != target_fingerprint
                     {
                         return Err(OwnershipFailure::owned(anyhow::anyhow!(
@@ -1671,10 +1719,9 @@ impl ContinuationRegistry {
                     };
                 }
 
-                let existing_plaintext =
-                    decrypt_row(&key, &existing).map_err(OwnershipFailure::lost_or_foreign)?;
-                if existing_plaintext != provider_response_id
-                    || existing.target_fingerprint != target_fingerprint
+                let existing_payload =
+                    decrypt_payload(&key, &existing).map_err(OwnershipFailure::lost_or_foreign)?;
+                if existing_payload != payload || existing.target_fingerprint != target_fingerprint
                 {
                     return Err(OwnershipFailure::lost_or_foreign(anyhow::anyhow!(
                         "gateway continuation id is already bound to another response"
@@ -1739,9 +1786,10 @@ impl ContinuationRegistry {
                 // it rather than reporting or mutating the superseded row.
                 continue;
             }
-            let provider_response_id = decrypt_row(&key, &row)?;
+            let payload = decrypt_payload(&key, &row)?;
             return Ok(ContinuationResolution::Active(ResolvedContinuation {
-                provider_response_id,
+                provider_response_id: payload.provider_response_id,
+                effective_model: payload.effective_model,
                 target_fingerprint: row.target_fingerprint,
                 key,
             }));
@@ -1883,6 +1931,21 @@ pub struct ContinuationRuntime {
     auth_appliers: AuthAppliers,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContinuationAdjustment {
+    Pin { effective_model: String },
+    Detach,
+}
+
+#[derive(Clone)]
+pub(crate) struct ContinuationRequestPlan {
+    pub(crate) adjustment: Option<ContinuationAdjustment>,
+    active: ResolvedContinuation,
+}
+
+#[derive(Debug)]
+struct RejectContinuationPreflight(&'static str);
+
 impl ContinuationRuntime {
     pub fn new(registry: ContinuationRegistry) -> Self {
         Self {
@@ -1900,6 +1963,74 @@ impl ContinuationRuntime {
 
     pub fn registry(&self) -> &ContinuationRegistry {
         &self.registry
+    }
+}
+
+#[async_trait]
+impl PreRequestHook for ContinuationRuntime {
+    async fn check(&self, ctx: &mut PipelineContext) -> PipelineResult<HookDecision> {
+        if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
+            return Ok(HookDecision::Allow);
+        }
+        let Some(previous_response_id) = ctx
+            .prompt()
+            .params
+            .extra
+            .get("previous_response_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+        else {
+            return Ok(HookDecision::Allow);
+        };
+        if decode_gateway_continuation_id(&previous_response_id)?.is_none() {
+            let explicit_provider_route =
+                ctx.model()
+                    .split_once(':')
+                    .is_some_and(|(provider, model)| {
+                        !provider.is_empty() && !model.is_empty() && !provider.starts_with('@')
+                    });
+            if !explicit_provider_route {
+                ctx.insert_extension(Arc::new(RejectContinuationPreflight(
+                    "native provider continuation requires an explicit provider model",
+                )));
+            }
+            return Ok(HookDecision::Allow);
+        }
+        let resolution = self
+            .registry
+            .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!(
+                    "resolving provider continuation failed closed: {error}"
+                ))
+            })?;
+        let active = match resolution {
+            ContinuationResolution::Active(active) => active,
+            ContinuationResolution::Expired => {
+                ctx.insert_extension(Arc::new(RejectContinuationPreflight(
+                    "provider continuation has expired",
+                )));
+                return Ok(HookDecision::Allow);
+            }
+            ContinuationResolution::Missing => {
+                ctx.insert_extension(Arc::new(RejectContinuationPreflight(
+                    "gateway continuation mapping is unavailable",
+                )));
+                return Ok(HookDecision::Allow);
+            }
+        };
+        let adjustment = if has_complete_visible_causal_history(ctx.prompt()) {
+            ctx.insert_extension(Arc::new(SuppressProviderContinuation));
+            Some(ContinuationAdjustment::Detach)
+        } else {
+            active
+                .effective_model
+                .clone()
+                .map(|effective_model| ContinuationAdjustment::Pin { effective_model })
+        };
+        ctx.insert_extension(Arc::new(ContinuationRequestPlan { adjustment, active }));
+        Ok(HookDecision::Allow)
     }
 }
 
@@ -1925,6 +2056,9 @@ impl RouteHook for ContinuationRuntime {
             return Ok(());
         };
         let decoded_gateway_id = decode_gateway_continuation_id(&previous_response_id)?;
+        if let Some(rejection) = ctx.extension::<RejectContinuationPreflight>() {
+            return Err(BitrouterError::bad_request(rejection.0));
+        }
         if decoded_gateway_id.is_none() {
             let selected = chain
                 .iter()
@@ -1939,15 +2073,41 @@ impl RouteHook for ContinuationRuntime {
             chain.push(selected);
             return Ok(());
         }
-        let resolution = self
-            .registry
-            .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
-            .await
-            .map_err(|error| {
-                BitrouterError::internal(format!(
-                    "resolving provider continuation failed closed: {error}"
-                ))
-            })?;
+        if ctx
+            .extension::<ContinuationRequestPlan>()
+            .is_some_and(|plan| {
+                matches!(
+                    plan.adjustment.as_ref(),
+                    Some(ContinuationAdjustment::Detach)
+                )
+            })
+        {
+            let selected = chain
+                .iter()
+                .find(|target| target.api_protocol == ApiProtocol::Responses)
+                .cloned()
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "detached provider continuation has no Responses target",
+                    )
+                })?;
+            chain.clear();
+            chain.push(selected);
+            return Ok(());
+        }
+        let prepared = ctx.extension::<ContinuationRequestPlan>();
+        let resolution = if let Some(prepared) = prepared {
+            ContinuationResolution::Active(prepared.active.clone())
+        } else {
+            self.registry
+                .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
+                .await
+                .map_err(|error| {
+                    BitrouterError::internal(format!(
+                        "resolving provider continuation failed closed: {error}"
+                    ))
+                })?
+        };
         match resolution {
             ContinuationResolution::Active(active) => {
                 let mut selected = None;
@@ -2052,9 +2212,12 @@ impl ContinuationRuntime {
             .bind_pending(
                 ctx.caller.user_id(),
                 &public_continuation_id,
-                provider_response_id,
-                target,
-                &credential_authority,
+                ContinuationBinding {
+                    provider_response_id,
+                    effective_model: &ctx.effective_model,
+                    target,
+                    credential_authority: &credential_authority,
+                },
                 PendingBindAttempt {
                     now,
                     delivery_attempt_id: ctx.delivery_attempt_id,
@@ -2276,6 +2439,37 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
     String::from_utf8(plaintext.to_vec()).context("continuation plaintext is not valid UTF-8")
 }
 
+fn decrypt_payload(
+    key: &ContinuationKey,
+    row: &continuation_entity::Model,
+) -> Result<ContinuationPayload> {
+    let plaintext = decrypt_row(key, row)?;
+    let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_PREFIX) else {
+        return Ok(ContinuationPayload::legacy(plaintext));
+    };
+    let payload: ContinuationPayload =
+        serde_json::from_str(serialized).context("continuation payload is invalid")?;
+    if payload.version != CONTINUATION_PAYLOAD_VERSION {
+        anyhow::bail!("unsupported continuation payload version");
+    }
+    let effective_model = payload
+        .effective_model
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("continuation payload has no effective model"))?;
+    validate_effective_model(effective_model)?;
+    Ok(payload)
+}
+
+fn validate_effective_model(effective_model: &str) -> Result<()> {
+    if effective_model.is_empty()
+        || effective_model.len() > MAX_EFFECTIVE_MODEL_BYTES
+        || effective_model.chars().any(char::is_control)
+    {
+        anyhow::bail!("continuation effective model is invalid");
+    }
+    Ok(())
+}
+
 mod continuation_entity {
     use sea_orm::entity::prelude::*;
 
@@ -2386,6 +2580,7 @@ mod tests {
     fn resolved_continuation_debug_redacts_native_and_fingerprint_values() {
         let resolved = ResolvedContinuation {
             provider_response_id: "provider-debug-private-sentinel".into(),
+            effective_model: Some("provider:model".into()),
             target_fingerprint: "fingerprint-debug-private-sentinel".into(),
             key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
         };
@@ -2640,7 +2835,10 @@ mod tests {
     #[tokio::test]
     async fn encrypted_registry_round_trips_without_plaintext() -> anyhow::Result<()> {
         let registry = registry(7).await?;
-        let now = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 2, 0, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("test timestamp is invalid"))?;
         registry
             .bind(
                 "owner-a",
@@ -2659,6 +2857,7 @@ mod tests {
             anyhow::bail!("expected active continuation")
         };
         assert_eq!(active.provider_response_id, "resp-provider-secret");
+        assert_eq!(active.effective_model.as_deref(), Some("openai:gpt-5"));
         assert!(active.matches_target(&target("credential-a"), &static_authority("credential-a"))?);
         assert!(
             !active.matches_target(&target("credential-b"), &static_authority("credential-b"))?
@@ -2695,6 +2894,75 @@ mod tests {
         ] {
             assert!(!durable.contains(plaintext), "leaked {plaintext}");
         }
+
+        let reloaded = ContinuationRegistry::new(
+            registry.database().clone(),
+            ContinuationKeySource::fixed(ContinuationKey::from_bytes([7; 32])?),
+            30,
+            10,
+        )?;
+        let ContinuationResolution::Active(reloaded) = reloaded
+            .resolve("owner-a", "gateway-request-a", now)
+            .await?
+        else {
+            anyhow::bail!("reloaded registry lost the continuation")
+        };
+        assert_eq!(reloaded.provider_response_id, "resp-provider-secret");
+        assert_eq!(reloaded.effective_model.as_deref(), Some("openai:gpt-5"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_ciphertext_resolves_without_guessing_an_effective_model() -> anyhow::Result<()>
+    {
+        let registry = registry(75).await?;
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 2, 0, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("test timestamp is invalid"))?;
+        registry
+            .bind(
+                "legacy-owner",
+                "legacy-gateway",
+                "legacy-provider-response",
+                &target("legacy-credential"),
+                &static_authority("legacy-credential"),
+                now,
+            )
+            .await?;
+        let key = ContinuationKey::from_bytes([75; 32])?;
+        let continuation_identity = key.continuation_identity("legacy-owner", "legacy-gateway")?;
+        let row = continuation_entity::Entity::find_by_id(&continuation_identity)
+            .one(registry.database())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("legacy continuation row missing"))?;
+        let aad = aead_aad([
+            &row.key_id,
+            &row.owner_identity,
+            &row.continuation_identity,
+            &row.target_fingerprint,
+            &row.created_at,
+            &row.expires_at,
+            &row.purge_after,
+            &row.publication_state,
+            &row.publication_generation,
+            &row.publication_instance_id,
+            &row.publication_lease_until,
+        ]);
+        let (ciphertext, nonce) = encrypt(&key, b"legacy-provider-response", &aad)?;
+        let mut legacy: continuation_entity::ActiveModel = row.into();
+        legacy.ciphertext = Set(Some(ciphertext));
+        legacy.nonce = Set(Some(nonce));
+        legacy.update(registry.database()).await?;
+
+        let ContinuationResolution::Active(resolved) = registry
+            .resolve("legacy-owner", "legacy-gateway", now)
+            .await?
+        else {
+            anyhow::bail!("legacy continuation did not resolve")
+        };
+        assert_eq!(resolved.provider_response_id, "legacy-provider-response");
+        assert_eq!(resolved.effective_model, None);
         Ok(())
     }
 
@@ -3137,7 +3405,7 @@ mod tests {
         );
         PipelineContext::new(PipelineRequest {
             request_id: "next-gateway".into(),
-            model: "gpt-5".into(),
+            model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", "owner"),
             headers: Default::default(),
             prompt: Prompt {
@@ -3413,6 +3681,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_continuation_does_not_guess_an_auto_routed_provider() -> anyhow::Result<()> {
+        let runtime = ContinuationRuntime::new(registry(76).await?);
+        let mut auto = continuation_context("provider-native-arbitrary-format");
+        auto.set_model("@auto");
+
+        let decision = PreRequestHook::check(&runtime, &mut auto).await?;
+
+        assert!(matches!(decision, HookDecision::Allow));
+        assert!(auto.extension::<RejectContinuationPreflight>().is_some());
+        let error = RouteHook::resolve(&runtime, &mut vec![target("first")], &mut auto)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("explicit provider model"));
+
+        let mut explicit = continuation_context("provider-native-arbitrary-format");
+        assert!(matches!(
+            PreRequestHook::check(&runtime, &mut explicit).await?,
+            HookDecision::Allow
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn required_finalizer_publishes_native_mapping() -> anyhow::Result<()> {
         let registry = registry(14).await?;
         let runtime = ContinuationRuntime::new(registry.clone());
@@ -3440,6 +3731,7 @@ mod tests {
             delivery_attempt_id,
             caller: CallerContext::new("key", "owner"),
             target: Some(target("credential")),
+            effective_model: "openai:gpt-5".into(),
             inbound_protocol: Some(ApiProtocol::Responses),
             response_id: Some(provider_response_id.into()),
             finish_reason: Some(bitrouter_sdk::language_model::FinishReason::Stop),
@@ -5131,7 +5423,8 @@ mod tests {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("renewed raced row missing"))?;
         assert_eq!(
-            decrypt_row(&owner_registry.inner.keys.load()?, &renewed_raced_row)?,
+            decrypt_payload(&owner_registry.inner.keys.load()?, &renewed_raced_row)?
+                .provider_response_id,
             "provider-raced",
             "lease renewal did not re-seal an authenticated readable row"
         );

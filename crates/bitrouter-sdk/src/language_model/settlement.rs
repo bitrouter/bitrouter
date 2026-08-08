@@ -30,6 +30,8 @@ pub struct RequiredFinalizationContext {
     pub caller: CallerContext,
     /// Exact final target that served the response.
     pub target: Option<RoutingTarget>,
+    /// Public logical model selector resolved for the successful request.
+    pub effective_model: String,
     /// Inbound client protocol.
     pub inbound_protocol: Option<ApiProtocol>,
     /// Final provider response id, when the serving protocol supplied one.

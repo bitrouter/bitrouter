@@ -94,6 +94,23 @@ impl HttpHarness {
         Self::new_with_upstream_authority(true, InboundProtocol::Responses, false).await
     }
 
+    async fn predictive_responses_split_authority() -> anyhow::Result<Self> {
+        let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
+            "../../../templates/auto-router/policy-lock.yaml"
+        ))?;
+        let auto = lock
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("template lock is missing the auto policy"))?;
+        auto.tiers
+            .insert("strong".into(), "strong:strong-model".into());
+        auto.tiers
+            .insert("balanced".into(), "balanced:balanced-model".into());
+        auto.tiers
+            .insert("economy".into(), "economy:economy-model".into());
+        Self::with_lock_and_upstream_authority(lock, InboundProtocol::Responses, false).await
+    }
+
     async fn new_with_upstream(
         progress_guard: bool,
         upstream_protocol: InboundProtocol,
@@ -353,6 +370,7 @@ struct NativeResponsesState {
     issued: BTreeSet<String>,
     forwarded_parents: Vec<Option<String>>,
     served_models: Vec<String>,
+    forwarded_bodies: Vec<Value>,
 }
 
 impl Respond for NativeResponsesStream {
@@ -376,6 +394,7 @@ impl Respond for NativeResponsesStream {
         let mut state = self.state.lock().expect("Responses mock state poisoned");
         state.forwarded_parents.push(previous_response_id.clone());
         state.served_models.push(model.clone());
+        state.forwarded_bodies.push(body);
         if previous_response_id
             .as_ref()
             .is_some_and(|parent| !state.issued.contains(parent))
@@ -660,10 +679,18 @@ async fn post_streaming_responses(
     if let Some(previous_response_id) = previous_response_id {
         body["previous_response_id"] = Value::String(previous_response_id.to_owned());
     }
+    post_streaming_responses_body(server, bearer, &body).await
+}
+
+async fn post_streaming_responses_body(
+    server: &TestServer,
+    bearer: &str,
+    body: &Value,
+) -> anyhow::Result<String> {
     let response = server
         .post(InboundProtocol::Responses.endpoint())
         .add_header("authorization", format!("Bearer {bearer}"))
-        .json(&body)
+        .json(body)
         .await;
     assert_eq!(
         response.status_code().as_u16(),
@@ -1432,8 +1459,13 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
         .map(|tier| format!("{tier}-model"))
         .collect::<Vec<_>>();
     assert_eq!(
-        served_models, selected_models,
-        "actual serving models must equal the signed policy decisions"
+        selected_models,
+        ["economy-model", "economy-model", "strong-model"]
+    );
+    assert_eq!(
+        served_models,
+        ["economy-model", "economy-model", "economy-model"],
+        "hidden ancestry keeps serving continuity instead of presenting the strong proposal as served"
     );
     assert_eq!(
         after_restart.correlation_sources,
@@ -1532,7 +1564,251 @@ async fn invalid_responses_request_id_has_no_upstream_or_durable_side_effects() 
 }
 
 #[tokio::test]
-async fn guarded_continuation_fails_before_upstream_when_authority_changes() -> anyhow::Result<()> {
+async fn hidden_responses_continuation_pins_the_exact_serving_authority() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "hidden-continuation-pin").await?;
+
+    let first_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "Design the architecture and plan the implementation",
+        None,
+    )
+    .await?;
+    assert!(first_id.starts_with("brc_"));
+    assert!(!first_id.contains("provider-only-response-"));
+
+    let second_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "Continue with the implementation",
+        Some(&first_id),
+    )
+    .await?;
+    assert!(second_id.starts_with("brc_"));
+    assert_ne!(first_id, second_id);
+
+    let (served_models, forwarded_parents) = {
+        let state = harness
+            .responses_state
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+        (state.served_models.clone(), state.forwarded_parents.clone())
+    };
+    assert_eq!(served_models, ["strong-model", "strong-model"]);
+    assert_eq!(
+        forwarded_parents,
+        [None, Some("provider-only-response-0".to_owned())]
+    );
+    assert_eq!(
+        harness
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        2
+    );
+    assert!(
+        harness
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hidden_continuation_fails_closed_when_reload_removes_its_model() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let first_app = harness.assemble().await?;
+    let first_server = server(&first_app);
+    let bearer = add_owner(&first_app.db, "continuation-model-removed").await?;
+    let first_id = post_streaming_responses(
+        &first_server,
+        &bearer,
+        "Design the architecture and plan the implementation",
+        None,
+    )
+    .await?;
+    first_app
+        .app
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
+        .drain_required_pending_settlements()
+        .await?;
+    drop(first_server);
+    drop(first_app);
+
+    let lock_path = harness._home.path().join("policy-lock.yaml");
+    let mut lock: PolicyLock =
+        serde_saphyr::from_str(&tokio::fs::read_to_string(&lock_path).await?)?;
+    lock.policies
+        .get_mut("auto")
+        .ok_or_else(|| anyhow::anyhow!("auto policy missing"))?
+        .tiers
+        .insert("strong".to_owned(), "strong:replacement-model".to_owned());
+    write_policy_lock(harness._home.path(), &lock).await?;
+
+    let restarted = harness.assemble().await?;
+    let restarted_server = server(&restarted);
+    let response = restarted_server
+        .post(InboundProtocol::Responses.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"))
+        .json(&json!({
+            "model": "@auto",
+            "stream": true,
+            "input": "Continue with implementation",
+            "previous_response_id": first_id
+        }))
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 400);
+    assert!(response.text().contains("unavailable in the active policy"));
+    assert_eq!(
+        harness
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        1
+    );
+    assert!(
+        harness
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "a removed continuation model must fail before dispatch"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn visible_responses_history_detaches_and_crosses_provider_once() -> anyhow::Result<()> {
+    let harness = HttpHarness::predictive_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "visible-continuation-detach").await?;
+    let first_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "Design the architecture and plan the implementation",
+        None,
+    )
+    .await?;
+    assert!(first_id.starts_with("brc_"));
+
+    let visible_history = json!([
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Design the architecture and plan the implementation"
+            }]
+        },
+        {
+            "type": "function_call",
+            "call_id": "call-inspect",
+            "name": "inspect_repository",
+            "arguments": "{}"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call-inspect",
+            "output": "repository structure inspected successfully"
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Implement the approved change now"
+            }]
+        }
+    ]);
+    let tools = json!([{
+        "type": "function",
+        "name": "inspect_repository",
+        "description": "Inspect repository state",
+        "parameters": {"type": "object", "properties": {}}
+    }]);
+    let body = json!({
+        "model": "@auto",
+        "stream": true,
+        "previous_response_id": first_id,
+        "input": visible_history,
+        "tools": tools,
+        "tool_choice": "auto",
+        "parallel_tool_calls": false
+    });
+    let second_id = post_streaming_responses_body(&server, &bearer, &body).await?;
+    assert!(second_id.starts_with("brc_"));
+
+    let (served_models, forwarded_parents, forwarded) = {
+        let state = harness
+            .responses_state
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Responses oracle missing"))?
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Responses mock state poisoned"))?;
+        let forwarded = state
+            .forwarded_bodies
+            .get(1)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("detached follow-up was not forwarded"))?;
+        (
+            state.served_models.clone(),
+            state.forwarded_parents.clone(),
+            forwarded,
+        )
+    };
+    assert_eq!(served_models, ["strong-model", "balanced-model"]);
+    assert_eq!(forwarded_parents, [None, None]);
+    assert_eq!(forwarded.get("input"), Some(&visible_history));
+    assert_eq!(forwarded.get("tools"), Some(&tools));
+    assert_eq!(
+        forwarded.get("tool_choice"),
+        Some(&Value::String("auto".into()))
+    );
+    assert_eq!(
+        forwarded.get("parallel_tool_calls"),
+        Some(&Value::Bool(false))
+    );
+    assert!(forwarded.get("previous_response_id").is_none());
+    assert_eq!(
+        harness
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        1
+    );
+    assert_eq!(
+        harness
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hidden_continuation_keeps_the_original_authority_when_policy_changes() -> anyhow::Result<()>
+{
     let harness = HttpHarness::streaming_responses_split_authority().await?;
     let app = harness.assemble().await?;
     let server = server(&app);
@@ -1548,18 +1824,19 @@ async fn guarded_continuation_fails_before_upstream_when_authority_changes() -> 
     )
     .await?;
 
-    let response = server
-        .post(InboundProtocol::Responses.endpoint())
-        .add_header("authorization", format!("Bearer {bearer}"))
-        .json(&json!({
-            "model": "@auto",
-            "stream": true,
-            "input": "review the completed change",
-            "previous_response_id": second_id
-        }))
-        .await;
-    assert_eq!(response.status_code().as_u16(), 400);
-    assert!(response.text().contains("target is unavailable or changed"));
+    let third_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "review the completed change",
+        Some(&second_id),
+    )
+    .await?;
+    assert!(third_id.starts_with("brc_"));
+    app.app
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("language-model pipeline missing"))?
+        .drain_required_pending_settlements()
+        .await?;
     assert_eq!(
         harness
             .economy
@@ -1567,7 +1844,7 @@ async fn guarded_continuation_fails_before_upstream_when_authority_changes() -> 
             .await
             .unwrap_or_default()
             .len(),
-        2
+        3
     );
     assert!(
         harness
@@ -1576,37 +1853,21 @@ async fn guarded_continuation_fails_before_upstream_when_authority_changes() -> 
             .await
             .unwrap_or_default()
             .is_empty(),
-        "the changed authority must fail before any strong-provider dispatch"
+        "provider-hidden ancestry must stay on its original authority"
     );
-    assert_eq!(table_row_count(&app.db, "provider_continuations").await?, 2);
+    assert_eq!(table_row_count(&app.db, "provider_continuations").await?, 3);
     let statuses = trajectory_request_statuses(&app.db, owner).await?;
     assert_eq!(
         statuses.iter().filter(|status| *status == "failed").count(),
-        1
+        0
     );
     assert_eq!(
         statuses
             .iter()
             .filter(|status| *status == "settled")
             .count(),
-        2
+        3
     );
-    let events = events_for_only_episode(&app.db, owner).await?;
-    let failed = events
-        .iter()
-        .find(|event| {
-            event.kind == TrajectoryEventKind::RequestSettled
-                && event.evidence.categorical.get("settlement.outcome")
-                    == Some(&"failed".to_owned())
-        })
-        .ok_or_else(|| anyhow::anyhow!("changed-authority request was not settled as failed"))?;
-    assert!(
-        !failed
-            .evidence
-            .categorical
-            .contains_key("settlement.provider")
-    );
-    assert!(!failed.evidence.categorical.contains_key("settlement.model"));
     Ok(())
 }
 
