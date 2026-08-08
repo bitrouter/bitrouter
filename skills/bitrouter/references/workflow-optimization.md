@@ -4,7 +4,7 @@ Use this flow when the user wants to reduce an agent workflow's model cost
 while retaining a user-defined quality outcome. The online router never sees
 task answers or benchmark labels. It sees ordinary request traces; the offline
 optimizer joins those decisions to the workflow's observable eval result and
-authoritative Cloud settlement.
+daemon-authored normalized metering.
 
 ## Onboard
 
@@ -46,6 +46,12 @@ Pass `--evaluator-via-cloud` to
 `bitrouter optimize setup` only when the user explicitly wants Cloud judging.
 ORI is not required.
 
+The default route ladder is `openai-codex:gpt-5.6-sol` (Codex subscription)
+to `bitrouter:deepseek/deepseek-v4-flash-0731` (BitRouter Cloud OAuth). Both
+routes execute through the private daemon. The intent pins the subscription's
+normalized API-equivalent price schedule; this is showback for comparison, not
+a claim of marginal cash spend.
+
 ## Evolve one route at a time
 
 ```bash
@@ -59,11 +65,11 @@ bitrouter optimize rollback sha256:<digest>
 `run` launches the same exact argv once for the active baseline and once for a
 candidate that changes one observed route key. It does not retry. The workflow
 command may itself run a multi-case eval suite; its output is judged against
-the success contract. BitRouter—not the judge—provides settled cost, latency,
+the success contract. BitRouter—not the judge—provides normalized cost, latency,
 policy lineage, and request attribution.
 
-`review` reports baseline/candidate quality, settled cost delta, observed
-latency, the route-key change, and content digests. `run` never changes the
+`review` reports baseline/candidate quality, normalized showback cost delta,
+observed latency, the route-key change, and content digests. `run` never changes the
 active policy. `publish` is a separate explicit action and rejects stale or
 mismatched lineage. Run the loop again after publication to optimize another
 eligible route key.
@@ -72,10 +78,11 @@ Profiles:
 
 - `quality-first`: no observed quality regression;
 - `balanced`: prioritize frequently used route keys and require manual review;
-- `savings-first`: prioritize greatest settled cost and require manual review;
+- `savings-first`: prioritize greatest normalized cost and require manual
+  review;
 
 These profiles control search order. This version still requires one explicit
-agentic pass and lower authoritative settled cost; it does not claim a
+agentic pass and lower normalized showback cost; it does not claim a
 statistical percentage quality-loss budget.
 
 If the workflow uses ignored/generated inputs (for example `node_modules`,
@@ -88,7 +95,7 @@ currently Unix-only.
 
 - Non-zero workflow exit: valid quality evidence for the evaluator.
 - Timeout: terminal run; never publishable.
-- No request/decision/settlement join: infrastructure ambiguity; fail closed.
+- No request/decision/metering-price join: infrastructure ambiguity; fail closed.
 - Candidate did not exercise the changed route: experiment invalid; fail
   closed.
 - Workflow argv or referenced file changed between variants: source drift; fail
@@ -97,7 +104,8 @@ currently Unix-only.
 - Intent/contract changed: run `bitrouter optimize resolve`, then start a new run.
 
 Raw workflow output and model replies remain under the BitRouter home. Commit
-only the intent, lock, success contract, and policy lock. Inject the Cloud API
-key from an environment/secret manager; never put it in commands, configs,
-reports, or repository files. Known secrets are redacted best-effort, so eval
+only the intent, lock, success contract, and policy lock. Provider auth stays
+inside the daemon's native credential stores (including Cloud OAuth); never put
+credentials in commands, configs, reports, or repository files. Known secrets
+are redacted best-effort, so eval
 commands must not intentionally print credentials.

@@ -22,7 +22,7 @@ use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 pub struct RouteObservation {
     pub request_key: String,
     pub selected_tier: String,
-    pub settled_cost_micro_usd: Option<u64>,
+    pub normalized_cost_micro_usd: Option<u64>,
 }
 
 pub struct WorkflowRunRequest<'a> {
@@ -62,7 +62,7 @@ pub struct VariantEvidence {
     pub policy_digest: String,
     pub execution: WorkflowExecution,
     pub request_count: usize,
-    pub settled_cost_micro_usd: u64,
+    pub normalized_cost_micro_usd: u64,
     pub observed_latency_ms: u64,
     pub observations: Vec<RouteObservation>,
     pub attributions: Vec<VariantAttribution>,
@@ -73,7 +73,10 @@ pub struct VariantEvidence {
 pub struct VariantAttribution {
     pub request_id: String,
     pub decision: crate::eval::types::EvalDecisionRef,
-    pub settled_cost_micro_usd: u64,
+    pub usage_origin: bitrouter_sdk::language_model::UsageOrigin,
+    pub pricing_source: crate::metering::PricingSource,
+    pub pricing_version: String,
+    pub normalized_cost_micro_usd: u64,
     pub latency_ms: u64,
 }
 
@@ -83,9 +86,9 @@ pub struct PrivateVariantRequest<'a> {
     pub intent: &'a super::OptimizationIntent,
     pub policy: &'a PolicyLock,
     pub policy_digest: &'a str,
+    pub source_config_raw: &'a str,
     pub workflow_cwd: &'a Path,
     pub bitrouter_executable: &'a Path,
-    pub settlement_bearer: &'a str,
     pub maximum_output_bytes: usize,
 }
 
@@ -130,44 +133,85 @@ impl PrivateDaemonPaths {
 pub fn private_daemon_config(
     paths: &PrivateDaemonPaths,
     intent: &super::OptimizationIntent,
+    source_config_raw: &str,
     port: u16,
 ) -> Result<String> {
     intent.validate()?;
-    if !intent.strong.starts_with("bitrouter:") || !intent.economy.starts_with("bitrouter:") {
-        anyhow::bail!("this optimization run requires Cloud-backed strong and economy models");
+    let source: serde_json::Value = serde_saphyr::from_str(source_config_raw)
+        .context("parsing source config for private daemon")?;
+    let source = source
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("source BitRouter config must be a YAML object"))?;
+    let mut document = serde_json::Map::new();
+    for key in [
+        "upstream",
+        "providers",
+        "models",
+        "presets",
+        "variants",
+        "plugins",
+        "mcp",
+        "mcp_servers",
+        "server_tools",
+        "inherit_defaults",
+        "registry",
+        "continuation",
+    ] {
+        if let Some(value) = source.get(key) {
+            document.insert(key.to_string(), value.clone());
+        }
     }
-    let document = serde_json::json!({
-        "server": {
+    let providers = document
+        .entry("providers")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("source config providers must be a YAML object"))?;
+    for route in [&intent.strong, &intent.economy] {
+        let (provider, _) = route.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!("optimization tier route '{route}' must be provider-qualified")
+        })?;
+        providers
+            .entry(provider.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    }
+    document.insert(
+        "server".into(),
+        serde_json::json!({
             "listen": format!("127.0.0.1:{port}"),
             "control_socket": paths.control_socket,
             "log_level": "warn",
             "skip_auth": true
-        },
-        "database": {
-            "url": paths.database_url()
-        },
-        "providers": {
-            "bitrouter": {
-                "auto_discover": true
-            }
-        },
-        "inherit_defaults": true,
-        "policy": {
-            "path": paths.policy,
-            "mode": "frozen"
-        },
-        "trajectory": {
-            "enabled": false
-        },
-        "presets": {
-            intent.preset.clone(): {
-                "model": intent.strong,
-                "policy": intent.policy
-            }
-        }
-    });
-    let mut rendered =
-        serde_saphyr::to_string(&document).context("serializing private daemon config")?;
+        }),
+    );
+    document.insert(
+        "database".into(),
+        serde_json::json!({ "url": paths.database_url() }),
+    );
+    document.insert(
+        "policy".into(),
+        serde_json::json!({ "path": paths.policy, "mode": "frozen" }),
+    );
+    document.insert("trajectory".into(), serde_json::json!({ "enabled": false }));
+    let presets = document
+        .entry("presets")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("source config presets must be a YAML object"))?;
+    let preset = presets
+        .entry(intent.preset.clone())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("source optimization preset must be a YAML object"))?;
+    preset.insert(
+        "model".into(),
+        serde_json::Value::String(intent.strong.clone()),
+    );
+    preset.insert(
+        "policy".into(),
+        serde_json::Value::String(intent.policy.clone()),
+    );
+    let mut rendered = serde_saphyr::to_string(&serde_json::Value::Object(document))
+        .context("serializing private daemon config")?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
@@ -175,9 +219,6 @@ pub fn private_daemon_config(
 }
 
 pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<VariantEvidence> {
-    if request.settlement_bearer.trim().is_empty() {
-        anyhow::bail!("BitRouter Cloud API key is required for authoritative settlement");
-    }
     request.intent.validate()?;
     validate_document(request.policy)?;
     if semantic_digest(request.policy)? != request.policy_digest {
@@ -185,7 +226,12 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
     }
     super::secure_private_directory(&request.paths.root).await?;
     let port = reserve_loopback_port()?;
-    let config = private_daemon_config(request.paths, request.intent, port)?;
+    let config = private_daemon_config(
+        request.paths,
+        request.intent,
+        request.source_config_raw,
+        port,
+    )?;
     tokio::fs::write(&request.paths.config, config)
         .await
         .with_context(|| format!("writing private config {}", request.paths.config.display()))?;
@@ -202,7 +248,6 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
         request.bitrouter_executable.to_path_buf(),
         request.paths.clone(),
         port,
-        request.settlement_bearer.to_string(),
     )
     .await?;
     let run_result = async {
@@ -246,11 +291,11 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
         .map_err(anyhow::Error::from)
         .context("opening private optimization database")?;
     let metering = crate::metering::MeteringStore::new(db.clone());
-    let initial_usage = metering
+    let mut usage = metering
         .export_usage(crate::metering::TimeWindow::ThisMonth)
         .await
         .map_err(anyhow::Error::from)?;
-    let request_ids = initial_usage
+    let request_ids = usage
         .iter()
         .map(|record| {
             record
@@ -262,36 +307,14 @@ pub async fn run_private_variant(request: PrivateVariantRequest<'_>) -> Result<V
     if request_ids.is_empty() {
         anyhow::bail!("{} workflow produced no metered requests", request.variant);
     }
-    if initial_usage.iter().any(|record| {
-        record.reconciliation_status != crate::metering::ReconciliationStatus::Pending
-    }) {
-        anyhow::bail!("private workflow emitted a request outside Cloud settlement authority");
-    }
-    let settlement = bitrouter_cloud_sdk::settlement::SettlementClient::new(
-        format!(
-            "{}/v1",
-            bitrouter_cloud_sdk::auth::settings::DEFAULT_AS.trim_end_matches('/')
-        ),
-        request.settlement_bearer,
-    )
-    .context("building Cloud settlement client")?;
-    let summary = crate::metering::reconciliation::reconcile_authoritative_requests(
-        &metering,
-        &settlement,
-        &request_ids,
-        8,
-        Duration::from_millis(500),
-    )
-    .await
-    .map_err(anyhow::Error::from)
-    .context("reconciling exact private workflow requests")?;
-    if !summary.accepted() {
-        anyhow::bail!("authoritative settlement was not conclusive for every workflow request");
-    }
-    let usage = metering
-        .export_usage(crate::metering::TimeWindow::ThisMonth)
-        .await
+    let price_overrides = request
+        .intent
+        .normalized_price_overrides
+        .iter()
+        .map(|value| crate::metering::UsagePriceOverride::parse(value))
+        .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(anyhow::Error::from)?;
+    crate::metering::MeteringUsageRecord::apply_price_overrides(&mut usage, &price_overrides);
     let subjects = crate::eval::store::EvalStore::new(db)
         .list_subjects()
         .await?;
@@ -318,12 +341,7 @@ fn reserve_loopback_port() -> Result<u16> {
 }
 
 impl PrivateDaemon {
-    async fn start(
-        executable: &Path,
-        paths: &PrivateDaemonPaths,
-        port: u16,
-        cloud_api_key: &str,
-    ) -> Result<Self> {
+    async fn start(executable: &Path, paths: &PrivateDaemonPaths, port: u16) -> Result<Self> {
         let log = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -337,9 +355,6 @@ impl PrivateDaemon {
                 .with_context(|| format!("securing private daemon log {}", paths.log.display()))?;
         }
         let mut command = tokio::process::Command::new(executable);
-        for name in super::restricted_child_environment_names() {
-            command.env_remove(name);
-        }
         let mut child = command
             .arg("serve")
             .arg("--config")
@@ -348,7 +363,6 @@ impl PrivateDaemon {
                 crate::workflow_state::decision::POLICY_DECISION_JSONL_ENV,
                 &paths.decisions,
             )
-            .env(crate::harness::BITROUTER_API_KEY_ENV, cloud_api_key)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr))
@@ -481,24 +495,18 @@ impl PrivateDaemon {
 }
 
 impl PrivateDaemonSupervisor {
-    async fn start(
-        executable: PathBuf,
-        paths: PrivateDaemonPaths,
-        port: u16,
-        cloud_api_key: String,
-    ) -> Result<Self> {
+    async fn start(executable: PathBuf, paths: PrivateDaemonPaths, port: u16) -> Result<Self> {
         let (readiness_tx, readiness_rx) = tokio::sync::oneshot::channel();
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let mut daemon =
-                match PrivateDaemon::start(&executable, &paths, port, &cloud_api_key).await {
-                    Ok(daemon) => daemon,
-                    Err(error) => {
-                        let _ = readiness_tx.send(Err(format!("{error:#}")));
-                        return;
-                    }
-                };
+            let mut daemon = match PrivateDaemon::start(&executable, &paths, port).await {
+                Ok(daemon) => daemon,
+                Err(error) => {
+                    let _ = readiness_tx.send(Err(format!("{error:#}")));
+                    return;
+                }
+            };
             if readiness_tx.send(Ok(())).is_err() {
                 let _ = daemon.stop().await;
                 return;
@@ -580,6 +588,7 @@ async fn run_workflow_command_isolated(
         .command
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("workflow command is empty"))?;
+    let harness_overlay = workflow_harness_overlay(program, arguments, request.env)?;
     let started = Instant::now();
     let mut command = tokio::process::Command::new(program);
     for name in super::model_credential_environment_names() {
@@ -588,9 +597,11 @@ async fn run_workflow_command_isolated(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command
+        .args(&harness_overlay.args)
         .args(arguments)
         .current_dir(request.cwd)
         .envs(request.env)
+        .envs(harness_overlay.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -663,6 +674,36 @@ async fn run_workflow_command_isolated(
         launches: 1,
         cwd: request.cwd.to_string_lossy().into_owned(),
     })
+}
+
+#[cfg(not(windows))]
+fn workflow_harness_overlay(
+    program: &str,
+    arguments: &[String],
+    environment: &BTreeMap<String, String>,
+) -> Result<crate::harness::RoutingOverlay> {
+    let executable_name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str());
+    let harness = executable_name
+        .and_then(crate::harness::by_interactive_binary)
+        .or_else(|| crate::harness::match_invocation(program, arguments));
+    let Some(harness) = harness else {
+        return Ok(crate::harness::RoutingOverlay::default());
+    };
+    if !harness.env_args_routable() {
+        anyhow::bail!(
+            "workflow harness '{}' cannot be proven to route through the private daemon using an env/argv adapter",
+            harness.id
+        );
+    }
+    let base_url = environment.get("BITROUTER_BASE_URL").ok_or_else(|| {
+        anyhow::anyhow!("workflow harness routing is missing the private daemon base URL")
+    })?;
+    let model = environment
+        .get("BITROUTER_MODEL")
+        .ok_or_else(|| anyhow::anyhow!("workflow harness routing is missing the private preset"))?;
+    Ok(harness.routing_overlay(base_url, crate::harness::PLACEHOLDER_API_KEY, Some(model)))
 }
 
 #[cfg(not(windows))]
@@ -875,25 +916,24 @@ pub fn collect_variant_evidence(
         {
             anyhow::bail!("{variant} request {request_id} has an ambiguous decision join");
         }
-        if !matches!(
-            record.reconciliation_status,
-            crate::metering::ReconciliationStatus::Computed
-                | crate::metering::ReconciliationStatus::NotCharged
-        ) || record.authoritative_receipt.is_none()
+        if record.usage_origin == bitrouter_sdk::language_model::UsageOrigin::Unknown
+            || record.charge_status != crate::metering::ChargeStatus::Computed
         {
-            anyhow::bail!("{variant} request {request_id} lacks an authoritative settlement");
+            anyhow::bail!(
+                "{variant} request {request_id} lacks complete normalized showback evidence; configure provider pricing or add a frozen normalized_price_overrides entry"
+            );
         }
-        let settled_cost =
-            if record.reconciliation_status == crate::metering::ReconciliationStatus::Computed {
-                record.final_charge_micro_usd.ok_or_else(|| {
-                    anyhow::anyhow!("{variant} request {request_id} has no final settled cost")
-                })?
-            } else {
-                0
-            };
+        let charge_evidence = record.charge_evidence.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{variant} request {request_id} has no normalized showback calculation evidence"
+            )
+        })?;
+        let normalized_cost = record.final_charge_micro_usd.ok_or_else(|| {
+            anyhow::anyhow!("{variant} request {request_id} has no normalized showback cost")
+        })?;
         total_cost = total_cost
-            .checked_add(settled_cost)
-            .ok_or_else(|| anyhow::anyhow!("{variant} settled cost overflow"))?;
+            .checked_add(normalized_cost)
+            .ok_or_else(|| anyhow::anyhow!("{variant} normalized cost overflow"))?;
         let latency_ms = subject
             .evidence
             .iter()
@@ -910,17 +950,20 @@ pub fn collect_variant_evidence(
         observations.push(RouteObservation {
             request_key: decision.request_key.clone(),
             selected_tier: selected_tier.to_string(),
-            settled_cost_micro_usd: Some(settled_cost),
+            normalized_cost_micro_usd: Some(normalized_cost),
         });
         attributions.push(VariantAttribution {
             request_id: request_id.to_string(),
             decision: subject.decisions[0].clone(),
-            settled_cost_micro_usd: settled_cost,
+            usage_origin: record.usage_origin,
+            pricing_source: charge_evidence.pricing_source,
+            pricing_version: charge_evidence.pricing_version.clone(),
+            normalized_cost_micro_usd: normalized_cost,
             latency_ms,
         });
     }
     if observations.is_empty() {
-        anyhow::bail!("{variant} produced no settled named-policy decisions");
+        anyhow::bail!("{variant} produced no metered named-policy decisions");
     }
     if observations.len() != usage.len() || observations.len() != subjects.len() {
         anyhow::bail!(
@@ -935,7 +978,7 @@ pub fn collect_variant_evidence(
         policy_digest: expected_policy_digest.into(),
         execution,
         request_count: observations.len(),
-        settled_cost_micro_usd: total_cost,
+        normalized_cost_micro_usd: total_cost,
         observed_latency_ms,
         observations,
         attributions,
@@ -966,7 +1009,7 @@ async fn drain_bounded(
 #[derive(Default)]
 struct ObservationSummary {
     count: u64,
-    settled_cost_micro_usd: u64,
+    normalized_cost_micro_usd: u64,
     priced_count: u64,
     selected_tiers: std::collections::BTreeSet<String>,
 }
@@ -1010,8 +1053,9 @@ pub fn select_target_request_key(
         summary
             .selected_tiers
             .insert(observation.selected_tier.clone());
-        if let Some(cost) = observation.settled_cost_micro_usd {
-            summary.settled_cost_micro_usd = summary.settled_cost_micro_usd.saturating_add(cost);
+        if let Some(cost) = observation.normalized_cost_micro_usd {
+            summary.normalized_cost_micro_usd =
+                summary.normalized_cost_micro_usd.saturating_add(cost);
             summary.priced_count = summary.priced_count.saturating_add(1);
         }
     }
@@ -1048,8 +1092,8 @@ pub fn select_target_request_key(
                 .cmp(&right.1.count)
                 .then_with(|| {
                     left.1
-                        .settled_cost_micro_usd
-                        .cmp(&right.1.settled_cost_micro_usd)
+                        .normalized_cost_micro_usd
+                        .cmp(&right.1.normalized_cost_micro_usd)
                 })
                 .then_with(|| left.0.cmp(&right.0))
         }),
@@ -1065,13 +1109,15 @@ pub fn select_target_request_key(
             eligible.sort_by(|left, right| {
                 right
                     .1
-                    .settled_cost_micro_usd
-                    .cmp(&left.1.settled_cost_micro_usd)
+                    .normalized_cost_micro_usd
+                    .cmp(&left.1.normalized_cost_micro_usd)
                     .then_with(|| right.1.count.cmp(&left.1.count))
                     .then_with(|| left.0.cmp(&right.0))
             });
             if eligible.is_empty() {
-                anyhow::bail!("savings-first optimization requires at least one priced settlement");
+                anyhow::bail!(
+                    "savings-first optimization requires at least one normalized priced request"
+                );
             }
         }
     }
@@ -1131,6 +1177,8 @@ mod tests {
 
     use bitrouter_sdk::config::AdequacyConfig;
 
+    #[cfg(not(windows))]
+    use super::workflow_harness_overlay;
     use super::{
         PrivateDaemonPaths, RouteObservation, WorkflowExecution, build_experiment_lock,
         collect_variant_evidence, private_daemon_config, select_target_request_key,
@@ -1141,7 +1189,10 @@ mod tests {
     use crate::eval::types::{
         EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvidenceItem, evidence_digest,
     };
-    use crate::metering::{ChargeStatus, MeteringUsageRecord, ReconciliationStatus};
+    use crate::metering::{
+        ChargeStatus, MeteringUsageRecord, ModelPricing, PricingSource, ReconciliationStatus,
+        calculate_charge_evidence,
+    };
     use crate::optimization::{
         EvaluatorRoute, OptimizationIntent, OptimizationPreference, ResolvedEvaluator,
         WorkflowCommand,
@@ -1183,17 +1234,17 @@ mod tests {
             RouteObservation {
                 request_key: "agent_trace/v2|edit|normal".into(),
                 selected_tier: "strong".into(),
-                settled_cost_micro_usd: Some(900),
+                normalized_cost_micro_usd: Some(900),
             },
             RouteObservation {
                 request_key: "agent_trace/v2|edit|normal".into(),
                 selected_tier: "strong".into(),
-                settled_cost_micro_usd: Some(800),
+                normalized_cost_micro_usd: Some(800),
             },
             RouteObservation {
                 request_key: "agent_trace/v2|test|normal".into(),
                 selected_tier: "strong".into(),
-                settled_cost_micro_usd: Some(4_000),
+                normalized_cost_micro_usd: Some(4_000),
             },
         ]
     }
@@ -1269,15 +1320,29 @@ mod tests {
         })
     }
 
-    fn settled_usage() -> MeteringUsageRecord {
+    fn normalized_usage() -> MeteringUsageRecord {
+        let usage = bitrouter_sdk::language_model::Usage {
+            prompt_tokens: 20,
+            completion_tokens: 10,
+            origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+        let charge_evidence = calculate_charge_evidence(
+            &usage,
+            &ModelPricing::new(5.0, 30.0),
+            PricingSource::Override,
+        );
         MeteringUsageRecord {
             request_id: Some("req-1".into()),
-            provider_id: "bitrouter".into(),
-            model_id: "openai/gpt-5.6".into(),
+            provider_id: "openai-codex".into(),
+            model_id: "gpt-5.6-sol".into(),
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            usage_origin: usage.origin,
             final_charge_micro_usd: Some(400),
             charge_status: ChargeStatus::Computed,
-            reconciliation_status: ReconciliationStatus::Computed,
-            authoritative_receipt: Some(serde_json::json!({"request_id": "req-1"})),
+            charge_evidence: Some(charge_evidence),
+            reconciliation_status: ReconciliationStatus::NotApplicable,
             ..Default::default()
         }
     }
@@ -1357,7 +1422,7 @@ mod tests {
         let observations = vec![RouteObservation {
             request_key: "agent_trace/v2|edit|normal".into(),
             selected_tier: "economy".into(),
-            settled_cost_micro_usd: Some(10),
+            normalized_cost_micro_usd: Some(10),
         }];
         assert!(
             select_target_request_key(
@@ -1455,6 +1520,34 @@ mod tests {
         assert!(timeout.elapsed < Duration::from_secs(4));
         assert_eq!(timeout.launches, 1);
         assert_eq!(PathBuf::from(timeout.cwd), dir.path());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let fake_codex = dir.path().join("codex");
+            tokio::fs::write(&fake_codex, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").await?;
+            std::fs::set_permissions(&fake_codex, std::fs::Permissions::from_mode(0o700))?;
+            let routed_environment = workflow_environment("http://127.0.0.1:43123", "auto")?;
+            let routed = run_workflow_command(WorkflowRunRequest {
+                workflow: &WorkflowCommand {
+                    command: vec![
+                        fake_codex.display().to_string(),
+                        "exec".into(),
+                        "run the eval".into(),
+                    ],
+                    inputs: Vec::new(),
+                    timeout_secs: 2,
+                },
+                cwd: dir.path(),
+                env: &routed_environment,
+                maximum_output_bytes: 8 * 1024,
+            })
+            .await?;
+            assert!(routed.stdout.contains("model_provider=\"bitrouter\""));
+            assert!(routed.stdout.contains("model=\"@auto\""));
+            assert!(routed.stdout.contains("exec\nrun the eval"));
+        }
         Ok(())
     }
 
@@ -1482,9 +1575,36 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
-    fn evidence_requires_exact_decision_subject_and_authoritative_settlement() -> anyhow::Result<()>
-    {
+    fn codex_workflow_gets_the_explicit_private_daemon_provider_adapter() -> anyhow::Result<()> {
+        let environment = workflow_environment("http://127.0.0.1:43123", "auto")?;
+        let overlay = workflow_harness_overlay(
+            "/usr/local/bin/codex",
+            &["exec".into(), "run the eval".into()],
+            &environment,
+        )?;
+
+        assert!(
+            overlay
+                .args
+                .contains(&"model_provider=\"bitrouter\"".to_string())
+        );
+        assert!(overlay.args.contains(
+            &"model_providers.bitrouter.base_url=\"http://127.0.0.1:43123/v1\"".to_string()
+        ));
+        assert!(overlay.args.contains(&"model=\"@auto\"".to_string()));
+        assert!(
+            overlay
+                .args
+                .iter()
+                .all(|argument| !argument.contains("api.bitrouter.ai"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_requires_exact_decision_subject_and_normalized_showback() -> anyhow::Result<()> {
         let policy_digest = digest('a');
         let execution = WorkflowExecution {
             exit_code: Some(0),
@@ -1501,9 +1621,9 @@ mod tests {
             execution.clone(),
             &[decision(&policy_digest)],
             &[subject(&policy_digest)?],
-            &[settled_usage()],
+            &[normalized_usage()],
         )?;
-        assert_eq!(evidence.settled_cost_micro_usd, 400);
+        assert_eq!(evidence.normalized_cost_micro_usd, 400);
         assert_eq!(evidence.observed_latency_ms, 250);
         assert_eq!(evidence.request_count, 1);
 
@@ -1515,13 +1635,28 @@ mod tests {
             failed_execution,
             &[decision(&policy_digest)],
             &[subject(&policy_digest)?],
-            &[settled_usage()],
+            &[normalized_usage()],
         )?;
         assert_eq!(failed.execution.exit_code, Some(2));
 
-        let mut pending = settled_usage();
-        pending.reconciliation_status = ReconciliationStatus::Pending;
-        pending.authoritative_receipt = None;
+        let mut cloud_pending = normalized_usage();
+        cloud_pending.provider_id = "bitrouter".into();
+        cloud_pending.model_id = "deepseek/deepseek-v4-flash-0731".into();
+        cloud_pending.reconciliation_status = ReconciliationStatus::Pending;
+        let cloud_evidence = collect_variant_evidence(
+            "baseline",
+            &policy_digest,
+            execution.clone(),
+            &[decision(&policy_digest)],
+            &[subject(&policy_digest)?],
+            &[cloud_pending],
+        )?;
+        assert_eq!(cloud_evidence.normalized_cost_micro_usd, 400);
+
+        let mut missing_price = normalized_usage();
+        missing_price.charge_status = ChargeStatus::Unknown;
+        missing_price.charge_evidence = None;
+        missing_price.final_charge_micro_usd = None;
         assert!(
             collect_variant_evidence(
                 "baseline",
@@ -1529,7 +1664,7 @@ mod tests {
                 execution,
                 &[decision(&policy_digest)],
                 &[subject(&policy_digest)?],
-                &[pending],
+                &[missing_price],
             )
             .is_err()
         );
@@ -1537,7 +1672,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_daemon_config_is_isolated_cloud_only_and_secret_free() -> anyhow::Result<()> {
+    async fn private_daemon_config_preserves_subscription_and_cloud_routes() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let paths = PrivateDaemonPaths::new(dir.path().join("baseline"));
         #[cfg(unix)]
@@ -1556,8 +1691,9 @@ mod tests {
             source_config: PathBuf::from("bitrouter.yaml"),
             policy: "auto".into(),
             preset: "auto".into(),
-            strong: "bitrouter:openai/gpt-5.6".into(),
+            strong: "openai-codex:gpt-5.6-sol".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            normalized_price_overrides: vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()],
             preference: OptimizationPreference::Balanced,
             evaluator: ResolvedEvaluator {
                 agent: "codex-acp".into(),
@@ -1565,10 +1701,23 @@ mod tests {
                 route: EvaluatorRoute::Cloud,
             },
         };
-        let yaml = private_daemon_config(&paths, &intent, 43123)?;
+        let source = r#"
+providers:
+  openai-codex: {}
+  bitrouter: {}
+inherit_defaults: true
+registry:
+  enabled: true
+presets:
+  auto:
+    system_prompt: preserve-source-preset
+"#;
+        let yaml = private_daemon_config(&paths, &intent, source, 43123)?;
         assert!(!yaml.contains("brk_"));
         assert!(yaml.contains("127.0.0.1:43123"));
-        assert!(yaml.contains("auto_discover: true"));
+        assert!(yaml.contains("openai-codex"));
+        assert!(yaml.contains("bitrouter"));
+        assert!(yaml.contains("preserve-source-preset"));
 
         tokio::fs::create_dir_all(&paths.root).await?;
         tokio::fs::write(&paths.config, yaml).await?;
@@ -1581,9 +1730,10 @@ mod tests {
         assert_eq!(parsed.presets["auto"].policy.as_deref(), Some("auto"));
         assert_eq!(
             parsed.presets["auto"].model.as_deref(),
-            Some("bitrouter:openai/gpt-5.6")
+            Some("openai-codex:gpt-5.6-sol")
         );
         assert!(parsed.providers.contains_key("bitrouter"));
+        assert!(parsed.providers.contains_key("openai-codex"));
         Ok(())
     }
 }

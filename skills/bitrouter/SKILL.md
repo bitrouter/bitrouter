@@ -12,7 +12,7 @@ description: >
   OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
   bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
   Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing agent workflows
-  against eval quality and settled cost. Trigger on "set up a local LLM proxy",
+  against eval quality and normalized routed cost. Trigger on "set up a local LLM proxy",
   "managed AI gateway", "replace litellm", "point claude code at a
   proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
   port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name

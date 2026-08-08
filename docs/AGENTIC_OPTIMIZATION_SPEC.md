@@ -5,7 +5,7 @@ Status: implementation contract
 ## Product outcome
 
 BitRouter can optimize an arbitrary agent workflow from its observable outcome
-and routed request settlements. A new user can configure the loop during
+and daemon-metered model requests. A new user can configure the loop during
 onboarding, run the same workflow under a baseline and a one-variable routing
 candidate, inspect measured quality and cost, and explicitly publish the
 candidate. The online router remains independent of task data.
@@ -43,11 +43,11 @@ The onboarding trade-off choices are qualitative:
   quality regression before recommending a candidate.
 - `balanced`: explore the most frequently used eligible route key and expose
   the measured trade-off for manual review.
-- `savings_first`: explore the eligible route key with the greatest settled
-  cost and expose the measured trade-off for manual review.
+- `savings_first`: explore the eligible route key with the greatest normalized
+  showback cost and expose the measured trade-off for manual review.
 
 All three profiles require the candidate workflow's single agentic evaluation
-to pass and its authoritative settled cost to improve. They are search-order
+to pass and its normalized showback cost to improve. They are search-order
 preferences, not statistical quality-loss promises. Case-level quality budgets
 remain a future extension once BitRouter has a host-verifiable task denominator.
 
@@ -61,7 +61,7 @@ optimization objective in this version.
 BitRouter owns:
 
 - workflow process supervision;
-- policy, decision, request, and settlement identity;
+- policy, decision, request, and metering identity;
 - private experiment daemon and database lifecycle;
 - evidence hashing and redaction;
 - Eval Exchange subjects, results, admission, and snapshots;
@@ -113,23 +113,42 @@ a concrete BitRouter Cloud model or the detected agent's own direct
 subscription, according to the pinned executor configuration. Judge traffic is
 never included in workflow candidate cost.
 
+Every baseline/candidate tier route is executed by the private BitRouter
+daemon. A tier is a provider-qualified daemon route, not a separate execution
+backend: for example `openai-codex:gpt-5.6-sol` uses the daemon's Codex
+subscription auth applier, while
+`bitrouter:deepseek/deepseek-v4-flash-0731` uses the same daemon's BitRouter
+Cloud OAuth auth applier. The workflow child receives only a loopback endpoint
+and local sentinel credential. Known coding-agent executables such as Codex and
+Claude also receive their catalog-owned argv/env routing adapter; a known
+adapter that cannot prove loopback routing fails closed.
+
+The cost objective is normalized showback, not necessarily cash spend. Metered
+providers use their configured cache-aware prices. Flat-rate subscriptions can
+pin an API-equivalent schedule in the version-controlled intent through
+`normalized_price_overrides`; their actual marginal cash charge remains
+unknown. Missing usage or pricing is never interpreted as zero.
+
 ### Experiment loop
 
 One `optimize run` performs these steps:
 
 1. Load and validate intent, lock, source config, and active policy lock.
 2. Create a unique run directory under the BitRouter home.
-3. Derive a minimal private daemon config with a unique loopback port, control
+3. Derive a provider-neutral private daemon config from the source provider,
+   model, registry, and auth semantics, with a unique loopback port, control
    socket, database, and the active policy lock.
 4. Create two detached Git worktrees from one frozen source manifest, overlay
    the same dirty/untracked files, and include any explicitly declared ignored
    dependencies or fixtures (`workflow.inputs`). Run the configured workflow
-   without a shell while pointing common OpenAI,
-   Anthropic, and BitRouter base-url variables at the private daemon.
+   without a shell, preserving user argv boundaries after any catalog-owned
+   routing prefix, while pointing common OpenAI, Anthropic, Gemini, and
+   BitRouter base-url variables at the private daemon. Apply the shared harness
+   catalog adapter when the executable is Codex or another known agent.
    Fingerprint exact argv, its resolved executable, and referenced regular-file
    arguments before and after both variants.
-5. Require at least one settled named-policy decision and build a redacted
-   baseline evidence packet.
+5. Require at least one metered named-policy decision with complete usage and
+   normalized-price evidence, then build a redacted baseline evidence packet.
 6. Select one eligible route key according to the qualitative preference.
 7. Build a non-publishable experiment lock that differs only by mapping that
    key from its baseline tier to the configured economy tier.
@@ -137,9 +156,9 @@ One `optimize run` performs these steps:
    database using the experiment lock.
 9. Evaluate baseline and candidate outputs independently against the same
    success contract. `inconclusive` is preserved and never converted to pass.
-10. Import host-authored settlement metrics and agentic quality results into
-    the source config's Eval Exchange, crediting quality only to the route key
-    changed by the controlled experiment.
+10. Import host-authored normalized metering metrics and agentic quality
+    results into the source config's Eval Exchange, crediting quality only to
+    the route key changed by the controlled experiment.
 11. Freeze an immutable Eval snapshot and compile a v2 candidate from the
     active parent lock plus that exact snapshot.
 12. Save the report, candidate, and lock transition. Never publish as part of
@@ -147,8 +166,8 @@ One `optimize run` performs these steps:
 
 Long or failed workflow commands occupy only their own run. Baseline and
 candidate workflow identities are never retried. The evaluator may use one
-schema-repair turn, and authoritative settlement may poll up to eight times;
-both are bounded and do not relaunch the workflow. A non-zero exit remains quality evidence for the generic evaluator;
+bounded schema-repair turn, which does not relaunch the workflow. A non-zero
+exit remains quality evidence for the generic evaluator;
 it is not mislabeled as a routing-infrastructure error. A timed-out,
 source-drifted, or structurally ambiguous run is terminal and cannot produce a
 publishable candidate. Users who need statistical power configure their
@@ -160,12 +179,12 @@ The private packet may contain bounded stdout, stderr, exit status, elapsed
 time, and user-authored success criteria. The persisted Eval subject contains
 only redacted evidence descriptors and SHA-256 digests.
 
-Request cost and latency come from settled request subjects emitted by the
-private daemon. The host submits those metrics with generic operational
+Request cost and latency come from metered request subjects emitted by the
+private daemon. The host submits normalized showback with generic operational
 authority. The agentic evaluator submits only `quality.pass` semantics.
 
 When the candidate changes exactly one request key, the workflow-level quality
-outcome and workflow-level settled cost/latency delta are causally credited,
+outcome and workflow-level normalized cost/latency delta are causally credited,
 with exact weights, only to decisions for that treatment key. They are not
 represented as per-request measurements. If the observed candidate does not
 preserve that single-variable condition, credit is withheld and the run is
@@ -176,7 +195,8 @@ inconclusive.
 `optimize review` shows:
 
 - baseline and candidate pass/fail/inconclusive outcomes;
-- exact settled cost and percentage delta when both sides have priced usage;
+- exact normalized showback cost and percentage delta when both sides have
+  complete priced usage;
 - observed latency as non-gating information;
 - the one route-key change;
 - evaluator, model, skill, contract, evidence, and policy digests;
@@ -213,8 +233,9 @@ bitrouter optimize setup \
   --workflow-arg --case-set \
   --workflow-arg smoke.jsonl \
   --workflow-input .venv \
-  --strong bitrouter:<strong-model> \
-  --economy bitrouter:<economy-model> \
+  --strong openai-codex:gpt-5.6-sol \
+  --economy bitrouter:deepseek/deepseek-v4-flash-0731 \
+  --normalized-price openai-codex:gpt-5.6-sol=5,0.5,6.25,30 \
   --preference balanced
 ```
 
@@ -233,7 +254,7 @@ The optimizer fails closed when any of these are missing or inconsistent:
 - active source config or named policy lock;
 - distinct strong and economy models;
 - evaluator executable or structured result;
-- workflow settlement, policy decision, or pricing join;
+- workflow metering, policy decision, or pricing join;
 - active/candidate command comparability;
 - exact policy parent lineage;
 - single-variable candidate mutation;
@@ -241,10 +262,11 @@ The optimizer fails closed when any of these are missing or inconsistent:
 - private daemon cleanup.
 
 BitRouter never intentionally writes credentials to intent, lock, reports,
-process arguments, or version-controlled artifacts. Cloud credentials are
-resolved from the API-key credential store or environment and passed only
-through child-process environment. Workflow output is untrusted: known token
-forms and the exact values of recognized sensitive environment variables are
+process arguments, or version-controlled artifacts. Provider credentials are
+resolved by the private daemon through the same native auth appliers used in
+normal service, including Codex subscription and BitRouter Cloud OAuth; they
+are not forwarded to the workflow child. Workflow output is untrusted: known
+token forms and the exact values of recognized sensitive environment variables are
 redacted before evaluator/report persistence, but users must still keep secret
 values out of eval output and treat the selected ACP runtime as trusted.
 
@@ -258,7 +280,7 @@ The implementation is complete only when all of the following are proven:
    schema-validated opinion; malformed output gets one repair turn and then
    fails closed.
 3. A deterministic mock workflow executes under baseline and one-key candidate
-   private daemons, produces settled request evidence, and never mutates the
+   private daemons, produces normalized metering evidence, and never mutates the
    active policy during `run`.
 4. The imported Eval snapshot compiles a candidate with agentic certificates
    and exact parent/evidence digests.
@@ -270,9 +292,10 @@ The implementation is complete only when all of the following are proven:
 8. Cleanup leaves no private daemon, socket, or child process.
 9. The full Rust test, Clippy, formatting, distribution, and repository hygiene
    checks pass.
-10. A real onboarding-to-second-cycle smoke test succeeds using BitRouter Cloud
-    credentials and an installed Codex ACP evaluator, without task-data
-    injection into routing.
+10. A real onboarding-to-second-cycle smoke test succeeds with a Codex
+    subscription strong tier and BitRouter Cloud OAuth economy tier, both
+    proven to traverse the private daemon, without task-data injection into
+    routing.
 
 ## Implementation sequence
 
@@ -280,10 +303,10 @@ The implementation is complete only when all of the following are proven:
    resolution, validation, and reports with failing tests first.
 2. Parameterize candidate compilation with quality-first and manual-review
    search preferences while preserving the legacy compiler default.
-3. Add the embedded-skill evaluator prompt, ACP execution, Cloud credential
+3. Add the embedded-skill evaluator prompt, ACP execution, evaluator credential
    reuse, result validation, and fake-agent tests.
 4. Add private daemon/workflow supervision, experiment-lock generation,
-   settlement extraction, and cleanup tests.
+   normalized metering extraction, and cleanup tests.
 5. Add Eval import, snapshot, compile, review, and publish orchestration with a
    full mock-provider integration test.
 6. Wire `bitrouter optimize` and onboarding, then update CLI/skill references

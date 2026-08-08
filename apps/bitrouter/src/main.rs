@@ -279,12 +279,16 @@ enum Command {
         /// Observable workflow success contract text.
         #[arg(long)]
         optimize_success: Option<String>,
-        /// Strong Cloud route for optimization onboarding.
-        #[arg(long, default_value = "bitrouter:openai/gpt-5.6-terra")]
+        /// Provider-qualified strong route for optimization onboarding.
+        #[arg(long, default_value = "openai-codex:gpt-5.6-sol")]
         optimize_strong: String,
-        /// Economy Cloud route for optimization onboarding.
+        /// Provider-qualified economy route for optimization onboarding.
         #[arg(long, default_value = "bitrouter:deepseek/deepseek-v4-flash-0731")]
         optimize_economy: String,
+        /// Frozen normalized-showback price override. Repeat for unpriced
+        /// subscription routes.
+        #[arg(long = "optimize-normalized-price")]
+        optimize_normalized_prices: Vec<String>,
         /// Qualitative optimization trade-off; latency is observe-only.
         #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
         optimize_preference: OptimizePreferenceArg,
@@ -333,7 +337,7 @@ enum Command {
         #[command(subcommand)]
         action: EvalAction,
     },
-    /// Optimize an agent workflow against measured quality and Cloud cost.
+    /// Optimize an agent workflow against measured quality and normalized cost.
     Optimize {
         #[command(subcommand)]
         action: OptimizeAction,
@@ -1156,12 +1160,17 @@ struct OptimizeSetupArgs {
     /// Preset passed to the workflow as `@preset`.
     #[arg(long, default_value = "auto")]
     preset: String,
-    /// Strong Cloud route used by the baseline.
+    /// Provider-qualified strong route used by the baseline.
     #[arg(long)]
     strong: String,
-    /// Economy Cloud route tested as the one-variable candidate.
+    /// Provider-qualified economy route tested as the one-variable candidate.
     #[arg(long)]
     economy: String,
+    /// Frozen normalized-showback price as
+    /// provider:model=uncached,cache_read,cache_write,output. Repeat for
+    /// subscription or otherwise unpriced routes.
+    #[arg(long = "normalized-price")]
+    normalized_price_overrides: Vec<String>,
     /// Qualitative quality/cost trade-off. Latency remains observe-only.
     #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
     preference: OptimizePreferenceArg,
@@ -1172,7 +1181,8 @@ struct OptimizeSetupArgs {
     #[arg(long)]
     evaluator_model: Option<String>,
     /// Route judge traffic through BitRouter Cloud instead of the detected
-    /// agent's own subscription. Workflow traffic always uses Cloud.
+    /// agent's own subscription. Workflow traffic always uses the private
+    /// BitRouter daemon and may select any configured provider.
     #[arg(long)]
     evaluator_via_cloud: bool,
 }
@@ -1616,8 +1626,16 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_success,
             optimize_strong,
             optimize_economy,
+            optimize_normalized_prices,
             optimize_preference,
         } => {
+            let optimize_normalized_prices = if optimize_normalized_prices.is_empty()
+                && optimize_strong == "openai-codex:gpt-5.6-sol"
+            {
+                vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()]
+            } else {
+                optimize_normalized_prices
+            };
             let optimization = if optimize || optimize_workflow_command.is_some() {
                 Some(bitrouter::onboarding::OnboardingOptimization {
                     workflow_command: optimize_workflow_command.map(|command| {
@@ -1629,6 +1647,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     success_contract: optimize_success,
                     strong: optimize_strong,
                     economy: optimize_economy,
+                    normalized_price_overrides: optimize_normalized_prices,
                     preference: optimize_preference.into(),
                 })
             } else {
@@ -3733,6 +3752,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 preset,
                 strong,
                 economy,
+                normalized_price_overrides,
                 preference,
                 evaluator_agent,
                 evaluator_model,
@@ -3764,6 +3784,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     preset,
                     strong,
                     economy,
+                    normalized_price_overrides,
                     preference,
                     evaluator_agent,
                     evaluator_model,
@@ -3779,6 +3800,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     "contract": outcome.contract_path,
                     "active_policy_digest": outcome.lock.active_policy_digest,
                     "evaluator": outcome.lock.evaluator,
+                    "strong": outcome.intent.strong,
+                    "economy": outcome.intent.economy,
+                    "normalized_price_overrides": outcome.intent.normalized_price_overrides,
                     "preference": outcome.intent.preference,
                     "latency": "observe_only",
                 }),
@@ -3797,8 +3821,6 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             } else {
                 None
             };
-            bitrouter::optimization::setup::validate_catalog_model(&loaded.intent.strong)?;
-            bitrouter::optimization::setup::validate_catalog_model(&loaded.intent.economy)?;
             bitrouter::optimization::setup::validate_resolved_evaluator_model(
                 loaded.intent.evaluator.route,
                 &loaded.intent.evaluator.model,
@@ -3814,6 +3836,16 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     )
                 })?;
             let source_config = config::parse(&source_raw).context("parsing source config")?;
+            bitrouter::optimization::setup::validate_routable_model(
+                &source_config,
+                &loaded.intent.strong,
+            )
+            .await?;
+            bitrouter::optimization::setup::validate_routable_model(
+                &source_config,
+                &loaded.intent.economy,
+            )
+            .await?;
             let policy_path = bitrouter::policy_lock::resolve_path(
                 &source_config,
                 Some(&loaded.paths.source_config),
@@ -3892,7 +3924,6 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 lock.document.evaluator.clone(),
                 std::time::Duration::from_secs(300),
             )?;
-            let settlement_bearer = optimization_cloud_bearer().await?;
             let executable = std::env::current_exe().context("resolving BitRouter executable")?;
             let workflow_cwd = loaded
                 .paths
@@ -3906,7 +3937,6 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     optimization_lock: &lock,
                     workflow_cwd: &workflow_cwd,
                     bitrouter_executable: &executable,
-                    settlement_bearer: &settlement_bearer,
                     evaluator: &backend,
                 },
             )
@@ -4428,23 +4458,6 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             Ok(())
         }
     }
-}
-
-async fn optimization_cloud_bearer() -> Result<String> {
-    if let Ok(key) = std::env::var(bitrouter::harness::BITROUTER_API_KEY_ENV)
-        && !key.is_empty()
-    {
-        return Ok(key);
-    }
-    bitrouter::cloud::cloud_api_key_for_base_url(
-        bitrouter_cloud_sdk::auth::settings::DEFAULT_AS,
-    )
-    .await
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "a BitRouter Cloud inference API key is required for authoritative settlement; inject BITROUTER_API_KEY from your shell or secret manager, then rerun"
-        )
-    })
 }
 
 async fn load_optimization_report(
@@ -6486,9 +6499,11 @@ mod tests {
             "--workflow-input",
             ".venv",
             "--strong",
-            "bitrouter:openai/gpt-5.6-terra",
+            "openai-codex:gpt-5.6-sol",
             "--economy",
-            "bitrouter:openai/gpt-5.4-mini",
+            "bitrouter:deepseek/deepseek-v4-flash-0731",
+            "--normalized-price",
+            "openai-codex:gpt-5.6-sol=5,0.5,6.25,30",
         ])?;
         assert!(matches!(
             setup.command,
@@ -6504,9 +6519,9 @@ mod tests {
                 "--workflow-command",
                 "./run-eval",
                 "--strong",
-                "bitrouter:openai/gpt-5.6-terra",
+                "openai-codex:gpt-5.6-sol",
                 "--economy",
-                "bitrouter:openai/gpt-5.4-mini",
+                "bitrouter:deepseek/deepseek-v4-flash-0731",
                 "--evaluator-via-cloud",
             ])
             .is_ok()

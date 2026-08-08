@@ -23,6 +23,7 @@ pub struct SetupOptimizationRequest {
     pub preset: String,
     pub strong: String,
     pub economy: String,
+    pub normalized_price_overrides: Vec<String>,
     pub preference: OptimizationPreference,
     pub evaluator_agent: String,
     pub evaluator_model: Option<String>,
@@ -82,15 +83,26 @@ pub async fn setup_optimization(
             source_config.display()
         );
     }
-    if !request.strong.starts_with("bitrouter:") || !request.economy.starts_with("bitrouter:") {
-        anyhow::bail!("workflow optimization currently requires two BitRouter Cloud routes");
+    let route_providers = [&request.strong, &request.economy]
+        .into_iter()
+        .map(|route| {
+            route
+                .split_once(':')
+                .map(|(provider, _)| provider.to_string())
+                .filter(|provider| !provider.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("optimization tier route '{route}' must be provider-qualified")
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for value in &request.normalized_price_overrides {
+        crate::metering::UsagePriceOverride::parse(value)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("validating normalized price override {value:?}"))?;
     }
-    validate_catalog_model(&request.strong)?;
-    validate_catalog_model(&request.economy)?;
     let evaluator_model = resolve_evaluator_model(
         request.evaluator_route,
         request.evaluator_model,
-        &request.strong,
         &request.evaluator_agent,
     )?;
     validate_resolved_evaluator_model(request.evaluator_route, &evaluator_model)?;
@@ -145,6 +157,21 @@ pub async fn setup_optimization(
         paths.lock.clone(),
     );
     let outcome: Result<SetupOptimizationOutcome> = async {
+        let source_with_providers =
+            crate::policy_lock::edit_config_provider_stubs(&source_raw, &route_providers)?;
+        if source_with_providers != source_raw {
+            crate::policy_lock::write_text_atomic_unlocked(
+                &source_config,
+                &source_raw,
+                &source_with_providers,
+            )?;
+            rollback.record_source_policy_owned()?;
+        }
+        let source_raw = tokio::fs::read_to_string(&source_config).await?;
+        let source_parsed = bitrouter_sdk::config::parse(&source_raw)
+            .context("parsing provider-complete source BitRouter config")?;
+        validate_routable_model(&source_parsed, &request.strong).await?;
+        validate_routable_model(&source_parsed, &request.economy).await?;
         let policy_exists = if policy_path.is_file() {
             let existing = crate::policy_lock::load(&policy_path).await?;
             if let Some(definition) = existing.document.policies.get(&request.policy) {
@@ -232,6 +259,7 @@ pub async fn setup_optimization(
             preset: request.preset,
             strong: request.strong,
             economy: request.economy,
+            normalized_price_overrides: request.normalized_price_overrides,
             preference: request.preference,
             evaluator: ResolvedEvaluator {
                 agent: request.evaluator_agent.clone(),
@@ -443,9 +471,9 @@ fn path_relative_to(root: &Path, path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub fn validate_catalog_model(route: &str) -> Result<()> {
+pub fn validate_cloud_catalog_model(route: &str) -> Result<()> {
     let model = route.strip_prefix("bitrouter:").ok_or_else(|| {
-        anyhow::anyhow!("optimization route must use the bitrouter: provider prefix")
+        anyhow::anyhow!("Cloud evaluator route must use the bitrouter: provider prefix")
     })?;
     let catalog: serde_json::Value =
         serde_json::from_str(include_str!("../../../../dist/registry/models.json"))
@@ -470,12 +498,11 @@ pub fn validate_catalog_model(route: &str) -> Result<()> {
 fn resolve_evaluator_model(
     route: EvaluatorRoute,
     requested: Option<String>,
-    strong: &str,
     agent: &str,
 ) -> Result<String> {
     match (route, requested) {
         (EvaluatorRoute::Cloud, Some(model)) => Ok(model),
-        (EvaluatorRoute::Cloud, None) => Ok(strong.to_string()),
+        (EvaluatorRoute::Cloud, None) => Ok("bitrouter:openai/gpt-5.6-terra".into()),
         (EvaluatorRoute::Direct, Some(model)) => validate_direct_model(model),
         (EvaluatorRoute::Direct, None) if agent == "codex-acp" => detect_codex_model(),
         (EvaluatorRoute::Direct, None) if agent == "claude-acp" => detect_claude_model(),
@@ -487,9 +514,41 @@ fn resolve_evaluator_model(
 
 pub fn validate_resolved_evaluator_model(route: EvaluatorRoute, model: &str) -> Result<()> {
     match route {
-        EvaluatorRoute::Cloud => validate_catalog_model(model),
+        EvaluatorRoute::Cloud => validate_cloud_catalog_model(model),
         EvaluatorRoute::Direct => validate_direct_model(model.to_string()).map(|_| ()),
     }
+}
+
+pub async fn validate_routable_model(
+    source: &bitrouter_sdk::config::Config,
+    route: &str,
+) -> Result<()> {
+    let (provider, model) = route.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!("optimization tier route '{route}' must be provider-qualified")
+    })?;
+    if provider.is_empty() || model.is_empty() || model.starts_with('@') {
+        anyhow::bail!("optimization tier route '{route}' is not a concrete provider model");
+    }
+    let mut resolved = source.clone();
+    crate::merge_registry_into(&mut resolved).await;
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let provider_config = resolved.providers.get(provider).ok_or_else(|| {
+        anyhow::anyhow!(
+            "optimization provider '{provider}' is not available from the source config or provider registry"
+        )
+    })?;
+    if !provider_config.active || provider_config.api_base.trim().is_empty() {
+        anyhow::bail!(
+            "optimization provider '{provider}' is not active and routable; configure its credential or provider entry first"
+        );
+    }
+    bitrouter_sdk::config::routing_table::resolve_route_chain(
+        &resolved,
+        route,
+        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+    )
+    .with_context(|| format!("resolving optimization tier route '{route}'"))?;
+    Ok(())
 }
 
 fn validate_direct_model(model: String) -> Result<String> {
@@ -602,7 +661,10 @@ fn claude_model_from_settings(raw: &str) -> Result<String> {
 
 #[cfg(all(test, not(windows)))]
 mod tests {
-    use super::{claude_model_from_settings, codex_model_from_config, validate_catalog_model};
+    use super::{
+        claude_model_from_settings, codex_model_from_config, validate_cloud_catalog_model,
+        validate_routable_model,
+    };
 
     #[test]
     fn detects_exact_local_codex_model_without_importing_agent_settings() -> anyhow::Result<()> {
@@ -623,10 +685,30 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn setup_models_must_exist_in_the_embedded_cloud_catalog() {
-        assert!(validate_catalog_model("bitrouter:openai/gpt-5.6-terra").is_ok());
-        assert!(validate_catalog_model("bitrouter:deepseek/deepseek-v4-flash-0731").is_ok());
-        assert!(validate_catalog_model("bitrouter:openai/gpt-5.6").is_err());
+    fn cloud_evaluator_models_must_exist_in_the_embedded_cloud_catalog() {
+        assert!(validate_cloud_catalog_model("bitrouter:openai/gpt-5.6-terra").is_ok());
+        assert!(validate_cloud_catalog_model("bitrouter:deepseek/deepseek-v4-flash-0731").is_ok());
+        assert!(validate_cloud_catalog_model("bitrouter:openai/gpt-5.6").is_err());
+    }
+
+    #[tokio::test]
+    async fn tier_models_may_use_distinct_daemon_providers() -> anyhow::Result<()> {
+        let source = bitrouter_sdk::config::parse(
+            r#"
+providers:
+  openai-codex:
+    api_base: https://chatgpt.example.test/backend-api/codex
+    models: [{ id: gpt-5.6-sol }]
+  bitrouter:
+    api_base: https://api.bitrouter.example.test/v1
+    models: [{ id: deepseek/deepseek-v4-flash-0731 }]
+inherit_defaults: false
+"#,
+        )?;
+
+        validate_routable_model(&source, "openai-codex:gpt-5.6-sol").await?;
+        validate_routable_model(&source, "bitrouter:deepseek/deepseek-v4-flash-0731").await?;
+        Ok(())
     }
 
     #[test]

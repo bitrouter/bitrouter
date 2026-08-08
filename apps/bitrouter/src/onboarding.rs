@@ -204,6 +204,7 @@ pub struct OnboardingOptimization {
     pub success_contract: Option<String>,
     pub strong: String,
     pub economy: String,
+    pub normalized_price_overrides: Vec<String>,
     pub preference: crate::optimization::OptimizationPreference,
 }
 
@@ -272,6 +273,9 @@ pub struct OptimizationOnboardingReport {
     pub intent: String,
     pub lock: String,
     pub evaluator: String,
+    pub strong: String,
+    pub economy: String,
+    pub normalized_price_overrides: Vec<String>,
     pub preference: crate::optimization::OptimizationPreference,
 }
 
@@ -302,6 +306,16 @@ impl CliReport for OnboardingReport {
             h.field("optimization intent", &optimization.intent)?;
             h.field("optimization lock", &optimization.lock)?;
             h.field("quality evaluator", &optimization.evaluator)?;
+            h.field("strong route", &optimization.strong)?;
+            h.field("economy route", &optimization.economy)?;
+            h.field(
+                "normalized prices",
+                if optimization.normalized_price_overrides.is_empty() {
+                    "provider catalog".to_string()
+                } else {
+                    optimization.normalized_price_overrides.join(", ")
+                },
+            )?;
         }
         if let Some(snippet) = &self.snippet {
             h.blank()?;
@@ -864,8 +878,9 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
             workflow_command: None,
             workflow_inputs: Vec::new(),
             success_contract: None,
-            strong: "bitrouter:openai/gpt-5.6-terra".into(),
+            strong: "openai-codex:gpt-5.6-sol".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            normalized_price_overrides: vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()],
             preference: crate::optimization::OptimizationPreference::Balanced,
         },
     };
@@ -924,6 +939,7 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
         success_contract: Some(success_contract),
         strong: requested.strong,
         economy: requested.economy,
+        normalized_price_overrides: requested.normalized_price_overrides,
         preference,
     }))
 }
@@ -939,19 +955,6 @@ async fn configure_optimization(
     let success_contract = requested.success_contract.ok_or_else(|| {
         anyhow::anyhow!("headless optimization onboarding requires --optimize-success")
     })?;
-    let has_cloud_api_key = std::env::var(crate::harness::BITROUTER_API_KEY_ENV)
-        .ok()
-        .is_some_and(|key| !key.trim().is_empty())
-        || crate::cloud::cloud_api_key_for_base_url(
-            bitrouter_cloud_sdk::auth::settings::DEFAULT_AS,
-        )
-        .await
-        .is_some();
-    if !has_cloud_api_key {
-        anyhow::bail!(
-            "workflow optimization requires a BitRouter Cloud inference API key before setup; export BITROUTER_API_KEY in this shell or sign in through the interactive API-key prompt, then rerun onboarding"
-        );
-    }
     let evaluator_agent = if installed.iter().any(|agent| agent.contains("codex")) {
         "codex-acp"
     } else if installed.iter().any(|agent| agent.contains("claude")) {
@@ -978,6 +981,7 @@ async fn configure_optimization(
             preset: "auto".into(),
             strong: requested.strong,
             economy: requested.economy,
+            normalized_price_overrides: requested.normalized_price_overrides,
             preference: requested.preference,
             evaluator_agent: evaluator_agent.into(),
             evaluator_model: None,
@@ -989,6 +993,9 @@ async fn configure_optimization(
         intent: outcome.paths.intent.display().to_string(),
         lock: outcome.paths.lock.display().to_string(),
         evaluator: evaluator_agent.into(),
+        strong: outcome.intent.strong,
+        economy: outcome.intent.economy,
+        normalized_price_overrides: outcome.intent.normalized_price_overrides,
         preference: outcome.intent.preference,
     })
 }

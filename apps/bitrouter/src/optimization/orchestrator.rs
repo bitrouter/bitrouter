@@ -51,8 +51,8 @@ pub struct OptimizationReport {
     pub preference: super::OptimizationPreference,
     pub baseline: VariantReport,
     pub candidate: VariantReport,
-    pub cost_delta_micro_usd: i64,
-    pub cost_delta_ppm: Option<i64>,
+    pub normalized_cost_delta_micro_usd: i64,
+    pub normalized_cost_delta_ppm: Option<i64>,
     pub latency_observe_only: bool,
     pub eval_snapshot_digest: String,
     pub candidate_digest: String,
@@ -70,7 +70,7 @@ pub struct VariantReport {
     pub evidence_digest: String,
     pub policy_digest: String,
     pub request_count: usize,
-    pub settled_cost_micro_usd: u64,
+    pub normalized_cost_micro_usd: u64,
     pub observed_latency_ms: u64,
     pub elapsed_ms: u64,
 }
@@ -80,7 +80,6 @@ pub struct RunOptimizationRequest<'a> {
     pub optimization_lock: &'a super::LoadedOptimizationLock,
     pub workflow_cwd: &'a Path,
     pub bitrouter_executable: &'a Path,
-    pub settlement_bearer: &'a str,
     pub evaluator: &'a dyn AgenticEvaluatorBackend,
 }
 
@@ -157,9 +156,9 @@ pub async fn run_optimization(
         intent: &request.loaded.intent,
         policy: &active.document,
         policy_digest: &active.digest,
+        source_config_raw: &source_raw,
         workflow_cwd: &workflow_workspaces.baseline_cwd,
         bitrouter_executable: request.bitrouter_executable,
-        settlement_bearer: request.settlement_bearer,
         maximum_output_bytes: MAXIMUM_WORKFLOW_OUTPUT_BYTES,
     })
     .await
@@ -206,9 +205,9 @@ pub async fn run_optimization(
         intent: &request.loaded.intent,
         policy: &experiment,
         policy_digest: &experiment_digest,
+        source_config_raw: &source_raw,
         workflow_cwd: &workflow_workspaces.candidate_cwd,
         bitrouter_executable: request.bitrouter_executable,
-        settlement_bearer: request.settlement_bearer,
         maximum_output_bytes: MAXIMUM_WORKFLOW_OUTPUT_BYTES,
     })
     .await
@@ -407,7 +406,7 @@ pub async fn run_optimization(
                 migration.source == crate::policy_lock::LegacyEvidenceSource::SealedEmpty
             })
     });
-    let cost_improved = candidate.settled_cost_micro_usd < baseline.settled_cost_micro_usd;
+    let cost_improved = candidate.normalized_cost_micro_usd < baseline.normalized_cost_micro_usd;
     let publishable = !baseline.execution.timed_out
         && !candidate.execution.timed_out
         && candidate_evaluation.verdict == AgenticVerdict::Pass
@@ -431,7 +430,7 @@ pub async fn run_optimization(
         caveats.push("candidate workflow timed out".into());
     }
     if !cost_improved {
-        caveats.push("candidate did not reduce authoritative settled cost".into());
+        caveats.push("candidate did not reduce normalized showback cost".into());
     }
     if !exact_change {
         caveats.push("compiler output was not an exact one-route change".into());
@@ -445,9 +444,9 @@ pub async fn run_optimization(
                 .into(),
         );
     }
-    let cost_delta_micro_usd = signed_delta(
-        candidate.settled_cost_micro_usd,
-        baseline.settled_cost_micro_usd,
+    let normalized_cost_delta_micro_usd = signed_delta(
+        candidate.normalized_cost_micro_usd,
+        baseline.normalized_cost_micro_usd,
     );
     let report = OptimizationReport {
         run_id: run_id.clone(),
@@ -459,10 +458,10 @@ pub async fn run_optimization(
         preference: request.loaded.intent.preference,
         baseline: variant_report(&baseline, &baseline_evaluation)?,
         candidate: variant_report(&candidate, &candidate_evaluation)?,
-        cost_delta_micro_usd,
-        cost_delta_ppm: percentage_delta_ppm(
-            candidate.settled_cost_micro_usd,
-            baseline.settled_cost_micro_usd,
+        normalized_cost_delta_micro_usd,
+        normalized_cost_delta_ppm: percentage_delta_ppm(
+            candidate.normalized_cost_micro_usd,
+            baseline.normalized_cost_micro_usd,
         ),
         latency_observe_only: true,
         eval_snapshot_digest: snapshot.evidence_root.clone(),
@@ -1148,8 +1147,8 @@ async fn submit_variant_result(
             attributes: evidence_attributes,
         },
         EvidenceItem {
-            evidence_id: "authoritative-settlement".into(),
-            kind: "request.settlement".into(),
+            evidence_id: "normalized-showback".into(),
+            kind: "request.normalized_showback".into(),
             digest: canonical_digest(&evidence.attributions)?,
             redacted: true,
             attributes: BTreeMap::from([(
@@ -1185,8 +1184,8 @@ async fn submit_variant_result(
         (
             "cost.usd_micros".into(),
             MetricValue::new(
-                i64::try_from(evidence.settled_cost_micro_usd)
-                    .context("encoding settled workflow cost")?,
+                i64::try_from(evidence.normalized_cost_micro_usd)
+                    .context("encoding normalized workflow cost")?,
                 MetricUnit::MicroUsd,
             ),
         ),
@@ -1280,19 +1279,19 @@ async fn submit_variant_result(
         eval_id,
         evidence_digest: subject.evidence_digest.clone(),
         evaluator: EvaluatorIdentity {
-            authority_id: "bitrouter.optimization.settlement".into(),
-            evaluator_id: "bitrouter.authoritative-settlement".into(),
+            authority_id: "bitrouter.optimization.metering".into(),
+            evaluator_id: "bitrouter.normalized-showback".into(),
             kind: EvaluatorKind::Generic,
             version: "1".into(),
-            config_digest: canonical_digest(&("bitrouter.authoritative-settlement", 1_u32))?,
+            config_digest: canonical_digest(&("bitrouter.normalized-showback", 1_u32))?,
         },
         verdict: EvalVerdict::Inconclusive,
         metrics: operational_metrics,
         hard_violations: Vec::new(),
         confidence_ppm: None,
-        evidence_refs: vec!["authoritative-settlement".into()],
+        evidence_refs: vec!["normalized-showback".into()],
         decision_credit: operational_credit,
-        idempotency_key: format!("optimize:{run_id}:{}:settlement", evidence.variant),
+        idempotency_key: format!("optimize:{run_id}:{}:metering", evidence.variant),
         submitted_at: chrono::Utc::now().to_rfc3339(),
     };
     let operational_admission = service
@@ -1300,7 +1299,7 @@ async fn submit_variant_result(
         .await?;
     if operational_admission.status != AdmissionStatus::Admitted {
         anyhow::bail!(
-            "authoritative settlement result was not admitted: {} ({})",
+            "normalized metering result was not admitted: {} ({})",
             operational_admission.reason,
             evidence.variant
         );
@@ -1353,7 +1352,7 @@ fn variant_report(
         evidence_digest: canonical_digest(&evidence.attributions)?,
         policy_digest: evidence.policy_digest.clone(),
         request_count: evidence.request_count,
-        settled_cost_micro_usd: evidence.settled_cost_micro_usd,
+        normalized_cost_micro_usd: evidence.normalized_cost_micro_usd,
         observed_latency_ms: evidence.observed_latency_ms,
         elapsed_ms: duration_ms(evidence.execution.elapsed),
     })
@@ -1364,7 +1363,7 @@ fn outcome_summary(report: &VariantReport) -> OutcomeSummary {
         verdict: report.verdict,
         evidence_digest: report.evidence_digest.clone(),
         policy_digest: report.policy_digest.clone(),
-        settled_cost_micro_usd: Some(report.settled_cost_micro_usd),
+        normalized_cost_micro_usd: Some(report.normalized_cost_micro_usd),
         elapsed_ms: report.elapsed_ms,
     }
 }
@@ -1661,17 +1660,21 @@ mod tests {
                 cwd: "/tmp/project".into(),
             },
             request_count: 1,
-            settled_cost_micro_usd: if name == "baseline" { 100 } else { 60 },
+            normalized_cost_micro_usd: if name == "baseline" { 100 } else { 60 },
             observed_latency_ms: 200,
             observations: vec![RouteObservation {
                 request_key: decision.request_key.clone(),
                 selected_tier: tier.into(),
-                settled_cost_micro_usd: Some(60),
+                normalized_cost_micro_usd: Some(60),
             }],
             attributions: vec![VariantAttribution {
                 request_id: format!("req-{name}"),
                 decision,
-                settled_cost_micro_usd: 60,
+                usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+                pricing_source: crate::metering::PricingSource::Configured,
+                pricing_version:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                normalized_cost_micro_usd: 60,
                 latency_ms: 200,
             }],
         }

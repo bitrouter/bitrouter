@@ -1139,6 +1139,69 @@ pub fn edit_config_mode(raw: &str, mode: PolicyRuntimeMode) -> Result<String> {
     Ok(edited)
 }
 
+/// Ensure provider-qualified policy tiers remain routable after setup by
+/// adding empty registry-backed provider stubs without reserializing the
+/// operator's config. Existing provider bodies and comments are untouched.
+pub fn edit_config_provider_stubs(raw: &str, providers: &[String]) -> Result<String> {
+    let parsed = bitrouter_sdk::config::parse_with(raw, |_| {
+        Some("bitrouter-provider-stub-validation".into())
+    })
+    .context("parsing bitrouter.yaml")?;
+    let mut missing = providers
+        .iter()
+        .filter(|provider| !parsed.providers.contains_key(provider.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if missing.is_empty() {
+        return Ok(raw.to_string());
+    }
+    if missing.iter().any(|provider| {
+        provider.is_empty()
+            || provider.len() > 128
+            || !provider
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    }) {
+        anyhow::bail!("provider ids must use ASCII letters, digits, '.', '_' or '-'");
+    }
+
+    let mut lines = source_lines(raw);
+    if let Some((start, end)) = block_range(&lines, "providers", 0) {
+        let inline_empty = lines[start]
+            .split_once(':')
+            .is_some_and(|(_, value)| matches!(value.trim(), "{}" | "{ }"));
+        if inline_empty {
+            lines[start] = "providers:".into();
+        } else {
+            require_block_header(&lines[start], "providers")?;
+        }
+        let insert_at = if inline_empty { start + 1 } else { end };
+        for (offset, provider) in std::mem::take(&mut missing).into_iter().enumerate() {
+            lines.insert(insert_at + offset, format!("  {provider}: {{}}"));
+        }
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("providers:".into());
+        for provider in missing {
+            lines.push(format!("  {provider}: {{}}"));
+        }
+    }
+    let edited = render_source_lines(lines, raw.ends_with('\n'));
+    let checked = bitrouter_sdk::config::parse_with(&edited, |_| {
+        Some("bitrouter-provider-stub-validation".into())
+    })
+    .context("validating provider stubs in bitrouter.yaml")?;
+    if providers
+        .iter()
+        .any(|provider| !checked.providers.contains_key(provider))
+    {
+        anyhow::bail!("edited config did not retain every optimization provider");
+    }
+    Ok(edited)
+}
+
 /// Variant used by `policy init`, which may create the preset when a strong
 /// base model is supplied.
 pub fn edit_config_policy_with_model(
@@ -3741,6 +3804,28 @@ presets:
             Some("terminal-bench")
         );
         assert_eq!(parsed.policy.mode, PolicyRuntimeMode::Frozen);
+    }
+
+    #[test]
+    fn config_provider_stubs_preserve_existing_provider_bodies() -> anyhow::Result<()> {
+        let raw = r#"# operator-owned config
+providers:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+inherit_defaults: true
+"#;
+        let edited = edit_config_provider_stubs(
+            raw,
+            &["openai-codex".into(), "bitrouter".into(), "openai".into()],
+        )?;
+        let parsed = bitrouter_sdk::config::parse_with(&edited, |_| Some("test".into()))?;
+
+        assert!(edited.contains("# operator-owned config"));
+        assert!(edited.contains("    api_key: ${OPENAI_API_KEY}"));
+        assert!(parsed.providers.contains_key("openai-codex"));
+        assert!(parsed.providers.contains_key("bitrouter"));
+        assert!(parsed.providers.contains_key("openai"));
+        Ok(())
     }
 
     #[test]

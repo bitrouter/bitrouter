@@ -80,6 +80,11 @@ pub struct OptimizationIntent {
     pub preset: String,
     pub strong: String,
     pub economy: String,
+    /// Frozen normalized-showback prices for routes whose provider does not
+    /// publish token pricing (for example a flat-rate subscription). Values
+    /// use `provider:model=uncached,cache_read,cache_write,output`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub normalized_price_overrides: Vec<String>,
     pub preference: OptimizationPreference,
     pub evaluator: ResolvedEvaluator,
 }
@@ -107,6 +112,27 @@ impl OptimizationIntent {
         }
         if self.strong == self.economy {
             anyhow::bail!("strong and economy routes must be distinct");
+        }
+        for (label, route) in [("strong", &self.strong), ("economy", &self.economy)] {
+            let Some((provider, model)) = route.split_once(':') else {
+                anyhow::bail!("{label} route must be provider-qualified");
+            };
+            if provider.is_empty() || model.is_empty() || model.starts_with('@') {
+                anyhow::bail!("{label} route must name a concrete provider model");
+            }
+        }
+        if self.normalized_price_overrides.len() > 256 {
+            anyhow::bail!("normalized price overrides exceed the bounded schedule contract");
+        }
+        let mut priced_routes = std::collections::BTreeSet::new();
+        for value in &self.normalized_price_overrides {
+            let parsed = crate::metering::UsagePriceOverride::parse(value)
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("validating normalized price override {value:?}"))?;
+            let route = format!("{}:{}", parsed.provider_id, parsed.model_id);
+            if !priced_routes.insert(route.clone()) {
+                anyhow::bail!("duplicate normalized price override for '{route}'");
+            }
         }
         Ok(())
     }
@@ -260,7 +286,7 @@ pub struct OutcomeSummary {
     pub evidence_digest: String,
     pub policy_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub settled_cost_micro_usd: Option<u64>,
+    pub normalized_cost_micro_usd: Option<u64>,
     pub elapsed_ms: u64,
 }
 
@@ -619,6 +645,7 @@ mod tests {
             preset: "auto".into(),
             strong: "bitrouter:openai/gpt-5.6".into(),
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            normalized_price_overrides: Vec::new(),
             preference: OptimizationPreference::Balanced,
             evaluator: ResolvedEvaluator {
                 agent: "codex-acp".into(),
