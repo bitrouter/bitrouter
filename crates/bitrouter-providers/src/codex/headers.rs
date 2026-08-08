@@ -3,9 +3,8 @@
 //! Codex's backend at `chatgpt.com/backend-api/codex` rejects requests that
 //! don't carry the integration headers an official CLI client would send.
 //! We mirror what OpenAI's Codex CLI ships with — `chatgpt-account-id`
-//! sourced from the OAuth access-token's JWT claims, `OpenAI-Beta` to opt
-//! into the streamed-Responses path, and an `originator` tag identifying
-//! the client.
+//! sourced from the OAuth access-token's JWT claims, the current Codex HTTP
+//! Responses contract marker, and an `originator` tag identifying the client.
 //!
 //! Header values cribbed from the OpenCode reference at
 //! `packages/opencode/src/plugin/codex.ts` (line 108: `originator: "opencode"`)
@@ -19,9 +18,8 @@
 /// other Codex clients.
 pub const ORIGINATOR: &str = "bitrouter";
 
-/// `OpenAI-Beta` value to opt into the experimental Responses API surface
-/// that Codex's backend speaks.
-pub const OPENAI_BETA: &str = "responses=experimental";
+/// Header value used by the current Codex CLI for HTTP Responses requests.
+pub const RESPONSES_LITE: &str = "true";
 
 /// `user-agent` bitrouter sends on Codex requests. The backend is lenient
 /// about the value (the OpenClaw reference sends its own name), so we send

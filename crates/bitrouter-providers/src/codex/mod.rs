@@ -14,7 +14,7 @@
 //!    [`crate::oauth::refresh::REFRESH_WINDOW`] of expiry.
 //! 3. Decode the access token JWT to extract `chatgpt_account_id` and
 //!    forward it on the `chatgpt-account-id` header alongside the Bearer.
-//! 4. Set `OpenAI-Beta: responses=experimental` and `originator: bitrouter`
+//! 4. Set the current Codex HTTP Responses marker and `originator: bitrouter`
 //!    so the upstream admits the request through the Codex pipeline.
 //!
 //! ## Body shape
@@ -342,8 +342,8 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             headers_mut.insert(HeaderName::from_static("chatgpt-account-id"), value);
         }
         headers_mut.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static(headers::OPENAI_BETA),
+            HeaderName::from_static("x-openai-internal-codex-responses-lite"),
+            HeaderValue::from_static(headers::RESPONSES_LITE),
         );
         headers_mut.insert(
             HeaderName::from_static("originator"),
@@ -394,8 +394,11 @@ impl AuthApplier for OpenAiCodexAuthApplier {
 ///
 /// The backend requires `store: false` (it does not persist Codex responses)
 /// and `include: ["reasoning.encrypted_content"]` so reasoning models return
-/// their encrypted reasoning for multi-turn continuity. The caller's system
-/// prompt rides in `instructions` (set by the Responses adapter); when the
+/// their encrypted reasoning for multi-turn continuity. The Responses-Lite
+/// transport marker also requires `reasoning.context: "all_turns"` and
+/// `parallel_tool_calls: false`; preserve any caller effort while pinning that
+/// provider contract. The caller's system prompt rides in `instructions` (set
+/// by the Responses adapter); when the
 /// caller sent none, default it to the Codex CLI's own fallback so the backend
 /// always sees instructions. Mirrors OpenClaw
 /// `src/llm/providers/openai-chatgpt-responses.ts`.
@@ -426,6 +429,19 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
         strip_codex_unsupported_fields(value);
     }
     obj.insert("store".to_string(), Value::Bool(false));
+    obj.insert("parallel_tool_calls".to_string(), Value::Bool(false));
+    let reasoning = obj
+        .entry("reasoning".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !reasoning.is_object() {
+        *reasoning = Value::Object(serde_json::Map::new());
+    }
+    if let Some(reasoning) = reasoning.as_object_mut() {
+        reasoning.insert(
+            "context".to_string(),
+            Value::String("all_turns".to_string()),
+        );
+    }
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
             if !items.iter().any(|v| v.as_str() == Some(REASONING_INCLUDE)) {
@@ -713,9 +729,11 @@ mod tests {
             h.get("chatgpt-account-id").and_then(|v| v.to_str().ok()),
             Some("acct-bitrouter")
         );
+        assert!(h.get("openai-beta").is_none());
         assert_eq!(
-            h.get("openai-beta").and_then(|v| v.to_str().ok()),
-            Some(headers::OPENAI_BETA)
+            h.get("x-openai-internal-codex-responses-lite")
+                .and_then(|v| v.to_str().ok()),
+            Some("true")
         );
         assert_eq!(
             h.get("originator").and_then(|v| v.to_str().ok()),
@@ -930,6 +948,7 @@ mod tests {
         let mut body = serde_json::json!({
             "model": "gpt-5-codex",
             "input": [],
+            "reasoning": {"effort": "high", "context": "legacy"},
             "max_output_tokens": 16,
             "stream_options": {"include_usage": true}
         });
@@ -944,6 +963,9 @@ mod tests {
             body["include"],
             serde_json::json!(["reasoning.encrypted_content"])
         );
+        assert_eq!(body["reasoning"]["context"], serde_json::json!("all_turns"));
+        assert_eq!(body["reasoning"]["effort"], serde_json::json!("high"));
+        assert_eq!(body["parallel_tool_calls"], serde_json::json!(false));
         // include already present → reasoning item appended without duplication.
         let mut body2 = serde_json::json!({ "include": ["foo"] });
         applier

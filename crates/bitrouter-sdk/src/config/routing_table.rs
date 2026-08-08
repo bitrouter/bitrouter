@@ -119,15 +119,11 @@ fn build_targets(
     // `provider:upstream-id` route that matches no declared model also passes
     // through unchanged.
     let service_id = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
+        .model_config(model_id)
         .and_then(|m| m.provider_model_id.as_deref())
         .unwrap_or(model_id);
     let chat_compatibility = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
+        .model_config(model_id)
         .map(|m| &m.compatibility.chat_completions);
     let chat_token_limit_field =
         chat_compatibility.and_then(|compatibility| compatibility.token_limit_field);
@@ -1581,6 +1577,32 @@ providers:
         assert_eq!(chain[0].provider_name, "anthropic");
         // Dispatched against the upstream id, not the canonical match key.
         assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn explicit_upstream_id_reuses_registry_model_protocol() -> crate::Result<()> {
+        let yaml = r#"
+providers:
+  openai-codex:
+    api_base: https://chatgpt.com/backend-api/codex
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+        api_protocol: responses
+"#;
+
+        let chain = table(yaml)
+            .route_chain(
+                "openai-codex:gpt-5.6-sol",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await?;
+
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].service_id, "gpt-5.6-sol");
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Responses);
+        Ok(())
     }
 
     #[tokio::test]

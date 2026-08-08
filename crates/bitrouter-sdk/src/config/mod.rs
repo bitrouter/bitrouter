@@ -1102,6 +1102,16 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    /// Resolve either the registry's canonical model id or its provider-native
+    /// dispatch id to the same metadata entry. Explicit `provider:model`
+    /// routes commonly use the native id, but must retain the registry's
+    /// protocol, pricing, and compatibility contract.
+    pub(crate) fn model_config(&self, model_id: &str) -> Option<&ProviderModel> {
+        self.models.iter().find(|model| {
+            model.id == model_id || model.provider_model_id.as_deref() == Some(model_id)
+        })
+    }
+
     /// The API key for provider-level operations that aren't tied to a
     /// specific routed request — currently model discovery's `/models`
     /// probe. Returns the top-level [`api_key`](Self::api_key), or the
@@ -1126,7 +1136,7 @@ impl ProviderConfig {
     /// router prefers whichever member matches the inbound request (native
     /// routing) and otherwise falls back to the head.
     pub fn protocols_for(&self, model_id: &str) -> Vec<ApiProtocol> {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
+        if let Some(m) = self.model_config(model_id)
             && let Some(list) = &m.api_protocol
             && !list.is_empty()
         {
