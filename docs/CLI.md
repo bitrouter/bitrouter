@@ -289,12 +289,30 @@ Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over 
 ### `bitrouter launch`
 
 ```
-bitrouter launch -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
-Launches a coding-agent harness (`-a claude` for Claude Code, `-a codex` for Codex CLI) as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the *main orchestrator* surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`. Claude Code gets child-process environment overrides (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`); Codex gets one-shot `-c` config overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions` or `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
+Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the *main orchestrator* surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
 
-The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
+`-a/--agent` takes any catalog harness with an interactive binary — the same set `bitrouter tui --agent` accepts: **`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`** (the catalog id `antigravity` also resolves to `agy`). An unknown id fails up front with the available list. Each harness is routed by its own mechanism, all from the shared catalog:
+
+| Harness | How it reaches BitRouter |
+| --- | --- |
+| `claude` | child env (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` for `--model`) |
+| `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
+| `opencode` | synthesized `OPENCODE_CONFIG` JSON declaring a `bitrouter` openai-compatible provider |
+| `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bitrouter --model …` |
+| `hermes` | synthesized `HERMES_HOME/config.yaml` (loopback `custom` provider) + `CUSTOM_API_KEY` |
+| `openclaw` | synthesized `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH` profile, run as `tui --local` |
+| `grok`, `agy` | **not routed** — own-auth subscription clients (see below) |
+
+The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
+
+`--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
+
+**`grok` and `agy` are own-auth harnesses**: they are subscription clients whose sessions the daemon itself borrows as providers (`supergrok` / `google-ai`), so routing them through BitRouter would loop back to the same backend on the same credential. They launch with their own auth — `launch` says so on stderr and `--check` reports it as a `routing` warning — and `--model` forwards as their native flag (`-m` / `--model`).
+
+The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `launch` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 

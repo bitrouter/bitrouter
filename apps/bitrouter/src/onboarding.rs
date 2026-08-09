@@ -1164,7 +1164,10 @@ async fn finish_launch(
         _ => Vec::new(),
     };
     let opts = crate::spawn::SpawnOptions {
-        agent,
+        agent: crate::spawn::resolve_launch_agent(agent.spec().id)?,
+        // The wizard already forwards its `--model` as the harness's own flag
+        // (`agent_args`), the shape it has always used.
+        model: None,
         agent_args,
         base_url: None,
         no_install,

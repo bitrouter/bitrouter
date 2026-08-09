@@ -370,23 +370,38 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness (Claude Code or Codex) as an interactive
-    /// native-TUI child, with its API base URL pointed at the local BitRouter
-    /// daemon — no agent config files are touched. The human drives the
-    /// harness's own TUI directly; this is the *main orchestrator* surface (use
-    /// `bitrouter spawn` for headless ACP sub-agents). Follows `cargo run`'s
-    /// separator convention: bitrouter options come before `--`, everything
-    /// after `--` is forwarded to the agent verbatim, e.g.
-    /// `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
+    /// Launch a coding-agent harness as an interactive native-TUI child, with
+    /// its API base URL pointed at the local BitRouter daemon. The human drives
+    /// the harness's own TUI directly (use `bitrouter spawn` for headless ACP
+    /// sub-agents). Follows `cargo run`'s separator convention: bitrouter
+    /// options come before `--`, everything after `--` is forwarded to the
+    /// agent verbatim, e.g. `bitrouter launch -a codex -- --search`.
+    ///
+    /// Harnesses that route by env/args (claude, codex) are launched without
+    /// touching any config file. Those that can only be routed by config
+    /// (opencode, pi, hermes, openclaw) get one synthesized under
+    /// `.bitrouter/launch/` — your own agent config is still never modified.
+    /// The own-auth clients (grok, agy) are subscription sessions the daemon
+    /// borrows, so they launch unrouted.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bitrouter init`). A missing agent binary is offered
-    /// for install via its official native installer.
+    /// default written by `bitrouter init`). A missing `claude` / `codex`
+    /// binary is offered for install via its official native installer; other
+    /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch.
-        #[arg(short, long, value_enum)]
-        agent: bitrouter::spawn::SpawnAgent,
+        /// Which agent harness to launch: `claude`, `codex`, `opencode`, `pi`,
+        /// `hermes`, `openclaw`, `grok`, or `agy` (the catalog id
+        /// `antigravity` also resolves to `agy`).
+        #[arg(short, long, value_name = "ID")]
+        agent: String,
+        /// Pin the harness's model to a daemon-routable id (e.g. the explicit
+        /// `provider/model` form). Applied through whatever mechanism the
+        /// harness has — a model env var, a `-c model=` override, the
+        /// synthesized config's default, or the harness's own flag for the
+        /// own-auth clients (grok, agy).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
         /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
         /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
         /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
@@ -1705,6 +1720,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
             agent,
+            model,
             config,
             base_url,
             no_install,
@@ -1713,7 +1729,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
-                agent,
+                agent: bitrouter::spawn::resolve_launch_agent(&agent)?,
+                model,
                 agent_args,
                 base_url,
                 no_install,
@@ -1762,7 +1779,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     legacy.spec().id
                 );
                 let opts = bitrouter::spawn::SpawnOptions {
-                    agent: legacy,
+                    agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
+                    model: model.clone(),
                     agent_args,
                     base_url,
                     no_install,
