@@ -9,7 +9,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (TUI, spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP).
+  skills over MCP, the unified control plane).
 
 ## Where product docs live
 
