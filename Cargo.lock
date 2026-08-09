@@ -622,7 +622,6 @@ dependencies = [
  "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
- "bitrouter-substrate",
  "chrono",
  "clap",
  "erased-serde",
@@ -796,14 +795,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "bitrouter-substrate"
-version = "1.0.0-alpha.27"
-dependencies = [
- "bitrouter-sdk",
- "tempfile",
 ]
 
 [[package]]

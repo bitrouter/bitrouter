@@ -424,7 +424,7 @@ impl UpstreamConnection {
         let raw_updates_for_thread = raw_updates_tx.clone();
         let usage_for_thread = usage.clone();
         let thread = std::thread::Builder::new()
-            .name("bitrouter-substrate-up".to_string())
+            .name("bitrouter-acp-up".to_string())
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
@@ -678,7 +678,7 @@ async fn drive(
 
     let connect = agent_client_protocol::Client
         .builder()
-        .name("bitrouter-substrate")
+        .name("bitrouter-acp")
         .on_receive_notification(
             move |notification: SessionNotification, _cx| {
                 let notif_updates = notif_updates.clone();

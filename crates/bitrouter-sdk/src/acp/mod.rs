@@ -17,12 +17,18 @@
 //!
 //! ## Feature-gated components
 //!
-//! The `Pipeline`, `Builder`, hook traits, and request/response types are
-//! always available — they have no external dependencies. The
-//! [`config_routing::ConfigAcpRoutingTable`] lives behind the `acp` feature
-//! and provides the config-driven routing table the binary registers at
-//! startup. Typed health-checking (initialize-only) is provided by
-//! `bitrouter-substrate::up::health_check`.
+//! [`AcpTarget`], the [`RoutingTable`] trait, and the
+//! [`transport::AcpTransport`] enum are always available — they have no
+//! external dependencies, so a consumer can wire ACP routing without pulling
+//! the ACP SDK in.
+//!
+//! Everything else rides the `acp` feature: the [`Pipeline`], the hook traits,
+//! the typed request/response payloads, [`config_routing::ConfigAcpRoutingTable`],
+//! and the **live thin proxy** — [`up`] (the agent child + ACP client role),
+//! [`engine`] (one session wired to the pipeline), and [`down`] (the session
+//! re-exposed as a vanilla ACP agent). This mirrors how
+//! [`crate::mcp::rmcp_executor`] rides the `mcp` feature. Typed
+//! health-checking (initialize-only) is [`up::health_check`].
 
 #[cfg(feature = "acp")]
 use std::sync::Arc;
