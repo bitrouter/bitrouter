@@ -44,6 +44,9 @@ pub mod transport;
 #[cfg(feature = "acp")]
 pub mod config_routing;
 
+#[cfg(feature = "acp")]
+pub mod translate;
+
 pub use transport::{AcpAgentConfig, AcpTransport};
 
 #[cfg(feature = "acp")]
