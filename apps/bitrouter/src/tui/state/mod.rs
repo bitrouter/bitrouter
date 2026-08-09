@@ -1,8 +1,15 @@
 //! Pure render state + reducer for the TUI. No `ratatui`/`tokio` deps.
 //!
-//! One screen: a fixed left rail (roster sorted by actionability + radar) and
-//! a splittable detail viewport showing 1–4 agents. The rail is the canonical
-//! list of every agent; the detail split is ephemeral layout, not structure.
+//! Two screens. The DEFAULT screen is the focused agent's viewport at full
+//! terminal width over a one-line status bar — nothing else, so the harness's
+//! own TUI gets every column it asks for. The MANAGER screen (leader `m`) is
+//! a full-screen overlay listing the whole fleet, and it is where supervision
+//! happens: decide (`y`/`a`/`n`), review (`D`/`m`/`p`/`r`), focus, close.
+//!
+//! The manager is not optional chrome. A focused PTY pane is locked-mode
+//! passthrough, so NORMAL-mode supervision keys never fire while the
+//! orchestrator has the keyboard — the manager is the only surface on which a
+//! blocked subagent can be seen and unblocked.
 
 use std::collections::HashMap;
 
@@ -16,18 +23,15 @@ pub mod diff;
 pub mod pane;
 use self::pane::{PaneKind, PaneState};
 pub mod overlay;
-use self::overlay::{DEFAULT_LEADER, Mode, PaletteState, PickerState};
+use self::overlay::{DEFAULT_LEADER, ManagerState, Mode, PaletteState, PickerState};
 pub mod layout;
-use self::layout::{ClickZone, DetailLayout, PtyArea};
+use self::layout::{ClickZone, PtyArea};
 pub mod events;
 pub mod keys;
 use self::events::reduce_inner;
 
 /// Max scrollback lines retained per pane (ring buffer).
 const SCROLLBACK_CAP: usize = 2000;
-
-/// Max agents shown at once in the detail viewport.
-const MAX_SHOWN: usize = 4;
 
 /// How many times failing verification checks are looped back to the agent
 /// before the failure surfaces to the human.
@@ -72,19 +76,19 @@ fn fmt_elapsed(secs: u64) -> String {
     }
 }
 
-/// Whole-app render state: a flat agent list + the detail layout + rail cursor.
+/// Whole-app render state: a flat agent list + which one has the viewport.
 /// Accessors return `Option` because the agent list may be empty transiently
 /// (right after the last agent closes, before `should_quit`).
 #[derive(Debug, Clone)]
 pub struct AppState {
-    /// Every live agent, in spawn order (stable; the roster sorts a projection).
+    /// Every live agent, in spawn order (stable; `fleet()` sorts a projection).
     pub agents: Vec<PaneState>,
-    pub detail: DetailLayout,
-    /// User-collapsed sidebars (palette `toggle sessions`/`toggle subagents`;
-    /// narrow terminals also auto-collapse at render time without touching
-    /// these).
-    pub sessions_collapsed: bool,
-    pub subagents_collapsed: bool,
+    /// The `record_id` owning the viewport — the ONE agent on screen, which
+    /// also receives NORMAL-mode input. `None` only transiently, between the
+    /// focused agent closing and its replacement being picked.
+    pub focus: Option<String>,
+    /// Manager-overlay state (present while `mode == Manager`).
+    pub manager: Option<ManagerState>,
     /// The configured one-shot leader chord (`tui.leader`, default
     /// [`DEFAULT_LEADER`]) — the only key NORMAL intercepts before PTY
     /// passthrough.
@@ -134,20 +138,19 @@ pub struct AppState {
     /// it to forward mouse events to a mouse-reporting inner app. Rebuilt every
     /// frame by the renderer.
     pub pty_areas: Vec<PtyArea>,
-    /// Clickable regions recorded by the renderer for the current frame (mouse
-    /// hit-test targets: sidebar toggle buttons + roster rows). Rebuilt every
+    /// Clickable regions recorded by the renderer for the current frame (the
+    /// manager view's rows and its `+ new session` footer). Rebuilt every
     /// frame, like [`AppState::pty_areas`].
     pub click_zones: Vec<ClickZone>,
 }
 
 impl AppState {
     pub fn new(pane: PaneState) -> Self {
-        let detail = DetailLayout::solo(pane.record_id.clone());
+        let focus = Some(pane.record_id.clone());
         Self {
             agents: vec![pane],
-            detail,
-            sessions_collapsed: false,
-            subagents_collapsed: false,
+            focus,
+            manager: None,
             leader: DEFAULT_LEADER,
             perm_seq: 0,
             harness_by_agent: HashMap::new(),
@@ -187,15 +190,19 @@ impl AppState {
         self.harness_by_agent = map;
     }
 
-    /// Roster order for the subagents panel: indices of the ACP panes, sorted
-    /// by actionability bucket (needs-you > attention > running > dead).
+    /// The fleet list — the manager view's canonical order: EVERY agent,
+    /// orchestrator sessions and ACP subagents alike, sorted by actionability
+    /// bucket (needs-you > review > attention > done > working > idle > dead).
     /// Needs-you rows order by risk (high first) then age (oldest pending
-    /// first) — the queue; other buckets keep spawn order. PTY panes live in
-    /// the sessions panel ([`sessions_list`](Self::sessions_list)).
-    pub fn roster(&self) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..self.agents.len())
-            .filter(|&i| self.agents[i].kind == PaneKind::Monitor)
-            .collect();
+    /// first), so the head is always the next decision; other buckets keep
+    /// spawn order (the sort is stable).
+    ///
+    /// The two sidebars this replaced split the same set by pane kind — PTY
+    /// sessions on the left, ACP monitors on the right. That is an
+    /// implementation detail of how an agent was launched, not a distinction
+    /// the human thinks in, so the manager shows one list and tags the kind.
+    pub fn fleet(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.agents.len()).collect();
         order.sort_by_key(|&i| {
             let p = &self.agents[i];
             match &p.pending {
@@ -240,8 +247,10 @@ impl AppState {
             .collect()
     }
 
-    /// Sessions-panel order: indices of the PTY panes (orchestrator sessions
-    /// and interactive attaches) in spawn order — stable, herdr-spaces style.
+    /// Indices of the PTY panes (orchestrator sessions and interactive
+    /// attaches) in spawn order. Deliberately NOT actionability-sorted: this
+    /// backs `leader 1..9`, and a chord that means a different session
+    /// depending on who happens to be blocked is a chord you cannot learn.
     pub fn sessions_list(&self) -> Vec<usize> {
         (0..self.agents.len())
             .filter(|&i| self.agents[i].kind == PaneKind::Pty)
@@ -263,21 +272,27 @@ impl AppState {
         total
     }
 
-    /// The detail-focused pane (receives NORMAL-mode input).
+    /// The pane owning the viewport (receives NORMAL-mode input).
     pub fn focused(&self) -> Option<&PaneState> {
-        let id = self.detail.focused_id()?;
+        let id = self.focus.as_deref()?;
         self.agents.iter().find(|p| p.record_id == id)
     }
 
-    /// The detail-focused pane, mutably.
+    /// The pane owning the viewport, mutably.
     pub fn focused_mut(&mut self) -> Option<&mut PaneState> {
-        let id = self.detail.focused_id()?.to_string();
+        let id = self.focus.clone()?;
         self.agents.iter_mut().find(|p| p.record_id == id)
     }
 
-    /// Whether `record_id` is visible in the detail viewport.
+    /// Give `record_id` the viewport, and count it as seen.
+    pub(super) fn focus_on(&mut self, record_id: String) {
+        self.focus = Some(record_id);
+        mark_shown_seen(self);
+    }
+
+    /// Whether `record_id` is the agent currently on screen.
     fn is_shown(&self, record_id: &str) -> bool {
-        self.detail.shown.iter().any(|r| r == record_id)
+        self.focus.as_deref() == Some(record_id)
     }
 
     fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
@@ -306,7 +321,8 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         state.notice_at = state.tick;
     }
     // Time-in-state: stamp the tick whenever a pane changes actionability
-    // bucket, so the rail can show how long it has been working/blocked/done.
+    // bucket, so the manager can show how long it has been
+    // working/blocked/done.
     let tick = state.tick;
     for pane in state.agents.iter_mut() {
         let bucket = pane.bucket();
@@ -318,19 +334,19 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
     effects
 }
 
-/// Mark every agent visible in the detail viewport as seen (the user is now
-/// looking at them): clears `attention` and decays `done` back to idle.
+/// Mark the agent on screen as seen (the user is now looking at it): clears
+/// `attention` and decays `done` back to idle.
 fn mark_shown_seen(state: &mut AppState) {
     if !state.term_focused {
         // On screen but the human is elsewhere — not seen yet.
         return;
     }
-    let shown: Vec<String> = state.detail.shown.clone();
-    for pane in state.agents.iter_mut() {
-        if shown.iter().any(|r| r == &pane.record_id) {
-            pane.attention = false;
-            pane.done = false;
-        }
+    let Some(shown) = state.focus.clone() else {
+        return;
+    };
+    if let Some(pane) = state.pane_by_id_mut(&shown) {
+        pane.attention = false;
+        pane.done = false;
     }
 }
 

@@ -2,9 +2,10 @@
 
 use super::diff::{DiffLine, Line};
 use super::keys::{request_spawn, run_command};
-use super::layout::{ClickTarget, Split};
+use super::layout::ClickTarget;
 use super::overlay::{
-    COMMANDS, Command, LEADER_LEAVES, LeaderAction, PickerPurpose, leader_action, parse_leader,
+    COMMANDS, Command, LEADER_LEAVES, LeaderAction, ManagerState, PickerPurpose, leader_action,
+    parse_leader,
 };
 use super::pane::{Autonomy, Ownership, PendingView, TailKind};
 use super::*;
@@ -55,7 +56,7 @@ fn press(code: KeyCode) -> AppEvent {
     AppEvent::Key(KeyEvent::from(code))
 }
 
-/// Three agents r0/r1/r2 in spawn order; detail shows r0 solo.
+/// Three agents r0/r1/r2 in spawn order; r0 holds the viewport.
 fn agents3() -> AppState {
     let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
     st.agents.push(PaneState::new("r1".into(), "a1".into()));
@@ -67,68 +68,39 @@ fn click(col: u16, row: u16) -> AppEvent {
     AppEvent::Click { col, row }
 }
 
-#[test]
-fn click_toggle_button_collapses_the_sidebar() {
-    let mut st = agents3();
+/// Put the manager up with a row zone for `row` at a known position.
+fn manager_with_row_zone(st: &mut AppState, row: usize) {
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
     st.click_zones.push(ClickZone {
-        x: 0,
-        y: 20,
-        w: 3,
-        h: 1,
-        target: ClickTarget::ToggleSessions,
+        x: 2,
+        y: 3,
+        w: 40,
+        h: 3,
+        target: ClickTarget::AgentRow(row),
     });
-    assert!(!st.sessions_collapsed);
-    reduce(&mut st, &click(1, 20));
-    assert!(st.sessions_collapsed, "<< toggles the sessions sidebar");
-    reduce(&mut st, &click(1, 20));
-    assert!(!st.sessions_collapsed, "clicking again restores it");
 }
 
 #[test]
-fn click_on_a_rail_row_opens_it_solo_in_agent_mode() {
+fn first_click_on_a_manager_row_only_aims() {
+    // A click near a `y`/`n` row must not also switch the viewport out from
+    // under the human: aim first, commit second.
     let mut st = agents3();
-    // roster() with three idle agents keeps spawn order: row 1 == r1.
-    st.click_zones.push(ClickZone {
-        x: 24,
-        y: 3,
-        w: 20,
-        h: 2,
-        target: ClickTarget::RailRow(1),
-    });
-    reduce(&mut st, &click(30, 4));
-    assert_eq!(
-        st.mode,
-        Mode::Normal,
-        "no mode to enter — click just focuses"
-    );
-    assert_eq!(
-        st.detail.shown,
-        vec!["r1".to_string()],
-        "the clicked agent opens solo"
-    );
+    manager_with_row_zone(&mut st, 1);
+    reduce(&mut st, &click(10, 4));
+    assert_eq!(st.manager.as_ref().map(|m| m.cursor), Some(1), "aimed");
+    assert_eq!(st.mode, Mode::Manager, "still in the manager");
+    assert_eq!(st.focus.as_deref(), Some("r0"), "viewport untouched");
 }
 
 #[test]
-fn clicking_a_shown_panes_row_focuses_its_slot() {
-    // A split's slots are focus-switchable by clicking their rows —
-    // never collapsed back to solo (Fable review finding 4).
-    let mut st = agents3(); // detail = [r0]
-    run_command(&mut st, Command::SplitH); // [r0, r1], focus 1
-    assert_eq!(st.detail.focus, 1);
-    st.click_zones.push(ClickZone {
-        x: 24,
-        y: 3,
-        w: 20,
-        h: 2,
-        target: ClickTarget::RailRow(0), // r0's row (all same bucket)
-    });
-    reduce(&mut st, &click(30, 4));
-    assert_eq!(
-        st.detail.shown,
-        vec!["r0".to_string(), "r1".to_string()],
-        "the split survives the click"
-    );
-    assert_eq!(st.detail.focus, 0, "focus moved to the clicked slot");
+fn second_click_on_the_aimed_row_opens_it() {
+    let mut st = agents3();
+    manager_with_row_zone(&mut st, 1);
+    reduce(&mut st, &click(10, 4));
+    reduce(&mut st, &click(10, 4));
+    assert_eq!(st.focus.as_deref(), Some("r1"), "committed to the viewport");
+    assert_eq!(st.mode, Mode::Normal, "and left the manager");
 }
 
 #[test]
@@ -152,57 +124,49 @@ fn clicking_new_session_footer_opens_the_picker() {
 }
 
 #[test]
-fn click_on_a_session_row_focuses_the_sessions_panel() {
+fn a_manager_row_click_spans_sessions_and_subagents_alike() {
+    // The merged list is ordered by fleet(), which mixes PTY sessions and ACP
+    // monitors — a row index means "the Nth agent", not "the Nth of its kind".
     let mut st = agents3();
     let mut orch = PaneState::new("orch".into(), "claude".into());
     orch.kind = PaneKind::Pty;
     st.agents.push(orch);
-    // sessions_list() holds only the PTY pane: row 0 == orch.
-    st.click_zones.push(ClickZone {
-        x: 0,
-        y: 2,
-        w: 24,
-        h: 2,
-        target: ClickTarget::SessionRow(0),
-    });
-    reduce(&mut st, &click(5, 2));
+    let row = st
+        .fleet()
+        .iter()
+        .position(|&i| st.agents[i].record_id == "orch")
+        .expect("the session is in the fleet list");
+    manager_with_row_zone(&mut st, row);
+    reduce(&mut st, &click(10, 4));
+    reduce(&mut st, &click(10, 4));
     assert_eq!(
-        st.mode,
-        Mode::Normal,
-        "no mode to enter — click just focuses"
+        st.focus.as_deref(),
+        Some("orch"),
+        "a PTY session is just a row"
     );
-    assert_eq!(st.detail.shown, vec!["orch".to_string()]);
 }
 
 #[test]
 fn click_outside_every_zone_is_a_noop() {
     let mut st = agents3();
-    st.click_zones.push(ClickZone {
-        x: 0,
-        y: 0,
-        w: 2,
-        h: 1,
-        target: ClickTarget::ToggleSubagents,
-    });
+    manager_with_row_zone(&mut st, 1);
     reduce(&mut st, &click(50, 50));
-    assert!(!st.subagents_collapsed, "a miss changes nothing");
-    assert_eq!(st.mode, Mode::Normal);
+    assert_eq!(
+        st.manager.as_ref().map(|m| m.cursor),
+        Some(0),
+        "a miss changes nothing"
+    );
 }
 
 #[test]
 fn clicks_are_swallowed_while_an_overlay_is_up() {
     let mut st = agents3();
+    manager_with_row_zone(&mut st, 1);
     st.mode = Mode::Picker;
-    st.click_zones.push(ClickZone {
-        x: 0,
-        y: 20,
-        w: 3,
-        h: 1,
-        target: ClickTarget::ToggleSessions,
-    });
-    reduce(&mut st, &click(1, 20));
-    assert!(
-        !st.sessions_collapsed,
+    reduce(&mut st, &click(10, 4));
+    assert_eq!(
+        st.manager.as_ref().map(|m| m.cursor),
+        Some(0),
         "a click behind the picker must not act on the zone under it"
     );
 }
@@ -592,11 +556,11 @@ fn prompt_failed_on_background_pane_flags_attention_and_bells() {
 // ── App shape + updates. ──
 
 #[test]
-fn new_app_shows_the_initial_agent_solo() {
+fn new_app_gives_the_initial_agent_the_viewport() {
     let st = AppState::new(pane());
     assert_eq!(st.agents.len(), 1);
-    assert_eq!(st.detail.shown, vec!["rec-1".to_string()]);
-    assert_eq!(st.detail.focus, 0);
+    assert_eq!(st.focus.as_deref(), Some("rec-1"));
+    assert!(st.manager.is_none(), "the manager starts closed");
 }
 
 #[test]
@@ -1001,7 +965,7 @@ fn agent_spawned_appends_and_opens_solo() {
     assert_eq!(st.agents.len(), 2);
     assert_eq!(st.agents[1].record_id, "r9");
     assert_eq!(st.agents[1].agent_id, "fake");
-    assert_eq!(st.detail.shown, vec!["r9".to_string()]);
+    assert_eq!(st.focus.as_deref(), Some("r9"));
 }
 
 #[test]
@@ -1137,7 +1101,7 @@ fn esc_returns_to_normal_from_leader() {
 // ── Roster sort. ──
 
 #[test]
-fn roster_sorts_by_actionability_stable_within_bucket() {
+fn fleet_sorts_by_actionability_stable_within_bucket() {
     let mut st = agents3(); // r0 r1 r2 all running
     st.agents[2].pending = Some(PendingView {
         title: "WRITE".into(),
@@ -1146,62 +1110,62 @@ fn roster_sorts_by_actionability_stable_within_bucket() {
         risk: Risk::High,
     }); // r2 needs you → top
     st.agents[0].exited = true; // r0 dead → bottom
-    let order = st.roster();
+    let order = st.fleet();
     assert_eq!(order, vec![2, 1, 0], "needs-you > running > dead");
 }
 
 #[test]
-fn roster_puts_attention_above_running() {
+fn fleet_puts_attention_above_running() {
     let mut st = agents3();
     st.agents[1].attention = true;
-    let order = st.roster();
+    let order = st.fleet();
     assert_eq!(order, vec![1, 0, 2]);
 }
 
-// ── Detail layout (splits are palette-only in v3). ──
-
 #[test]
-fn split_commands_add_most_actionable_unshown_agent() {
-    let mut st = agents3(); // detail = [r0]
-    run_command(&mut st, Command::SplitH);
-    assert_eq!(st.detail.shown, vec!["r0".to_string(), "r1".to_string()]);
-    assert_eq!(st.detail.split, Split::H);
-    assert_eq!(st.detail.focus, 1, "new slot takes focus");
-}
-
-#[test]
-fn split_with_every_agent_shown_sets_a_notice() {
-    let mut st = AppState::new(pane()); // one agent, already shown
-    run_command(&mut st, Command::SplitH);
-    assert_eq!(st.detail.shown, vec!["rec-1".to_string()], "unchanged");
-    assert!(
-        st.notice.as_deref().is_some_and(|n| n.contains("split")),
-        "explains why nothing happened"
+fn fleet_is_one_list_across_pty_sessions_and_acp_monitors() {
+    // The merge the manager view is built on: an orchestrator session that
+    // needs a decision outranks an idle subagent, because actionability is
+    // the axis the human cares about — not how the agent was launched.
+    let mut st = agents3();
+    let mut orch = PaneState::new("orch".into(), "claude".into());
+    orch.kind = PaneKind::Pty;
+    orch.pending = Some(PendingView {
+        title: "WRITE".into(),
+        diff: None,
+        options: vec![],
+        risk: Risk::High,
+    });
+    st.agents.push(orch);
+    let order = st.fleet();
+    assert_eq!(order.len(), 4, "every agent, both kinds, one list");
+    assert_eq!(
+        st.agents[order[0]].record_id, "orch",
+        "the blocked session leads, kind notwithstanding"
     );
 }
 
 #[test]
-fn split_caps_at_four_shown() {
+fn fleet_orders_pending_rows_by_risk_then_age() {
     let mut st = agents3();
-    st.agents.push(PaneState::new("r3".into(), "a3".into()));
-    st.agents.push(PaneState::new("r4".into(), "a4".into()));
-    for _ in 0..4 {
-        run_command(&mut st, Command::SplitH);
+    // r1 blocks first but at low risk; r2 second at high risk.
+    for (i, risk) in [(1usize, Risk::Low), (2, Risk::High)] {
+        st.agents[i].pending = Some(PendingView {
+            title: "t".into(),
+            diff: None,
+            options: vec![],
+            risk,
+        });
+        st.agents[i].pending_seq = i as u64;
     }
-    assert_eq!(st.detail.shown.len(), 4, "fifth split is refused");
-    assert!(!st.detail.shown.contains(&"r4".to_string()));
+    let order = st.fleet();
+    assert_eq!(
+        st.agents[order[0]].record_id, "r2",
+        "high risk jumps the queue: {order:?}"
+    );
 }
 
-#[test]
-fn unsplit_drops_focused_slot_but_never_below_one() {
-    let mut st = agents3();
-    run_command(&mut st, Command::SplitH); // [r0, r1], focus 1
-    run_command(&mut st, Command::Unsplit);
-    assert_eq!(st.detail.shown, vec!["r0".to_string()]);
-    assert_eq!(st.detail.focus, 0);
-    run_command(&mut st, Command::Unsplit); // already solo — no-op
-    assert_eq!(st.detail.shown, vec!["r0".to_string()]);
-}
+// ── The viewport holds one agent; there is no split model. ──
 
 #[test]
 fn spawn_command_opens_picker_with_available_agents() {
@@ -1220,7 +1184,7 @@ fn spawn_command_opens_picker_with_available_agents() {
 #[test]
 fn leader_c_closes_focused_agent_and_emits_close_agent() {
     let mut st = agents3();
-    st.detail = DetailLayout::solo("r1".into());
+    st.focus = Some("r1".into());
     st.mode = Mode::Leader;
     let fx = reduce(&mut st, &press(KeyCode::Char('c')));
     assert_eq!(
@@ -1264,8 +1228,8 @@ fn closing_the_shown_agent_refills_detail_with_roster_head() {
         }]
     );
     assert_eq!(
-        st.detail.shown,
-        vec!["r2".to_string()],
+        st.focus.as_deref(),
+        Some("r2"),
         "detail refilled with the most actionable agent"
     );
 }
@@ -1289,8 +1253,8 @@ fn y_resolves_the_top_pending_and_advances_to_the_next() {
     );
     assert!(st.agents[2].pending.is_none(), "top item cleared");
     assert_eq!(
-        st.detail.shown,
-        vec!["r1".to_string()],
+        st.focus.as_deref(),
+        Some("r1"),
         "focus advances to the next pending item (batch clear)"
     );
     // The next `n` denies r1's — queue drained.
@@ -1317,9 +1281,13 @@ fn leader_p_opens_the_command_palette() {
 
 #[test]
 fn leader_leaves_are_one_shot() {
-    // Every leaf leaves `Leader` in exactly one key: back to NORMAL, or
-    // into a Command/Picker leaf — never a sticky mode (TUI_SPEC_V3 I3).
-    // Driven from LEADER_LEAVES so a new leaf is covered automatically.
+    // Every leaf leaves `Leader` in exactly one key: back to NORMAL, or into
+    // a Command/Picker/Manager leaf — never leaving the prefix armed. Driven
+    // from LEADER_LEAVES so a new leaf is covered automatically.
+    //
+    // Manager is the one deliberately STICKY destination: supervising a fleet
+    // is a task you stay in for several keystrokes (decide, decide, review),
+    // not a single verb, and `Esc` is the way out.
     let keys = [KeyCode::Char('1'), KeyCode::Esc]
         .into_iter()
         .chain(LEADER_LEAVES.iter().map(|&(key, _, _)| key));
@@ -1329,7 +1297,10 @@ fn leader_leaves_are_one_shot() {
         st.mode = Mode::Leader;
         reduce(&mut st, &press(key));
         assert!(
-            matches!(st.mode, Mode::Normal | Mode::Picker | Mode::Command),
+            matches!(
+                st.mode,
+                Mode::Normal | Mode::Picker | Mode::Command | Mode::Manager
+            ),
             "{key:?} must leave Leader in one key, got {:?}",
             st.mode
         );
@@ -1366,8 +1337,8 @@ fn leader_tab_focuses_the_next_actionable_agent() {
     reduce(&mut st, &press(KeyCode::Tab));
     assert_eq!(st.mode, Mode::Normal, "one-shot");
     assert_eq!(
-        st.detail.shown,
-        vec!["r2".to_string()],
+        st.focus.as_deref(),
+        Some("r2"),
         "the actionable agent takes the detail"
     );
 }
@@ -1405,7 +1376,7 @@ fn wheel_scroll_pages_acp_and_pty() {
 #[test]
 fn leader_t_attaches_the_focused_live_monitor_only() {
     let mut st = agents3();
-    st.detail = DetailLayout::solo("r1".into());
+    st.focus = Some("r1".into());
     st.mode = Mode::Leader;
     let fx = reduce(&mut st, &press(KeyCode::Char('t')));
     assert_eq!(
@@ -1419,12 +1390,12 @@ fn leader_t_attaches_the_focused_live_monitor_only() {
     let mut pty = PaneState::new("session-1".into(), "claude".into());
     pty.kind = PaneKind::Pty;
     st.agents.push(pty);
-    st.detail = DetailLayout::solo("session-1".into());
+    st.focus = Some("session-1".into());
     st.mode = Mode::Leader;
     assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
     // A dead agent has nothing to drive.
     st.agents[1].exited = true;
-    st.detail = DetailLayout::solo("r1".into());
+    st.focus = Some("r1".into());
     st.mode = Mode::Leader;
     assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
 }
@@ -1445,7 +1416,7 @@ fn pty_attached_adds_a_solo_pty_pane() {
         .find(|p| p.record_id == "attach:r1")
         .expect("attach pane added");
     assert_eq!(pane.kind, PaneKind::Pty);
-    assert_eq!(st.detail.shown, vec!["attach:r1".to_string()], "solo");
+    assert_eq!(st.focus.as_deref(), Some("attach:r1"), "solo");
     assert_eq!(st.mode, Mode::Normal, "keys route to the attach");
     assert!(st.notice.as_deref().is_some_and(|n| n.contains("detach")));
 }
@@ -1468,14 +1439,21 @@ fn fleet_state() -> AppState {
 }
 
 #[test]
-fn roster_lists_acp_panes_and_sessions_list_pty_panes() {
+fn fleet_lists_every_pane_while_sessions_list_stays_pty_only() {
     let st = fleet_state();
-    let roster: Vec<&str> = st
-        .roster()
+    let fleet: Vec<&str> = st
+        .fleet()
         .into_iter()
         .map(|i| st.agents[i].record_id.as_str())
         .collect();
-    assert_eq!(roster, vec!["r1", "r2"], "roster = ACP only");
+    assert_eq!(
+        fleet.len(),
+        st.agents.len(),
+        "fleet = everything: {fleet:?}"
+    );
+    for id in ["r1", "r2"] {
+        assert!(fleet.contains(&id), "{id} in the merged list");
+    }
     let sessions: Vec<&str> = st
         .sessions_list()
         .into_iter()
@@ -1494,11 +1472,11 @@ fn leader_digit_focuses_session_n() {
     st.mode = Mode::Leader;
     reduce(&mut st, &press(KeyCode::Char('2')));
     assert_eq!(st.mode, Mode::Normal, "one-shot");
-    assert_eq!(st.detail.shown, vec!["session-1".to_string()]);
+    assert_eq!(st.focus.as_deref(), Some("session-1"));
     // Out of range → notice, focus untouched.
     st.mode = Mode::Leader;
     reduce(&mut st, &press(KeyCode::Char('9')));
-    assert_eq!(st.detail.shown, vec!["session-1".to_string()]);
+    assert_eq!(st.focus.as_deref(), Some("session-1"));
     assert!(
         st.notice
             .as_deref()
@@ -1545,13 +1523,13 @@ fn session_spawned_adds_a_solo_pty_pane_with_model() {
         .expect("session pane added");
     assert_eq!(pane.kind, PaneKind::Pty);
     assert_eq!(pane.model.as_deref(), Some("supergrok:grok-4.5"));
-    assert_eq!(st.detail.shown, vec!["session-2".to_string()], "solo");
+    assert_eq!(st.focus.as_deref(), Some("session-2"), "solo");
 }
 
 #[test]
 fn leader_c_closes_a_focused_session() {
     let mut st = fleet_state();
-    st.detail = DetailLayout::solo("session-1".into());
+    st.focus = Some("session-1".into());
     st.mode = Mode::Leader;
     let fx = reduce(&mut st, &press(KeyCode::Char('c')));
     assert_eq!(
@@ -1580,13 +1558,15 @@ fn review_verbs_never_fire_on_a_focused_session() {
 }
 
 #[test]
-fn palette_toggles_collapse_the_sidebars() {
+fn palette_opens_the_manager_at_the_fleet_head() {
     let mut st = fleet_state();
-    let _ = run_command(&mut st, Command::ToggleSessions);
-    let _ = run_command(&mut st, Command::ToggleSubagents);
-    assert!(st.sessions_collapsed && st.subagents_collapsed);
-    let _ = run_command(&mut st, Command::ToggleSessions);
-    assert!(!st.sessions_collapsed, "toggle back");
+    let _ = run_command(&mut st, Command::Manager);
+    assert_eq!(st.mode, Mode::Manager);
+    assert_eq!(
+        st.manager.as_ref().map(|m| m.cursor),
+        Some(0),
+        "lands on whatever most wants attention"
+    );
 }
 
 #[test]
@@ -1838,18 +1818,18 @@ fn review_ready_sets_state_and_sorts_to_rail_head() {
         st.agents[2].lines.last(),
         Some(Line::Note(n)) if n.contains("+10/-3")
     ));
-    let order = st.roster();
+    let order = st.fleet();
     assert_eq!(order[0], 2, "review outranks idle agents");
     // But needs-you still outranks review.
     reduce(&mut st, &perm("r1", "wants"));
-    assert_eq!(st.roster()[0], 1, "pending beats review");
+    assert_eq!(st.fleet()[0], 1, "pending beats review");
 }
 
 #[test]
 fn review_keys_emit_integration_effects() {
     let mut st = agents3();
     reduce(&mut st, &review_ready("r1"));
-    st.detail = DetailLayout::solo("r1".into()); // review inline on focus
+    st.focus = Some("r1".into()); // review inline on focus
 
     let fx = reduce(&mut st, &press(KeyCode::Char('m')));
     assert_eq!(
@@ -1887,7 +1867,7 @@ fn review_keys_are_inert_without_review_state() {
 fn reject_human_owned_reprompts() {
     let mut st = agents3(); // human-owned monitors (Ownership::Human)
     reduce(&mut st, &review_ready("r1"));
-    st.detail = DetailLayout::solo("r1".into());
+    st.focus = Some("r1".into());
     let fx = reduce(&mut st, &press(KeyCode::Char('r')));
     assert_eq!(
         fx,
@@ -1907,7 +1887,7 @@ fn reject_orchestrator_owned_sets_task_outcome() {
     let mut st = AppState::new(pane());
     spawn_mirror(&mut st); // mcp:abc123, Ownership::Orchestrator
     reduce(&mut st, &review_ready("mcp:abc123"));
-    st.detail = DetailLayout::solo("mcp:abc123".into());
+    st.focus = Some("mcp:abc123".into());
     let fx = reduce(&mut st, &press(KeyCode::Char('r')));
     assert_eq!(
         fx,
@@ -1939,7 +1919,7 @@ fn reject_on_a_disconnected_orchestrator_is_honest() {
             record_ids: vec!["mcp:abc123".into()],
         },
     );
-    st.detail = DetailLayout::solo("mcp:abc123".into());
+    st.focus = Some("mcp:abc123".into());
     let fx = reduce(&mut st, &press(KeyCode::Char('r')));
     assert!(fx.is_empty(), "no verdict effect for a dead bridge: {fx:?}");
     assert!(
@@ -1957,7 +1937,7 @@ fn reject_on_a_disconnected_orchestrator_is_honest() {
 fn reject_clears_review_and_opens_the_pane() {
     let mut st = agents3();
     reduce(&mut st, &review_ready("r1"));
-    st.detail = DetailLayout::solo("r1".into());
+    st.focus = Some("r1".into());
     let fx = reduce(&mut st, &press(KeyCode::Char('r')));
     assert_eq!(fx.len(), 1, "one routed rejection effect: {fx:?}");
     assert!(st.agents[1].review.is_none(), "review cleared");
@@ -2088,9 +2068,9 @@ fn exit_on_background_pane_sets_attention_and_bell() {
 }
 
 #[test]
-fn permission_on_split_shown_pane_is_not_background() {
+fn permission_on_the_agent_in_the_viewport_is_not_background() {
     let mut st = agents3();
-    run_command(&mut st, Command::SplitH); // show r0 + r1
+    st.focus = Some("r1".into());
     let fx = reduce(
         &mut st,
         &AppEvent::Permission {
@@ -2103,9 +2083,257 @@ fn permission_on_split_shown_pane_is_not_background() {
     );
     assert!(
         !st.agents[1].attention,
-        "visible in a split — no attention needed"
+        "already on screen — no attention needed"
     );
     assert!(!fx.contains(&Effect::Bell));
+}
+
+// ── The manager screen: the supervision surface. ───────────────────────────
+
+/// An orchestrator PTY holding the viewport, plus a blocked ACP subagent that
+/// is NOT on screen — the exact situation the manager exists for.
+fn orchestrator_with_blocked_subagent() -> AppState {
+    let mut orch = PaneState::new("orch".into(), "claude".into());
+    orch.kind = PaneKind::Pty;
+    orch.harness = "pty".into();
+    let mut st = AppState::new(orch);
+    let mut sub = PaneState::new("sub".into(), "codex-acp".into());
+    sub.pending = Some(PendingView {
+        title: "rm -rf /".into(),
+        diff: None,
+        options: allow_deny(),
+        risk: Risk::High,
+    });
+    st.agents.push(sub);
+    st
+}
+
+#[test]
+fn a_focused_pty_swallows_the_decision_keys_in_normal_mode() {
+    // The premise of the manager. `y` typed at a focused orchestrator is
+    // TEXT FOR THE AGENT — it must never resolve a subagent's permission
+    // behind the human's back.
+    let mut st = orchestrator_with_blocked_subagent();
+    let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+    assert!(
+        matches!(fx.as_slice(), [Effect::PtyKey { .. }]),
+        "the keystroke went to the child, not the decision queue: {fx:?}"
+    );
+    assert!(
+        st.agents[1].pending.is_some(),
+        "the subagent is still blocked"
+    );
+}
+
+#[test]
+fn the_manager_decides_for_an_agent_that_is_not_on_screen() {
+    // ...and this is the way out. Same fleet, same keystroke, via the manager.
+    let mut st = orchestrator_with_blocked_subagent();
+    st.mode = Mode::Leader;
+    reduce(&mut st, &press(KeyCode::Char('m')));
+    assert_eq!(st.mode, Mode::Manager, "leader m opens the manager");
+    // The blocked subagent leads the fleet list, so the cursor is already on it.
+    let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+    assert_eq!(
+        fx,
+        vec![Effect::ResolvePermission {
+            record_id: "sub".into(),
+            outcome: PermissionOutcome::AllowOnce,
+        }],
+        "resolved the cursor row"
+    );
+    assert!(st.agents[1].pending.is_none(), "decision cleared");
+    assert_eq!(
+        st.focus.as_deref(),
+        Some("orch"),
+        "deciding does not steal the viewport from the orchestrator"
+    );
+}
+
+#[test]
+fn manager_n_denies_rather_than_opening_a_new_session() {
+    // `n` is deny here — the collision is resolved in favor of the decision
+    // keys, and new-session moves to `N`.
+    let mut st = orchestrator_with_blocked_subagent();
+    st.available_sessions = vec!["claude".into()];
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    let fx = reduce(&mut st, &press(KeyCode::Char('n')));
+    assert_eq!(
+        fx,
+        vec![Effect::ResolvePermission {
+            record_id: "sub".into(),
+            outcome: PermissionOutcome::Deny,
+        }]
+    );
+    assert_ne!(st.mode, Mode::Picker, "n must not open the harness picker");
+}
+
+#[test]
+fn manager_shift_n_opens_the_new_session_picker() {
+    let mut st = agents3();
+    st.available_sessions = vec!["claude".into()];
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    reduce(&mut st, &press(KeyCode::Char('N')));
+    assert_eq!(st.mode, Mode::Picker);
+    assert!(
+        st.picker
+            .as_ref()
+            .is_some_and(|p| p.purpose == PickerPurpose::Session)
+    );
+}
+
+#[test]
+fn manager_decision_keys_are_inert_on_a_row_that_is_not_blocked() {
+    // `n` on an idle agent must do nothing rather than deny someone else's
+    // request — the cursor row is the subject, always.
+    let mut st = agents3();
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 1 });
+    let fx = reduce(&mut st, &press(KeyCode::Char('n')));
+    assert!(fx.is_empty(), "nothing to decide: {fx:?}");
+}
+
+#[test]
+fn manager_navigation_clamps_at_both_ends() {
+    let mut st = agents3();
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    reduce(&mut st, &press(KeyCode::Up));
+    assert_eq!(st.manager.as_ref().map(|m| m.cursor), Some(0), "no wrap up");
+    for _ in 0..10 {
+        reduce(&mut st, &press(KeyCode::Char('j')));
+    }
+    assert_eq!(
+        st.manager.as_ref().map(|m| m.cursor),
+        Some(st.agents.len() - 1),
+        "clamped at the last row"
+    );
+    reduce(&mut st, &press(KeyCode::Char('g')));
+    assert_eq!(st.manager.as_ref().map(|m| m.cursor), Some(0), "g = first");
+}
+
+#[test]
+fn manager_enter_gives_the_row_the_viewport_and_leaves() {
+    let mut st = agents3();
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 2 });
+    reduce(&mut st, &press(KeyCode::Enter));
+    assert_eq!(st.focus.as_deref(), Some("r2"));
+    assert_eq!(
+        st.mode,
+        Mode::Normal,
+        "the manager is a place you pass through"
+    );
+    assert!(st.manager.is_none());
+}
+
+#[test]
+fn the_leader_chord_toggles_the_manager_shut() {
+    // The key that opened it closes it: a glance at the fleet is one chord
+    // out and one chord back.
+    let mut st = agents3();
+    st.mode = Mode::Leader;
+    reduce(&mut st, &press(KeyCode::Char('m')));
+    assert_eq!(st.mode, Mode::Manager);
+    let leader = AppEvent::Key(KeyEvent::new(st.leader.0, st.leader.1));
+    reduce(&mut st, &leader);
+    assert_eq!(st.mode, Mode::Normal, "the leader chord closed it");
+    assert!(st.manager.is_none());
+}
+
+#[test]
+fn esc_leaves_the_manager_without_touching_the_fleet() {
+    let mut st = orchestrator_with_blocked_subagent();
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    reduce(&mut st, &press(KeyCode::Esc));
+    assert_eq!(st.mode, Mode::Normal);
+    assert!(st.manager.is_none());
+    assert!(
+        st.agents[1].pending.is_some(),
+        "backing out decides nothing"
+    );
+}
+
+#[test]
+fn manager_review_verbs_act_on_the_cursor_row() {
+    let mut st = agents3();
+    st.agents[1].review = Some((4, 120, 33));
+    st.agents[1].owner = Ownership::Human;
+    st.mode = Mode::Manager;
+    // r1 has the diff, so it heads the fleet list.
+    st.manager = Some(ManagerState { cursor: 0 });
+    let fx = reduce(&mut st, &press(KeyCode::Char('m')));
+    assert_eq!(
+        fx,
+        vec![Effect::Merge {
+            record_id: "r1".into()
+        }],
+        "merge targets the cursor row, not the focused pane"
+    );
+}
+
+#[test]
+fn manager_diff_focuses_the_agent_it_opens() {
+    // `D` renders into the agent's own pane, so it must also put that agent
+    // in the viewport — otherwise the diff loads somewhere you cannot see.
+    let mut st = agents3();
+    st.agents[1].review = Some((1, 2, 3));
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    let fx = reduce(&mut st, &press(KeyCode::Char('D')));
+    assert_eq!(
+        fx,
+        vec![Effect::LoadDiff {
+            record_id: "r1".into()
+        }]
+    );
+    assert_eq!(
+        st.focus.as_deref(),
+        Some("r1"),
+        "and moved the viewport there"
+    );
+    assert_eq!(st.mode, Mode::Normal);
+}
+
+#[test]
+fn manager_close_respects_the_orchestrator_owned_guard() {
+    // Same guard as every other close surface: a live orchestrator-owned
+    // subagent stays, or its future permission requests are orphaned.
+    let mut st = agents3();
+    st.agents[1].owner = Ownership::Orchestrator;
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 1 });
+    let fx = reduce(&mut st, &press(KeyCode::Char('c')));
+    assert!(fx.is_empty(), "refused: {fx:?}");
+    assert_eq!(st.agents.len(), 3, "nothing was removed");
+    assert!(st.notice.is_some(), "and it says why");
+}
+
+#[test]
+fn manager_cursor_survives_the_fleet_shrinking_under_it() {
+    // The list re-sorts and shortens as agents finish; a stale cursor must
+    // clamp to a real row rather than index past the end.
+    let mut st = agents3();
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 2 });
+    reduce(&mut st, &press(KeyCode::Char('c')));
+    let cursor = st.manager.as_ref().map(|m| m.cursor).expect("still open");
+    assert!(cursor < st.agents.len(), "cursor {cursor} is in range");
+    // And the next key still lands on a real agent rather than panicking.
+    reduce(&mut st, &press(KeyCode::Enter));
+    assert!(st.focus.is_some());
+}
+
+#[test]
+fn manager_closes_itself_when_the_last_agent_goes() {
+    let mut st = AppState::new(pane());
+    st.mode = Mode::Manager;
+    st.manager = Some(ManagerState { cursor: 0 });
+    reduce(&mut st, &press(KeyCode::Char('c')));
+    assert!(st.should_quit, "closing the last agent still quits");
 }
 
 // ── Decision queue. ──
@@ -2130,7 +2358,7 @@ fn queue_orders_pending_by_age_oldest_first() {
     reduce(&mut st, &perm("r2", "second wants"));
     reduce(&mut st, &perm("r1", "third wants"));
     // r2's request arrived before r1's → r2 tops the queue.
-    let order = st.roster();
+    let order = st.fleet();
     assert_eq!(order[0], 2, "oldest pending first");
     assert_eq!(order[1], 1);
     assert_eq!(order[2], 0, "running agent below the queue");
@@ -2140,7 +2368,7 @@ fn queue_orders_pending_by_age_oldest_first() {
 fn dead_agents_pending_leaves_the_queue() {
     let mut st = agents3();
     reduce(&mut st, &perm("r1", "wants"));
-    assert_eq!(st.roster()[0], 1);
+    assert_eq!(st.fleet()[0], 1);
     reduce(
         &mut st,
         &AppEvent::Exited {
@@ -2232,7 +2460,7 @@ fn queue_orders_high_risk_above_older_low_risk() {
     let mut st = agents3();
     reduce(&mut st, &perm_with_risk("r0", "older low", Risk::Low));
     reduce(&mut st, &perm_with_risk("r1", "newer high", Risk::High));
-    let order = st.roster();
+    let order = st.fleet();
     assert_eq!(order[0], 1, "high risk outranks age");
     assert_eq!(order[1], 0);
 }
@@ -2348,16 +2576,11 @@ fn leader_question_mark_opens_keys_help_and_any_key_dismisses() {
 fn opening_an_agent_clears_its_attention() {
     let mut st = agents3();
     st.agents[1].attention = true;
-    // Click its rail row (roster: [r1(attn), r0, r2] → row 0 = r1).
-    st.click_zones.push(ClickZone {
-        x: 0,
-        y: 0,
-        w: 20,
-        h: 2,
-        target: ClickTarget::RailRow(0),
-    });
-    reduce(&mut st, &click(1, 0));
-    assert_eq!(st.detail.shown, vec!["r1".to_string()]);
+    // r1 tops the fleet list (attention), so its manager row is 0.
+    manager_with_row_zone(&mut st, 0);
+    reduce(&mut st, &click(10, 4));
+    reduce(&mut st, &click(10, 4));
+    assert_eq!(st.focus.as_deref(), Some("r1"));
     assert!(!st.agents[1].attention, "looking at it clears attention");
 }
 
@@ -2367,15 +2590,10 @@ fn opening_an_agent_clears_its_attention() {
 fn opening_an_agent_decays_done_to_idle() {
     let mut st = agents3();
     st.agents[1].done = true;
-    // Click its rail row (r1 tops the roster, done-unseen).
-    st.click_zones.push(ClickZone {
-        x: 0,
-        y: 0,
-        w: 20,
-        h: 2,
-        target: ClickTarget::RailRow(0),
-    });
-    reduce(&mut st, &click(1, 0));
+    // r1 tops the fleet list (done-unseen), so its manager row is 0.
+    manager_with_row_zone(&mut st, 0);
+    reduce(&mut st, &click(10, 4));
+    reduce(&mut st, &click(10, 4));
     assert!(!st.agents[1].done, "viewing decays done back to idle");
 }
 
@@ -2385,7 +2603,7 @@ fn done_sorts_above_working_below_attention() {
     st.agents[0].turn_active = true; // working
     st.agents[1].done = true; // finished, unseen
     st.agents[2].attention = true; // trouble
-    assert_eq!(st.roster(), vec![2, 1, 0], "attention > done > working");
+    assert_eq!(st.fleet(), vec![2, 1, 0], "attention > done > working");
 }
 
 #[test]
@@ -2571,7 +2789,7 @@ fn spawn_mirror(st: &mut AppState) {
 #[test]
 fn bridge_spawn_mirrors_into_the_rail_without_stealing_focus() {
     let mut st = AppState::new(pane());
-    st.detail = DetailLayout::solo("rec-1".into());
+    st.focus = Some("rec-1".into());
     spawn_mirror(&mut st);
     let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
     let mirror = mirror.expect("mirror pane created");
@@ -2579,14 +2797,14 @@ fn bridge_spawn_mirrors_into_the_rail_without_stealing_focus() {
     assert_eq!(mirror.owner, Ownership::Orchestrator);
     assert!(mirror.turn_active, "a bridge spawn starts working");
     assert!(
-        st.roster()
+        st.fleet()
             .iter()
             .any(|&i| st.agents[i].record_id == "mcp:abc123"),
         "mirror appears in the subagents roster"
     );
     assert_eq!(
-        st.detail.shown,
-        vec!["rec-1".to_string()],
+        st.focus.as_deref(),
+        Some("rec-1"),
         "the human's detail focus is untouched"
     );
 }
@@ -2613,7 +2831,7 @@ fn bridge_permission_rides_the_decision_queue() {
         .expect("mirror pane");
     assert!(mirror.pending.is_some(), "gated request reaches the queue");
     // Resolve inline from NORMAL on the focused mirror.
-    st.detail = DetailLayout::solo("mcp:abc123".into());
+    st.focus = Some("mcp:abc123".into());
     let effects = reduce(&mut st, &press(KeyCode::Char('y')));
     assert!(
         effects.contains(&Effect::ResolvePermission {
@@ -2630,7 +2848,7 @@ fn live_mirror_refuses_close_and_prompt() {
     let mut st = AppState::new(pane());
     spawn_mirror(&mut st);
     // `leader c` on the focused live mirror: refused with guidance.
-    st.detail = DetailLayout::solo("mcp:abc123".into());
+    st.focus = Some("mcp:abc123".into());
     st.mode = Mode::Leader;
     let effects = reduce(&mut st, &press(KeyCode::Char('c')));
     assert!(effects.is_empty(), "no CloseAgent for a live mirror");
@@ -2646,7 +2864,7 @@ fn live_mirror_refuses_close_and_prompt() {
     // Typing at a focused orchestrator-owned monitor lands on a notice
     // pointing at the owner, never an invisible composer.
     st.mode = Mode::Normal;
-    st.detail = DetailLayout::solo("mcp:abc123".into());
+    st.focus = Some("mcp:abc123".into());
     let fx = reduce(&mut st, &press(KeyCode::Char('h')));
     assert!(fx.is_empty(), "typing at a mirror does nothing: {fx:?}");
     assert!(
@@ -2715,7 +2933,7 @@ fn paste_routes_to_a_focused_pty_pane() {
     let mut pty = PaneState::new("session-1".into(), "claude".into());
     pty.kind = PaneKind::Pty;
     st.agents.push(pty);
-    st.detail = DetailLayout::solo("session-1".into());
+    st.focus = Some("session-1".into());
     let effects = reduce(&mut st, &AppEvent::Paste("hello".into()));
     assert_eq!(
         effects,

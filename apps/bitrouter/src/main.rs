@@ -508,9 +508,15 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Launch the composite multi-agent TUI: a left rail (roster sorted by
-    /// who needs you, radar strip, decision + review queues) beside the
-    /// primary pane. `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
+    /// Launch the composite multi-agent TUI. Two screens: the DEFAULT screen
+    /// is the focused agent at full terminal width over a one-line status bar
+    /// (no sidebars — the harness's own TUI gets every column), and
+    /// `Ctrl-Space m` opens the MANAGER, a full-screen list of the whole
+    /// fleet carrying the supervision verbs (`y`/`a`/`n` decide,
+    /// `D`/`m`/`p`/`r` review, `c` close) against its cursor row. A focused
+    /// PTY passes every key to the child, so the manager is the only place an
+    /// agent that is not on screen can be unblocked.
+    /// `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
     /// hosts that harness's REAL native TUI in a PTY pane (the orchestrator —
     /// keys pass through; `Ctrl-Space` is the one manager leader; `Ctrl-C`
     /// interrupts the agent, not the TUI) with the fleet MCP bridge injected
@@ -519,7 +525,8 @@ enum Command {
     /// launch with their own subscription auth (the daemon borrows those
     /// same sessions as providers). A configured `agents:` id instead
     /// renders that ACP agent from typed events. `Ctrl-Space n` spawns
-    /// worktree-isolated ACP subagents either way.
+    /// worktree-isolated ACP subagents either way (`N` from the manager —
+    /// there, `n` is deny).
     #[cfg(feature = "tui")]
     Tui {
         /// The primary agent: a native harness (`claude`, `codex`,

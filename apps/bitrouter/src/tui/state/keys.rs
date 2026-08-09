@@ -7,12 +7,13 @@ use crossterm::event::{KeyCode, KeyEvent};
 use bitrouter_substrate::translate::PermissionOutcome;
 
 use super::diff::Line;
-use super::layout::{ClickTarget, DetailLayout, Split};
+use super::layout::ClickTarget;
 use super::overlay::{
-    Command, LeaderAction, Mode, PaletteState, PickerPurpose, PickerState, leader_action,
+    Command, LeaderAction, ManagerState, Mode, PaletteState, PickerPurpose, PickerState,
+    leader_action,
 };
 use super::pane::{Ownership, PaneKind};
-use super::{AppState, MAX_SHOWN, REJECT_NOTE, mark_shown_seen};
+use super::{AppState, REJECT_NOTE, mark_shown_seen};
 use crate::tui::event::Effect;
 
 /// NORMAL-mode keys. Permission keys take priority when a prompt is pending.
@@ -76,129 +77,31 @@ pub(super) fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Eff
         }
         _ => {}
     }
-    // ── Inline decisions (TUI_SPEC_V3 §5): `y/a/n` resolve the TOP pending
-    // decision — the roster head's, risk-sorted then oldest-first — and
-    // advance focus to the next pending item (batch clear, no mode).
-    let top_pending = state
-        .roster()
-        .into_iter()
-        .find(|&i| state.agents[i].pending.is_some())
-        .map(|i| state.agents[i].record_id.clone());
-    if let Some(top_id) = top_pending {
-        let outcome = match key.code {
-            KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
-            KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
-            KeyCode::Char('n') => Some(PermissionOutcome::Deny),
-            _ => None,
-        };
-        if let Some(outcome) = outcome {
-            if let Some(pane) = state.pane_by_id_mut(&top_id) {
-                pane.pending = None;
-                // Decided — nothing left to look at here.
-                pane.attention = false;
-                pane.done = false;
-            }
-            // Advance to the next decision so `y y y` batch-clears the
-            // queue without refocusing by hand.
-            if let Some(next) = state
-                .roster()
-                .into_iter()
-                .find(|&i| state.agents[i].pending.is_some())
-                .map(|i| state.agents[i].record_id.clone())
-            {
-                state.detail = DetailLayout::solo(next);
-                mark_shown_seen(state);
-            }
-            return vec![Effect::ResolvePermission {
-                record_id: top_id,
-                outcome,
-            }];
-        }
-        // A pending decision is up: other keys still work (scroll handled
-        // above; review/notice arms below), but never leak into it.
+    // ── Inline decisions: `y/a/n` resolve the TOP pending decision — the
+    // fleet head's, risk-sorted then oldest-first — and advance focus to the
+    // next pending item (batch clear, no mode).
+    //
+    // NOTE this arm is unreachable while a PTY pane is focused (the
+    // passthrough above returns first), which is the default screen. That is
+    // exactly why the manager view owns the same verbs: it is the only
+    // surface on which a blocked subagent can be unblocked while the
+    // orchestrator holds the keyboard.
+    // A pending decision being up does not swallow other keys: scroll is
+    // handled above and the review/notice arms below still run.
+    if let Some(top_id) = top_pending(state)
+        && let Some(outcome) = decide_outcome(key.code)
+    {
+        return decide(state, &top_id, outcome, true);
     }
 
-    // ── Inline review verbs on the focused Monitor (TUI_SPEC_V3 §5): no
-    // mode to enter — `D` loads the diff, `m` merges, `p` applies, `r`
-    // rejects. Only live when the focused pane has a ready-to-review diff,
-    // so they never shadow anything else.
-    let review_ready = state.focused().is_some_and(|p| p.review.is_some());
-    if review_ready {
-        match key.code {
-            KeyCode::Char('D') => {
-                mark_shown_seen(state);
-                return vec![Effect::LoadDiff {
-                    record_id: focus_id,
-                }];
-            }
-            KeyCode::Char('m') => {
-                if let Some(pane) = state.focused_mut() {
-                    // Integrations queue one at a time in the background;
-                    // the outcome lands as an OpDone line.
-                    pane.push_external(Line::Note("merging in the background…".into()));
-                }
-                return vec![Effect::Merge {
-                    record_id: focus_id,
-                }];
-            }
-            KeyCode::Char('p') => {
-                if let Some(pane) = state.focused_mut() {
-                    pane.push_external(Line::Note("applying in the background…".into()));
-                }
-                return vec![Effect::Apply {
-                    record_id: focus_id,
-                }];
-            }
-            KeyCode::Char('r') => {
-                let owner = state.focused().map(|p| p.owner);
-                let exited = state.focused().is_some_and(|p| p.exited);
-                if let Some(pane) = state.focused_mut() {
-                    pane.review = None;
-                }
-                mark_shown_seen(state);
-                return match owner {
-                    // Orchestrator-owned but the bridge is gone: there is no
-                    // consumer for the verdict — dismiss the review honestly
-                    // instead of claiming it was routed.
-                    Some(Ownership::Orchestrator) if exited => {
-                        state.notice = Some(
-                            "orchestrator disconnected — review dismissed, no verdict sent".into(),
-                        );
-                        Vec::new()
-                    }
-                    // Orchestrator-owned: the verdict is the subagent's task
-                    // outcome, consumed by the owning orchestrator — nothing
-                    // is injected into any PTY or prompt (TUI_SPEC_V3 §5).
-                    Some(Ownership::Orchestrator) => {
-                        state.notice = Some(
-                            "rejected — routed to the orchestrator (changes_requested)".into(),
-                        );
-                        vec![Effect::ReviewVerdict {
-                            record_id: focus_id,
-                            note: REJECT_NOTE.into(),
-                        }]
-                    }
-                    // Human-owned (the palette hatch): the human IS the
-                    // owner, so direct steering is correct here — and only
-                    // here. The rejection re-prompts the agent.
-                    _ => {
-                        if let Some(pane) = state.focused_mut() {
-                            pane.push_external(Line::Note("rejected — asked to revise".into()));
-                            // New work supersedes the finished turn's state.
-                            pane.turn_active = true;
-                            pane.done = false;
-                            pane.check_retries = 0;
-                        }
-                        state.notice = Some("rejected — agent asked to revise".into());
-                        vec![Effect::Prompt {
-                            record_id: focus_id,
-                            text: REJECT_NOTE.into(),
-                        }]
-                    }
-                };
-            }
-            _ => {}
-        }
+    // ── Inline review verbs on the focused Monitor: no mode to enter — `D`
+    // loads the diff, `m` merges, `p` applies, `r` rejects. Only live when
+    // the focused pane has a ready-to-review diff, so they never shadow
+    // anything else. Shared verbatim with the manager view.
+    if state.focused().is_some_and(|p| p.review.is_some())
+        && let Some(effects) = review_verb(state, &focus_id, key.code)
+    {
+        return effects;
     }
 
     // Monitors are read-only (TUI_SPEC_V3 I2): there is no composer and no
@@ -226,6 +129,243 @@ pub(super) fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Eff
     }
 }
 
+// ── Supervision verbs, shared by NORMAL (against the focused pane) and
+// MANAGER (against the cursor row). One implementation, so a decision made
+// from the manager and one made from a focused monitor cannot diverge.
+
+/// The record id of the fleet's top pending decision — highest risk, then
+/// oldest — or `None` when nothing is blocked.
+fn top_pending(state: &AppState) -> Option<String> {
+    state
+        .fleet()
+        .into_iter()
+        .find(|&i| state.agents[i].pending.is_some())
+        .map(|i| state.agents[i].record_id.clone())
+}
+
+/// Map a decision key to its ACP outcome. `y` allow once, `a` allow always,
+/// `n` deny.
+fn decide_outcome(code: KeyCode) -> Option<PermissionOutcome> {
+    match code {
+        KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
+        KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
+        KeyCode::Char('n') => Some(PermissionOutcome::Deny),
+        _ => None,
+    }
+}
+
+/// Resolve `record_id`'s pending decision. With `advance`, focus moves to the
+/// next blocked agent so `y y y` batch-clears the queue without navigating by
+/// hand — the manager passes `false` because its cursor already tracks the
+/// re-sorted list.
+fn decide(
+    state: &mut AppState,
+    record_id: &str,
+    outcome: PermissionOutcome,
+    advance: bool,
+) -> Vec<Effect> {
+    if let Some(pane) = state.pane_by_id_mut(record_id) {
+        pane.pending = None;
+        // Decided — nothing left to look at here.
+        pane.attention = false;
+        pane.done = false;
+    }
+    if advance && let Some(next) = top_pending(state) {
+        state.focus_on(next);
+    }
+    vec![Effect::ResolvePermission {
+        record_id: record_id.to_string(),
+        outcome,
+    }]
+}
+
+/// Run a review verb (`D` diff · `m` merge · `p` apply · `r` reject) against
+/// `record_id`. `None` when `code` is not a review verb, so callers can fall
+/// through to their own bindings.
+fn review_verb(state: &mut AppState, record_id: &str, code: KeyCode) -> Option<Vec<Effect>> {
+    let record_id = record_id.to_string();
+    match code {
+        KeyCode::Char('D') => {
+            mark_shown_seen(state);
+            Some(vec![Effect::LoadDiff { record_id }])
+        }
+        KeyCode::Char('m') => {
+            if let Some(pane) = state.pane_by_id_mut(&record_id) {
+                // Integrations queue one at a time in the background; the
+                // outcome lands as an OpDone line.
+                pane.push_external(Line::Note("merging in the background…".into()));
+            }
+            Some(vec![Effect::Merge { record_id }])
+        }
+        KeyCode::Char('p') => {
+            if let Some(pane) = state.pane_by_id_mut(&record_id) {
+                pane.push_external(Line::Note("applying in the background…".into()));
+            }
+            Some(vec![Effect::Apply { record_id }])
+        }
+        KeyCode::Char('r') => {
+            let pane = state.pane_by_id_mut(&record_id)?;
+            let (owner, exited) = (pane.owner, pane.exited);
+            pane.review = None;
+            mark_shown_seen(state);
+            Some(match owner {
+                // Orchestrator-owned but the bridge is gone: there is no
+                // consumer for the verdict — dismiss the review honestly
+                // instead of claiming it was routed.
+                Ownership::Orchestrator if exited => {
+                    state.notice = Some(
+                        "orchestrator disconnected — review dismissed, no verdict sent".into(),
+                    );
+                    Vec::new()
+                }
+                // Orchestrator-owned: the verdict is the subagent's task
+                // outcome, consumed by the owning orchestrator — nothing is
+                // injected into any PTY or prompt.
+                Ownership::Orchestrator => {
+                    state.notice =
+                        Some("rejected — routed to the orchestrator (changes_requested)".into());
+                    vec![Effect::ReviewVerdict {
+                        record_id,
+                        note: REJECT_NOTE.into(),
+                    }]
+                }
+                // Human-owned (the palette hatch): the human IS the owner, so
+                // direct steering is correct here — and only here. The
+                // rejection re-prompts the agent.
+                Ownership::Human => {
+                    if let Some(pane) = state.pane_by_id_mut(&record_id) {
+                        pane.push_external(Line::Note("rejected — asked to revise".into()));
+                        // New work supersedes the finished turn's state.
+                        pane.turn_active = true;
+                        pane.done = false;
+                        pane.check_retries = 0;
+                    }
+                    state.notice = Some("rejected — agent asked to revise".into());
+                    vec![Effect::Prompt {
+                        record_id,
+                        text: REJECT_NOTE.into(),
+                    }]
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+/// MANAGER-mode keys: the fleet list. Navigation (`↑`/`↓`, `j`/`k`, `g`/`G`),
+/// `Enter` to give a row the viewport, and the supervision verbs against the
+/// CURSOR row — `y`/`a`/`n` decide, `D`/`m`/`p`/`r` review, `c` close.
+///
+/// `n` is deny, not new-session: the decision keys are the reason this view
+/// exists, and splitting `y`/`a` from `n` across two meanings would be worse
+/// than moving new-session to `N`.
+pub(super) fn reduce_key_manager(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    let order = state.fleet();
+    if order.is_empty() {
+        state.mode = Mode::Normal;
+        state.manager = None;
+        return Vec::new();
+    }
+    // Clamp rather than wrap: the list re-sorts as agents change state, and a
+    // cursor left past the end must land on a real row.
+    let cursor = state
+        .manager
+        .as_ref()
+        .map_or(0, |m| m.cursor)
+        .min(order.len() - 1);
+    let record_id = state.agents[order[cursor]].record_id.clone();
+    let set_cursor = |state: &mut AppState, next: usize| {
+        state.manager = Some(ManagerState { cursor: next });
+    };
+    // The leader chord toggles: the key that opened the manager closes it, so
+    // a glance at the fleet is one chord out and one chord back.
+    if (key.code, key.modifiers) == state.leader {
+        state.mode = Mode::Normal;
+        state.manager = None;
+        return Vec::new();
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = Mode::Normal;
+            state.manager = None;
+            Vec::new()
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            set_cursor(state, cursor.saturating_sub(1));
+            Vec::new()
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            set_cursor(state, (cursor + 1).min(order.len() - 1));
+            Vec::new()
+        }
+        KeyCode::Home | KeyCode::Char('g') => {
+            set_cursor(state, 0);
+            Vec::new()
+        }
+        KeyCode::End | KeyCode::Char('G') => {
+            set_cursor(state, order.len() - 1);
+            Vec::new()
+        }
+        // Give the cursor row the viewport and get out of the way — the
+        // manager is a place you pass through, not one you live in.
+        KeyCode::Enter => {
+            state.focus_on(record_id);
+            state.mode = Mode::Normal;
+            state.manager = None;
+            Vec::new()
+        }
+        // Decide on the cursor row. Only when that row is actually blocked,
+        // so `n` on an idle agent is inert rather than surprising.
+        KeyCode::Char('y') | KeyCode::Char('a') | KeyCode::Char('n')
+            if state
+                .pane_by_id_mut(&record_id)
+                .is_some_and(|p| p.pending.is_some()) =>
+        {
+            // Safe: the guard matched one of the three decision keys.
+            match decide_outcome(key.code) {
+                Some(outcome) => decide(state, &record_id, outcome, false),
+                None => Vec::new(),
+            }
+        }
+        // Review the cursor row. `D` opens the diff, which only makes sense
+        // in the viewport — so it focuses that agent and closes the manager.
+        KeyCode::Char('D')
+            if state
+                .pane_by_id_mut(&record_id)
+                .is_some_and(|p| p.review.is_some()) =>
+        {
+            state.focus_on(record_id.clone());
+            state.mode = Mode::Normal;
+            state.manager = None;
+            review_verb(state, &record_id, KeyCode::Char('D')).unwrap_or_default()
+        }
+        KeyCode::Char('m') | KeyCode::Char('p') | KeyCode::Char('r')
+            if state
+                .pane_by_id_mut(&record_id)
+                .is_some_and(|p| p.review.is_some()) =>
+        {
+            review_verb(state, &record_id, key.code).unwrap_or_default()
+        }
+        // Close the cursor row (same guards as every other close surface).
+        KeyCode::Char('c') => close_agent(state, &record_id),
+        // New session / new subagent: shifted out of `n`'s way.
+        KeyCode::Char('N') => run_command(state, Command::NewSession),
+        KeyCode::Char('S') => run_command(state, Command::SpawnAgent),
+        KeyCode::Char(':') => {
+            state.palette = Some(PaletteState::default());
+            state.mode = Mode::Command;
+            state.manager = None;
+            Vec::new()
+        }
+        KeyCode::Char('?') => {
+            state.keys_help = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// LEADER leaves (TUI_SPEC_V3 §3): one key, then back to NORMAL (or into
 /// a `Command`/`Picker` leaf). Never sticky — every arm leaves `Leader`.
 pub(super) fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
@@ -236,21 +376,26 @@ pub(super) fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Eff
         return Vec::new();
     };
     match action {
+        // The manager: the whole fleet, and the only place supervision verbs
+        // reach an agent that is not the one on screen.
+        LeaderAction::Manager => run_command(state, Command::Manager),
         // Focus session N (switch orchestrator conversation).
         LeaderAction::FocusSession(idx) => {
-            if let Some(&i) = state.sessions_list().get(idx) {
-                state.detail = DetailLayout::solo(state.agents[i].record_id.clone());
-                mark_shown_seen(state);
-            } else {
-                state.notice = Some(format!("no session {}", idx + 1));
+            match state.sessions_list().get(idx).copied() {
+                Some(i) => {
+                    let id = state.agents[i].record_id.clone();
+                    state.focus_on(id);
+                }
+                None => state.notice = Some(format!("no session {}", idx + 1)),
             }
             Vec::new()
         }
-        // Focus the next actionable subagent (needs-you → review), cycling
-        // past the currently focused one.
+        // Focus the next actionable agent (needs-you → review), cycling past
+        // the currently focused one — the keyboard fast path that skips
+        // opening the manager at all.
         LeaderAction::NextActionable => {
             let actionable: Vec<usize> = state
-                .roster()
+                .fleet()
                 .into_iter()
                 .filter(|&i| {
                     let p = &state.agents[i];
@@ -261,14 +406,14 @@ pub(super) fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Eff
                 state.notice = Some("all clear — nothing actionable".into());
                 return Vec::new();
             }
-            let focused = state.detail.focused_id().map(str::to_string);
+            let focused = state.focus.clone();
             let next = actionable
                 .iter()
                 .position(|&i| Some(state.agents[i].record_id.as_str()) == focused.as_deref())
                 .map(|pos| actionable[(pos + 1) % actionable.len()])
                 .unwrap_or(actionable[0]);
-            state.detail = DetailLayout::solo(state.agents[next].record_id.clone());
-            mark_shown_seen(state);
+            let id = state.agents[next].record_id.clone();
+            state.focus_on(id);
             Vec::new()
         }
         // New orchestrator session (harness picker).
@@ -372,15 +517,16 @@ pub(super) fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Ef
     }
 }
 
-/// Execute one palette command. Every action maps onto an existing reducer
-/// path — the palette is a discoverable front door, not a second behavior set.
 /// Hit-test a left-click against the zones the renderer recorded this frame.
-/// Later-pushed zones sit on top, so the topmost match wins (`rev()`). Sidebar
-/// buttons toggle their panel; a row click focuses that pane — its split slot
-/// when already shown, else solo (TUI_SPEC_V3 §3: click is the pointer half
-/// of navigation; no mode involved). Overlays (picker / palette / confirm /
-/// which-key) swallow clicks: their zones sit behind the popup, so acting on
-/// them would be a click-through.
+/// Later-pushed zones sit on top, so the topmost match wins (`rev()`).
+///
+/// Every zone belongs to the manager view — the default screen is all agent,
+/// so there is nothing there to click. A row click moves the cursor to it
+/// rather than jumping straight to focus: one click to aim, `Enter` (or a
+/// second click on the same row) to commit, so a misclick near a `y`/`n`
+/// decision costs nothing. Overlays (picker / palette / confirm / which-key)
+/// swallow clicks: their zones sit behind the popup, so acting on them would
+/// be a click-through.
 pub(super) fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
     if state.keys_help
         || matches!(
@@ -400,30 +546,39 @@ pub(super) fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effe
         return Vec::new();
     };
     match target {
-        ClickTarget::ToggleSessions => run_command(state, Command::ToggleSessions),
-        ClickTarget::ToggleSubagents => run_command(state, Command::ToggleSubagents),
-        ClickTarget::SessionRow(i) => {
-            let Some(&idx) = state.sessions_list().get(i) else {
+        ClickTarget::AgentRow(i) => {
+            let order = state.fleet();
+            let Some(&idx) = order.get(i) else {
                 return Vec::new();
             };
             let id = state.agents[idx].record_id.clone();
-            focus_or_solo(state, id);
-            Vec::new()
-        }
-        ClickTarget::RailRow(i) => {
-            let Some(&idx) = state.roster().get(i) else {
-                return Vec::new();
-            };
-            let id = state.agents[idx].record_id.clone();
-            focus_or_solo(state, id);
+            let already_there = state.manager.as_ref().is_some_and(|m| m.cursor == i);
+            if already_there {
+                // Second click on the same row commits, like `Enter`.
+                state.focus_on(id);
+                state.mode = Mode::Normal;
+                state.manager = None;
+            } else {
+                state.manager = Some(ManagerState { cursor: i });
+            }
             Vec::new()
         }
         ClickTarget::NewSession => run_command(state, Command::NewSession),
     }
 }
 
+/// Execute one palette command. Every action maps onto an existing reducer
+/// path — the palette is a discoverable front door, not a second behavior set.
 pub(super) fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
     match cmd {
+        // Open the manager with the cursor on whatever most wants attention
+        // (the fleet head) — the common case is "something needs me", and
+        // landing on it saves the navigation.
+        Command::Manager => {
+            state.manager = Some(ManagerState { cursor: 0 });
+            state.mode = Mode::Manager;
+            Vec::new()
+        }
         Command::SpawnAgent => {
             state.picker = Some(PickerState {
                 agents: state.available_agents.clone(),
@@ -443,19 +598,6 @@ pub(super) fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             Vec::new()
         }
         Command::CloseAgent => close_focused(state),
-        Command::SplitH | Command::SplitV => {
-            let split = if cmd == Command::SplitH {
-                Split::H
-            } else {
-                Split::V
-            };
-            split_detail(state, split);
-            Vec::new()
-        }
-        Command::Unsplit => {
-            state.detail.remove_focused();
-            Vec::new()
-        }
         Command::Autonomy => cycle_focused_autonomy(state),
         Command::KillDone => {
             let dead: Vec<String> = state
@@ -470,14 +612,6 @@ pub(super) fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             }
             effects
         }
-        Command::ToggleSessions => {
-            state.sessions_collapsed = !state.sessions_collapsed;
-            Vec::new()
-        }
-        Command::ToggleSubagents => {
-            state.subagents_collapsed = !state.subagents_collapsed;
-            Vec::new()
-        }
         Command::KeysHelp => {
             state.keys_help = true;
             Vec::new()
@@ -489,58 +623,31 @@ pub(super) fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
     }
 }
 
-/// Split the detail in `split` direction (palette-only in v3). Adds the
-/// roster's most actionable agent not yet shown. A notice explains the
-/// no-op cases (all shown / full).
-fn split_detail(state: &mut AppState, split: Split) {
-    if state.detail.shown.len() >= MAX_SHOWN {
-        state.notice = Some(format!(
-            "detail is full ({MAX_SHOWN} panes) — unsplit drops a slot"
-        ));
-        return;
-    }
-    let target = state
-        .roster()
-        .into_iter()
-        .map(|i| state.agents[i].record_id.clone())
-        .find(|id| !state.detail.shown.contains(id));
-    match target {
-        Some(id) => {
-            state.detail.add(id, split);
-            mark_shown_seen(state);
-        }
-        None => {
-            state.notice = Some("nothing to split with — every agent is already shown".into());
-        }
-    }
-}
-
-/// Focus `id` in the detail: when it is already shown (a split slot), move
-/// focus to its slot — the only way to switch slots, so clicking must never
-/// collapse a split; otherwise open it solo.
-fn focus_or_solo(state: &mut AppState, id: String) {
-    match state.detail.shown.iter().position(|r| r == &id) {
-        Some(slot) => state.detail.focus = slot,
-        None => state.detail = DetailLayout::solo(id),
-    }
-    mark_shown_seen(state);
-}
-
 /// Close the focused pane (leader `c` / palette `close agent`; attach close
-/// = detach). A *live* orchestrator-owned monitor stays: another process
-/// owns that session, and removing the pane would orphan its future
-/// permission requests — every close surface shares this guard.
+/// = detach).
 fn close_focused(state: &mut AppState) -> Vec<Effect> {
+    match state.focus.clone() {
+        Some(id) => close_agent(state, &id),
+        None => Vec::new(),
+    }
+}
+
+/// Close one agent, with the guard every close surface shares: a *live*
+/// orchestrator-owned monitor stays, because another process owns that
+/// session and removing the pane would orphan its future permission requests.
+fn close_agent(state: &mut AppState, record_id: &str) -> Vec<Effect> {
     match state
-        .focused()
-        .map(|p| (p.record_id.clone(), p.owner, p.exited))
+        .agents
+        .iter()
+        .find(|p| p.record_id == record_id)
+        .map(|p| (p.owner, p.exited))
     {
-        Some((_, Ownership::Orchestrator, false)) => {
+        Some((Ownership::Orchestrator, false)) => {
             state.notice =
                 Some("orchestrator-managed subagent — close it there (close_subagent)".into());
             Vec::new()
         }
-        Some((id, _, _)) => close_agent_by_id(state, &id),
+        Some(_) => close_agent_by_id(state, record_id),
         None => Vec::new(),
     }
 }
@@ -562,28 +669,30 @@ fn cycle_focused_autonomy(state: &mut AppState) -> Vec<Effect> {
     Vec::new()
 }
 
-/// Close one agent by id: remove it, prune the detail layout (refilling it
-/// with the most actionable agent if it empties), emit `CloseAgent`. Closing
-/// the last agent quits.
+/// Close one agent by id: remove it, hand the viewport to the most actionable
+/// survivor if it was the one on screen, emit `CloseAgent`. Closing the last
+/// agent quits.
 fn close_agent_by_id(state: &mut AppState, record_id: &str) -> Vec<Effect> {
     if !state.agents.iter().any(|p| p.record_id == record_id) {
         return Vec::new();
     }
     state.agents.retain(|p| p.record_id != record_id);
-    state.detail.prune(record_id);
+    if state.focus.as_deref() == Some(record_id) {
+        state.focus = None;
+    }
     if state.agents.is_empty() {
         state.should_quit = true;
-    } else if state.detail.shown.is_empty() {
-        // Refill with the roster head (most actionable agent), falling back
-        // to the first session when no ACP agents remain.
-        let head = state
-            .roster()
-            .into_iter()
-            .next()
-            .or_else(|| state.sessions_list().into_iter().next());
-        if let Some(head) = head {
-            state.detail = DetailLayout::solo(state.agents[head].record_id.clone());
+    } else if state.focus.is_none() {
+        // Refill with the fleet head — the most actionable survivor.
+        if let Some(head) = state.fleet().into_iter().next() {
+            let id = state.agents[head].record_id.clone();
+            state.focus_on(id);
         }
+    }
+    // The manager's cursor indexes a list that just got shorter; clamping
+    // here keeps a close from leaving it pointing past the end.
+    if let Some(manager) = state.manager.as_mut() {
+        manager.cursor = manager.cursor.min(state.agents.len().saturating_sub(1));
     }
     vec![Effect::CloseAgent {
         record_id: record_id.to_string(),

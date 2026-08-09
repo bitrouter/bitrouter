@@ -1,6 +1,14 @@
-//! ratatui rendering of `AppState`: a fixed left rail (roster sorted by
-//! actionability + radar strip) beside a splittable detail viewport, with the
-//! input box, mode bar, and the picker/permission popups.
+//! ratatui rendering of `AppState`.
+//!
+//! Two screens. The DEFAULT screen is the focused agent at full terminal
+//! width over a one-line status bar — no sidebars, no rails, no borrowed
+//! columns. Harness TUIs draw their own chrome and wrap against the grid they
+//! are given, so every column BitRouter takes for itself is a column the
+//! agent's own layout degrades by.
+//!
+//! The MANAGER screen (leader `m`) is a full-screen overlay holding the one
+//! thing the sidebars were genuinely for: the fleet, and the verbs that
+//! unblock it.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -12,22 +20,9 @@ use crossterm::event::KeyCode;
 
 use crate::tui::state::AppState;
 use crate::tui::state::diff::{DiffLine, Line, diff_lines};
-use crate::tui::state::layout::{ClickTarget, ClickZone, Split};
+use crate::tui::state::layout::{ClickTarget, ClickZone};
 use crate::tui::state::overlay::{LEADER_LEAVES, Mode, PickerPurpose, PickerState};
 use crate::tui::state::pane::{PaneState, PendingView, TailKind};
-
-/// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
-/// plus its expanded `└ y·a·d risk · title` line to stay readable.
-const RAIL_WIDTH: u16 = 28;
-
-/// Sessions-panel (left sidebar) width: a binary name + a dim model line.
-const SESSIONS_WIDTH: u16 = 24;
-
-/// The center column (the agent-native TUI) never shrinks below this: when
-/// both sidebars don't fit beside it, they fold one at a time — the panel
-/// with content wins, then the subagents rail by default. User collapse
-/// (palette toggles) always wins over all.
-const CENTER_MIN_WIDTH: u16 = 48;
 
 /// A PTY pane's rendered grid for this frame, produced loop-side from its
 /// terminal backend (state stays pure — the emulator lives with the loop).
@@ -44,72 +39,26 @@ pub struct PtyView {
 /// reducer uses it to page the scrollback by exactly one screen.
 pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let area = frame.area();
-    // Columns split FIRST: the sidebars run the full terminal height, and
-    // the center column owns everything that belongs to the agent pane —
-    // detail viewport, composer, and the always-visible status bar (its
-    // width is the center's, per the accepted wireframe).
-    //
-    // Which sidebars show: user collapse always wins; when both fit beside
-    // a usable center they both show (even empty — an empty panel is an
-    // affordance, not noise); when space is tight the panel that has
-    // content wins, then the subagents rail.
-    let rail_w = RAIL_WIDTH.min(area.width / 3);
-    let sessions_allowed = !state.sessions_collapsed;
-    let rail_allowed = !state.subagents_collapsed;
-    let sessions_content = !state.sessions_list().is_empty();
-    let rail_content = state
-        .agents
-        .iter()
-        .any(|p| p.kind == crate::tui::state::pane::PaneKind::Monitor);
-    let fits_both = area.width >= SESSIONS_WIDTH + rail_w + CENTER_MIN_WIDTH;
-    let (show_sessions, show_rail) = if fits_both {
-        (sessions_allowed, rail_allowed)
-    } else {
-        // One sidebar at most: the panel with content wins.
-        let prefer_sessions = sessions_allowed && sessions_content && !rail_content;
-        if prefer_sessions && area.width >= SESSIONS_WIDTH + CENTER_MIN_WIDTH {
-            (true, false)
-        } else if rail_allowed && area.width >= rail_w + CENTER_MIN_WIDTH {
-            (false, true)
-        } else if sessions_allowed && area.width >= SESSIONS_WIDTH + CENTER_MIN_WIDTH {
-            (true, false)
-        } else {
-            (false, false)
-        }
-    };
-    let mut constraints = Vec::new();
-    if show_sessions {
-        constraints.push(Constraint::Length(SESSIONS_WIDTH));
-    }
-    constraints.push(Constraint::Min(1));
-    if show_rail {
-        constraints.push(Constraint::Length(rail_w));
-    }
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(constraints)
-        .split(area);
-
-    // The center column: detail over status bar. There is no composer —
-    // monitors are read-only (TUI_SPEC_V3 I2) and a focused PTY pane owns
-    // the keyboard (locked-mode passthrough).
-    let center = cols[if show_sessions { 1 } else { 0 }];
+    // The whole screen is the agent, minus one row for the status bar. There
+    // is no composer — monitors are read-only and a focused PTY pane owns the
+    // keyboard (locked-mode passthrough).
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(center);
+        .split(area);
 
-    // Clickable regions for this frame, filled by the chrome renderers and
+    // Clickable regions for this frame, filled by the manager renderer and
     // handed to state for the `Click` reducer to hit-test (mirrors `pty_areas`).
     let mut zones: Vec<ClickZone> = Vec::new();
-    if show_sessions {
-        render_sessions(state, &mut zones, frame, cols[0]);
-    }
     render_detail(state, pty, frame, rows[0]);
-    if show_rail {
-        render_rail(state, &mut zones, frame, cols[cols.len() - 1]);
+    render_statusbar(state, frame, rows[1]);
+
+    // The manager sits over everything: it is a screen, not a panel, so the
+    // fleet gets the full width for names, state, and the expanded action
+    // line — the thing a 28-column rail could never show without clipping.
+    if state.mode == Mode::Manager {
+        render_manager(state, &mut zones, frame, area);
     }
-    render_statusbar(state, &mut zones, frame, rows[rows.len() - 1]);
     state.click_zones = zones;
 
     if state.mode == Mode::Picker
@@ -134,7 +83,11 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         render_keys_help(state.mode, &state.leader_label(), frame, area);
     }
 
-    if let Some(pane) = state.focused()
+    // The focused agent's own pending decision, as a modal. Suppressed under
+    // the manager, which already shows every pending inline — two renderings
+    // of the same request, one of them behind the other, is worse than one.
+    if state.mode != Mode::Manager
+        && let Some(pane) = state.focused()
         && let Some(pending) = &pane.pending
     {
         render_permission(pending, state.no_color, frame, area);
@@ -237,6 +190,18 @@ fn render_keys_help(mode: Mode, leader: &str, frame: &mut Frame, area: Rect) {
             (leader, "leader (one-shot menu)"),
             ("Ctrl-C", "interrupt the focused agent"),
         ]),
+        // The manager's verbs act on the CURSOR row, not the focused pane —
+        // that is the whole point of the screen.
+        Mode::Manager => static_rows(&[
+            ("↑ ↓ / j k", "move the cursor"),
+            ("g / G", "first / last agent"),
+            ("Enter", "give this agent the viewport"),
+            ("y / a / n", "decide: allow once · always · deny"),
+            ("D / m / p / r", "review: diff · merge · apply · reject"),
+            ("c", "close this agent"),
+            ("N / S", "new session · spawn subagent"),
+            ("Esc", "back to the agent"),
+        ]),
         // Rendered from LEADER_LEAVES — the same table the reducer
         // dispatches from — so a leaf and its help line cannot drift apart
         // (TUI_SPEC_V3 §9). Only the digit range and Esc are hand rows.
@@ -330,88 +295,199 @@ fn state_word(pane: &PaneState) -> &'static str {
     }
 }
 
-/// Dim lowercase section header — the herdr-minimal panel chrome.
-fn header_line(text: String, nc: bool) -> TuiLine<'static> {
-    TuiLine::styled(text, tint(nc, Color::DarkGray).add_modifier(Modifier::BOLD))
-}
-
-/// Left sidebar: orchestrator sessions (PTY panes), herdr-spaces style — a
-/// name line over a dim `state · model` line per entry. The cursor (`▸`)
-/// follows the detail-focused session.
-fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
+/// The manager screen: one list of the WHOLE fleet — orchestrator sessions
+/// and ACP subagents together, sorted by who needs you — over a footer of the
+/// verbs that apply to the cursor row.
+///
+/// This is the supervision surface. Because a focused PTY pane swallows every
+/// key but the leader, an agent that is not on screen can only be seen and
+/// unblocked from here.
+fn render_manager(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
+    frame.render_widget(Clear, area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
-    let order = state.sessions_list();
-    let focused_id = state.focused().map(|p| p.record_id.clone());
+
+    let order = state.fleet();
+    let cursor = state
+        .manager
+        .as_ref()
+        .map_or(0, |m| m.cursor)
+        .min(order.len().saturating_sub(1));
+    let focused_id = state.focus.clone();
+    let inner_width = chunks[0].width.saturating_sub(2) as usize;
+
+    let needs_you = state
+        .agents
+        .iter()
+        .filter(|p| p.pending.is_some() || p.review.is_some())
+        .count();
+    let summary = if needs_you > 0 {
+        format!("{} agents · {needs_you} need you", state.agents.len())
+    } else {
+        format!("{} agents · all clear", state.agents.len())
+    };
+
     let mut cursor_end = 0usize;
-    // Logical line range of each entry (name + meta), turned into click zones
-    // once the scroll offset is known.
     let mut row_spans: Vec<(usize, usize)> = Vec::new();
-    let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
-    for &idx in order.iter() {
+    let mut lines: Vec<TuiLine> = Vec::new();
+    for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
-        let glyph = state_glyph(pane, state.tick);
-        let at_cursor = focused_id.as_deref() == Some(pane.record_id.as_str());
-        let cursor = if at_cursor { "▸" } else { " " };
-        let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
-        let mut name_style = Style::default();
-        if shown {
-            name_style = name_style.add_modifier(Modifier::BOLD);
-        }
-        lines.push(TuiLine::raw(""));
+        let at_cursor = row == cursor;
+        let on_screen = focused_id.as_deref() == Some(pane.record_id.as_str());
+        // Focus is carried by weight (the agent you are looking at reads
+        // bold); the cursor by the `▸` marker. Neither leans on hue.
+        let name_style = if on_screen {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
         let start = lines.len();
         lines.push(TuiLine::from(vec![
-            Span::raw(cursor.to_string()),
-            Span::raw(glyph.to_string()),
+            Span::raw(if at_cursor { "▸" } else { " " }.to_string()),
+            Span::raw(state_glyph(pane, state.tick).to_string()),
             Span::raw(" "),
             Span::styled(pane.agent_id.clone(), name_style),
+            Span::styled(
+                if on_screen { "  ·  on screen" } else { "" }.to_string(),
+                tint(nc, Color::DarkGray),
+            ),
         ]));
-        // Which model this session's traffic is pinned to (the glyph already
-        // carries its state; a long `provider:model` id needs every column).
-        let meta = if pane.harness == "attach" {
-            "attach".to_string()
-        } else {
-            pane.model.as_deref().unwrap_or("default model").to_string()
+
+        // Dim metadata line: state word, how it was launched, then the
+        // quantitative extras (time-in-state, dev-server port, cost,
+        // autonomy). The `pty`/`acp` tag is the ONLY place the old
+        // sessions-vs-subagents split survives — as a fact about the row,
+        // not as a reason to keep two lists.
+        let mut words = vec![state_word(pane).to_string()];
+        let kind = match pane.kind {
+            crate::tui::state::pane::PaneKind::Pty => "pty",
+            crate::tui::state::pane::PaneKind::Monitor => "acp",
         };
+        words.push(kind.to_string());
+        if !pane.harness.is_empty() && pane.harness != kind {
+            words.push(pane.harness.clone());
+        }
+        if let Some(model) = &pane.model {
+            words.push(model.clone());
+        }
+        if let Some(elapsed) = pane.elapsed_label(state.tick) {
+            words.push(elapsed);
+        }
+        if let Some(port) = pane.port {
+            words.push(format!(":{port}"));
+        }
+        if let Some(cost) = &pane.cost {
+            words.push(fmt_cost(cost).trim_start().to_string());
+        }
+        match pane.autonomy {
+            crate::tui::state::pane::Autonomy::Manual => {}
+            crate::tui::state::pane::Autonomy::Assisted => words.push("[a]".to_string()),
+            crate::tui::state::pane::Autonomy::Auto => words.push("[A]".to_string()),
+        }
         lines.push(TuiLine::from(vec![
             Span::raw("   "),
-            Span::styled(meta, tint(nc, Color::DarkGray)),
+            Span::styled(words.join(" · "), tint(nc, Color::DarkGray)),
         ]));
+
+        // Actionable rows expand: what the agent wants and the keys that
+        // answer it. Full terminal width, so the request title survives
+        // intact — clipping the one line that says what you are approving
+        // was the rail's worst failure.
+        if let Some(pending) = &pane.pending {
+            let risk = match pending.risk {
+                crate::risk::Risk::High => {
+                    Span::styled("high", Style::default().add_modifier(Modifier::BOLD))
+                }
+                crate::risk::Risk::Low => Span::styled("low", tint(nc, Color::DarkGray)),
+            };
+            let mut detail = vec![Span::raw("   └ ")];
+            if at_cursor {
+                detail.push(Span::styled(
+                    "y·a·n  ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+            }
+            detail.push(risk);
+            detail.push(Span::raw(" · "));
+            detail.push(Span::raw(clip(
+                &pending.title,
+                inner_width.saturating_sub(24),
+            )));
+            lines.push(TuiLine::from(detail));
+        } else if let Some((files, adds, dels)) = pane.review {
+            let mut detail = vec![Span::raw("   └ ")];
+            if at_cursor {
+                detail.push(Span::styled(
+                    "D·m·p·r  ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+            }
+            detail.push(Span::raw(format!("review · {files}f +{adds}/-{dels}")));
+            lines.push(TuiLine::from(detail));
+        }
+        lines.push(TuiLine::raw(""));
         row_spans.push((start, lines.len()));
         if at_cursor {
             cursor_end = lines.len();
         }
     }
     if order.is_empty() {
-        lines.push(TuiLine::raw(""));
-        lines.push(TuiLine::styled("(no sessions)", tint(nc, Color::DarkGray)));
+        lines.push(TuiLine::styled("(no agents)", tint(nc, Color::DarkGray)));
     }
-    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::RIGHT))
-        .scroll((scroll, 0));
-    frame.render_widget(para, chunks[0]);
-    // Each visible entry's name+meta rows are its click zone (select + solo).
+
+    let scroll = scroll_to_cursor(cursor_end, chunks[0].height.saturating_sub(2));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .title(TuiLine::from(Span::styled(
+            " fleet ",
+            Style::default().add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(
+            TuiLine::from(Span::styled(
+                format!(" {summary} "),
+                tint(nc, Color::DarkGray),
+            ))
+            .right_aligned(),
+        );
+    frame.render_widget(
+        Paragraph::new(lines).block(block).scroll((scroll, 0)),
+        chunks[0],
+    );
+
+    // Row click zones, offset past the block border.
+    let list = Rect {
+        x: chunks[0].x + 1,
+        y: chunks[0].y + 1,
+        width: chunks[0].width.saturating_sub(2),
+        height: chunks[0].height.saturating_sub(2),
+    };
     for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
-        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
+        if let Some((y, h)) = screen_span(list, scroll as usize, lo, hi) {
             zones.push(ClickZone {
-                x: chunks[0].x,
+                x: list.x,
                 y,
-                w: chunks[0].width,
+                w: list.width,
                 h,
-                target: ClickTarget::SessionRow(row),
+                target: ClickTarget::AgentRow(row),
             });
         }
     }
-    // The `new` affordance: clickable, with the real chord (`leader n`).
-    let footer = Paragraph::new(TuiLine::styled(
-        format!("+ new session ({} n)", state.leader_label()),
-        tint(nc, Color::DarkGray),
-    ))
-    .block(Block::default().borders(Borders::RIGHT));
+
+    // The footer names the verbs. `n` is deny here, so new-session moves to
+    // `N` — spelled out rather than left to be discovered.
+    let footer =
+        "↑↓ move · ⏎ open · y/a/n decide · D/m/p/r review · c close · N new · S spawn · esc back";
+    frame.render_widget(
+        Paragraph::new(TuiLine::styled(
+            clip(footer, chunks[1].width as usize),
+            tint(nc, Color::DarkGray),
+        )),
+        chunks[1],
+    );
     zones.push(ClickZone {
         x: chunks[1].x,
         y: chunks[1].y,
@@ -419,223 +495,68 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
         h: chunks[1].height,
         target: ClickTarget::NewSession,
     });
-    frame.render_widget(footer, chunks[1]);
 }
 
-/// Right rail: the subagents roster (every ACP agent, sorted by
-/// actionability) over a radar strip — a name line over a dim
-/// `state · harness` line per entry, herdr-minimal. The rail cursor (`▸`)
-/// follows the detail-focused agent.
-fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
-    let nc = state.no_color;
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
-
-    let order = state.roster();
-    let focused_id = state.focused().map(|p| p.record_id.clone());
-    // What `y/a/n` acts on: the roster head's pending (the queue top) —
-    // the chip marks that row, not the focused one.
-    let top_pending_id = order
-        .iter()
-        .find(|&&i| state.agents[i].pending.is_some())
-        .map(|&i| state.agents[i].record_id.clone());
-    let header = "subagents".to_string();
-    let mut cursor_end = 0usize;
-    // Logical line range of each entry (name through any expansion line),
-    // turned into click zones once the scroll offset is known.
-    let mut row_spans: Vec<(usize, usize)> = Vec::new();
-    let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
-    for &idx in order.iter() {
-        let pane = &state.agents[idx];
-        let glyph = state_glyph(pane, state.tick);
-        let at_cursor = focused_id.as_deref() == Some(pane.record_id.as_str());
-        let cursor = if at_cursor { "▸" } else { " " };
-        let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
-        let mut name_style = Style::default();
-        if shown {
-            name_style = name_style.add_modifier(Modifier::BOLD);
-        }
-        let spans = vec![
-            Span::raw(cursor.to_string()),
-            Span::raw(glyph.to_string()),
-            Span::raw(" "),
-            Span::styled(pane.agent_id.clone(), name_style),
-        ];
-        lines.push(TuiLine::raw(""));
-        let start = lines.len();
-        lines.push(TuiLine::from(spans));
-        // Dim metadata line: state word, harness tag, then the quantitative
-        // extras (time-in-state, dev-server port, metered cost, autonomy).
-        let mut meta = vec![Span::raw("   ")];
-        let mut words = vec![state_word(pane).to_string()];
-        if !pane.harness.is_empty() {
-            words.push(pane.harness.clone());
-        }
-        // Time-in-state: how long it has been working/blocked/done — the
-        // "is it stuck?" signal. Idle and dead rows stay calm.
-        if let Some(elapsed) = pane.elapsed_label(state.tick) {
-            words.push(elapsed);
-        }
-        // The fleet-allocated dev-server port, so N servers stay tellable apart.
-        if let Some(port) = pane.port {
-            words.push(format!(":{port}"));
-        }
-        // Cumulative cost, when the upstream meters it.
-        if let Some(cost) = &pane.cost {
-            words.push(fmt_cost(cost).trim_start().to_string());
-        }
-        // Non-default autonomy is worth knowing at a glance.
-        match pane.autonomy {
-            crate::tui::state::pane::Autonomy::Manual => {}
-            crate::tui::state::pane::Autonomy::Assisted => words.push("[a]".to_string()),
-            crate::tui::state::pane::Autonomy::Auto => words.push("[A]".to_string()),
-        }
-        meta.push(Span::styled(words.join(" · "), tint(nc, Color::DarkGray)));
-        lines.push(TuiLine::from(meta));
-        // Actionable rows expand inline: risk + what the agent wants, and
-        // (on the queue-top row) the resolve keys `y/a/n` act on.
-        if let Some(pending) = &pane.pending {
-            // Monochrome: `high` leans on bold (not red); `low` stays dim. The
-            // words + glyphs carry the risk without hue.
-            let risk_span = match pending.risk {
-                crate::risk::Risk::High => {
-                    Span::styled("high · ", Style::default().add_modifier(Modifier::BOLD))
-                }
-                crate::risk::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
-            };
-            // Keys first, then risk, then the (clippable) title — on a narrow
-            // rail the actionable part must survive truncation.
-            let mut detail = vec![Span::raw(" └ ")];
-            if top_pending_id.as_deref() == Some(pane.record_id.as_str()) {
-                detail.push(Span::styled(
-                    "y·a·n ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ));
-            }
-            detail.push(risk_span);
-            detail.push(Span::raw(pending.title.clone()));
-            lines.push(TuiLine::from(detail));
-        } else if let Some((files, adds, dels)) = pane.review {
-            // Ready-to-review rows expand with the diff stat and (on the
-            // focused row) the integration keys. The `+`/`-` signs carry
-            // the direction; no hue in the monochrome wrapper.
-            let mut detail = vec![Span::raw(" └ ")];
-            if at_cursor {
-                detail.push(Span::styled(
-                    "m·p·D·r ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ));
-            }
-            detail.push(Span::raw(format!("review · {files}f ")));
-            detail.push(Span::raw(format!("+{adds}")));
-            detail.push(Span::raw("/"));
-            detail.push(Span::raw(format!("-{dels}")));
-            lines.push(TuiLine::from(detail));
-        }
-        row_spans.push((start, lines.len()));
-        if at_cursor {
-            cursor_end = lines.len();
-        }
+/// Truncate to `width` display cells with an ellipsis.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
     }
-    if order.is_empty() {
-        lines.push(TuiLine::raw(""));
-        lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
-    }
-    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
-    let roster = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::LEFT))
-        .scroll((scroll, 0));
-    frame.render_widget(roster, chunks[0]);
-    // Each visible entry's rows are its click zone (select + open solo).
-    for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
-        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
-            zones.push(ClickZone {
-                x: chunks[0].x,
-                y,
-                w: chunks[0].width,
-                h,
-                target: ClickTarget::RailRow(row),
-            });
-        }
-    }
-
-    // Radar: one glyph per agent in roster order — peripheral vision of every
-    // agent's state even while the detail is zoomed into one.
-    let radar: Vec<Span> = order
-        .iter()
-        .map(|&idx| Span::raw(state_glyph(&state.agents[idx], state.tick).to_string()))
-        .collect();
-    frame.render_widget(
-        Paragraph::new(TuiLine::from(radar)).block(Block::default().borders(Borders::LEFT)),
-        chunks[1],
-    );
+    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
-/// Detail viewport: the shown agents in a horizontal or vertical split.
+/// The viewport: the ONE focused agent, full width.
 fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
-    let shown = state.detail.shown.clone();
-    let focus = state.detail.focus;
-    let split = state.detail.split;
-    if shown.is_empty() {
+    let Some(rid) = state.focus.clone() else {
         let placeholder = Paragraph::new(format!(
-            "no agent shown — {} n for a session · palette 'spawn subagent'",
+            "no agent shown — {} n for a session · {} m for the fleet",
+            state.leader_label(),
             state.leader_label()
         ))
         .style(tint(nc, Color::DarkGray))
         .block(Block::default().borders(Borders::ALL));
         frame.render_widget(placeholder, area);
+        state.pty_areas = Vec::new();
         return;
-    }
-    let rects = split_rects(area, shown.len(), split);
+    };
     let mut pty_areas = Vec::new();
-    for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
-        if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
-            match pane.kind {
-                crate::tui::state::pane::PaneKind::Pty => {
-                    // Record the drawn content rect (inside the border) so the
-                    // loop can resize the emulator + PTY (SIGWINCH) on layout
-                    // changes and hit-test the pointer for mouse forwarding.
-                    pty_areas.push(crate::tui::state::layout::PtyArea {
-                        record_id: rid.clone(),
-                        x: rect.x.saturating_add(1),
-                        y: rect.y.saturating_add(1),
-                        cols: rect.width.saturating_sub(2),
-                        rows: rect.height.saturating_sub(2),
-                    });
-                    let view = pty.iter().find(|v| &v.record_id == rid);
-                    render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
-                }
-                // Monitor panes: bitrouter-drawn lines, no PTY grid.
-                crate::tui::state::pane::PaneKind::Monitor => {
-                    render_pane(pane, slot, slot == focus, nc, frame, *rect)
-                }
+    if let Some(pane) = state.agents.iter_mut().find(|p| p.record_id == rid) {
+        match pane.kind {
+            crate::tui::state::pane::PaneKind::Pty => {
+                // Record the drawn content rect (inside the border) so the
+                // loop can resize the emulator + PTY (SIGWINCH) on layout
+                // changes and hit-test the pointer for mouse forwarding.
+                pty_areas.push(crate::tui::state::layout::PtyArea {
+                    record_id: rid.clone(),
+                    x: area.x.saturating_add(1),
+                    y: area.y.saturating_add(1),
+                    cols: area.width.saturating_sub(2),
+                    rows: area.height.saturating_sub(2),
+                });
+                let view = pty.iter().find(|v| v.record_id == rid);
+                render_pty_pane(pane, view, nc, frame, area);
             }
+            // Monitor panes: bitrouter-drawn lines, no PTY grid.
+            crate::tui::state::pane::PaneKind::Monitor => render_pane(pane, nc, frame, area),
         }
     }
     state.pty_areas = pty_areas;
 }
 
-/// Monochrome pane frame: focus is carried by weight, not hue. Focused → a
-/// thick, bold border with a bold title; unfocused → a plain, dim border.
-/// Selection rides on the `✓` marker the caller bakes into `title`, not color.
-fn pane_block(title: String, focused: bool, nc: bool) -> Block<'static> {
-    if focused {
-        let bold = Style::default().add_modifier(Modifier::BOLD);
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Thick)
-            .border_style(bold)
-            .title(TuiLine::from(Span::styled(title, bold)))
-    } else {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Plain)
-            .border_style(tint(nc, Color::DarkGray))
-            .title(title)
-    }
+/// Monochrome pane frame for the agent in the viewport. There is only ever
+/// one, so the border carries identity rather than focus.
+fn pane_block(title: String, nc: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(tint(nc, Color::DarkGray))
+        .title(TuiLine::from(Span::styled(
+            title,
+            Style::default().add_modifier(Modifier::BOLD),
+        )))
 }
 
 /// Render a PTY pane: the emulator's grid verbatim inside the pane border —
@@ -643,8 +564,6 @@ fn pane_block(title: String, focused: bool, nc: bool) -> Block<'static> {
 fn render_pty_pane(
     pane: &mut PaneState,
     view: Option<&PtyView>,
-    slot: usize,
-    focused: bool,
     nc: bool,
     frame: &mut Frame,
     area: Rect,
@@ -654,14 +573,8 @@ fn render_pty_pane(
     if pane.exited {
         markers.push_str(" ✗");
     }
-    let title = format!(
-        " [{}] {} · {}{} ",
-        slot + 1,
-        pane.agent_id,
-        pane.harness,
-        markers
-    );
-    let block = pane_block(title, focused, nc);
+    let title = format!(" {} · {}{} ", pane.agent_id, pane.harness, markers);
+    let block = pane_block(title, nc);
     // Pinned into history: a right-aligned bottom hint so the frozen tail
     // reads as "scrolled" (with the way back), not "hung".
     let block = if view.is_some_and(|v| v.scrolled) {
@@ -685,27 +598,6 @@ fn render_pty_pane(
     // No wrap: the emulator already fits its grid to the pane.
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, area);
-}
-
-/// Equal division of `area` into `n` slots: columns for [`Split::H`], rows for
-/// [`Split::V`]. `n == 0` → empty.
-fn split_rects(area: Rect, n: usize, split: Split) -> Vec<Rect> {
-    if n == 0 {
-        return Vec::new();
-    }
-    if n == 1 {
-        return vec![area];
-    }
-    let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
-    let direction = match split {
-        Split::H => Direction::Horizontal,
-        Split::V => Direction::Vertical,
-    };
-    Layout::default()
-        .direction(direction)
-        .constraints(constraints)
-        .split(area)
-        .to_vec()
 }
 
 /// Sidebar scroll offset keeping the cursor entry (whose last line index is
@@ -734,14 +626,7 @@ fn screen_span(area: Rect, scroll: usize, lo: usize, hi: usize) -> Option<(u16, 
 /// `[slot] agent · harness · shortid [markers]`, focused slot highlighted.
 /// Shows the scrollback tail unless the pane is pinned (`scroll`), and records
 /// the drawn viewport height for paging.
-fn render_pane(
-    pane: &mut PaneState,
-    slot: usize,
-    focused: bool,
-    nc: bool,
-    frame: &mut Frame,
-    area: Rect,
-) {
+fn render_pane(pane: &mut PaneState, nc: bool, frame: &mut Frame, area: Rect) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
     let inner_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
@@ -776,15 +661,8 @@ fn render_pane(
     };
     // Context occupancy + cost live in the status bar's left zone
     // (TUI_SPEC_V3 §6) — the header stays identity + attention only.
-    let title = format!(
-        " [{}] {}{} · {}{} ",
-        slot + 1,
-        pane.agent_id,
-        harness,
-        short,
-        markers
-    );
-    let block = pane_block(title, focused, nc);
+    let title = format!(" {}{} · {}{} ", pane.agent_id, harness, short, markers);
+    let block = pane_block(title, nc);
     let committed_end = pane.lines.len().min(start + inner_height);
     let mut lines: Vec<TuiLine> = pane.lines[start.min(pane.lines.len())..committed_end]
         .iter()
@@ -925,35 +803,49 @@ fn render_diff_line(d: &DiffLine, nc: bool, width: usize) -> TuiLine<'static> {
     }
 }
 
-/// The global status bar (one line, three zones): mode + context hints on
-/// the left — a notice temporarily claims that zone (it decays reducer-side)
-/// — and global fleet state on the right (attention counts by glyph, session
-/// count, cumulative cost, and the live `serve` dot).
-fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
+/// The global status bar — the ONLY chrome BitRouter draws on the default
+/// screen, so it carries the entire peripheral-awareness budget.
+///
+/// Three zones on one line: the focused agent's numbers plus mode hints on
+/// the left (a notice temporarily claims that zone; it decays reducer-side),
+/// and global fleet state on the right — attention counts by glyph,
+/// cumulative cost, the live `serve` dot. When something needs a human, the
+/// left zone says which key gets you to it; with the sidebars gone, that
+/// pointer is the whole discovery path to the manager.
+fn render_statusbar(state: &AppState, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let pty_focused = state
         .focused()
         .is_some_and(|p| p.kind == crate::tui::state::pane::PaneKind::Pty);
-    // The bar is a gauge, not a cheat-sheet (TUI_SPEC_V3 §6): the one
-    // persistent affordance is the leader; full bindings live in the
-    // which-key overlay (leader / `?`) and the palette. The PTY routing
-    // hint stays — it explains where every keystroke is going.
     let leader = state.leader_label();
+    // How many agents are actually waiting on a human — the number that
+    // decides whether the bar nags or stays quiet.
+    let waiting = state
+        .agents
+        .iter()
+        .filter(|p| p.pending.is_some() || p.review.is_some())
+        .count();
     let hints = match state.mode {
-        Mode::Normal if pty_focused => {
-            format!("⇢ keys go to the orchestrator · {leader} menu")
+        // Something is blocked: the hint's job is to name the way out, not
+        // to describe the mode. This is the only nudge toward the manager
+        // the default screen gets.
+        Mode::Normal if waiting > 0 => {
+            let noun = if waiting == 1 { "agent" } else { "agents" };
+            format!("{waiting} {noun} waiting · {leader} m to decide")
         }
-        Mode::Normal => format!("{leader} menu"),
+        Mode::Normal if pty_focused => format!("⇢ keys go to the agent · {leader} m fleet"),
+        Mode::Normal => format!("{leader} m fleet · {leader} menu"),
+        Mode::Manager => "MANAGER".to_string(),
         // Overlay modes render their own affordances; the bar just names them.
         Mode::Leader => "LEADER".to_string(),
         Mode::Picker => "PICKER".to_string(),
         Mode::Command => "COMMAND".to_string(),
         Mode::Confirm => "CONFIRM".to_string(),
     };
-    // The left zone follows the focused pane (TUI_SPEC_V3 §6): context
-    // gauge + model + cost, when the upstream reports them — the numbers
-    // you actually watch. A live notice takes the whole zone (full width,
-    // never clipped at the edge mid-word); mode hints trail the gauge.
+    // The left zone follows the focused pane: context gauge + model + cost,
+    // when the upstream reports them — the numbers you actually watch. A live
+    // notice takes the whole zone (full width, never clipped at the edge
+    // mid-word); mode hints trail the gauge.
     let left = match &state.notice {
         Some(n) => format!("! {n}"),
         None => {
@@ -1009,15 +901,7 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     }
     let right_chars = right.chars().count() + serve.map_or(0, |s| s.chars().count());
 
-    // Reserve the bar's edge cells for the sidebar toggle buttons (`<<`/`>>`).
-    // They live here — always drawn — so a collapsed sidebar can be brought
-    // back (a button inside the sidebar would vanish with it). Dropped only
-    // when the bar is too narrow to spare the cells.
-    const BTN: usize = 3; // "<< " and " >>"
-    let full = area.width as usize;
-    let buttons = full >= BTN * 2 + 4;
-    let width = if buttons { full - BTN * 2 } else { full };
-
+    let width = area.width as usize;
     // Right-align the state zone. When both don't fit, hints yield to the
     // global state (truncated with an ellipsis); a notice keeps the whole
     // line — it's transient, and clipping it is exactly the old failure.
@@ -1030,63 +914,21 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
         }
     }
     let left_chars = left.chars().count();
-    // The inner region between the buttons, padded to exactly `width` so the
-    // right button stays flush at the bar's edge.
-    let mut inner: Vec<Span> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
     if right_chars > 0 && left_chars + right_chars + 2 <= width {
         let pad = width - left_chars - right_chars;
-        inner.push(Span::raw(left));
-        inner.push(Span::raw(" ".repeat(pad)));
-        inner.push(Span::styled(right, tint(nc, Color::DarkGray)));
+        spans.push(Span::raw(left));
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(right, tint(nc, Color::DarkGray)));
         if let Some(text) = serve {
-            inner.push(Span::styled(text, tint(nc, Color::DarkGray)));
+            spans.push(Span::styled(text, tint(nc, Color::DarkGray)));
         }
     } else {
-        // Lone-left (or an over-long notice): keep it within its cells so the
-        // right button stays put, then pad out to `width`.
+        // Lone-left (or an over-long notice): keep it within the bar's cells.
         if left.chars().count() > width {
             left = left.chars().take(width).collect();
         }
-        let pad = width - left.chars().count();
-        inner.push(Span::raw(left));
-        if pad > 0 {
-            inner.push(Span::raw(" ".repeat(pad)));
-        }
-    }
-
-    let mut spans = Vec::new();
-    if buttons {
-        // Chevrons reflect the collapse flag the click toggles: `<<` collapses
-        // an open sidebar, `>>` expands a collapsed one.
-        let l_btn = if state.sessions_collapsed {
-            ">> "
-        } else {
-            "<< "
-        };
-        let r_btn = if state.subagents_collapsed {
-            " <<"
-        } else {
-            " >>"
-        };
-        spans.push(Span::styled(l_btn, tint(nc, Color::DarkGray)));
-        spans.extend(inner);
-        spans.push(Span::styled(r_btn, tint(nc, Color::DarkGray)));
-        zones.push(ClickZone {
-            x: area.x,
-            y: area.y,
-            w: BTN as u16,
-            h: 1,
-            target: ClickTarget::ToggleSessions,
-        });
-        zones.push(ClickZone {
-            x: area.x + area.width - BTN as u16,
-            y: area.y,
-            w: BTN as u16,
-            h: 1,
-            target: ClickTarget::ToggleSubagents,
-        });
-    } else {
-        spans.extend(inner);
+        spans.push(Span::raw(left));
     }
     frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
@@ -1179,12 +1021,10 @@ mod tests {
     use super::*;
     use crate::tui::state::AppState;
     use crate::tui::state::diff::Line;
-    use crate::tui::state::layout::DetailLayout;
-    use crate::tui::state::overlay::{Mode, PickerPurpose, PickerState};
+    use crate::tui::state::overlay::{ManagerState, Mode, PickerPurpose, PickerState};
     use crate::tui::state::pane::PaneState;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::layout::Rect;
 
     fn draw(state: &mut AppState, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
@@ -1206,11 +1046,73 @@ mod tests {
         st
     }
 
+    /// Open the manager with the cursor at the head, then render.
+    fn draw_manager(state: &mut AppState, w: u16, h: u16) -> String {
+        state.mode = Mode::Manager;
+        state.manager = Some(ManagerState { cursor: 0 });
+        draw(state, w, h)
+    }
+
     #[test]
-    fn rail_lists_every_agent_even_when_detail_is_solo() {
-        let text = draw(&mut agents3(), 80, 24);
-        assert!(text.contains("a0") && text.contains("a1") && text.contains("a2"));
-        assert!(text.contains("subagents"), "rail header");
+    fn default_screen_is_the_agent_plus_one_status_row() {
+        // The premise of the whole layout: nothing but the focused agent and
+        // the bar. No sidebar headers, no roster, no second list.
+        let mut st = agents3();
+        let text = draw(&mut st, 80, 24);
+        assert!(!text.contains("sessions"), "no sessions sidebar: {text:?}");
+        assert!(!text.contains("subagents"), "no subagents rail");
+        // No agent but the focused one is named: the fleet list is a screen
+        // you open, not chrome you carry.
+        assert!(!text.contains("a1") && !text.contains("a2"), "no roster");
+        // Only the focused agent's pane is drawn — one box.
+        assert_eq!(text.matches('┌').count(), 1, "exactly one pane frame");
+    }
+
+    #[test]
+    fn manager_lists_every_agent_in_one_list() {
+        // The merge: PTY sessions and ACP monitors in a single list, each
+        // tagged by kind rather than split across two panels.
+        let text = draw_manager(&mut with_session(), 100, 30);
+        for name in ["a0", "a1", "a2", "claude"] {
+            assert!(text.contains(name), "manager lists {name}: {text:?}");
+        }
+        assert!(text.contains("fleet"), "manager title");
+        assert!(text.contains("pty"), "session kind tag");
+        assert!(text.contains("acp"), "subagent kind tag");
+    }
+
+    #[test]
+    fn manager_footer_names_the_verbs_including_shifted_new_session() {
+        let text = draw_manager(&mut agents3(), 110, 24);
+        assert!(text.contains("y/a/n decide"), "decision keys advertised");
+        assert!(text.contains("D/m/p/r review"), "review keys advertised");
+        assert!(
+            text.contains("N new"),
+            "new-session moved to N because n is deny: {text:?}"
+        );
+    }
+
+    #[test]
+    fn manager_suppresses_the_permission_modal_it_already_shows_inline() {
+        let mut st = agents3();
+        st.agents[0].pending = Some(crate::tui::state::pane::PendingView {
+            title: "MODAL_ONLY_TITLE".into(),
+            diff: None,
+            options: vec![],
+            risk: crate::risk::Risk::High,
+        });
+        st.focus = Some("r0".into());
+        // Normal: the focused pane's pending is a modal.
+        let text = draw(&mut st, 100, 24);
+        assert!(text.contains("MODAL_ONLY_TITLE"), "modal up in NORMAL");
+        let modal_boxes = text.matches('┌').count();
+        // Manager: the same request appears once, in the list.
+        let text = draw_manager(&mut st, 100, 24);
+        assert!(text.contains("MODAL_ONLY_TITLE"), "still visible inline");
+        assert!(
+            text.matches('┌').count() < modal_boxes,
+            "the modal is not stacked behind the manager: {text:?}"
+        );
     }
 
     /// agents3 plus a PTY orchestrator session pinned to a model.
@@ -1233,89 +1135,65 @@ mod tests {
     }
 
     #[test]
-    fn renderer_records_click_zones_for_buttons_and_rows() {
+    fn the_default_screen_records_no_click_zones() {
+        // Nothing to click when the whole screen is the agent — the pointer
+        // belongs to the inner app.
         let mut st = with_session();
         render_keeping_state(&mut st, 130, 30);
-        let has = |t: ClickTarget| st.click_zones.iter().any(|z| z.target == t);
-        assert!(has(ClickTarget::ToggleSessions), "<< button zone recorded");
-        assert!(has(ClickTarget::ToggleSubagents), ">> button zone recorded");
-        assert!(
+        assert!(st.click_zones.is_empty(), "{:?}", st.click_zones);
+    }
+
+    #[test]
+    fn manager_records_a_zone_per_agent_row() {
+        let mut st = with_session();
+        st.mode = Mode::Manager;
+        st.manager = Some(ManagerState { cursor: 0 });
+        render_keeping_state(&mut st, 130, 30);
+        let rows = st
+            .click_zones
+            .iter()
+            .filter(|z| matches!(z.target, ClickTarget::AgentRow(_)))
+            .count();
+        assert_eq!(
+            rows,
+            st.agents.len(),
+            "one zone per agent: {:?}",
             st.click_zones
-                .iter()
-                .any(|z| matches!(z.target, ClickTarget::SessionRow(_))),
-            "a session row is clickable"
-        );
-        assert!(
-            st.click_zones
-                .iter()
-                .any(|z| matches!(z.target, ClickTarget::RailRow(_))),
-            "a subagent row is clickable"
         );
     }
 
     #[test]
-    fn a_click_at_a_recorded_rail_zone_opens_that_agent() {
+    fn clicking_a_manager_row_aims_then_a_second_click_opens_it() {
         // The renderer's zone coordinates and the reducer's hit-test must
-        // agree: click the center of the RailRow(1) zone and that agent opens.
+        // agree — and a first click must only move the cursor, so a misclick
+        // near a decision row costs nothing.
         let mut st = with_session();
+        st.mode = Mode::Manager;
+        st.manager = Some(ManagerState { cursor: 0 });
         render_keeping_state(&mut st, 130, 30);
-        let target = st.roster()[1];
-        let target_id = st.agents[target].record_id.clone();
+        let target_id = st.agents[st.fleet()[1]].record_id.clone();
         let zone = st
             .click_zones
             .iter()
-            .find(|z| z.target == ClickTarget::RailRow(1))
+            .find(|z| z.target == ClickTarget::AgentRow(1))
             .copied()
-            .expect("a RailRow(1) zone");
+            .expect("an AgentRow(1) zone");
         let (col, row) = (zone.x + zone.w / 2, zone.y + zone.h / 2);
-        crate::tui::state::reduce(&mut st, &crate::tui::event::AppEvent::Click { col, row });
-        assert_eq!(
-            st.detail.shown,
-            vec![target_id],
-            "clicked rail row opened solo"
-        );
-        assert_eq!(
-            st.mode,
-            Mode::Normal,
-            "no mode to enter — click just focuses"
-        );
+        let click = crate::tui::event::AppEvent::Click { col, row };
+        crate::tui::state::reduce(&mut st, &click);
+        assert_eq!(st.manager.as_ref().map(|m| m.cursor), Some(1), "aimed");
+        assert_eq!(st.mode, Mode::Manager, "still in the manager");
+        crate::tui::state::reduce(&mut st, &click);
+        assert_eq!(st.focus.as_deref(), Some(target_id.as_str()), "committed");
+        assert_eq!(st.mode, Mode::Normal, "and got out of the way");
     }
 
     #[test]
-    fn sessions_panel_shows_binary_model_and_footer_on_wide_terminals() {
-        let text = draw(&mut with_session(), 130, 30);
-        assert!(text.contains("sessions"), "left header");
+    fn manager_rows_carry_the_model_and_a_new_session_footer() {
+        let text = draw_manager(&mut with_session(), 130, 30);
         assert!(text.contains("claude"), "session binary");
         assert!(text.contains("supergrok:grok-4.5"), "session model");
-        assert!(text.contains("+ new session"), "footer affordance");
-    }
-
-    #[test]
-    fn sessions_panel_folds_on_narrow_terminals_and_on_collapse() {
-        let mut st = with_session();
-        let text = draw(&mut st, 80, 24);
-        assert!(!text.contains("+ new session"), "auto-collapsed at 80 cols");
-        // Wide but user-collapsed: stays hidden.
-        st.sessions_collapsed = true;
-        let text = draw(&mut st, 130, 30);
-        assert!(!text.contains("+ new session"), "user collapse wins");
-        // Both sidebars collapsed: the detail still renders.
-        st.subagents_collapsed = true;
-        let text = draw(&mut st, 130, 30);
-        assert!(!text.contains("subagents"), "rail hidden");
-    }
-
-    #[test]
-    fn empty_sessions_panel_shows_when_wide_folds_when_tight() {
-        // agents3 is pure-ACP. Wide: both sidebars fit — the empty sessions
-        // panel is an affordance, not noise.
-        let text = draw(&mut agents3(), 130, 30);
-        assert!(text.contains("+ new session"), "affordance on wide: {text}");
-        // Tight: one sidebar at most — the panel with content (the rail)
-        // wins and the empty sessions panel gives its columns back.
-        let text = draw(&mut agents3(), 90, 30);
-        assert!(!text.contains("+ new session"), "empty panel folds");
-        assert!(text.contains("subagents"), "content panel survives");
+        assert!(text.contains("N new"), "new-session affordance");
     }
 
     #[test]
@@ -1323,26 +1201,18 @@ mod tests {
         let mut st = with_session();
         // A focused PTY session owns the keyboard: no composer, and the
         // routing hint lives in the status bar instead.
-        st.detail = DetailLayout {
-            shown: vec!["orchestrator".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
+        st.focus = Some("orchestrator".into());
         let text = draw(&mut st, 140, 24);
         assert!(!text.contains("› "), "no idle prompt under a PTY pane");
         assert!(
-            text.contains("keys go to the orchestrator"),
+            text.contains("keys go to the agent"),
             "hint moved to the status bar"
         );
         let boxes_under_pty = text.matches('┌').count();
         // A focused Monitor is read-only (TUI_SPEC_V3 I2): no composer, no
         // input-border row — the same chrome as a PTY focus, which never
         // had one.
-        st.detail = DetailLayout {
-            shown: vec!["r0".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
+        st.focus = Some("r0".into());
         let text = draw(&mut st, 140, 24);
         assert!(!text.contains("› "), "no composer for a Monitor pane");
         assert_eq!(
@@ -1356,11 +1226,7 @@ mod tests {
     fn status_bar_left_zone_follows_the_focused_pane() {
         let mut st = with_session();
         // Focus the ACP monitor and report upstream numbers on it.
-        st.detail = DetailLayout {
-            shown: vec!["r0".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
+        st.focus = Some("r0".into());
         st.agents[0].usage = Some((62_000, 100_000));
         st.agents[0].model = Some("claude-opus-4-8".into());
         st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
@@ -1415,17 +1281,17 @@ mod tests {
     }
 
     #[test]
-    fn subagent_rows_carry_a_state_and_harness_meta_line() {
+    fn manager_rows_carry_a_state_and_harness_meta_line() {
         let mut st = agents3();
         st.agents[1].harness = "claude".into();
         st.agents[1].turn_active = true;
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("working · claude"), "meta line: {text}");
+        let text = draw_manager(&mut st, 100, 24);
+        assert!(text.contains("working · acp · claude"), "meta line: {text}");
         assert!(text.contains("idle"), "calm rows say idle");
     }
 
     #[test]
-    fn rail_sorts_actionable_agent_to_the_top() {
+    fn manager_sorts_actionable_agent_to_the_top() {
         let mut st = agents3();
         st.agents[2].pending = Some(crate::tui::state::pane::PendingView {
             title: "WRITE".into(),
@@ -1434,12 +1300,8 @@ mod tests {
             risk: crate::risk::Risk::High,
         });
         // Show r2's pane so the permission popup doesn't cover the rail.
-        st.detail = DetailLayout {
-            shown: vec!["r2".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
-        let text = draw(&mut st, 80, 24);
+        st.focus = Some("r2".into());
+        let text = draw_manager(&mut st, 100, 24);
         let (a2, a0) = (text.find("a2"), text.find("a0"));
         assert!(
             a2 < a0,
@@ -1449,7 +1311,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_shows_only_shown_agents() {
+    fn the_viewport_shows_only_the_focused_agent() {
         let mut st = agents3();
         st.agents[1]
             .lines
@@ -1457,28 +1319,35 @@ mod tests {
         let text = draw(&mut st, 80, 24);
         assert!(
             !text.contains("SECOND_PANE_UNIQUE"),
-            "non-shown agent content hidden"
+            "unfocused agent content hidden"
         );
-        assert!(text.contains("[1]"), "solo pane has slot header");
+        // No slot numbers: with one pane there is no slot to name.
+        assert!(!text.contains("[1]"), "no slot header: {text:?}");
+        assert!(text.contains("a0"), "the focused agent is titled");
     }
 
     #[test]
-    fn split_shows_two_panes_with_slots() {
+    fn the_viewport_holds_exactly_one_agent() {
+        // No splits: switching focus replaces the viewport rather than
+        // subdividing it. The multiplexer the user already runs does panes.
         let mut st = agents3();
-        st.detail = DetailLayout {
-            shown: vec!["r0".into(), "r1".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 1,
-        };
         st.agents[0]
             .lines
-            .push(Line::Message("LEFT_CONTENT".into()));
+            .push(Line::Message("FIRST_CONTENT".into()));
         st.agents[1]
             .lines
-            .push(Line::Message("RIGHT_CONTENT".into()));
+            .push(Line::Message("SECOND_CONTENT".into()));
+        st.focus = Some("r0".into());
         let text = draw(&mut st, 100, 24);
-        assert!(text.contains("LEFT_CONTENT") && text.contains("RIGHT_CONTENT"));
-        assert!(text.contains("[1]") && text.contains("[2]"));
+        assert!(text.contains("FIRST_CONTENT"), "focused agent drawn");
+        assert!(!text.contains("SECOND_CONTENT"), "no second slot");
+        st.focus = Some("r1".into());
+        let text = draw(&mut st, 100, 24);
+        assert!(
+            text.contains("SECOND_CONTENT"),
+            "focus swapped the viewport"
+        );
+        assert!(!text.contains("FIRST_CONTENT"), "the old agent is gone");
     }
 
     #[test]
@@ -1493,43 +1362,18 @@ mod tests {
     }
 
     #[test]
-    fn split_rects_h_columns_v_rows_no_overlap() {
-        let area = Rect::new(0, 0, 80, 24);
-        for n in 1..=4usize {
-            for split in [
-                crate::tui::state::layout::Split::H,
-                crate::tui::state::layout::Split::V,
-            ] {
-                let rects = split_rects(area, n, split);
-                assert_eq!(rects.len(), n, "n={n} rect count");
-                for i in 0..rects.len() {
-                    for j in (i + 1)..rects.len() {
-                        assert!(!overlaps(rects[i], rects[j]), "n={n} rects {i},{j} overlap");
-                    }
-                }
-            }
-        }
-        // Direction: H splits along x, V along y.
-        let h = split_rects(area, 2, crate::tui::state::layout::Split::H);
-        assert_eq!(h[0].y, h[1].y, "H = side-by-side");
-        let v = split_rects(area, 2, crate::tui::state::layout::Split::V);
-        assert_eq!(v[0].x, v[1].x, "V = stacked");
-    }
-
-    fn overlaps(a: Rect, b: Rect) -> bool {
-        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-    }
-
-    #[test]
-    fn rail_shows_attention_glyph_for_background_agent() {
+    fn manager_shows_attention_glyph_for_background_agent() {
         let mut st = agents3();
         st.agents[1].attention = true;
         let text = draw(&mut st, 80, 24);
-        assert!(text.contains('●'), "attention glyph rendered in rail/radar");
+        assert!(
+            text.contains('●'),
+            "attention glyph rendered in the fleet list"
+        );
     }
 
     #[test]
-    fn rail_shows_done_unseen_glyph() {
+    fn manager_shows_done_unseen_glyph() {
         let mut st = agents3();
         st.agents[1].done = true;
         let text = draw(&mut st, 80, 24);
@@ -1537,13 +1381,13 @@ mod tests {
     }
 
     #[test]
-    fn rail_shows_time_in_state_for_working_rows() {
+    fn manager_shows_time_in_state_for_working_rows() {
         let mut st = agents3();
         st.agents[0].turn_active = true;
         // Stamp the bucket, then advance 42s of ticks (5/sec).
         crate::tui::state::reduce(&mut st, &crate::tui::event::AppEvent::Tick);
         st.tick += 42 * 5;
-        let text = draw(&mut st, 80, 24);
+        let text = draw_manager(&mut st, 100, 24);
         assert!(text.contains("42s"), "elapsed column rendered: {text:?}");
     }
 
@@ -1590,7 +1434,7 @@ mod tests {
     }
 
     #[test]
-    fn rail_expands_pending_row_with_title_and_resolve_hint() {
+    fn manager_expands_pending_row_with_title_and_resolve_hint() {
         let mut st = agents3();
         st.agents[1].pending = Some(crate::tui::state::pane::PendingView {
             title: "rm -rf".into(),
@@ -1598,19 +1442,14 @@ mod tests {
             options: vec![],
             risk: crate::risk::Risk::High,
         });
-        st.detail = DetailLayout {
-            shown: vec!["r1".into()],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
-        let text = draw(&mut st, 100, 24);
+        let text = draw_manager(&mut st, 100, 24);
         assert!(text.contains("rm -rf"), "pending title inline");
         assert!(text.contains('└'), "expanded row marker");
         assert!(text.contains("y·a·n"), "resolve hint on the queue-top row");
     }
 
     #[test]
-    fn rail_shows_risk_label_and_autonomy_tag() {
+    fn manager_shows_risk_label_and_autonomy_tag() {
         let mut st = agents3();
         st.agents[1].pending = Some(crate::tui::state::pane::PendingView {
             title: "wants".into(),
@@ -1619,7 +1458,7 @@ mod tests {
             risk: crate::risk::Risk::High,
         });
         st.agents[2].autonomy = crate::tui::state::pane::Autonomy::Auto;
-        let text = draw(&mut st, 80, 24);
+        let text = draw_manager(&mut st, 100, 24);
         assert!(text.contains("high ·"), "risk label on the expanded row");
         assert!(text.contains("[A]"), "auto tier tagged on the row");
     }
@@ -1703,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn cost_shows_in_rail_and_status_bar() {
+    fn cost_shows_in_the_status_bar() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
             amount: 0.25,
@@ -1757,7 +1596,7 @@ mod tests {
         assert!(text.contains("NATIVE_TUI_ROW_1"), "grid rendered: {text:?}");
         assert!(text.contains("claude · pty"), "pane header");
         assert!(
-            text.contains("keys go to the orchestrator"),
+            text.contains("keys go to the agent"),
             "passthrough hint replaces the prompt line"
         );
         let area = st.pty_areas.first().expect("drawn size recorded");
@@ -1808,17 +1647,17 @@ mod tests {
     }
 
     #[test]
-    fn rail_shows_allocated_port() {
+    fn manager_shows_allocated_port() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         st.agents[0].port = Some(3101);
-        let text = draw(&mut st, 80, 24);
+        let text = draw_manager(&mut st, 80, 24);
         assert!(text.contains(":3101"), "port column rendered: {text:?}");
     }
 
     #[test]
     fn idle_agent_shows_idle_glyph_not_spinner() {
         let mut st = agents3(); // no turn in flight anywhere
-        let text = draw(&mut st, 80, 24);
+        let text = draw_manager(&mut st, 80, 24);
         assert!(text.contains('○'), "idle glyph");
         assert!(!text.contains('⣾'), "no spinner without a turn");
     }
@@ -1839,9 +1678,9 @@ mod tests {
         let mut st = agents3();
         st.agents[0].turn_active = true; // spinner = a turn in flight
         st.tick = 0;
-        let t0 = draw(&mut st, 80, 24);
+        let t0 = draw_manager(&mut st, 80, 24);
         st.tick = 1;
-        let t1 = draw(&mut st, 80, 24);
+        let t1 = draw_manager(&mut st, 80, 24);
         assert!(t0.contains('⣾') && !t0.contains('⣽'), "frame 0");
         assert!(t1.contains('⣽') && !t1.contains('⣾'), "frame 1");
     }
@@ -1870,16 +1709,15 @@ mod tests {
     fn empty_agent_list_renders_placeholders() {
         let mut st = agents3();
         st.agents.clear();
-        st.detail = DetailLayout {
-            shown: vec![],
-            split: crate::tui::state::layout::Split::H,
-            focus: 0,
-        };
-        // Tight width, nothing anywhere: the default (subagents) panel keeps
-        // its placeholder as the one visible affordance.
+        st.focus = None;
         let text = draw(&mut st, 80, 24);
-        assert!(text.contains("(no subagents)"), "rail placeholder");
-        assert!(text.contains("no agent shown"), "detail placeholder");
+        assert!(text.contains("no agent shown"), "viewport placeholder");
+        // The manager over an empty fleet says so rather than drawing blank.
+        let text = draw_manager(&mut st, 80, 24);
+        assert!(
+            text.contains("(no agents)"),
+            "manager placeholder: {text:?}"
+        );
     }
 
     #[test]
@@ -1888,14 +1726,10 @@ mod tests {
         use crate::tui::state::pane::PendingView;
         use bitrouter_substrate::translate::PermissionOutcome;
 
-        // Every render surface active at once: rail, split detail, input,
-        // mode bar, picker overlay, permission popup, notice.
+        // Every render surface active at once: viewport, status bar, picker
+        // overlay, permission popup, notice.
         let mut st = agents3();
-        st.detail = DetailLayout {
-            shown: vec!["r0".into(), "r1".into()],
-            split: crate::tui::state::layout::Split::V,
-            focus: 0,
-        };
+        st.focus = Some("r0".into());
         st.agents[0].pending = Some(PendingView {
             title: "write file".into(),
             diff: Some(crate::tui::event::DiffData {

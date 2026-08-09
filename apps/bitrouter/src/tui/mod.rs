@@ -1,4 +1,8 @@
 //! `bitrouter tui` — in-process multi-agent manager.
+//!
+//! Two screens: the focused agent at full terminal width over a one-line
+//! status bar, and a full-screen manager (leader `m`) listing the whole fleet.
+//! See [`state`] for why the manager is load-bearing rather than decorative.
 mod event;
 mod highlight;
 mod notify;
@@ -33,11 +37,11 @@ use crate::tui::state::{AppState, reduce};
 
 /// Launch the TUI. `--agent` names either a native harness (`claude`,
 /// `codex`, `opencode`, `pi`) — the **orchestrator**, hosted at full
-/// fidelity in a PTY pane (TUI_SPEC §2/§3) with the fleet MCP bridge
-/// injected where the harness supports MCP — or a configured `agents:`
-/// entry, which falls back to an ACP-rendered primary pane. `--model` pins
-/// the orchestrator's model (a daemon-routable id). The palette's `spawn
-/// subagent` hatch spawns worktree-isolated ACP subagents either way.
+/// fidelity in a PTY pane with the fleet MCP bridge injected where the
+/// harness supports MCP — or a configured `agents:` entry, which falls back
+/// to an ACP-rendered primary pane. `--model` pins the orchestrator's model
+/// (a daemon-routable id). The palette's `spawn subagent` hatch spawns
+/// worktree-isolated ACP subagents either way.
 pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) -> Result<()> {
     // ── Config + catalog. ──
     let source = crate::paths::resolve_config(None)?;
@@ -68,7 +72,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let _ = bitrouter_substrate::dotdir::ensure_self_ignored(&base_repo.join(".bitrouter"));
 
     // The fleet socket (Unix): MCP bridge subprocesses connect back through
-    // it so orchestrator-spawned subagents appear in the rail and their
+    // it so orchestrator-spawned subagents appear in the fleet list and their
     // gated permissions reach the human's decision queue (TUI_SPEC §2/§5).
     #[cfg(unix)]
     let fleet_sock = start_fleet_listener(&base_repo, tx.clone());

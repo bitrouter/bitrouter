@@ -13,10 +13,9 @@ use crate::tui::event::{AppEvent, DiffData, Effect, PermOption};
 
 use super::diff::{Line, unified_to_lines};
 use super::keys::{
-    reduce_click, reduce_key_command, reduce_key_confirm, reduce_key_leader, reduce_key_normal,
-    reduce_key_picker,
+    reduce_click, reduce_key_command, reduce_key_confirm, reduce_key_leader, reduce_key_manager,
+    reduce_key_normal, reduce_key_picker,
 };
-use super::layout::DetailLayout;
 use super::overlay::Mode;
 use super::pane::{Autonomy, Ownership, PaneKind, PaneState, PendingView, TailKind};
 use super::{AppState, CHECK_RETRY_CAP, NOTICE_DECAY_TICKS, mark_shown_seen, stop_label};
@@ -259,15 +258,15 @@ fn on_agent_spawned(
     }
     pane.port = *port;
     state.agents.push(pane);
-    // A just-spawned agent is what you want to look at: open it solo.
-    state.detail = DetailLayout::solo(record_id.to_owned());
+    // A just-spawned agent is what you want to look at: give it the viewport.
+    state.focus_on(record_id.to_owned());
     state.notice = None;
     Vec::new()
 }
 
 #[cfg(unix)]
 /// ── MCP fleet bridge (Unix): the orchestrator's subagents mirror
-/// into the rail; their gated permissions ride the same decision
+/// into the fleet list; their gated permissions ride the same decision
 /// queue as TUI-spawned agents. ──
 fn on_bridge_connected(state: &mut AppState, conn: &u64) -> Vec<Effect> {
     vec![Effect::BridgeHello {
@@ -394,9 +393,9 @@ fn on_pty_attached(state: &mut AppState, record_id: &str, agent_id: &str) -> Vec
     pane.kind = PaneKind::Pty;
     pane.harness = "attach".to_string();
     state.agents.push(pane);
-    // Attaching is for DRIVING this one agent — show it solo, keys
-    // pass through; `leader c` on the attach pane detaches.
-    state.detail = DetailLayout::solo(record_id.to_owned());
+    // Attaching is for DRIVING this one agent — give it the viewport,
+    // keys pass through; `leader c` on the attach pane detaches.
+    state.focus_on(record_id.to_owned());
     state.mode = Mode::Normal;
     state.notice = Some(format!("attached — {} c detaches", state.leader_label()));
     Vec::new()
@@ -413,8 +412,8 @@ fn on_session_spawned(
     pane.harness = "pty".to_string();
     pane.model = model.clone();
     state.agents.push(pane);
-    // A fresh session is what you asked to talk to — show it solo.
-    state.detail = DetailLayout::solo(record_id.to_owned());
+    // A fresh session is what you asked to talk to — give it the viewport.
+    state.focus_on(record_id.to_owned());
     state.mode = Mode::Normal;
     state.notice = None;
     Vec::new()
@@ -572,7 +571,22 @@ fn on_paste(state: &mut AppState, text: &str) -> Vec<Effect> {
 }
 
 fn on_scroll(state: &mut AppState, up: &bool) -> Vec<Effect> {
-    // Overlays (leader / picker / palette / confirm / which-key)
+    // The manager owns the wheel while it is up: it moves the cursor, so a
+    // long fleet list is browsable by pointer as well as by `j`/`k`.
+    if state.mode == Mode::Manager && !state.keys_help {
+        let len = state.agents.len();
+        if let Some(manager) = state.manager.as_mut()
+            && len > 0
+        {
+            manager.cursor = if *up {
+                manager.cursor.saturating_sub(1)
+            } else {
+                (manager.cursor + 1).min(len - 1)
+            };
+        }
+        return Vec::new();
+    }
+    // Other overlays (leader / picker / palette / confirm / which-key)
     // capture input: the wheel must not page — or worse, type into —
     // the pane behind them (mirrors `reduce_click`'s gate).
     if state.mode != Mode::Normal || state.keys_help {
@@ -648,6 +662,7 @@ fn on_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         if state.mode != Mode::Normal {
             let esc = KeyEvent::from(KeyCode::Esc);
             return match state.mode {
+                Mode::Manager => reduce_key_manager(state, &esc),
                 Mode::Leader => reduce_key_leader(state, &esc),
                 Mode::Picker => reduce_key_picker(state, &esc),
                 Mode::Command => reduce_key_command(state, &esc),
@@ -688,6 +703,7 @@ fn on_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
     match state.mode {
         Mode::Normal => reduce_key_normal(state, key),
+        Mode::Manager => reduce_key_manager(state, key),
         Mode::Leader => reduce_key_leader(state, key),
         Mode::Picker => reduce_key_picker(state, key),
         Mode::Command => reduce_key_command(state, key),

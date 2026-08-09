@@ -4,13 +4,18 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-/// Which key-handling mode the TUI is in. NORMAL is the only hub
-/// (TUI_SPEC_V3 §3/I3): supervision is inline, and the one-shot leader
-/// prefix covers the few rare verbs — there is no sticky manager mode.
+/// Which key-handling mode the TUI is in. NORMAL is the working hub — keys
+/// go to the agent on screen — and MANAGER is the supervision hub, the one
+/// sticky mode, because supervising a fleet is a task you stay in for a few
+/// keystrokes rather than a single verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Keys go to the focused pane (PTY passthrough); supervision inline.
+    /// Keys go to the focused pane (PTY passthrough).
     Normal,
+    /// The full-screen fleet list: navigate, decide (`y`/`a`/`n`), review
+    /// (`D`/`m`/`p`/`r`), focus, close. Sticky — `Esc` (or the leader chord)
+    /// returns to `Normal`.
+    Manager,
     /// One-shot leader prefix: the which-key overlay is up and exactly one
     /// leaf key runs, then back to `Normal` (or into a `Command`/`Picker`
     /// leaf). Never sticky.
@@ -53,16 +58,12 @@ pub fn parse_leader(spec: &str) -> Option<(KeyCode, KeyModifiers)> {
 /// reducer paths so the palette adds discoverability, not new behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    Manager,
     SpawnAgent,
     NewSession,
     CloseAgent,
-    SplitH,
-    SplitV,
-    Unsplit,
     Autonomy,
     KillDone,
-    ToggleSessions,
-    ToggleSubagents,
     KeysHelp,
     Quit,
 }
@@ -70,16 +71,12 @@ pub enum Command {
 /// Palette entries: display name → command. Order = display order when the
 /// filter is empty.
 pub const COMMANDS: &[(&str, Command)] = &[
+    ("manager", Command::Manager),
     ("spawn subagent", Command::SpawnAgent),
     ("new session", Command::NewSession),
     ("close agent", Command::CloseAgent),
-    ("split horizontal", Command::SplitH),
-    ("split vertical", Command::SplitV),
-    ("unsplit", Command::Unsplit),
     ("autonomy cycle", Command::Autonomy),
     ("kill done", Command::KillDone),
-    ("toggle sessions", Command::ToggleSessions),
-    ("toggle subagents", Command::ToggleSubagents),
     ("keys help", Command::KeysHelp),
     ("quit", Command::Quit),
 ];
@@ -89,6 +86,7 @@ pub const COMMANDS: &[(&str, Command)] = &[
 pub enum LeaderAction {
     /// Focus session N (0-based; `leader 1..9`).
     FocusSession(usize),
+    Manager,
     NextActionable,
     NewSession,
     Palette,
@@ -104,6 +102,11 @@ pub enum LeaderAction {
 /// range) and `Esc` (the fall-through cancel) are the only rows the overlay
 /// adds by hand.
 pub const LEADER_LEAVES: &[(KeyCode, &str, LeaderAction)] = &[
+    (
+        KeyCode::Char('m'),
+        "manager: the whole fleet",
+        LeaderAction::Manager,
+    ),
     (
         KeyCode::Tab,
         "focus next actionable subagent",
@@ -143,6 +146,19 @@ pub(super) fn leader_action(code: KeyCode) -> Option<LeaderAction> {
         .iter()
         .find(|(key, _, _)| *key == code)
         .map(|&(_, _, action)| action)
+}
+
+/// State of the manager overlay: just where the cursor sits.
+///
+/// The cursor is an index into [`AppState::fleet`] order, which re-sorts as
+/// agents change state. It is clamped — never wrapped to a stale row — every
+/// time the manager reads it, so an agent finishing mid-browse moves the
+/// selection rather than pointing it at the wrong agent.
+///
+/// [`AppState::fleet`]: super::AppState::fleet
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ManagerState {
+    pub cursor: usize,
 }
 
 /// State of the command palette overlay.

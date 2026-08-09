@@ -1,92 +1,25 @@
-//! Detail-viewport layout and mouse hit-testing: how the 1-4 shown panes
-//! are split (`Split`, `DetailLayout`) and the clickable regions the
-//! renderer records each frame (`ClickTarget`, `ClickZone`).
-
-use super::MAX_SHOWN;
-
-/// How the detail viewport is divided when showing more than one agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Split {
-    /// Side-by-side columns.
-    H,
-    /// Stacked rows.
-    V,
-}
-
-/// Which agents the detail viewport shows and how. Ephemeral layout state —
-/// closing an agent prunes it; the split direction applies to all slots.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailLayout {
-    /// `record_id`s of the shown agents, in slot order (1..=MAX_SHOWN).
-    pub shown: Vec<String>,
-    pub split: Split,
-    /// Index into `shown` of the slot that receives NORMAL-mode input.
-    pub focus: usize,
-}
-
-impl DetailLayout {
-    /// Show exactly one agent.
-    pub(super) fn solo(record_id: String) -> Self {
-        Self {
-            shown: vec![record_id],
-            split: Split::H,
-            focus: 0,
-        }
-    }
-
-    /// Add `record_id` as a new slot in `split` direction (or refocus it if
-    /// already shown). Full viewport (MAX_SHOWN) refocuses instead of adding.
-    pub(super) fn add(&mut self, record_id: String, split: Split) {
-        self.split = split;
-        if let Some(i) = self.shown.iter().position(|r| r == &record_id) {
-            self.focus = i;
-            return;
-        }
-        if self.shown.len() >= MAX_SHOWN {
-            return;
-        }
-        self.shown.push(record_id);
-        self.focus = self.shown.len() - 1;
-    }
-
-    /// Remove the focused slot (keeps at least one).
-    pub(super) fn remove_focused(&mut self) {
-        if self.shown.len() > 1 {
-            self.shown.remove(self.focus);
-            if self.focus >= self.shown.len() {
-                self.focus = self.shown.len() - 1;
-            }
-        }
-    }
-
-    /// Drop `record_id` from the layout if shown; clamps focus.
-    pub(super) fn prune(&mut self, record_id: &str) {
-        self.shown.retain(|r| r != record_id);
-        if self.focus >= self.shown.len() {
-            self.focus = self.shown.len().saturating_sub(1);
-        }
-    }
-
-    /// The focused slot's record id.
-    pub(super) fn focused_id(&self) -> Option<&str> {
-        self.shown.get(self.focus).map(String::as_str)
-    }
-}
+//! Viewport geometry and mouse hit-testing: the clickable regions the
+//! renderer records each frame (`ClickTarget`, `ClickZone`) and the PTY
+//! pane's drawn content rect (`PtyArea`).
+//!
+//! There is no split model. The viewport shows exactly ONE agent — the
+//! focused one ([`AppState::focus`](super::AppState::focus)) — because the
+//! terminal multiplexer the user is already running does splitting better
+//! than a PTY emulator nested inside another PTY emulator can.
 
 /// What a recorded click zone does when the human clicks inside it. The
 /// renderer rebuilds the zone list every frame (like [`AppState::pty_areas`]);
 /// the [`AppEvent::Click`] reducer hit-tests the pointer against them.
+///
+/// [`AppState::pty_areas`]: super::AppState::pty_areas
+/// [`AppEvent::Click`]: crate::tui::event::AppEvent::Click
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickTarget {
-    /// The `<<` status-bar button: toggle the sessions (left) sidebar.
-    ToggleSessions,
-    /// The `>>` status-bar button: toggle the subagents (right) sidebar.
-    ToggleSubagents,
-    /// A sessions-panel row — an index into [`AppState::sessions_list`] order.
-    SessionRow(usize),
-    /// A subagents-rail row — an index into [`AppState::roster`] order.
-    RailRow(usize),
-    /// The sessions panel's `+ new session` footer — opens the harness picker.
+    /// A manager-view row — an index into [`AppState::fleet`] order.
+    ///
+    /// [`AppState::fleet`]: super::AppState::fleet
+    AgentRow(usize),
+    /// The manager's `+ new session` footer — opens the harness picker.
     NewSession,
 }
 
@@ -148,5 +81,20 @@ mod tests {
         assert!(!area.contains(6, 3), "one past the last column is outside");
         assert!(!area.contains(5, 4), "one past the last row is outside");
         assert!(!area.contains(1, 1), "the border column is outside");
+    }
+
+    #[test]
+    fn click_zone_contains_is_half_open() {
+        let zone = ClickZone {
+            x: 4,
+            y: 2,
+            w: 3,
+            h: 2,
+            target: ClickTarget::AgentRow(0),
+        };
+        assert!(zone.contains(4, 2));
+        assert!(zone.contains(6, 3));
+        assert!(!zone.contains(7, 3));
+        assert!(!zone.contains(6, 4));
     }
 }
