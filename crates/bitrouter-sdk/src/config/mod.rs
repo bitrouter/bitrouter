@@ -1102,6 +1102,31 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    /// Resolve either the registry's canonical model id or its provider-native
+    /// dispatch id to the same metadata entry. Explicit `provider:model`
+    /// routes commonly use the native id, but must retain the registry's
+    /// protocol, pricing, and compatibility contract.
+    pub(crate) fn model_config(&self, model_id: &str) -> Option<&ProviderModel> {
+        self.models.iter().find(|model| {
+            model.id == model_id || model.provider_model_id.as_deref() == Some(model_id)
+        })
+    }
+
+    /// Whether a concrete model positively advertises `capability`.
+    ///
+    /// This intentionally distinguishes an explicit declaration from legacy
+    /// model entries whose capability list is empty/unknown. Callers that
+    /// grant a policy exception (for example, a tool-safe economy tier) must
+    /// use positive evidence rather than treating unknown as supported.
+    pub fn model_supports_capability(
+        &self,
+        model_id: &str,
+        capability: crate::language_model::types::Capability,
+    ) -> bool {
+        self.model_config(model_id)
+            .is_some_and(|model| model.capabilities.contains(&capability))
+    }
+
     /// The API key for provider-level operations that aren't tied to a
     /// specific routed request — currently model discovery's `/models`
     /// probe. Returns the top-level [`api_key`](Self::api_key), or the
@@ -1126,7 +1151,7 @@ impl ProviderConfig {
     /// router prefers whichever member matches the inbound request (native
     /// routing) and otherwise falls back to the head.
     pub fn protocols_for(&self, model_id: &str) -> Vec<ApiProtocol> {
-        if let Some(m) = self.models.iter().find(|m| m.id == model_id)
+        if let Some(m) = self.model_config(model_id)
             && let Some(list) = &m.api_protocol
             && !list.is_empty()
         {
@@ -1198,6 +1223,12 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// Features this concrete provider/model route explicitly advertises.
+    /// An empty list means unknown, not unsupported. Runtime routing preserves
+    /// legacy unknown entries; policy code that grants a capability-specific
+    /// exception requires a positive declaration.
+    #[serde(default)]
+    pub capabilities: Vec<crate::language_model::types::Capability>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -1784,6 +1815,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        capabilities: Vec::new(),
                         compatibility: ModelCompatibility::default(),
                     })
                     .collect();

@@ -366,6 +366,95 @@ is part of the candidate lineage.
 
 The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
 
+### `bitrouter optimize`
+
+```text
+bitrouter optimize setup [--workflow-command CMD] [--workflow-arg ARG ...] \
+  [--workflow-input PATH ...] \
+  [--strong PROVIDER:MODEL] [--economy PROVIDER:MODEL] \
+  [--normalized-price PROVIDER:MODEL=INPUT,CACHE_READ,CACHE_WRITE,OUTPUT] \
+  [--preference PROFILE]
+bitrouter optimize resolve [--config bitrouter.optimize.yaml]
+bitrouter optimize run [--config bitrouter.optimize.yaml]
+bitrouter optimize review [--config bitrouter.optimize.yaml]
+bitrouter optimize publish [--run ID] [--enable-adaptive] [--config bitrouter.optimize.yaml]
+bitrouter optimize rollback DIGEST [--config bitrouter.optimize.yaml] [--socket PATH]
+bitrouter optimize status [--config bitrouter.optimize.yaml]
+```
+
+`optimize` is the version-controlled quality/cost loop for an arbitrary agent
+workflow. `setup` creates `bitrouter.optimize.yaml`,
+`bitrouter.optimize.lock.yaml`, and a success-contract starter without
+overwriting existing files. With omitted workflow flags, interactive setup
+discovers project-owned eval/benchmark package scripts and executable
+entrypoints, selects a unique candidate automatically, and prompts when more
+than one is plausible. It reuses an existing `@auto` strong/economy ladder;
+otherwise a TTY asks for both routes. Non-interactive ambiguity fails before
+any file mutation and reports the exact flags to supply. The workflow is launched without shell parsing;
+user argv boundaries are preserved after any catalog-owned routing prefix for
+a recognized agent. Common OpenAI, Anthropic, Gemini, and BitRouter client
+variables are pointed at a fresh private daemon using the configured preset.
+Baseline and candidate run in separate detached Git worktrees. Repeat
+`--workflow-input` for ignored dependencies or fixtures such as `node_modules`
+or `.venv` that the command requires.
+
+Every strong/economy model call goes through that private daemon. The tiers may
+use different native daemon providers—for example a Codex subscription strong
+route and BitRouter Cloud OAuth economy route. Known agent executables receive
+the shared harness catalog's routing adapter in addition to the common
+loopback environment, so Codex cannot silently retain its direct provider.
+Unsupported known harnesses that cannot be redirected fail closed.
+
+Cost is normalized showback. Provider catalog prices are cache-aware; repeat
+`--normalized-price` to pin an API-equivalent schedule for a subscription or
+another unpriced provider. The four rates are micro-USD per token (numerically
+the same as USD per million tokens). These overrides are committed in
+`bitrouter.optimize.yaml`; they do not claim that a subscription incurred that
+cash charge.
+
+By default BitRouter detects the selected local coding agent, pins the exact
+ACP adapter and configured judge model in the lock, and uses that agent's own
+subscription for generic agentic evaluation. `--evaluator-via-cloud` opts the
+judge into an independent Cloud model; workflow model calls still use the
+private daemon and whichever provider each policy tier selects. The maintained
+Codex adapter is
+`@agentclientprotocol/codex-acp` and is installed on demand by `npx` at its
+locked version.
+
+One `run` executes one baseline command and one one-route-key candidate. Those
+workflow identities are never retried; the judge has at most one schema-repair
+turn. If the command itself represents a
+multi-case eval suite, its aggregate output is the measurement unit. Non-zero exits are
+preserved as quality evidence; missing identity, policy, metering/price, or
+single-variable attribution fails the run as infrastructure ambiguity.
+Referenced argv files and the resolved executable are fingerprinted before and
+after both variants.
+
+The qualitative profiles are intentionally loose in this release:
+`quality-first`, `balanced`, and `savings-first` choose different eligible
+route keys, while every publishable candidate still requires one agentic pass
+and lower normalized showback cost. They are not percentage quality-loss
+budgets. Latency is reported as
+`observe_only` and is not a gate. `run` never publishes. `publish` revalidates
+the exact report, snapshot, candidate, parent policy, and lock lineage before
+using the atomic policy publication and daemon-reload path. Publication is
+idempotent: if the policy write succeeded before an interrupted lock update,
+rerunning the command completes that lock transition. The first publication
+from the default frozen mode asks for explicit confirmation on a TTY;
+headless/CI publication requires `--enable-adaptive`. Setup does not silently
+widen policy permissions. `optimize rollback`
+restores an archived policy digest and updates the optimization lock so the
+next cycle starts from the restored parent; it can also reconcile a matching
+rollback previously made through `bitrouter policy rollback`.
+
+`bitrouter init --optimize` folds the same setup into onboarding. Headless
+automation supplies `--optimize-workflow-command`, repeated
+`--optimize-workflow-arg`/`--optimize-workflow-input`, and
+`--optimize-success`; model and preference flags remain optional. Optimization
+setup is currently Unix-only.
+Setup also rejects an active progress guard before mutation because the exact
+two-tier experiment cannot preserve guard semantics yet.
+
 ### `bitrouter trajectory`
 
 Durable trajectory progress control is an explicit local opt-in:

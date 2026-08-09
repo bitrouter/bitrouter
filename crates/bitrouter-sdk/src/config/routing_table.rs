@@ -119,15 +119,11 @@ fn build_targets(
     // `provider:upstream-id` route that matches no declared model also passes
     // through unchanged.
     let service_id = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
+        .model_config(model_id)
         .and_then(|m| m.provider_model_id.as_deref())
         .unwrap_or(model_id);
     let chat_compatibility = provider
-        .models
-        .iter()
-        .find(|m| m.id == model_id)
+        .model_config(model_id)
         .map(|m| &m.compatibility.chat_completions);
     let chat_token_limit_field =
         chat_compatibility.and_then(|compatibility| compatibility.token_limit_field);
@@ -614,6 +610,11 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
             base.ignore.push(p.clone());
         }
     }
+    for capability in &extra.require_capabilities {
+        if !base.require_capabilities.contains(capability) {
+            base.require_capabilities.push(*capability);
+        }
+    }
     // The inbound protocol is a per-request fact set by the pipeline (not a
     // preset knob); carry it so target construction can route natively.
     if extra.inbound_protocol.is_some() {
@@ -625,9 +626,48 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 mod tests {
     use super::*;
     use crate::config::parse;
+    use crate::language_model::types::Capability;
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
+    }
+
+    #[tokio::test]
+    async fn capability_metadata_is_positive_not_an_exhaustive_denylist()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let table = table(
+            r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: alpha
+    models:
+      - id: shared
+        capabilities: [tools]
+  beta:
+    api_base: https://beta.example/v1
+    api_key: beta
+    models:
+      - id: shared
+        capabilities: [reasoning]
+"#,
+        );
+        let prefs = RoutingPrefs {
+            require_capabilities: vec![Capability::Tools],
+            ..RoutingPrefs::default()
+        };
+
+        let cascade = table
+            .route_chain("shared", &prefs, &CallerContext::local())
+            .await?;
+        assert_eq!(cascade.len(), 2);
+        assert_eq!(cascade[0].provider_name, "alpha");
+        assert_eq!(cascade[1].provider_name, "beta");
+        let direct = table
+            .route_chain("beta:shared", &prefs, &CallerContext::local())
+            .await?;
+        assert_eq!(direct[0].provider_name, "beta");
+        Ok(())
     }
 
     const PROVIDERS: &str = r#"
@@ -1581,6 +1621,32 @@ providers:
         assert_eq!(chain[0].provider_name, "anthropic");
         // Dispatched against the upstream id, not the canonical match key.
         assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn explicit_upstream_id_reuses_registry_model_protocol() -> crate::Result<()> {
+        let yaml = r#"
+providers:
+  openai-codex:
+    api_base: https://chatgpt.com/backend-api/codex
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+        api_protocol: responses
+"#;
+
+        let chain = table(yaml)
+            .route_chain(
+                "openai-codex:gpt-5.6-sol",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await?;
+
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].service_id, "gpt-5.6-sol");
+        assert_eq!(chain[0].api_protocol, ApiProtocol::Responses);
+        Ok(())
     }
 
     #[tokio::test]

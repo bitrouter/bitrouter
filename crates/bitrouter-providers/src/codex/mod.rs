@@ -14,7 +14,7 @@
 //!    [`crate::oauth::refresh::REFRESH_WINDOW`] of expiry.
 //! 3. Decode the access token JWT to extract `chatgpt_account_id` and
 //!    forward it on the `chatgpt-account-id` header alongside the Bearer.
-//! 4. Set `OpenAI-Beta: responses=experimental` and `originator: bitrouter`
+//! 4. Set the current Codex HTTP Responses marker and `originator: bitrouter`
 //!    so the upstream admits the request through the Codex pipeline.
 //!
 //! ## Body shape
@@ -342,8 +342,8 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             headers_mut.insert(HeaderName::from_static("chatgpt-account-id"), value);
         }
         headers_mut.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static(headers::OPENAI_BETA),
+            HeaderName::from_static("x-openai-internal-codex-responses-lite"),
+            HeaderValue::from_static(headers::RESPONSES_LITE),
         );
         headers_mut.insert(
             HeaderName::from_static("originator"),
@@ -394,8 +394,14 @@ impl AuthApplier for OpenAiCodexAuthApplier {
 ///
 /// The backend requires `store: false` (it does not persist Codex responses)
 /// and `include: ["reasoning.encrypted_content"]` so reasoning models return
-/// their encrypted reasoning for multi-turn continuity. The caller's system
-/// prompt rides in `instructions` (set by the Responses adapter); when the
+/// their encrypted reasoning for multi-turn continuity. The Responses-Lite
+/// transport marker also requires `reasoning.context: "all_turns"` and
+/// `parallel_tool_calls: false`; preserve any caller effort while pinning that
+/// provider contract. Codex clients using a custom gateway emit their local
+/// tools at the public top-level `tools` field, while the subscription backend
+/// accepts the same definitions as a developer `additional_tools` input item;
+/// normalize to that official wire shape. The caller's system prompt rides in
+/// `instructions` (set by the Responses adapter); when the
 /// caller sent none, default it to the Codex CLI's own fallback so the backend
 /// always sees instructions. Mirrors OpenClaw
 /// `src/llm/providers/openai-chatgpt-responses.ts`.
@@ -426,6 +432,19 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
         strip_codex_unsupported_fields(value);
     }
     obj.insert("store".to_string(), Value::Bool(false));
+    obj.insert("parallel_tool_calls".to_string(), Value::Bool(false));
+    let reasoning = obj
+        .entry("reasoning".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !reasoning.is_object() {
+        *reasoning = Value::Object(serde_json::Map::new());
+    }
+    if let Some(reasoning) = reasoning.as_object_mut() {
+        reasoning.insert(
+            "context".to_string(),
+            Value::String("all_turns".to_string()),
+        );
+    }
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
             if !items.iter().any(|v| v.as_str() == Some(REASONING_INCLUDE)) {
@@ -468,6 +487,7 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     }
     ensure_tool_names(obj);
     ensure_tool_descriptions(obj);
+    move_tools_to_additional_input(obj);
 }
 
 fn strip_codex_unsupported_fields(value: &mut serde_json::Value) {
@@ -558,6 +578,40 @@ fn ensure_tool_descriptions(obj: &mut serde_json::Map<String, serde_json::Value>
             .entry("parameters".to_string())
             .or_insert_with(|| serde_json::json!({}));
     }
+}
+
+fn move_tools_to_additional_input(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(tools) = obj.remove("tools") else {
+        return;
+    };
+    let serde_json::Value::Array(tools) = tools else {
+        obj.insert("tools".to_string(), tools);
+        return;
+    };
+    if tools.is_empty() {
+        return;
+    }
+    let Some(serde_json::Value::Array(input)) = obj.get_mut("input") else {
+        obj.insert("tools".to_string(), serde_json::Value::Array(tools));
+        return;
+    };
+    if let Some(existing) = input.iter_mut().find(|item| {
+        item.get("type").and_then(serde_json::Value::as_str) == Some("additional_tools")
+    }) && let Some(existing_tools) = existing
+        .get_mut("tools")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        existing_tools.extend(tools);
+        return;
+    }
+    input.insert(
+        0,
+        serde_json::json!({
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": tools,
+        }),
+    );
 }
 
 fn is_instruction_message(item: &serde_json::Value) -> bool {
@@ -713,9 +767,11 @@ mod tests {
             h.get("chatgpt-account-id").and_then(|v| v.to_str().ok()),
             Some("acct-bitrouter")
         );
+        assert!(h.get("openai-beta").is_none());
         assert_eq!(
-            h.get("openai-beta").and_then(|v| v.to_str().ok()),
-            Some(headers::OPENAI_BETA)
+            h.get("x-openai-internal-codex-responses-lite")
+                .and_then(|v| v.to_str().ok()),
+            Some("true")
         );
         assert_eq!(
             h.get("originator").and_then(|v| v.to_str().ok()),
@@ -930,6 +986,12 @@ mod tests {
         let mut body = serde_json::json!({
             "model": "gpt-5-codex",
             "input": [],
+            "tools": [
+                {"type": "function", "name": "shell", "parameters": {}},
+                {"type": "namespace", "name": "workspace", "tools": []},
+                {"type": "web_search"}
+            ],
+            "reasoning": {"effort": "high", "context": "legacy"},
             "max_output_tokens": 16,
             "stream_options": {"include_usage": true}
         });
@@ -943,6 +1005,22 @@ mod tests {
         assert_eq!(
             body["include"],
             serde_json::json!(["reasoning.encrypted_content"])
+        );
+        assert_eq!(body["reasoning"]["context"], serde_json::json!("all_turns"));
+        assert_eq!(body["reasoning"]["effort"], serde_json::json!("high"));
+        assert_eq!(body["parallel_tool_calls"], serde_json::json!(false));
+        assert!(body.get("tools").is_none());
+        assert_eq!(
+            body["input"][0]["type"],
+            serde_json::json!("additional_tools")
+        );
+        assert_eq!(body["input"][0]["role"], serde_json::json!("developer"));
+        assert_eq!(
+            body["input"][0]["tools"].as_array().map(|tools| tools
+                .iter()
+                .filter_map(|tool| tool.get("type").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()),
+            Some(vec!["function", "namespace", "web_search"])
         );
         // include already present → reasoning item appended without duplication.
         let mut body2 = serde_json::json!({ "include": ["foo"] });
@@ -1037,13 +1115,14 @@ mod tests {
             .prepare_body(&mut body5, &codex_target(None))
             .await
             .unwrap();
-        assert_eq!(body5["tools"][0]["name"], serde_json::json!("custom"));
+        let moved_tools = &body5["input"][0]["tools"];
+        assert_eq!(moved_tools[0]["name"], serde_json::json!("custom"));
         assert_eq!(
-            body5["tools"][1]["description"],
+            moved_tools[1]["description"],
             serde_json::json!("Search for available tools.")
         );
-        assert_eq!(body5["tools"][1]["parameters"], serde_json::json!({}));
-        assert!(body5["tools"][1].get("name").is_none());
-        assert_eq!(body5["tools"][2]["name"], serde_json::json!("read_file"));
+        assert_eq!(moved_tools[1]["parameters"], serde_json::json!({}));
+        assert!(moved_tools[1].get("name").is_none());
+        assert_eq!(moved_tools[2]["name"], serde_json::json!("read_file"));
     }
 }

@@ -87,6 +87,11 @@ pub struct LaunchOptions {
     /// Extra environment for the agent child (and the bootstrap hook),
     /// overlaid on the transport's `env` — e.g. a fleet-allocated `PORT`.
     pub env: Vec<(String, String)>,
+    /// Inherited environment names to remove before applying the explicit
+    /// transport and launch overlays. This lets isolated callers prevent
+    /// ambient credentials from crossing into an agent process while still
+    /// permitting a deliberately configured credential to win.
+    pub strip_inherited_env: Vec<String>,
     /// Per-turn deadline. On elapse the upstream is asked to cancel
     /// cooperatively (`session/cancel`); if it does not comply within
     /// `TURN_CANCEL_GRACE` (3s) the turn errors.
@@ -115,6 +120,8 @@ struct BuildArgs {
     remove_worktree_on_shutdown: bool,
     /// Extra environment overlaid on the transport's `env` for the child.
     env: Vec<(String, String)>,
+    /// Environment names stripped from the child before the explicit overlay.
+    strip_inherited_env: Vec<String>,
     turn_timeout: Option<Duration>,
     /// `mcpServers` for the immediate `session/new` (unused when deferring —
     /// [`Session::open`] then carries the manager's descriptors).
@@ -223,6 +230,7 @@ impl Session {
             worktree,
             worktree_bootstrap,
             env,
+            strip_inherited_env,
             turn_timeout,
             mcp_servers,
         } = options;
@@ -286,6 +294,7 @@ impl Session {
                     worktree_base_ref,
                     remove_worktree_on_shutdown: remove_on_shutdown,
                     env,
+                    strip_inherited_env,
                     turn_timeout,
                     mcp_servers,
                     open_now,
@@ -364,6 +373,7 @@ impl Session {
             worktree_base_ref,
             remove_worktree_on_shutdown,
             env: extra_env,
+            strip_inherited_env,
             turn_timeout,
             mcp_servers,
             open_now,
@@ -382,7 +392,10 @@ impl Session {
             merged.extend(extra_env.iter().cloned());
             merged
         };
-        let conn = Arc::new(UpstreamConnection::spawn(command, args, &env).await?);
+        let conn = Arc::new(
+            UpstreamConnection::spawn_with_stripped_env(command, args, &env, &strip_inherited_env)
+                .await?,
+        );
 
         // The record id was minted in `launch_inner` (before the worktree, so
         // `{record16}` naming could derive from it). The down-facing

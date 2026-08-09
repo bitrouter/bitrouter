@@ -221,6 +221,9 @@ pub enum PricingSource {
     Configured,
     /// Rates came from an explicit benchmark/export override.
     Override,
+    /// Final cost came directly from an authenticated authoritative receipt.
+    /// Per-token rates are intentionally absent in this mode.
+    AuthoritativeReceipt,
     /// No usable pricing entry was found.
     Unknown,
 }

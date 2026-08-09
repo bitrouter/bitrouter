@@ -2960,6 +2960,10 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "id": "deepseek/deepseek-v4-flash-0731",
           "pricing": {
             "input_tokens": {
@@ -3597,6 +3601,11 @@
           "api_protocol": "openai",
           "id": "x-ai/grok-4.5",
           "provider_model_id": "grok-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "provider_model_id": "kimi-k3"
         }
       ],
       "name": "github-copilot",
