@@ -18,9 +18,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::acp::{AcpContext, AcpResponse, ExecutionHook};
+use crate::error::Result;
 use async_trait::async_trait;
-use bitrouter_sdk::acp::{AcpContext, AcpResponse, ExecutionHook};
-use bitrouter_sdk::error::Result;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Context-window occupancy reported by the upstream's latest `UsageUpdate`.
@@ -96,11 +96,9 @@ impl ExecutionHook for TelemetryHook {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use crate::acp::{AcpContext, AcpRequest, AcpRequestPayload, AcpResponse, ExecutionHook};
+    use crate::caller::CallerContext;
     use agent_client_protocol_schema::v1::{PromptResponse, StopReason};
-    use bitrouter_sdk::acp::{
-        AcpContext, AcpRequest, AcpRequestPayload, AcpResponse, ExecutionHook,
-    };
-    use bitrouter_sdk::caller::CallerContext;
     use tokio::sync::mpsc;
 
     use super::{ContextUsage, TelemetryHook};

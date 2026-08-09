@@ -47,6 +47,28 @@ pub mod config_routing;
 #[cfg(feature = "acp")]
 pub mod translate;
 
+// ── the live thin proxy (feature = "acp") ───────────────────────────────────
+// One session, one agent: `up` speaks the ACP client role to the agent child,
+// `engine` wires it to this module's `Pipeline`, and `down` re-exposes the
+// result as a vanilla ACP agent. The direct analogue of
+// [`crate::mcp::rmcp_executor`] for the ACP protocol.
+#[cfg(feature = "acp")]
+pub mod down;
+#[cfg(feature = "acp")]
+pub mod engine;
+#[cfg(feature = "acp")]
+pub mod executor;
+#[cfg(feature = "acp")]
+pub mod permissions;
+#[cfg(feature = "acp")]
+pub mod session;
+#[cfg(feature = "acp")]
+pub mod telemetry;
+#[cfg(feature = "acp")]
+pub mod turn;
+#[cfg(feature = "acp")]
+pub mod up;
+
 pub use transport::{AcpAgentConfig, AcpTransport};
 
 #[cfg(feature = "acp")]

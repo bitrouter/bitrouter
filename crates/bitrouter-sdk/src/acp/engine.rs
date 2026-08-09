@@ -33,27 +33,27 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::acp::{
+    AcpRequest, AcpRequestPayload, AcpTarget, AcpTransport, ConfigAcpRoutingTable, Pipeline,
+    PipelineBuilder, RoutingTable,
+};
+use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result as SdkResult};
 use agent_client_protocol_schema::v1::{
     ContentBlock, McpServer, PromptRequest, PromptResponse, SessionId, SessionUpdate, StopReason,
     TextContent,
 };
 use async_trait::async_trait;
-use bitrouter_sdk::acp::{
-    AcpRequest, AcpRequestPayload, AcpTarget, AcpTransport, ConfigAcpRoutingTable, Pipeline,
-    PipelineBuilder, RoutingTable,
-};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::error::{BitrouterError, Result as SdkResult};
 use futures::Stream;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
-use crate::executor::SessionExecutor;
-use crate::permissions::PermissionRegistry;
-use crate::session::{SessionState, SessionStatus};
-use crate::telemetry::{RequestCompleted, TelemetryHook};
-use crate::translate::SessionUpdateKind;
-use crate::turn::TurnController;
-use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
+use crate::acp::executor::SessionExecutor;
+use crate::acp::permissions::PermissionRegistry;
+use crate::acp::session::SessionState;
+use crate::acp::telemetry::{RequestCompleted, TelemetryHook};
+use crate::acp::translate::SessionUpdateKind;
+use crate::acp::turn::TurnController;
+use crate::acp::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
 /// before [`TurnController::try_submit`] reports backpressure. `prompt` uses the
@@ -124,7 +124,7 @@ impl RoutingTable for PinnedTable {
 
 /// One live session: upstream connection + SDK pipeline + turn queue.
 pub struct Session {
-    /// Manager-facing identity + status.
+    /// Manager-facing identity.
     pub state: SessionState,
     /// The upstream ACP connection (agent child). Shared with the pipeline's
     /// executor; see the module-level shutdown note.
@@ -146,7 +146,7 @@ pub struct Session {
     /// Session-scoped registry of outstanding permission requests. The sole
     /// consumer of the upstream (take-once) permission stream; re-exposes it as a
     /// re-subscribable stream so a reattached manager sees the outstanding set
-    /// instead of an empty stream. See [`crate::permissions`].
+    /// instead of an empty stream. See [`crate::acp::permissions`].
     permissions: Arc<PermissionRegistry>,
 }
 
@@ -252,7 +252,6 @@ impl Session {
         // `SessionAgent` returns `record_id` for `session/new`; the upstream
         // `acp_session_id` stays internal.
         let mut state = SessionState::new(record_id, agent_id.to_string());
-        state.status = SessionStatus::Idle;
 
         // Wire identity slot: set exactly once, either right below (`open_now`)
         // or by `Session::open` when the manager's `session/new` arrives. The
@@ -272,7 +271,7 @@ impl Session {
         // One pump drains the upstream permission stream into a session-scoped
         // registry; every manager connection (re)subscribes to the registry, so a
         // reattached manager sees any permission that was outstanding when it
-        // left instead of an empty stream. See `crate::permissions`.
+        // left instead of an empty stream. See `crate::acp::permissions`.
         let permissions = Arc::new(PermissionRegistry::new());
 
         {
@@ -483,7 +482,7 @@ impl Session {
         self.telemetry_rx.lock().ok().and_then(|mut g| g.take())
     }
 
-    /// The session's identity + status.
+    /// The session's identity.
     pub fn state(&self) -> &SessionState {
         &self.state
     }
@@ -524,8 +523,8 @@ impl Session {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
     use agent_client_protocol_schema::v1::StopReason;
-    use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
     use futures::StreamExt;
 
     use super::{LaunchOptions, Session};
@@ -633,7 +632,7 @@ mod tests {
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "relay".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -711,7 +710,7 @@ mod tests {
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "relay".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -872,7 +871,7 @@ mod tests {
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "stall".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -956,7 +955,7 @@ mod tests {
         // The stub streamed a usage_update mid-turn; the hook snapshots it.
         assert_eq!(
             record.context,
-            Some(crate::telemetry::ContextUsage {
+            Some(crate::acp::telemetry::ContextUsage {
                 used: 1500,
                 size: 200_000,
             })

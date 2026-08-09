@@ -1,7 +1,7 @@
 //! Session-scoped permission registry.
 //!
 //! Upstream `session/request_permission` requests arrive on the single
-//! [`UpstreamConnection`](crate::up::UpstreamConnection) permission stream, which
+//! [`UpstreamConnection`](crate::acp::up::UpstreamConnection) permission stream, which
 //! is **take-once**: only one consumer can drain it. That is a problem for
 //! detach/reattach — the down-facing endpoint drains it on the *first* manager
 //! connection, so a reattached connection would get an empty stream and never
@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use futures::Stream;
 use tokio::sync::watch;
 
-use crate::up::PendingPermission;
+use crate::acp::up::PendingPermission;
 
 /// The session-owned set of outstanding permission requests.
 pub struct PermissionRegistry {

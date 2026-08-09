@@ -766,7 +766,9 @@ dependencies = [
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.27"
 dependencies = [
+ "agent-client-protocol",
  "agent-client-protocol-schema",
+ "anyhow",
  "async-stream",
  "async-trait",
  "axum",
@@ -779,13 +781,16 @@ dependencies = [
  "pin-project-lite",
  "reqwest",
  "rmcp",
+ "rustix 1.1.4",
  "schemars 1.2.1",
  "serde",
  "serde-saphyr",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tower",
  "tracing",
@@ -797,20 +802,8 @@ dependencies = [
 name = "bitrouter-substrate"
 version = "1.0.0-alpha.27"
 dependencies = [
- "agent-client-protocol",
- "agent-client-protocol-schema",
- "anyhow",
- "async-trait",
  "bitrouter-sdk",
- "futures",
- "libc",
- "serde",
  "tempfile",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "uuid",
 ]
 
 [[package]]

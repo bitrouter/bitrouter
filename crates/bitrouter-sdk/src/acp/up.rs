@@ -62,8 +62,8 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::telemetry::{ContextUsage, SharedContextUsage};
-use crate::translate::{
+use crate::acp::telemetry::{ContextUsage, SharedContextUsage};
+use crate::acp::translate::{
     PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
 };
 
@@ -91,7 +91,7 @@ const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 ///
 /// `PendingPermission` is **cloneable**: the resolver is shared behind an
 /// [`Arc`], so the session-scoped
-/// [`PermissionRegistry`](crate::permissions::PermissionRegistry) and any manager
+/// [`PermissionRegistry`](crate::acp::permissions::PermissionRegistry) and any manager
 /// forwarder can each hold a clone. The upstream is answered exactly **once**
 /// (first [`resolve`](Self::resolve) wins; later calls are no-ops), and a mere
 /// consumer drop no longer defaults to Deny while another clone (the registry) is
@@ -155,7 +155,7 @@ impl PendingPermission {
 
     /// Whether the upstream has already been answered (or the resolver lock was
     /// poisoned — treated as resolved so a broken entry is not re-offered). The
-    /// [`PermissionRegistry`](crate::permissions::PermissionRegistry) filters on
+    /// [`PermissionRegistry`](crate::acp::permissions::PermissionRegistry) filters on
     /// this so a resolved permission is never replayed on reattach.
     pub fn is_resolved(&self) -> bool {
         self.resolver.tx.lock().map(|g| g.is_none()).unwrap_or(true)
@@ -327,10 +327,19 @@ fn spawn_agent_process(
 /// `process_group(0)`). `ESRCH` just means everyone is already gone. On
 /// non-unix targets group semantics don't apply; `kill_on_drop` covers the
 /// direct child there.
+///
+/// Goes through `rustix`'s safe wrapper rather than a raw `libc::killpg`:
+/// this crate is `#![forbid(unsafe_code)]`, and that guarantee is worth more
+/// than saving a dependency already present in the build graph.
 #[cfg(unix)]
 fn kill_process_group(pid: u32) {
-    // SAFETY: plain syscall on a pid we spawned; failure is ignored by design.
-    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    // A pid too large for the platform's pid type, or a group that has already
+    // exited (`ESRCH`), are both no-ops by design.
+    if let Ok(raw) = i32::try_from(pid)
+        && let Some(pid) = rustix::process::Pid::from_raw(raw)
+    {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
 }
 
 #[cfg(not(unix))]
@@ -389,6 +398,10 @@ impl UpstreamConnection {
         Self::spawn_with_stripped_env(command, args, env, &[]).await
     }
 
+    /// Like [`spawn`](Self::spawn), but first removes `strip_inherited_env`
+    /// names from the inherited environment, so an isolated caller can stop
+    /// ambient credentials crossing into the agent while still letting a
+    /// deliberately configured `env` entry win.
     pub async fn spawn_with_stripped_env(
         command: &str,
         args: &[String],
@@ -490,7 +503,7 @@ impl UpstreamConnection {
     /// The telemetry hook snapshots this into each [`RequestCompleted`]
     /// record.
     ///
-    /// [`RequestCompleted`]: crate::telemetry::RequestCompleted
+    /// [`RequestCompleted`]: crate::acp::telemetry::RequestCompleted
     pub fn context_usage(&self) -> SharedContextUsage {
         self.usage.clone()
     }
