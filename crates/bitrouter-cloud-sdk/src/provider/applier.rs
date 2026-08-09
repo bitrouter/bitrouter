@@ -107,10 +107,10 @@ struct ResolvedCloudAuth {
 }
 
 fn oauth_continuation_authority(credentials: &Credentials) -> Result<Option<CredentialAuthority>> {
-    let Some(subject) = credentials
-        .subject
+    let Some(namespace_id) = credentials
+        .namespace_id
         .as_deref()
-        .filter(|subject| !subject.is_empty())
+        .filter(|namespace_id| !namespace_id.is_empty())
     else {
         return Ok(None);
     };
@@ -123,9 +123,9 @@ fn oauth_continuation_authority(credentials: &Credentials) -> Result<Option<Cred
     )?;
     let normalized_issuer = issuer.as_str().trim_end_matches('/');
     Ok(Some(CredentialAuthority::derive_scoped(
-        "bitrouter-cloud/oauth-subject",
+        "bitrouter-cloud/oauth-namespace",
         normalized_issuer,
-        subject,
+        namespace_id,
     )))
 }
 
@@ -210,8 +210,9 @@ impl BitrouterCloudAuthApplier {
         let Some(credential) = store.current() else {
             return Ok(None);
         };
-        // A subject is stable across OAuth access/refresh-token rotation. A
-        // legacy OAuth file without one cannot safely publish a resumable
+        // The namespace baked into a CLI OAuth credential is stable across
+        // access/refresh-token rotation and is the Cloud inference authority.
+        // A legacy OAuth file without one cannot safely publish a resumable
         // Responses root. Static stored keys use the key itself only as input
         // to the one-way proof and never retain or log it.
         let oauth_authority = match credential.oauth() {
@@ -387,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_authority_survives_token_rotation_for_same_issuer_and_subject() {
+    fn oauth_authority_survives_token_rotation_for_same_issuer_and_namespace() {
         let before = oauth_credentials(
             "HTTPS://AS.EXAMPLE:443/oauth/",
             "user-42",
@@ -405,6 +406,43 @@ mod tests {
             oauth_continuation_authority(&before).unwrap(),
             oauth_continuation_authority(&after).unwrap()
         );
+    }
+
+    #[test]
+    fn oauth_authority_uses_namespace_when_subject_is_unavailable() -> Result<()> {
+        let mut credentials = oauth_credentials(
+            "https://as.example/oauth",
+            "display-only-subject",
+            "access-token",
+            "refresh-token",
+        );
+        credentials.subject = None;
+
+        assert!(oauth_continuation_authority(&credentials)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn oauth_authority_changes_when_namespace_changes() -> Result<()> {
+        let original = oauth_credentials(
+            "https://as.example/oauth",
+            "shared-subject",
+            "access-a",
+            "refresh-a",
+        );
+        let mut rebound = oauth_credentials(
+            "https://as.example/oauth",
+            "shared-subject",
+            "access-b",
+            "refresh-b",
+        );
+        rebound.namespace_id = Some("ns-2".to_owned());
+
+        assert_ne!(
+            oauth_continuation_authority(&original)?,
+            oauth_continuation_authority(&rebound)?
+        );
+        Ok(())
     }
 
     #[test]

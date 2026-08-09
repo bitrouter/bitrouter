@@ -1442,6 +1442,18 @@ pub async fn initialize_files_unlocked(
         anyhow::bail!("strong and economy tiers must use different models");
     }
 
+    let mut capability_config = config.clone();
+    crate::merge_registry_into(&mut capability_config).await;
+    bitrouter_providers::apply_builtin_defaults(&mut capability_config);
+    let mut tool_safe_tiers = vec!["strong".to_string()];
+    if route_supports_capability(
+        &capability_config,
+        economy_model,
+        bitrouter_sdk::language_model::types::Capability::Tools,
+    ) {
+        tool_safe_tiers.push("economy".to_string());
+    }
+
     let lock_path = resolve_path(&config, Some(config_path))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve policy lock path"))?;
     if lock_path == config_path {
@@ -1476,7 +1488,7 @@ pub async fn initialize_files_unlocked(
             ]),
             default_tier: Some("strong".into()),
             tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into()],
+            tool_safe_tiers,
             adequacy,
             ..PolicyDefinition::default()
         },
@@ -1524,6 +1536,64 @@ pub async fn initialize_files_unlocked(
         ],
         conflicts: Vec::new(),
     })
+}
+
+fn route_supports_capability(
+    config: &bitrouter_sdk::config::Config,
+    route: &str,
+    capability: bitrouter_sdk::language_model::types::Capability,
+) -> bool {
+    let Some((provider_id, model_id)) = route.split_once(':') else {
+        return false;
+    };
+    config.providers.get(provider_id).is_some_and(|provider| {
+        provider.active
+            && (provider.model_supports_capability(model_id, capability)
+                || embedded_catalog_supports_capability(provider_id, model_id, capability))
+    })
+}
+
+fn embedded_catalog_supports_capability(
+    provider_id: &str,
+    model_id: &str,
+    capability: bitrouter_sdk::language_model::types::Capability,
+) -> bool {
+    let Ok(catalog) = serde_json::from_str::<serde_json::Value>(include_str!(
+        "../../../dist/registry/models.json"
+    )) else {
+        return false;
+    };
+    catalog
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|model| {
+                let canonical_match =
+                    model.get("id").and_then(serde_json::Value::as_str) == Some(model_id);
+                model
+                    .get("providers")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|providers| {
+                        providers.iter().any(|provider| {
+                            provider.get("provider").and_then(serde_json::Value::as_str)
+                                == Some(provider_id)
+                                && (canonical_match
+                                    || provider
+                                        .get("provider_model_id")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some(model_id))
+                                && provider
+                                    .get("capabilities")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|capabilities| {
+                                        capabilities
+                                            .iter()
+                                            .any(|item| item.as_str() == Some(capability.as_str()))
+                                    })
+                        })
+                    })
+            })
+        })
 }
 
 /// Compile a candidate from a caller-frozen database snapshot time.
@@ -3886,6 +3956,90 @@ presets:
         assert_eq!(policy.tiers["economy"], "moonshotai/kimi-k2.7-code");
         assert_eq!(policy.default_tier.as_deref(), Some("strong"));
         assert_eq!(policy.adequacy.explore_tier.as_deref(), Some("economy"));
+    }
+
+    #[tokio::test]
+    async fn initialize_marks_only_declared_tool_capable_tiers_safe() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"inherit_defaults: false
+providers:
+  strong-provider:
+    api_base: https://strong.example/v1
+    api_key: strong
+    models:
+      - id: strong-model
+        capabilities: [reasoning, tools]
+  economy-provider:
+    api_base: https://economy.example/v1
+    api_key: economy
+    models:
+      - id: economy-model
+        capabilities: [tools]
+presets:
+  auto:
+    model: strong-provider:strong-model
+"#,
+        )
+        .await?;
+
+        let update = initialize_files(
+            &config_path,
+            "auto",
+            "auto",
+            None,
+            "economy-provider:economy-model",
+        )
+        .await?;
+        let loaded = load(&update.path).await?;
+
+        assert_eq!(
+            loaded.document.policies["auto"].tool_safe_tiers,
+            ["strong", "economy"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn initialize_uses_embedded_cloud_capabilities_for_tool_safety() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"registry:
+  enabled: false
+providers:
+  openai-codex:
+    api_base: https://chatgpt.example/backend-api/codex
+    models:
+      - id: gpt-5.6-sol
+        capabilities: [reasoning, tools]
+  bitrouter:
+    api_base: https://api.bitrouter.example/v1
+presets:
+  auto:
+    model: openai-codex:gpt-5.6-sol
+"#,
+        )
+        .await?;
+
+        let update = initialize_files(
+            &config_path,
+            "auto",
+            "auto",
+            None,
+            "bitrouter:deepseek/deepseek-v4-flash-0731",
+        )
+        .await?;
+        let loaded = load(&update.path).await?;
+
+        assert_eq!(
+            loaded.document.policies["auto"].tool_safe_tiers,
+            ["strong", "economy"]
+        );
+        Ok(())
     }
 
     #[tokio::test]

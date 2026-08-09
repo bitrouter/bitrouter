@@ -36,6 +36,9 @@ use bitrouter::output::reports::daemon::{
 use bitrouter::output::reports::eval::EvalReport;
 use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
+use bitrouter::output::reports::optimization::{
+    OptimizationReviewReport, OptimizationSetupReport, OptimizationStatusReport,
+};
 use bitrouter::output::reports::policy::PolicyReport;
 use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
@@ -280,11 +283,11 @@ enum Command {
         #[arg(long)]
         optimize_success: Option<String>,
         /// Provider-qualified strong route for optimization onboarding.
-        #[arg(long, default_value = "openai-codex:gpt-5.6-sol")]
-        optimize_strong: String,
+        #[arg(long)]
+        optimize_strong: Option<String>,
         /// Provider-qualified economy route for optimization onboarding.
-        #[arg(long, default_value = "bitrouter:deepseek/deepseek-v4-flash-0731")]
-        optimize_economy: String,
+        #[arg(long)]
+        optimize_economy: Option<String>,
         /// Frozen normalized-showback price override. Repeat for unpriced
         /// subscription routes.
         #[arg(long = "optimize-normalized-price")]
@@ -1138,9 +1141,9 @@ struct OptimizeSetupArgs {
     /// Source BitRouter config used by the workflow.
     #[arg(long, default_value = "bitrouter.yaml")]
     source_config: PathBuf,
-    /// Exact workflow executable (no shell parsing).
+    /// Exact workflow executable (no shell parsing). Omit for project discovery.
     #[arg(long)]
-    workflow_command: String,
+    workflow_command: Option<String>,
     /// One exact workflow argument; repeat to preserve argv boundaries.
     #[arg(long, allow_hyphen_values = true)]
     workflow_arg: Vec<String>,
@@ -1160,12 +1163,12 @@ struct OptimizeSetupArgs {
     /// Preset passed to the workflow as `@preset`.
     #[arg(long, default_value = "auto")]
     preset: String,
-    /// Provider-qualified strong route used by the baseline.
+    /// Provider-qualified strong route. Omit to reuse @auto or prompt.
     #[arg(long)]
-    strong: String,
-    /// Provider-qualified economy route tested as the one-variable candidate.
+    strong: Option<String>,
+    /// Provider-qualified economy route. Omit to reuse @auto or prompt.
     #[arg(long)]
-    economy: String,
+    economy: Option<String>,
     /// Frozen normalized-showback price as
     /// provider:model=uncached,cache_read,cache_write,output. Repeat for
     /// subscription or otherwise unpriced routes.
@@ -1629,14 +1632,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_normalized_prices,
             optimize_preference,
         } => {
-            let optimize_normalized_prices = if optimize_normalized_prices.is_empty()
-                && optimize_strong == "openai-codex:gpt-5.6-sol"
+            let optimization = if optimize
+                || optimize_workflow_command.is_some()
+                || optimize_strong.is_some()
+                || optimize_economy.is_some()
+                || optimize_success.is_some()
+                || !optimize_workflow_input.is_empty()
+                || !optimize_normalized_prices.is_empty()
             {
-                vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()]
-            } else {
-                optimize_normalized_prices
-            };
-            let optimization = if optimize || optimize_workflow_command.is_some() {
                 Some(bitrouter::onboarding::OnboardingOptimization {
                     workflow_command: optimize_workflow_command.map(|command| {
                         std::iter::once(command)
@@ -3737,6 +3740,132 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
     Ok(())
 }
 
+fn read_optimization_prompt(prompt: &str) -> Result<String> {
+    use std::io::{BufRead, Write};
+
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    let read = std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("reading optimization setup input")?;
+    if read == 0 {
+        return Ok(String::new());
+    }
+    Ok(line.trim().to_string())
+}
+
+fn select_guided_workflow(
+    root: &Path,
+    executable: Option<String>,
+    arguments: Vec<String>,
+) -> Result<Vec<String>> {
+    use std::io::IsTerminal;
+
+    use bitrouter::optimization::discovery::GuidedWorkflow;
+
+    match bitrouter::optimization::discovery::resolve_guided_workflow(root, executable, arguments)?
+    {
+        GuidedWorkflow::Resolved { command, evidence } => {
+            eprintln!("  workflow: {evidence}");
+            Ok(command)
+        }
+        GuidedWorkflow::Choose(candidates) if std::io::stdin().is_terminal() => {
+            eprintln!("  Candidate agent workflows:");
+            for (index, candidate) in candidates.iter().enumerate() {
+                eprintln!(
+                    "    {}) {}  [{}]",
+                    index + 1,
+                    candidate.command.join(" "),
+                    candidate.evidence
+                );
+            }
+            let answer = read_optimization_prompt("  Select workflow [1]: ")?;
+            let selected = if answer.is_empty() {
+                1
+            } else {
+                answer
+                    .parse::<usize>()
+                    .context("workflow selection must be a candidate number")?
+            };
+            let candidate = candidates.get(selected.saturating_sub(1)).ok_or_else(|| {
+                anyhow::anyhow!("workflow selection {selected} is outside the candidate list")
+            })?;
+            Ok(candidate.command.clone())
+        }
+        GuidedWorkflow::Choose(candidates) => {
+            let choices = candidates
+                .iter()
+                .map(|candidate| format!("{} => {}", candidate.id, candidate.command.join(" ")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!(
+                "multiple workflow candidates were discovered ({choices}); rerun with --workflow-command and repeated --workflow-arg values"
+            )
+        }
+        GuidedWorkflow::Missing if std::io::stdin().is_terminal() => {
+            let raw = read_optimization_prompt(
+                "  Workflow argv as JSON (example: [\"npm\",\"run\",\"eval\"]): ",
+            )?;
+            let command: Vec<String> = serde_json::from_str(&raw)
+                .context("workflow command must be a JSON string array")?;
+            bitrouter::optimization::WorkflowCommand {
+                command: command.clone(),
+                inputs: Vec::new(),
+                timeout_secs: 1,
+            }
+            .validate()?;
+            Ok(command)
+        }
+        GuidedWorkflow::Missing => anyhow::bail!(
+            "no agent eval or benchmark entrypoint was discovered; pass --workflow-command and repeat --workflow-arg for exact argv"
+        ),
+    }
+}
+
+fn select_optimization_route(
+    label: &str,
+    requested: Option<String>,
+    existing: Option<String>,
+) -> Result<String> {
+    use std::io::IsTerminal;
+
+    if let Some(route) = requested.or(existing) {
+        return Ok(route);
+    }
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "no {label} route exists in @auto; pass --{label} with a provider-qualified model"
+        );
+    }
+    let route = read_optimization_prompt(&format!("  {label} route (provider:model): "))?;
+    if route.trim().is_empty() {
+        anyhow::bail!("{label} route is required");
+    }
+    Ok(route)
+}
+
+fn resolve_adaptive_publication_consent(
+    explicit: bool,
+    interactive: bool,
+    answer: Option<&str>,
+) -> Result<bool> {
+    if explicit {
+        return Ok(true);
+    }
+    if !interactive {
+        anyhow::bail!(
+            "policy runtime mode is frozen; rerun this publication with --enable-adaptive"
+        );
+    }
+    if answer.is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    {
+        return Ok(true);
+    }
+    anyhow::bail!("publication cancelled; @auto remains frozen and unchanged")
+}
+
 async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
     match action {
         OptimizeAction::Setup(args) => {
@@ -3758,9 +3887,43 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 evaluator_model,
                 evaluator_via_cloud,
             } = *args;
-            let operation_path =
-                bitrouter::optimization::OptimizationPaths::for_intent(config.clone())
-                    .operation_lock_target();
+            let setup_paths =
+                bitrouter::optimization::OptimizationPaths::for_intent(config.clone());
+            let project_root = setup_paths
+                .intent
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            if setup_paths.intent.exists() {
+                anyhow::bail!(
+                    "{} already exists; use `bitrouter optimize resolve` after editing version-controlled inputs",
+                    setup_paths.intent.display()
+                );
+            }
+            if setup_paths.lock.exists() {
+                anyhow::bail!(
+                    "{} already exists; refusing to overwrite",
+                    setup_paths.lock.display()
+                );
+            }
+            let source_config_path = if source_config.is_absolute() {
+                source_config.clone()
+            } else {
+                project_root.join(&source_config)
+            };
+            if !source_config_path.is_file() {
+                anyhow::bail!(
+                    "source config '{}' does not exist; run `bitrouter init --write-config` first",
+                    source_config_path.display()
+                );
+            }
+            let workflow_command =
+                select_guided_workflow(project_root, workflow_command, workflow_arg)?;
+            let (existing_strong, existing_economy) =
+                bitrouter::optimization::setup::existing_tier_routes(&source_config_path, &policy)
+                    .await?;
+            let strong = select_optimization_route("strong", strong, existing_strong)?;
+            let economy = select_optimization_route("economy", economy, existing_economy)?;
+            let operation_path = setup_paths.operation_lock_target();
             let _operation_lock =
                 bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
             let preference: bitrouter::optimization::OptimizationPreference = preference.into();
@@ -3773,9 +3936,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 bitrouter::optimization::setup::SetupOptimizationRequest {
                     intent_path: config,
                     source_config,
-                    workflow_command: std::iter::once(workflow_command)
-                        .chain(workflow_arg)
-                        .collect(),
+                    workflow_command,
                     workflow_inputs: workflow_input,
                     timeout_secs,
                     contract,
@@ -3792,20 +3953,28 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 },
             )
             .await?;
-            output.emit(&EvalReport {
-                action: "optimize.setup".into(),
-                data: serde_json::json!({
-                    "intent": outcome.paths.intent,
-                    "lock": outcome.paths.lock,
-                    "contract": outcome.contract_path,
-                    "active_policy_digest": outcome.lock.active_policy_digest,
-                    "evaluator": outcome.lock.evaluator,
-                    "strong": outcome.intent.strong,
-                    "economy": outcome.intent.economy,
-                    "normalized_price_overrides": outcome.intent.normalized_price_overrides,
-                    "preference": outcome.intent.preference,
-                    "latency": "observe_only",
-                }),
+            let evaluator_route = match outcome.lock.evaluator.route {
+                bitrouter::optimization::EvaluatorRoute::Cloud => "cloud",
+                bitrouter::optimization::EvaluatorRoute::Direct => "direct",
+            };
+            output.emit(&OptimizationSetupReport {
+                action: "optimize.setup",
+                model: "@auto",
+                intent: outcome.paths.intent.display().to_string(),
+                lock: outcome.paths.lock.display().to_string(),
+                contract: outcome.contract_path.display().to_string(),
+                workflow: outcome.intent.workflow.command.clone(),
+                strong: outcome.intent.strong,
+                economy: outcome.intent.economy,
+                evaluator: format!(
+                    "{} ({}, {evaluator_route})",
+                    outcome.lock.evaluator.agent, outcome.lock.evaluator.model
+                ),
+                evaluator_lock: Some(outcome.lock.evaluator),
+                normalized_price_overrides: outcome.intent.normalized_price_overrides,
+                preference: outcome.intent.preference,
+                active_policy_digest: outcome.lock.active_policy_digest,
+                latency: "observe_only",
             })?;
             Ok(())
         }
@@ -3980,10 +4149,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 &outcome.updated_lock,
             )
             .await?;
-            output.emit(&EvalReport {
-                action: "optimize.run".into(),
-                data: serde_json::to_value(outcome.report)?,
-            })?;
+            output.emit(&OptimizationReviewReport::for_run(
+                outcome.report,
+                source_config.policy.mode == config::PolicyRuntimeMode::Frozen,
+            ))?;
             Ok(())
         }
         OptimizeAction::Review { config, run } => {
@@ -3996,15 +4165,21 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 .latest_run
                 .as_ref()
                 .is_some_and(|latest| latest.published && !active);
-            let mut data = serde_json::to_value(report)?;
-            if let Some(object) = data.as_object_mut() {
-                object.insert("active".into(), serde_json::Value::Bool(active));
-                object.insert("rolled_back".into(), serde_json::Value::Bool(rolled_back));
-            }
-            output.emit(&EvalReport {
-                action: "optimize.review".into(),
-                data,
-            })?;
+            let source_raw = tokio::fs::read_to_string(&loaded.paths.source_config)
+                .await
+                .with_context(|| {
+                    format!(
+                        "reading source config {}",
+                        loaded.paths.source_config.display()
+                    )
+                })?;
+            let source_config = config::parse(&source_raw).context("parsing source config")?;
+            output.emit(&OptimizationReviewReport::new(
+                report,
+                active,
+                rolled_back,
+                source_config.policy.mode == config::PolicyRuntimeMode::Frozen,
+            ))?;
             Ok(())
         }
         OptimizeAction::Publish {
@@ -4091,13 +4266,27 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             } else {
                 source_raw.clone()
             };
-            let enable_adaptive =
-                cfg.policy.mode == config::PolicyRuntimeMode::Frozen && enable_adaptive;
-            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen && !enable_adaptive {
-                anyhow::bail!(
-                    "policy runtime mode is frozen; rerun this explicit publication with --enable-adaptive"
-                );
-            }
+            let enable_adaptive = if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                use std::io::IsTerminal;
+
+                let interactive = std::io::stdin().is_terminal();
+                let answer = if !enable_adaptive && interactive {
+                    eprintln!("  Publish reviewed candidate {} to @auto?", latest.run_id);
+                    eprintln!(
+                        "  This enables adaptive policy publication; rollback remains available from policy history."
+                    );
+                    Some(read_optimization_prompt("  Continue [y/N]: ")?)
+                } else {
+                    None
+                };
+                resolve_adaptive_publication_consent(
+                    enable_adaptive,
+                    interactive,
+                    answer.as_deref(),
+                )?
+            } else {
+                false
+            };
             let policy_path = bitrouter::policy_lock::resolve_path(&cfg, Some(config_path))
                 .ok_or_else(|| anyhow::anyhow!("cannot resolve source policy lock"))?;
             let _policy_lock = bitrouter::policy_lock::acquire_publication_lock(&policy_path)?;
@@ -4437,23 +4626,34 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             } else {
                 None
             };
-            output.emit(&EvalReport {
-                action: "optimize.status".into(),
-                data: serde_json::json!({
-                    "intent": loaded.paths.intent,
-                    "intent_digest": loaded.digest,
-                    "lock_active_policy_digest": lock.document.active_policy_digest,
-                    "actual_active_policy_digest": active.digest,
-                    "policy_mode": source_config.policy.mode,
-                    "lineage_consistent": intent_matches && active_matches,
-                    "latest_candidate_active": latest_active,
-                    "rolled_back": rolled_back,
-                    "repair_hint": repair_hint,
-                    "preference": loaded.intent.preference,
-                    "evaluator": lock.document.evaluator,
-                    "latest_run": lock.document.latest_run,
-                    "latency": "observe_only",
-                }),
+            let evaluator_route = match lock.document.evaluator.route {
+                bitrouter::optimization::EvaluatorRoute::Cloud => "cloud",
+                bitrouter::optimization::EvaluatorRoute::Direct => "direct",
+            };
+            let policy_mode = match source_config.policy.mode {
+                config::PolicyRuntimeMode::Frozen => "frozen",
+                config::PolicyRuntimeMode::Adaptive => "adaptive",
+            };
+            output.emit(&OptimizationStatusReport {
+                action: "optimize.status",
+                model: "@auto",
+                intent: loaded.paths.intent.display().to_string(),
+                intent_digest: loaded.digest,
+                lock_active_policy_digest: lock.document.active_policy_digest,
+                actual_active_policy_digest: active.digest,
+                policy_mode: policy_mode.into(),
+                lineage_consistent: intent_matches && active_matches,
+                latest_candidate_active: latest_active,
+                rolled_back,
+                repair_hint: repair_hint.map(String::from),
+                preference: loaded.intent.preference,
+                evaluator: format!(
+                    "{} ({}, {evaluator_route})",
+                    lock.document.evaluator.agent, lock.document.evaluator.model
+                ),
+                evaluator_lock: Some(lock.document.evaluator),
+                latest_run: lock.document.latest_run,
+                latency: "observe_only",
             })?;
             Ok(())
         }
@@ -6488,6 +6688,8 @@ mod tests {
     fn workflow_optimization_commands_parse_with_direct_judge_default() -> anyhow::Result<()> {
         use clap::Parser;
 
+        assert!(Cli::try_parse_from(["bitrouter", "optimize", "setup"]).is_ok());
+
         let setup = Cli::try_parse_from([
             "bitrouter",
             "optimize",
@@ -6542,6 +6744,44 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["bitrouter", "optimize", "rollback"]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn init_optimization_routes_have_no_model_specific_defaults() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let parsed = Cli::try_parse_from(["bitrouter", "init", "--optimize"])?;
+        match parsed.command {
+            Some(Command::Init {
+                optimize_strong,
+                optimize_economy,
+                ..
+            }) => {
+                assert!(optimize_strong.is_none());
+                assert!(optimize_economy.is_none());
+            }
+            _ => anyhow::bail!("expected init command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_publication_requires_explicit_or_interactive_consent() -> anyhow::Result<()> {
+        assert!(resolve_adaptive_publication_consent(true, false, None)?);
+        assert!(resolve_adaptive_publication_consent(
+            false,
+            true,
+            Some("yes")
+        )?);
+        assert!(resolve_adaptive_publication_consent(false, true, Some("n")).is_err());
+        let error = resolve_adaptive_publication_consent(false, false, None);
+        assert!(
+            error
+                .err()
+                .map(|value| value.to_string())
+                .is_some_and(|message| message.contains("--enable-adaptive"))
+        );
         Ok(())
     }
 

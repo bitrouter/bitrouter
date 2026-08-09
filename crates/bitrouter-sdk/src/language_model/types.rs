@@ -1062,7 +1062,7 @@ pub enum ToolChoice {
 /// A capability-aware [`RoutingTable`](crate::language_model::routing::RoutingTable)
 /// can read the set a request requires ([`Prompt::required_capabilities`]) and
 /// restrict the chain to providers advertising all of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].

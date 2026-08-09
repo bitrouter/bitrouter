@@ -624,7 +624,7 @@ async fn run_workflow_command_isolated(
     let (exit_code, timed_out) = match tokio::time::timeout(deadline, child.wait()).await {
         Ok(status) => {
             let exit_code = status.context("waiting for workflow program")?.code();
-            if workflow_process_group_has_live_members(child_pid).await? {
+            if !wait_for_workflow_process_group_exit(child_pid, Duration::from_secs(2)).await? {
                 terminate_workflow_tree(&mut child, child_pid)
                     .await
                     .context("terminating workflow background descendants")?;
@@ -785,6 +785,24 @@ impl Drop for WorkflowProcessGroupGuard {
 }
 
 #[cfg(not(windows))]
+async fn wait_for_workflow_process_group_exit(
+    child_pid: Option<u32>,
+    grace: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if !workflow_process_group_has_live_members(child_pid).await? {
+            return Ok(true);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep((deadline - now).min(Duration::from_millis(25))).await;
+    }
+}
+
+#[cfg(not(windows))]
 async fn workflow_process_group_has_live_members(child_pid: Option<u32>) -> Result<bool> {
     let Some(pid) = child_pid else {
         return Ok(false);
@@ -862,6 +880,12 @@ pub fn collect_variant_evidence(
 ) -> Result<VariantEvidence> {
     if !matches!(variant, "baseline" | "candidate") {
         anyhow::bail!("variant must be baseline or candidate");
+    }
+    if !usage.is_empty() && usage.iter().all(|record| record.error_code.is_some()) {
+        anyhow::bail!(
+            "{variant} produced no successful model request ({} failed); verify provider login and route health before optimizing",
+            usage.len()
+        );
     }
     let mut by_request = BTreeMap::new();
     for record in usage {
@@ -1551,6 +1575,28 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workflow_runner_allows_short_lived_descendants_to_drain() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let execution = run_workflow_command(WorkflowRunRequest {
+            workflow: &WorkflowCommand {
+                command: vec!["/bin/sh".into(), "-c".into(), "(sleep 0.05) &".into()],
+                inputs: Vec::new(),
+                timeout_secs: 2,
+            },
+            cwd: dir.path(),
+            env: &BTreeMap::new(),
+            maximum_output_bytes: 1024,
+        })
+        .await?;
+
+        assert_eq!(execution.exit_code, Some(0));
+        assert!(!execution.timed_out);
+        assert!(execution.elapsed >= Duration::from_millis(40));
+        Ok(())
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn process_group_listing_ignores_zombies_but_not_live_descendants() {
@@ -1664,10 +1710,33 @@ mod tests {
                 execution,
                 &[decision(&policy_digest)],
                 &[subject(&policy_digest)?],
-                &[missing_price],
+                &[missing_price.clone()],
             )
             .is_err()
         );
+
+        let mut failed_request = missing_price;
+        failed_request.error_code = Some("upstream_bad_gateway".into());
+        let error = collect_variant_evidence(
+            "baseline",
+            &policy_digest,
+            WorkflowExecution {
+                exit_code: Some(1),
+                timed_out: false,
+                elapsed: Duration::from_millis(500),
+                stdout: String::new(),
+                stderr: String::new(),
+                launches: 1,
+                cwd: "/tmp/project".into(),
+            },
+            &[decision(&policy_digest)],
+            &[subject(&policy_digest)?],
+            &[failed_request],
+        )
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("all-failed evidence unexpectedly succeeded"))?;
+        assert!(error.to_string().contains("no successful model request"));
+        assert!(!error.to_string().contains("normalized showback"));
         Ok(())
     }
 

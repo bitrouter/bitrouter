@@ -20,18 +20,19 @@ The primary flow is:
 
 ```text
 bitrouter init
-bitrouter optimize run
-bitrouter optimize review
-bitrouter optimize publish --enable-adaptive
+bitrouter optimize run --human
+bitrouter optimize review --human
+bitrouter optimize publish
 ```
 
-`bitrouter init` can create two version-controlled files after the user opts
+`bitrouter init` can create three version-controlled files after the user opts
 into workflow optimization:
 
 - `bitrouter.optimize.yaml`: human-authored intent, workflow command, success
   contract, route ladder, evaluator choice, and qualitative trade-off.
 - `bitrouter.optimize.lock.yaml`: resolved evaluator/runtime identities,
   content digests, active policy lineage, and latest candidate state.
+- `bitrouter.eval.md`: observable, user-editable workflow success contract.
 
 Private workflow output and model replies are stored under the BitRouter home,
 not in the source repository. The lock contains only identities, digests, and
@@ -205,11 +206,12 @@ inconclusive.
 `optimize publish` revalidates the candidate parent digest, optimization lock,
 Eval snapshot, and source config. It then delegates to the existing atomic
 policy/config publication and daemon reload path. A frozen project requires
-the explicit first-publication consent `--enable-adaptive`; setup never changes
-that safety mode. The transition is idempotently
+explicit first-publication consent: an attached TTY shows the reviewed run and
+asks for confirmation, while headless/CI use requires `--enable-adaptive`.
+Setup never changes that safety mode. The transition is idempotently
 recoverable if the process exits after the policy write but before the
-optimization-lock compare-and-swap. No interactive prompt is required, but
-publication is always a distinct command. `optimize rollback` restores an
+optimization-lock compare-and-swap. Publication is always a distinct command.
+`optimize rollback` restores an
 archived policy and changes the optimization lock's active digest in the same
 recoverable workflow, keeping the next experiment's parent lineage usable.
 
@@ -224,6 +226,13 @@ bitrouter optimize publish [--run ID] [--enable-adaptive] [--config FILE]
 bitrouter optimize rollback DIGEST [--config FILE] [--socket PATH]
 bitrouter optimize status [--config FILE]
 ```
+
+Interactive `setup` may omit workflow and route flags. It deterministically
+discovers repository-owned eval/benchmark package scripts and executable
+entrypoints, adopts a unique candidate, prompts on ambiguity, and reuses an
+existing `@auto` strong/economy ladder when present. If repository facts are
+insufficient it asks for exact argv/model ids; non-interactive execution fails
+before mutation and prints the required explicit flags.
 
 Headless setup accepts exact argv rather than a shell program:
 
@@ -246,6 +255,9 @@ which starts a fresh lineage.
 
 Controlled execution is Unix-only in this version. Windows setup fails before
 creating files until Job Object process-tree cleanup is implemented.
+An active progress guard is also rejected before mutation: the current exact
+two-tier experiment cannot preserve guard runtime semantics and never clears or
+reinterprets the guard as a convenience.
 
 ## Failure behavior
 
