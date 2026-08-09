@@ -616,6 +616,7 @@ pub async fn build_app_with_path(
             );
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
+            lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion

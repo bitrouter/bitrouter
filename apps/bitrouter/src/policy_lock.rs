@@ -14,7 +14,7 @@ use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
     TrajectoryConfig, validate_policy_table_config,
 };
-use bitrouter_sdk::language_model::{ModelSelector, PipelineContext};
+use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,7 +29,8 @@ use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::RouteProjection;
 use crate::workflow_state::predictive::{
-    PredictorContract, compiled_predictor_contract, compiled_scorecard_digest,
+    CanonicalPolicyProjection, PredictorContract, compiled_predictor_contract,
+    compiled_scorecard_digest,
 };
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
@@ -1901,6 +1902,30 @@ pub struct PolicyRuntime {
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
+#[derive(Debug)]
+struct PredictiveSingleTargetDispatch;
+
+/// Prevent a predictive named-policy decision from inheriting the SDK's
+/// generic cross-account fallback chain. Without an authoritative proof that a
+/// failed provider accepted no generation and incurred no charge, a semantic
+/// request may be dispatched to exactly one physical target.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PredictiveSingleTargetRouteHook;
+
+#[async_trait::async_trait]
+impl RouteHook for PredictiveSingleTargetRouteHook {
+    async fn resolve(
+        &self,
+        chain: &mut Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() {
+            chain.truncate(1);
+        }
+        Ok(())
+    }
+}
+
 impl PolicyRuntime {
     pub(crate) async fn new(
         config: &Config,
@@ -2169,6 +2194,7 @@ impl ModelSelector for PolicyRuntime {
             {
                 router.apply_continuation_adjustment(&mut decision, adjustment)?;
             }
+            let route_projection = decision.route_projection.clone();
             let selected = router.record_bound_policy_decision(
                 &correlated.request_id,
                 invocation.as_ref(),
@@ -2178,6 +2204,7 @@ impl ModelSelector for PolicyRuntime {
             );
             if let Some(model) = selected {
                 ctx.set_model(model);
+                mark_predictive_single_target(&route_projection, ctx);
             }
             ctx.insert_extension(Arc::new(correlated));
             return Ok(());
@@ -2189,6 +2216,7 @@ impl ModelSelector for PolicyRuntime {
         {
             router.apply_continuation_adjustment(&mut decision, adjustment)?;
         }
+        let route_projection = decision.route_projection.clone();
         let selected = router.record_bound_policy_decision(
             ctx.request_id(),
             invocation.as_ref(),
@@ -2198,8 +2226,18 @@ impl ModelSelector for PolicyRuntime {
         );
         if let Some(model) = selected {
             ctx.set_model(model);
+            mark_predictive_single_target(&route_projection, ctx);
         }
         Ok(())
+    }
+}
+
+fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
+    if matches!(
+        CanonicalPolicyProjection::parse_key(route_projection),
+        Some(CanonicalPolicyProjection::Predictive(_))
+    ) {
+        ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }
 

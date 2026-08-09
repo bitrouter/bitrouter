@@ -229,6 +229,195 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
 }
 
 #[tokio::test]
+async fn predictive_routes_do_not_fallback_to_a_second_account_after_upstream_failure() {
+    let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
+    #[derive(Clone, Copy)]
+    enum Failure {
+        ServiceUnavailable,
+        Timeout,
+        InvalidResponse,
+    }
+
+    for failure in [
+        Failure::ServiceUnavailable,
+        Failure::Timeout,
+        Failure::InvalidResponse,
+    ] {
+        let primary = MockServer::start().await;
+        let template = match failure {
+            Failure::ServiceUnavailable => ResponseTemplate::new(503),
+            Failure::Timeout => ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_secs(2))
+                .set_body_json(json!({"status": "completed"})),
+            Failure::InvalidResponse => {
+                ResponseTemplate::new(200).set_body_raw("{", "application/json")
+            }
+        };
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(template)
+            .mount(&primary)
+            .await;
+        let secondary = mock_chat_upstream().await;
+        let (mut config, config_path, config_dir) = template_config_with_mock(&primary.uri());
+        if matches!(failure, Failure::Timeout) {
+            config.upstream.timeouts.total_secs = Some(1);
+        }
+        let provider = config
+            .providers
+            .get_mut("mock-economy")
+            .expect("template economy provider exists");
+        provider.account_strategy = config::AccountStrategy::Failover;
+        provider.accounts = vec![
+            config::ProviderAccount {
+                api_key: "primary-key".into(),
+                api_base: primary.uri(),
+                label: "primary".into(),
+            },
+            config::ProviderAccount {
+                api_key: "secondary-key".into(),
+                api_base: secondary.uri(),
+                label: "secondary".into(),
+            },
+        ];
+        let (server, _, _config_dir) =
+            generalization_server_from_config(config, config_path, config_dir).await;
+        let instruction = "Read src/parser.rs and report the current error enum.";
+        let schema = json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        });
+        let cases = [
+            (
+                "/v1/chat/completions",
+                json!({
+                    "model": "@auto",
+                    "messages": [{"role": "user", "content": instruction}],
+                    "tools": [{"type": "function", "function": {
+                        "name": "read_file", "description": "Read one file",
+                        "parameters": schema
+                    }}]
+                }),
+            ),
+            (
+                "/v1/responses",
+                json!({
+                    "model": "@auto",
+                    "input": [{"type": "message", "role": "user", "content": instruction}],
+                    "tools": [{"type": "function", "name": "read_file",
+                        "description": "Read one file", "parameters": schema}]
+                }),
+            ),
+            (
+                "/v1/messages",
+                json!({
+                    "model": "@auto",
+                    "max_tokens": 64,
+                    "messages": [{"role": "user", "content": instruction}],
+                    "tools": [{"name": "read_file", "description": "Read one file",
+                        "input_schema": schema}]
+                }),
+            ),
+        ];
+
+        for (path, body) in cases {
+            let response = server.post(path).json(&body).await;
+            assert!(
+                response.status_code().is_server_error(),
+                "{path} must surface the selected account failure instead of retrying: {}",
+                response.status_code()
+            );
+        }
+
+        let primary_requests = primary
+            .received_requests()
+            .await
+            .expect("primary request journal");
+        let secondary_requests = secondary
+            .received_requests()
+            .await
+            .expect("secondary request journal");
+        assert_eq!(
+            primary_requests.len(),
+            3,
+            "one selected attempt per protocol"
+        );
+        assert_eq!(
+            secondary_requests.len(),
+            0,
+            "predictive selection must not retry an unproven second account"
+        );
+        for request in primary_requests {
+            let body: Value = serde_json::from_slice(&request.body).expect("forwarded JSON body");
+            assert!(body["input"].to_string().contains(instruction));
+            assert_eq!(body["tools"][0]["name"], "read_file");
+            assert_eq!(body["tools"][0]["description"], "Read one file");
+            assert_eq!(body["tools"][0]["parameters"], schema);
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_non_policy_routes_retain_generic_multi_account_fallback() {
+    let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
+    let primary = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&primary)
+        .await;
+    let secondary = mock_chat_upstream().await;
+    let (mut config, config_path, config_dir) = template_config_with_mock(&primary.uri());
+    let provider = config
+        .providers
+        .get_mut("mock-economy")
+        .expect("template economy provider exists");
+    provider.account_strategy = config::AccountStrategy::Failover;
+    provider.accounts = vec![
+        config::ProviderAccount {
+            api_key: "primary-key".into(),
+            api_base: primary.uri(),
+            label: "primary".into(),
+        },
+        config::ProviderAccount {
+            api_key: "secondary-key".into(),
+            api_base: secondary.uri(),
+            label: "secondary".into(),
+        },
+    ];
+    let (server, _, _config_dir) =
+        generalization_server_from_config(config, config_path, config_dir).await;
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": MOCK_ECONOMY_MODEL,
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .await
+        .assert_status_ok();
+
+    assert_eq!(
+        primary
+            .received_requests()
+            .await
+            .expect("primary request journal")
+            .len(),
+        1
+    );
+    assert_eq!(
+        secondary
+            .received_requests()
+            .await
+            .expect("secondary request journal")
+            .len(),
+        1,
+        "non-policy routes retain the SDK's explicit generic fallback contract"
+    );
+}
+
+#[tokio::test]
 async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
     let template = template_config();
@@ -1321,6 +1510,14 @@ fn native_cases() -> Vec<NativeCase> {
 
 async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture, TempDir) {
     let (cfg, config_path, config_dir) = template_config_with_mock(upstream);
+    generalization_server_from_config(cfg, config_path, config_dir).await
+}
+
+async fn generalization_server_from_config(
+    cfg: config::Config,
+    config_path: PathBuf,
+    config_dir: TempDir,
+) -> (TestServer, RealTraceCapture, TempDir) {
     let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
         .await
         .expect("app assembles");
