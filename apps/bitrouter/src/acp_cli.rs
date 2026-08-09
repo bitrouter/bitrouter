@@ -49,7 +49,6 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use bitrouter_substrate::engine::LaunchOptions;
 use bitrouter_substrate::telemetry::RequestCompleted;
 use bitrouter_substrate::translate::SessionUpdateKind;
-use bitrouter_substrate::worktree::WorktreeSpec;
 
 use crate::paths::ConfigSource;
 
@@ -81,7 +80,7 @@ pub struct SpawnContext<'a> {
     pub config: Config,
     /// The agent id to launch (catalog id or configured entry).
     pub agent_id: &'a str,
-    /// Session options (worktree, turn timeout).
+    /// Session options (turn timeout).
     pub options: LaunchOptions,
     /// The routing decision (via-daemon by default, or `--direct`).
     pub routing: RoutingOptions,
@@ -169,8 +168,8 @@ impl RoutingError {
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
 /// unroutable harness — each warned to stderr). Fails fast — before the
-/// caller creates any worktree or record — on an unreachable
-/// daemon or a missing required credential.
+/// caller creates any session record — on an unreachable daemon or a missing
+/// required credential.
 pub async fn apply_routing(
     source: &ConfigSource,
     config: &mut Config,
@@ -534,8 +533,7 @@ pub async fn spawn_check(
 /// **stdio** until the manager disconnects.
 ///
 /// Config is taken by value (already loaded by the caller); `options` carries
-/// the worktree spec and per-turn timeout resolved from the CLI flags (see
-/// [`launch_options`]).
+/// the per-turn timeout resolved from the CLI flags (see [`launch_options`]).
 pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let SpawnContext {
         source,
@@ -568,9 +566,9 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
     let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
 
-    // No manager left: shut the session down deliberately so the worktree
-    // policy is honored (same semantics as `prompt`). Once serving ends, the
-    // forwarding tasks have released their clones, so we are the sole owner.
+    // No manager left: shut the session down deliberately so its record is
+    // settled (same semantics as `prompt`). Once serving ends, the forwarding
+    // tasks have released their clones, so we are the sole owner.
     match Arc::try_unwrap(session) {
         Ok(session) => session
             .shutdown()
@@ -619,7 +617,7 @@ where
         routing,
     } = ctx;
     // Route by default; fail fast with a single structured NDJSON `error`
-    // line BEFORE any session side effect (no worktree/record).
+    // line BEFORE any session side effect (no record written).
     let via = match apply_routing(source, &mut config, agent_id, &routing).await {
         Ok(via) => via,
         Err(e) => {
@@ -840,7 +838,7 @@ where
 // ── sessions ──────────────────────────────────────────────────────────────────
 
 /// List the session records under the current repo's `.bitrouter/sessions/`,
-/// newest first: short record id, agent, status, age, and worktree.
+/// newest first: short record id, agent, status, and age.
 ///
 /// A record left `running` by a substrate process that died without shutting
 /// down is shown as `dead` (its pid no longer exists) rather than trusted.
@@ -862,7 +860,7 @@ where
     records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
 
     let now = now_unix();
-    let mut buf = String::from("RECORD    AGENT             STATUS   AGE      WORKTREE\n");
+    let mut buf = String::from("RECORD    AGENT             STATUS   AGE\n");
     for r in records {
         let status = match r.status {
             RecordStatus::Exited => "exited",
@@ -870,13 +868,8 @@ where
             RecordStatus::Running => "dead",
         };
         let short_id: String = r.record_id.chars().take(8).collect();
-        let worktree = r
-            .worktree
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "-".to_string());
         buf.push_str(&format!(
-            "{short_id:<9} {agent:<17} {status:<8} {age:<8} {worktree}\n",
+            "{short_id:<9} {agent:<17} {status:<8} {age}\n",
             agent = r.agent_id,
             age = format_age(now.saturating_sub(r.started_at)),
         ));
@@ -1009,20 +1002,9 @@ fn drain_telemetry_record(r: RequestCompleted) {
 }
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
-/// `--worktree`/`--rm-worktree` (retention is the default — removal destroys
-/// the agent's uncommitted work, so it is strictly opt-in) and
 /// `--turn-timeout <secs>`.
-pub fn launch_options(
-    worktree: Option<&str>,
-    rm_worktree: bool,
-    turn_timeout_secs: Option<u64>,
-) -> LaunchOptions {
+pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     LaunchOptions {
-        worktree: worktree.map(|name| WorktreeSpec {
-            name: name.to_string(),
-            branch: None,
-            remove_on_shutdown: rm_worktree,
-        }),
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
         ..Default::default()
     }

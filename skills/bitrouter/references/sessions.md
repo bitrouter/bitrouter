@@ -4,7 +4,7 @@ How BitRouter's per-session substrate works — one process, one session, one ag
 
 ## Substrate vs manager framing
 
-**Substrate = mechanism (one session).** `bitrouter acp serve|prompt` runs one stateful ACP session against one agent: spawn the upstream, drive turns (serialized), stream updates, broker permissions, optionally own a git worktree. One substrate process = one session = one agent.
+**Substrate = mechanism (one session).** `bitrouter acp serve|prompt` runs one stateful ACP session against one agent: spawn the upstream, drive turns (serialized), stream updates, broker permissions. One substrate process = one session = one agent.
 
 **Manager = orchestration (N sessions).** The GUI, an AI manager-agent, or any other orchestrator coordinates multiple substrate processes. Each manager spawns one `bitrouter acp serve --agent <id>` process per session; the substrate never knows about other sessions.
 
@@ -12,12 +12,11 @@ How BitRouter's per-session substrate works — one process, one session, one ag
 
 ```bash
 # Expose one session as a vanilla ACP Agent over stdio (manager-driven)
-bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] \
-  [--turn-timeout SECS] [--config PATH]
+bitrouter acp serve --agent <id> [--turn-timeout SECS] [--config PATH]
 
 # One-shot headless: launch, send one prompt, stream NDJSON output, exit
-bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] \
-  [--turn-timeout SECS] [--no-wait] [--config PATH] <text>
+bitrouter acp prompt --agent <id> [--turn-timeout SECS] [--no-wait] \
+  [--config PATH] <text>
 
 # List this repo's session records (.bitrouter/sessions/), newest first
 bitrouter acp sessions
@@ -42,13 +41,9 @@ Each line is a self-describing JSON object with a `type` field (snake_case):
 | `result` | Terminal line — carries `stop_reason` (ACP wire spelling, e.g. `"end_turn"`) |
 | `submitted` | Only with `--no-wait` — emitted after enqueue, then the process exits |
 
-## Worktrees: retained by default
-
-`--worktree <name>` provisions `.bitrouter/worktrees/<name>` — created with a same-named branch, or **reused** when the worktree already exists (attaching to an existing branch instead of failing). At shutdown the worktree is **retained** (it holds the agent's work; the path is logged to stderr). `--rm-worktree` opts in to removal, which destroys uncommitted work; a pre-existing (reused) worktree is never removed. `serve` and `prompt` share these semantics.
-
 ## Session records
 
-Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, worktree path, **branch + `base_ref`** (the base-repo `HEAD` a newly created worktree branch was cut from — the durable diff/merge base; absent when an existing branch/worktree was attached), pid, start/end timestamps, status — and shutdown settles it to `exited`. Records are written **atomically** (temp + rename). `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown). The `.bitrouter/` state dir is created **self-ignoring** (a `.gitignore` containing `*`, cargo-style), so records never land in version control by accident.
+Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, pid, start/end timestamps, status — and shutdown settles it to `exited`. Records are written **atomically** (temp + rename). `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown). The `.bitrouter/` state dir is created **self-ignoring** (a `.gitignore` containing `*`, cargo-style), so records never land in version control by accident.
 
 ## One agent per session (D8)
 
@@ -70,7 +65,7 @@ Each session carries three identity fields:
 
 ## Vanilla ACP, no extensions (D11)
 
-The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. There are no `_conductor/*` extensions. Agent and worktree are launch-time arguments, not wire methods; the manager chooses the agent by spawning the right command.
+The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. There are no `_conductor/*` extensions. The agent is a launch-time argument, not a wire method; the manager chooses the agent by spawning the right command.
 
 Fidelity guarantees on that wire:
 

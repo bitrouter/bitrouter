@@ -41,7 +41,7 @@ BitRouter has two agent-launching surfaces that grew independently:
   `ANTHROPIC_AUTH_TOKEN`, Codex `-c` provider overrides), daemon auto-start,
   install-on-missing, auth precedence, exit cost summary.
 - `bitrouter acp serve|prompt` — launches a **headless ACP session** via the
-  substrate (records, worktrees, OTel spans), but
+  substrate (records, OTel spans), but
   its LLM traffic goes wherever the harness's own config points — **not**
   through the daemon (#672).
 
@@ -66,7 +66,7 @@ daemon:
 ```
 human
  └─ bitrouter launch claude            # native TUI, env-wrapped
-     └─ (agent runs) bitrouter spawn codex -p "…"   # ACP session, worktree, NDJSON
+     └─ (agent runs) bitrouter spawn codex -p "…"   # ACP session, NDJSON
          └─ bitrouter spawn gemini -p "…"           # ACP all the way down
 ```
 
@@ -121,7 +121,7 @@ bitrouter spawn <agent> --serve                        # ACP over stdio (GUI / m
 bitrouter spawn <agent> --check                        # preflight only, no launch
 
 # shared session flags (carried over from `acp serve|prompt` unchanged):
-  [--worktree NAME [--rm-worktree]] [--turn-timeout SECS] [-c CONFIG]
+  [--turn-timeout SECS] [-c CONFIG]
 
 # routing flags (new):
   [--direct]              # do NOT inject routing env — agent talks to its provider directly
@@ -231,8 +231,8 @@ When `spawn` launches a session and routing is not disabled:
    **fails fast** when the daemon is definitively unreachable after
    auto-start is exhausted (§8) — a routed sub-agent without a daemon is a
    guaranteed-dead session, and the caller is a program, not a watching
-   human. The probe runs **before** any session side effect (worktree,
-   record, transcript). An ambiguous probe (reachable but the control
+   human. The probe runs **before** any session side effect (record,
+   transcript). An ambiguous probe (reachable but the control
    exchange errored) counts as up, same as `ensure_local_daemon`'s existing
    stance, so only a definitively-dead endpoint blocks a spawn.
 3. **Injection**, per the harness's `Routing` variant: an env overlay
@@ -374,8 +374,7 @@ it ships as a fast-follow. Until then pi spawns with a
 > spawn: direct-with-note like opencode/pi; exporting the synthesized env
 > manually routes both (verified live: `pong` through the daemon in all
 > four facets). OpenClaw caveat: gateway sessions are workspace-scoped via
-> `agents add --workspace`, not process-cwd-scoped — per-worktree agent
-> provisioning is the follow-up for review-queue isolation.
+> `agents add --workspace`, not process-cwd-scoped.
 
 ### 6.5 ACP-native gateway auth (noted for phase 2)
 
@@ -410,7 +409,7 @@ Exit non-zero on any fail, same reporting shape as `SpawnCheckReport`.
   (`ensure_local_daemon`, unchanged). If the daemon is still definitively
   unreachable — auto-start failed, `--no-start`, or a remote `--base-url`
   nobody can start — spawn **fails fast, before any side effect** (no
-  worktree, no record, no npx fetch):
+  record, no npx fetch):
   - `-p` mode: the only stdout line is
     `{"type":"error","code":"daemon_unreachable","via":"http://127.0.0.1:4356","hint":"bitrouter start, or pass --direct"}`,
     exit non-zero.
@@ -529,7 +528,7 @@ Per CLAUDE.md rules, in the same change:
   structured `error` line shape for `daemon_unreachable` / `auth_required`.
 - **Integration (fail-fast ordering)**: daemon definitively down +
   `--no-start` → spawn exits non-zero with the single `error` NDJSON line
-  and **no** worktree or record is created (assert `.bitrouter/` untouched);
+  and **no** record is created (assert `.bitrouter/` untouched);
   `--direct` under the same conditions launches.
 - **Integration** (`apps/bitrouter/tests/acp.rs` pattern): stub ACP agent
   script that echoes its env → assert injected vars present and overriding

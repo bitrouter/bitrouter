@@ -464,13 +464,6 @@ enum Command {
         /// Never auto-start a local daemon when none is running — fail fast.
         #[arg(long)]
         no_start: bool,
-        /// Provision (or reuse) a git worktree for the session.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends (only one this session
-        /// created). Off by default — removal discards uncommitted work.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
@@ -1353,16 +1346,6 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists). When
-        /// omitted the session runs in the current directory.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1395,15 +1378,6 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists).
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1704,8 +1678,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             model,
             base_url,
             no_start,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             result_schema,
@@ -1771,11 +1743,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     std::process::exit(report.exit_code());
                 }
             } else if serve {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
                     config: cfg,
@@ -1785,11 +1753,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 };
                 bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 // A malformed schema fails fast, before any session side effect.
                 let contract = result_schema
                     .as_deref()
@@ -5192,8 +5156,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
     match cmd {
         AcpCmd::Serve {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             direct,
             base_url,
@@ -5203,8 +5165,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -5222,8 +5183,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         }
         AcpCmd::Prompt {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             direct,
@@ -5235,8 +5194,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,

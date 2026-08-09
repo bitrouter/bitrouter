@@ -15,7 +15,7 @@
 //!   upstream `auth_methods` are **not** relayed (we answer `authenticate`
 //!   with method-not-found).
 //! - `session/new` → opens the upstream session, relaying the manager's `cwd`
-//!   (the session's launch-time worktree wins when set) and `mcpServers`
+//!   and `mcpServers`
 //!   **verbatim** — this is how a manager provides fs/terminal-style tooling
 //!   in the v2-aligned model (client-side MCP servers, not the removed
 //!   `fs/*`/`terminal/*` surface). Returns the session's `record_id` as the
@@ -232,7 +232,7 @@ fn serve_on(
         // ── session/new ─────────────────────────────────────────────────────
         .on_receive_request(
             // Opens the upstream session, relaying the manager's cwd +
-            // mcpServers (the launch-time worktree wins over cwd). For a
+            // mcpServers. For a
             // session that is already open — the immediate-open launch path,
             // or a repeated session/new — this is a no-op that answers with
             // the same stable record_id. Driven off the dispatch path: the
@@ -433,8 +433,8 @@ mod tests {
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 
     /// Launch a real [`Session`] whose upstream agent is a bash ACP stub running
-    /// `stub`. Shared by the duplex `serve_on`↔client tests below. No worktree is
-    /// created, so the caller just drops the returned `Arc` to tear down.
+    /// `stub`. Shared by the duplex `serve_on`↔client tests below. The caller
+    /// just drops the returned `Arc` to tear down.
     #[cfg(unix)]
     async fn launch_stub_session(stub: &str) -> (Arc<Session>, tempfile::TempDir) {
         use std::collections::HashMap;
@@ -576,8 +576,8 @@ mod tests {
                 agent.abort();
                 let _ = agent.await;
 
-                // No worktree (None) → nothing on disk to clean. Dropping all
-                // references lets the upstream child be reaped.
+                // Nothing on disk to clean. Dropping all references lets the
+                // upstream child be reaped.
                 drop(session);
             })
             .await;
