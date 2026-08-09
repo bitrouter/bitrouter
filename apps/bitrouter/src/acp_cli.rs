@@ -231,7 +231,7 @@ pub async fn apply_routing(
     if !harness.env_args_routable() {
         eprintln!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
-             (the `bitrouter tui` orchestrator facet does); launching direct",
+             (`bitrouter launch` does); launching direct",
             harness.id
         );
         warn_model_dropped("the harness routes only in the interactive facet");
@@ -399,7 +399,7 @@ pub async fn spawn_check(
                     "agent",
                     SpawnCheckStatus::Fail,
                     format!(
-                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter tui --agent {}`",
+                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter launch --agent {}`",
                         h.interactive_binary.unwrap_or(agent_id)
                     ),
                 ));

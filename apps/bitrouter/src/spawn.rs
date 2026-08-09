@@ -104,7 +104,7 @@ pub struct AgentSpec {
 /// Resolve a `bitrouter launch --agent` value to its catalog harness. Accepts
 /// the interactive binary name (`claude`, `codex`, `opencode`, `pi`, `hermes`,
 /// `openclaw`, `grok`, `agy`) and the catalog id (`antigravity`, `claude-acp`,
-/// …) — the same set `bitrouter tui --agent` takes. Errors list what is
+/// …). Errors list what is
 /// available.
 pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
     crate::harness::by_interactive_binary(id)

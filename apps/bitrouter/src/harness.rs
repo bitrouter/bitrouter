@@ -106,7 +106,7 @@ pub enum Routing {
     /// (`model.provider: custom` + a loopback `base_url` — hermes trusts
     /// loopback custom endpoints) in a per-launch dir, points `HERMES_HOME`
     /// at it, and passes the credential via `CUSTOM_API_KEY`. The same file
-    /// carries the default model and `mcp_servers` (fleet bridge).
+    /// carries the default model and `mcp_servers` (the gateway servers).
     /// Interactive facet only; headless spawn launches direct with a note
     /// (hermes then uses the user's own `~/.hermes` provider).
     HermesHome,
@@ -566,7 +566,7 @@ impl Harness {
             }
             // hermes: synthesize an isolated `HERMES_HOME` whose config.yaml
             // routes via a `custom` loopback provider (hermes trusts loopback
-            // custom endpoints) and carries the fleet MCP server; the
+            // custom endpoints) and carries the injected MCP servers; the
             // credential rides `CUSTOM_API_KEY`. The file is written as JSON
             // — hermes parses config.yaml with a YAML 1.2 loader, and JSON
             // is a YAML subset — so no YAML serializer dependency is needed.
@@ -701,12 +701,11 @@ impl Harness {
     }
 }
 
-/// An MCP server to inject into an orchestrator harness — the TUI's fleet
-/// bridge plus the gateway servers (`bitrouter_tools` / `bitrouter_skills`,
-/// see `crate::gateways`).
+/// An MCP server to inject into a launched harness — the gateway servers
+/// (`bitrouter_tools` / `bitrouter_skills`, see `crate::gateways`).
 #[derive(Debug, Clone)]
 pub struct McpServer {
-    /// Server name as the harness will list it (e.g. `bitrouter_fleet`).
+    /// Server name as the harness will list it (e.g. `bitrouter_tools`).
     pub name: String,
     /// How the harness dials it.
     pub transport: McpTransport,
@@ -1118,19 +1117,14 @@ mod tests {
         assert!(by_id("codex-acp").unwrap().env_args_routable());
     }
 
-    // ── Orchestrator overlays (TUI facet). ──
+    // ── Launch overlays (config synthesis + MCP injection). ──
 
     fn mcp() -> McpServer {
         McpServer {
-            name: "bitrouter_fleet".into(),
+            name: "bitrouter_stdio".into(),
             transport: McpTransport::Stdio {
                 command: "/bin/bitrouter".into(),
-                args: vec![
-                    "mcp".into(),
-                    "serve".into(),
-                    "--backend".into(),
-                    "fleet".into(),
-                ],
+                args: vec!["mcp".into(), "serve".into()],
             },
         }
     }
@@ -1160,10 +1154,10 @@ mod tests {
                 .expect("json");
         // Stdio entry: bare command/args.
         assert_eq!(
-            config["mcpServers"]["bitrouter_fleet"]["command"],
+            config["mcpServers"]["bitrouter_stdio"]["command"],
             "/bin/bitrouter"
         );
-        assert_eq!(config["mcpServers"]["bitrouter_fleet"]["args"][3], "fleet");
+        assert_eq!(config["mcpServers"]["bitrouter_stdio"]["args"][1], "serve");
         // HTTP entry: explicit type (a url without type is a hard error in
         // Claude Code) plus the auth header as an object.
         let tools = &config["mcpServers"]["bitrouter_tools"];
@@ -1183,15 +1177,13 @@ mod tests {
             .expect("overlay");
         assert!(
             o.args
-                .contains(&"mcp_servers.bitrouter_fleet.command=\"/bin/bitrouter\"".to_string()),
+                .contains(&"mcp_servers.bitrouter_stdio.command=\"/bin/bitrouter\"".to_string()),
             "{:?}",
             o.args
         );
         assert!(
-            o.args.contains(
-                &"mcp_servers.bitrouter_fleet.args=[\"mcp\",\"serve\",\"--backend\",\"fleet\"]"
-                    .to_string()
-            ),
+            o.args
+                .contains(&"mcp_servers.bitrouter_stdio.args=[\"mcp\",\"serve\"]".to_string()),
             "{:?}",
             o.args
         );
@@ -1240,7 +1232,7 @@ mod tests {
         assert_eq!(config["model"]["base_url"], "http://127.0.0.1:4356/v1");
         assert_eq!(config["model"]["default"], "supergrok:grok-4.5");
         assert_eq!(
-            config["mcp_servers"]["bitrouter_fleet"]["command"],
+            config["mcp_servers"]["bitrouter_stdio"]["command"],
             "/bin/bitrouter"
         );
         // HTTP entry: url presence selects the transport; auth is a header.
@@ -1320,9 +1312,9 @@ mod tests {
         assert!(config["provider"]["bitrouter"]["models"]["x-ai/grok-4.5"].is_object());
         // The MCP bridge rides the same file, command+args folded into one
         // invocation array.
-        assert_eq!(config["mcp"]["bitrouter_fleet"]["type"], "local");
+        assert_eq!(config["mcp"]["bitrouter_stdio"]["type"], "local");
         assert_eq!(
-            config["mcp"]["bitrouter_fleet"]["command"][0],
+            config["mcp"]["bitrouter_stdio"]["command"][0],
             "/bin/bitrouter"
         );
         // HTTP entry: opencode's remote type with the auth header.
