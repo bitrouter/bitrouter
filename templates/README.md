@@ -6,7 +6,7 @@ your own traffic before tuning it further.
 
 Available templates:
 
-- [`auto-router`](./auto-router/) — generic `@auto` / `@auto:cost` routing
+- [`auto-router`](./auto-router/) — generic `bitrouter/auto` / `bitrouter/auto:cost` routing
   with GPT-5.6 as the strong default and DeepSeek V4 Pro for normal mechanical
   trace projections.
 

@@ -1040,6 +1040,7 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
                     model.id
                 ));
             }
+            reject_reserved_namespace(&model.id, "registry/models", &mut issues);
             if let Some((org, _)) = model.id.split_once('/')
                 && Some(org) != stem
             {
@@ -1068,6 +1069,27 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
     }
     advisories.sort();
     Ok(advisories)
+}
+
+/// BitRouter's own model namespace — the `bitrouter/` in `bitrouter/auto`.
+///
+/// Stage-0 resolution claims this whole prefix and resolves it locally, so a
+/// catalog entry underneath it could never be reached by a request: the router
+/// answers first. Keeping the namespace empty here is the other half of that
+/// bargain, and it keeps the reserved slugs meaning one thing whether a caller
+/// is talking to a local daemon or to BitRouter Cloud.
+const RESERVED_MODEL_NAMESPACE: &str = "bitrouter/";
+
+/// Reject a model id that lands in the reserved namespace. Applied to both the
+/// curated catalog and provider-declared models, because a provider may serve
+/// ids beyond the catalog and those are otherwise only advisory.
+fn reject_reserved_namespace(model_id: &str, context: &str, issues: &mut Vec<String>) {
+    if model_id.starts_with(RESERVED_MODEL_NAMESPACE) {
+        issues.push(format!(
+            "{context}: model '{model_id}' uses the reserved '{RESERVED_MODEL_NAMESPACE}' \
+             namespace, which BitRouter resolves locally and no provider may declare"
+        ));
+    }
 }
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
@@ -1236,6 +1258,10 @@ fn validate_provider<'a>(
                 model.id, model.provider_model_id
             ));
         }
+        // A provider may serve ids beyond the catalog, so the reserved
+        // namespace has to be rejected here too — the advisory above would
+        // otherwise let one through without failing validation.
+        reject_reserved_namespace(&model.id, &file, issues);
         if let Some(protocols) = &model.api_protocol {
             validate_protocol_list(protocols, &file, "models.api_protocol", issues);
         }

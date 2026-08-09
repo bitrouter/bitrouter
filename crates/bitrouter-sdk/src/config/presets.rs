@@ -1,7 +1,9 @@
-//! Stage-0 model-name resolution: stripping `@preset` / `:variant` and deriving
-//! the clean model name + `RoutingPrefs` + prompt body overrides.
+//! Stage-0 model-name resolution: stripping `bitrouter/<slug>` / `@preset` /
+//! `:variant` and deriving the clean model name + `RoutingPrefs` + prompt body
+//! overrides.
 //!
-//! A request `model` string composes as `[@preset]base[:variant]`:
+//! A request `model` string composes as `[bitrouter/slug|@preset]base[:variant]`:
+//! - `bitrouter/auto` — the public spelling of a BitRouter-owned routing model;
 //! - `@careful` — a preset (its `model:` supplies the base);
 //! - `gpt-5:free` — a base model + a variant;
 //! - `@careful:free` — both.
@@ -12,6 +14,22 @@
 //!
 //! Validation: an unknown `@preset` is a hard 400; an unknown `:variant` is a
 //! passthrough (not stripped).
+//!
+//! # The reserved `bitrouter/` namespace
+//!
+//! `bitrouter/<slug>` follows the `vendor/auto` convention the gateway
+//! ecosystem already uses, so a caller can swap one segment of an existing
+//! `.../auto` model id and keep the rest of their config. The vendor segment
+//! names the *router being addressed*, not the token destination — a
+//! `bitrouter/auto` request is still fulfilled by whichever upstream provider
+//! the bound policy selects.
+//!
+//! Because the segment names BitRouter itself, this resolver claims the **whole
+//! prefix**: an unrecognised slug is a 400 here rather than a 404 from a
+//! provider lookup further down the pipeline. The registry is held to the other
+//! side of that bargain — `dist-helper registry validate` rejects any catalog
+//! model id under `bitrouter/`, so the namespace can never be shadowed by a
+//! provider's physical model.
 
 use std::collections::HashMap;
 
@@ -24,6 +42,55 @@ use crate::language_model::routing::RoutingPrefs;
 // which must stay available without the `config_file` feature. Re-exported
 // here so callers reading the config still find it under its old path.
 pub use crate::language_model::routing::PromptOverrides;
+
+/// The reserved BitRouter model namespace — the `bitrouter/` in
+/// `bitrouter/auto`. Everything under it is resolved by BitRouter itself and
+/// never reaches a provider lookup.
+pub const RESERVED_NAMESPACE: &str = "bitrouter/";
+
+/// The public model slug for policy-driven automatic routing.
+pub const AUTO_SLUG: &str = "bitrouter/auto";
+
+/// Whether `model` addresses the reserved BitRouter namespace. Callers that
+/// classify a model string — "is this already an explicit route?", "is this a
+/// concrete upstream model id?" — must treat the namespace like `@preset`: it
+/// names a BitRouter routing feature, not something a provider can serve.
+pub fn is_reserved(model: &str) -> bool {
+    model.starts_with(RESERVED_NAMESPACE)
+}
+
+/// What a slug under the reserved namespace addresses.
+enum ReservedSlug {
+    /// Resolved here, through the named preset's model and policy binding.
+    Preset(&'static str),
+    /// Reserved, but rewritten by an ingress transform before Stage 0 runs —
+    /// so reaching this resolver means the feature is unconfigured.
+    IngressAlias { requires: &'static str },
+}
+
+/// Classify a slug under the reserved namespace. `None` is an unknown slug.
+fn reserved_slug(slug: &str) -> Option<ReservedSlug> {
+    match slug {
+        "auto" => Some(ReservedSlug::Preset("auto")),
+        "fusion" => Some(ReservedSlug::IngressAlias {
+            requires: "server_tools.fusion",
+        }),
+        _ => None,
+    }
+}
+
+/// The preset a reserved slug addresses, or a 400 naming what went wrong.
+fn reserved_preset(slug: &str) -> Result<&'static str> {
+    match reserved_slug(slug) {
+        Some(ReservedSlug::Preset(preset)) => Ok(preset),
+        Some(ReservedSlug::IngressAlias { requires }) => Err(BitrouterError::bad_request(format!(
+            "'{RESERVED_NAMESPACE}{slug}' requires the `{requires}` config section"
+        ))),
+        None => Err(BitrouterError::bad_request(format!(
+            "unknown BitRouter model '{RESERVED_NAMESPACE}{slug}'"
+        ))),
+    }
+}
 
 /// The result of Stage-0 resolution.
 #[derive(Debug, Clone)]
@@ -77,19 +144,40 @@ pub fn resolve_presets(
         _ => (raw_model, None),
     };
 
-    // 2. A leading `@` marks the head as a preset reference.
-    let (preset_name, base_from_head) = match head.strip_prefix('@') {
-        Some(name) => (Some(name), None),
-        None => (None, Some(head)),
+    // 2. A leading `@` marks the head as a preset reference; the reserved
+    //    `bitrouter/` namespace is the public spelling of the same thing. The
+    //    `bitrouter:` colon form is a near-miss worth catching here — it would
+    //    otherwise reach Strategy 1 and be dispatched to the BitRouter Cloud
+    //    provider as an upstream model id it does not serve.
+    let (preset_name, base_from_head, reserved) = match head.strip_prefix('@') {
+        Some(name) => (Some(name), None, false),
+        None => match head.strip_prefix(RESERVED_NAMESPACE) {
+            Some(slug) => (Some(reserved_preset(slug)?), None, true),
+            None => match head.strip_prefix("bitrouter:") {
+                Some(slug) if reserved_slug(slug).is_some() => {
+                    return Err(BitrouterError::bad_request(format!(
+                        "'{head}' is not a provider route; use '{RESERVED_NAMESPACE}{slug}'"
+                    )));
+                }
+                _ => (None, Some(head), false),
+            },
+        },
     };
 
-    // 3. An unknown preset is a hard error: 400.
+    // 3. An unknown preset is a hard error: 400. A reserved slug resolves to a
+    //    preset the operator has to have configured, so its miss reports the
+    //    missing binding rather than an unknown name the caller never typed.
     let preset: Option<&PresetConfig> = match preset_name {
-        Some(name) => Some(
-            presets
-                .get(name)
-                .ok_or_else(|| BitrouterError::bad_request(format!("unknown preset '@{name}'")))?,
-        ),
+        Some(name) => Some(presets.get(name).ok_or_else(|| {
+            if reserved {
+                BitrouterError::bad_request(format!(
+                    "'{RESERVED_NAMESPACE}{name}' needs a preset named '{name}' bound to a \
+                     routing policy; run `bitrouter optimize setup`"
+                ))
+            } else {
+                BitrouterError::bad_request(format!("unknown preset '@{name}'"))
+            }
+        })?),
         None => None,
     };
 
@@ -169,6 +257,15 @@ mod tests {
                 },
             },
         );
+        m.insert(
+            "cost".to_string(),
+            VariantConfig {
+                routing: RoutingConfig {
+                    sort: Some(SortOrder::Cost),
+                    ..Default::default()
+                },
+            },
+        );
         m
     }
 
@@ -220,6 +317,97 @@ mod tests {
         // `gpt-5:turbo` — `turbo` is not a known variant, so it is NOT stripped.
         let r = resolve_presets("gpt-5:turbo", &presets(), &variants()).unwrap();
         assert_eq!(r.clean_model, "gpt-5:turbo");
+    }
+
+    /// `presets()` plus the `auto` preset the reserved `bitrouter/auto` slug
+    /// resolves through.
+    fn presets_with_auto() -> HashMap<String, PresetConfig> {
+        let mut m = presets();
+        m.insert(
+            "auto".to_string(),
+            PresetConfig {
+                model: Some("openai-codex:gpt-5.6-sol".to_string()),
+                policy: Some("auto".to_string()),
+                system_prompt: None,
+                params: serde_json::Map::new(),
+                routing: RoutingConfig::default(),
+            },
+        );
+        m
+    }
+
+    #[test]
+    fn reserved_auto_slug_resolves_through_the_auto_preset() {
+        let r = resolve_presets(AUTO_SLUG, &presets_with_auto(), &variants()).unwrap();
+        assert_eq!(r.clean_model, "openai-codex:gpt-5.6-sol");
+        assert_eq!(r.policy.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn reserved_auto_slug_composes_with_a_variant() {
+        // The variant split runs before the namespace is stripped, so the
+        // public slug keeps the `:cost` composition `@auto:cost` has.
+        let r = resolve_presets("bitrouter/auto:cost", &presets_with_auto(), &variants()).unwrap();
+        assert_eq!(r.clean_model, "openai-codex:gpt-5.6-sol");
+        assert_eq!(r.policy.as_deref(), Some("auto"));
+        assert_eq!(r.variant.as_deref(), Some("cost"));
+    }
+
+    #[test]
+    fn at_preset_spelling_still_resolves_identically() {
+        let public = resolve_presets(AUTO_SLUG, &presets_with_auto(), &variants()).unwrap();
+        let legacy = resolve_presets("@auto", &presets_with_auto(), &variants()).unwrap();
+        assert_eq!(public.clean_model, legacy.clean_model);
+        assert_eq!(public.policy, legacy.policy);
+    }
+
+    #[test]
+    fn reserved_auto_slug_without_a_bound_preset_names_the_setup_step() {
+        // The drop-in substitution moment: a caller pastes the slug before
+        // running setup. The 400 has to say what is missing, not 404 as an
+        // unknown provider model.
+        let err = resolve_presets(AUTO_SLUG, &presets(), &variants()).unwrap_err();
+        assert_eq!(err.status(), 400);
+        assert!(err.to_string().contains("bitrouter optimize setup"));
+    }
+
+    #[test]
+    fn unknown_reserved_slug_is_400_not_a_provider_lookup() {
+        let err = resolve_presets("bitrouter/nonexistent", &presets(), &variants()).unwrap_err();
+        assert_eq!(err.status(), 400);
+        assert!(err.to_string().contains("unknown BitRouter model"));
+    }
+
+    #[test]
+    fn reserved_fusion_slug_reaching_stage_0_reports_it_is_unconfigured() {
+        // The Fusion ingress alias rewrites this before Stage 0, so arriving
+        // here means `server_tools.fusion` is absent.
+        let err = resolve_presets("bitrouter/fusion", &presets(), &variants()).unwrap_err();
+        assert_eq!(err.status(), 400);
+        assert!(err.to_string().contains("server_tools.fusion"));
+    }
+
+    #[test]
+    fn reserved_slug_in_colon_form_points_at_the_slash_spelling() {
+        // `bitrouter:auto` would otherwise reach Strategy 1 and be dispatched
+        // to the BitRouter Cloud provider as a model it does not serve.
+        let err = resolve_presets("bitrouter:auto", &presets_with_auto(), &variants()).unwrap_err();
+        assert_eq!(err.status(), 400);
+        assert!(err.to_string().contains("bitrouter/auto"));
+    }
+
+    #[test]
+    fn ordinary_bitrouter_provider_routes_are_untouched() {
+        // Reserving the namespace must not capture Strategy-1 routes to the
+        // BitRouter Cloud provider's real catalog models.
+        let r = resolve_presets(
+            "bitrouter:anthropic/claude-opus-5",
+            &presets_with_auto(),
+            &variants(),
+        )
+        .unwrap();
+        assert_eq!(r.clean_model, "bitrouter:anthropic/claude-opus-5");
+        assert!(r.policy.is_none());
     }
 
     #[test]

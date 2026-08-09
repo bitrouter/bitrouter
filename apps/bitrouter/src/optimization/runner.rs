@@ -851,6 +851,10 @@ pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<Str
     }
     let base = base_url.trim_end_matches('/');
     let v1 = format!("{base}/v1");
+    // The `@preset` form, not the public `bitrouter/auto` slug: this wires the
+    // optimizer's harness to the optimizer's own private daemon and is generic
+    // over `preset`. The reserved namespace only names `auto`, so composing it
+    // here would 400 for every other optimization lineage.
     let model = format!("@{preset}");
     Ok(BTreeMap::from([
         ("BITROUTER_BASE_URL".into(), base.into()),

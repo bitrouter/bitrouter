@@ -1,4 +1,4 @@
-# Adaptive `@auto` routing
+# Adaptive `bitrouter/auto` routing
 
 This starter policy uses GPT-5.6 as the strong route, Kimi K3 as the balanced
 route, and DeepSeek V4 Pro as the economy route. It is agent- and
@@ -18,9 +18,10 @@ lock. Traces, metering, eval subjects/results, snapshots, and separate candidate
 exports remain available. Set `policy.mode: adaptive` only when the process may
 publish a reviewed candidate; it does not enable request-time learning.
 
-Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
-cost routing variant. Physical model ids remain passthrough, so an explicit
-`openai-codex:gpt-5.6-sol` request is not converted to a preset.
+Use `bitrouter/auto` for the strong base policy, or `bitrouter/auto:cost` to add
+the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
+form addresses the same policy. Physical model ids remain passthrough, so an
+explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
 The v2 lock uses generic `agent_trace/v2|<state>|<risk>` keys. The `context`
 risk band is separate from hard `guarded` recovery/redo/precision risk. Runtime

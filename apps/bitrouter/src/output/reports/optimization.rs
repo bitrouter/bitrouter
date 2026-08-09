@@ -28,7 +28,7 @@ pub struct OptimizationSetupReport {
 
 impl CliReport for OptimizationSetupReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
-        human.status_block(Health::Up, "@auto optimization is configured")?;
+        human.status_block(Health::Up, "bitrouter/auto optimization is configured")?;
         human.field("workflow", self.workflow.join(" "))?;
         human.field("routes", format!("{} → {}", self.strong, self.economy))?;
         human.field("judge", &self.evaluator)?;
@@ -69,17 +69,23 @@ pub struct OptimizationStatusReport {
 impl CliReport for OptimizationStatusReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
         let (health, headline) = if !self.lineage_consistent {
-            (Health::Down, "@auto optimization lineage needs repair")
+            (
+                Health::Down,
+                "bitrouter/auto optimization lineage needs repair",
+            )
         } else if self.latest_candidate_active {
-            (Health::Up, "@auto optimized candidate is active")
+            (Health::Up, "bitrouter/auto optimized candidate is active")
         } else if self.rolled_back {
-            (Health::Unknown, "@auto is active after rollback")
+            (Health::Unknown, "bitrouter/auto is active after rollback")
         } else if self.latest_run.as_ref().is_some_and(|run| run.publishable) {
-            (Health::Up, "@auto candidate is ready for review")
+            (Health::Up, "bitrouter/auto candidate is ready for review")
         } else if self.latest_run.is_some() {
-            (Health::Down, "@auto latest candidate is not publishable")
+            (
+                Health::Down,
+                "bitrouter/auto latest candidate is not publishable",
+            )
         } else {
-            (Health::Up, "@auto is ready to measure")
+            (Health::Up, "bitrouter/auto is ready to measure")
         };
         human.status_block(health, headline)?;
         human.field(
@@ -130,7 +136,7 @@ impl OptimizationReviewReport {
     pub fn for_run(report: OptimizationReport, publication_requires_enable_adaptive: bool) -> Self {
         Self {
             action: "optimize.run",
-            model: "@auto",
+            model: "bitrouter/auto",
             report,
             active: false,
             rolled_back: false,
@@ -146,7 +152,7 @@ impl OptimizationReviewReport {
     ) -> Self {
         Self {
             action: "optimize.review",
-            model: "@auto",
+            model: "bitrouter/auto",
             report,
             active,
             rolled_back,
@@ -158,13 +164,13 @@ impl OptimizationReviewReport {
 impl CliReport for OptimizationReviewReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
         let (health, headline) = if self.active {
-            (Health::Up, "@auto candidate is active")
+            (Health::Up, "bitrouter/auto candidate is active")
         } else if self.rolled_back {
-            (Health::Unknown, "@auto candidate was rolled back")
+            (Health::Unknown, "bitrouter/auto candidate was rolled back")
         } else if self.report.publishable {
-            (Health::Up, "@auto candidate is ready for review")
+            (Health::Up, "bitrouter/auto candidate is ready for review")
         } else {
-            (Health::Down, "@auto candidate is not publishable")
+            (Health::Down, "bitrouter/auto candidate is not publishable")
         };
         human.status_block(health, headline)?;
         human.field("run", &self.report.run_id)?;
