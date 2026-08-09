@@ -14,7 +14,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-substrate`     | crate   | Per-session agent engine — hosts the ACP downstream server (`down`) and session translation                               |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
-| `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI/TUI binary — turns a `Config` into a running `App` and owns the management commands |
+| `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
 
@@ -27,9 +27,9 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
 | **ACP**                   | `crates/bitrouter-substrate` (`down` / `translate`); subcommand glue in `apps/bitrouter/src/acp_cli.rs`   | `bitrouter acp serve`    |
-| **CLI / TUI**             | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
+| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
 
-The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate, ACP rides inside `bitrouter-substrate`, the API rides inside the SDK, and only the CLI/TUI lives in the binary itself.
+The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate, ACP rides inside `bitrouter-substrate`, the API rides inside the SDK, and only the CLI lives in the binary itself.
 
 ### Dependency Logic
 
@@ -46,7 +46,7 @@ The layering is strictly one-directional — every library crate points down at 
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
 3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and keep their default builds lean. Guardrails never pulls the axum HTTP stack; observe pulls axum/tower-http (for the inbound `TraceLayer`) only under its opt-in `otel-*` features. The `feature-isolation` CI job enforces this.
-4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI/TUI shell over that library.
+4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### SDK feature flags
 

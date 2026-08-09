@@ -292,9 +292,9 @@ Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over 
 bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
-Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the *main orchestrator* surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
+Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
 
-`-a/--agent` takes any catalog harness with an interactive binary — the same set `bitrouter tui --agent` accepts: **`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`** (the catalog id `antigravity` also resolves to `agy`). An unknown id fails up front with the available list. Each harness is routed by its own mechanism, all from the shared catalog:
+`-a/--agent` takes any catalog harness with an interactive binary: **`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`** (the catalog id `antigravity` also resolves to `agy`). An unknown id fails up front with the available list. Each harness is routed by its own mechanism, all from the shared catalog:
 
 | Harness | How it reaches BitRouter |
 | --- | --- |
@@ -308,6 +308,8 @@ Launches a coding-agent harness as an **interactive native-TUI** child process w
 
 The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
 
+**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` / `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
+
 `--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
 
 **`grok` and `agy` are own-auth harnesses**: they are subscription clients whose sessions the daemon itself borrows as providers (`supergrok` / `google-ai`), so routing them through BitRouter would loop back to the same backend on the same credential. They launch with their own auth — `launch` says so on stderr and `--check` reports it as a `routing` warning — and `--model` forwards as their native flag (`-m` / `--model`).
@@ -320,20 +322,6 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 
 `bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
 
-### `bitrouter tui`
-
-```
-bitrouter tui --agent <id> [--worktree <name>] [--model ID]
-```
-
-Launches the **composite multi-agent TUI** (TUI_SPEC_V3 — a pure control tower): a sessions sidebar (orchestrator PTY sessions), a subagents rail (ACP agents sorted by who needs you), and a focused detail pane over a one-line status bar. `--agent claude|codex|…` hosts that harness's real native TUI on a PTY as the *orchestrator*; a configured `agents:` id renders that ACP agent as a **read-only `Monitor`** — **there is no input bar anywhere**: the human never types into a subagent (the orchestrator steers subagents via the injected fleet MCP tools; `bitrouter serve` should be running alongside — the bar's `serve ●/✗` dot is live).
-
-**Keys.** NORMAL is the only hub — no sticky manager mode. A focused PTY session gets full key passthrough; the **only intercepted chord is the one-shot leader** (`tui.leader` in `bitrouter.yaml`, `ctrl-<key>` form, default `Ctrl-Space` — `Ctrl-A`/`Ctrl-B` reach the child as readline keys). Leader leaves (which-key overlay, one key, back to NORMAL): `1`-`9` focus session · `Tab` next actionable subagent · `n` new session (picker) · `p` command palette · `c` close · `a` autonomy tier · `t` attach · `?` keys help. Inline from NORMAL: `y`/`a`/`n` resolve the **top** pending permission (batch-clears, focus advances) · `D`/`m`/`p`/`r` review the focused Monitor's ready diff (diff / merge / apply / **reject — routed by ownership**: orchestrator-spawned → the verdict becomes the subagent's task outcome, `subagent_status` shows `changes_requested` + note; human-spawned via the palette's `spawn subagent` hatch → re-prompted directly) · `Ctrl-C` interrupts the focused agent (quits from NORMAL only when the focused pane's child has already exited) · `PgUp`/`PgDn` scroll · click any row to focus it. Quit via the palette's `quit` or by closing the last pane.
-
-**Status bar.** A gauge, not a cheat-sheet: the left zone follows the focused pane (`ctx N%` context occupancy · model · `$cost`; transient notices claim it and decay), plus the `⌃space menu` affordance; the right zone is global fleet (attention badges `⚠◆●◉` · summed `$` cost · `serve ●/✗`).
-
-Subagents spawned from the picker get worktree isolation + a `PORT` by default (retained on close); a configured `worktrees.bootstrap` hook is human-approved on first use per session. The TUI's stderr (and its agent children's) goes to `.bitrouter/tui.log` on Unix.
-
 ### `bitrouter spawn`
 
 ```
@@ -342,11 +330,11 @@ bitrouter spawn <agent> --serve [flags]                                      # A
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
 
-Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent, a GUI, or `bitrouter tui`). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
+Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent or a GUI). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
 
 **Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--turn-timeout`).
 
-Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter tui` orchestrator facet, not headless spawn yet) and non-catalog agents warn and run direct.
+Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
 
 `--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 

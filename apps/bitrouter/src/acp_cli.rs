@@ -598,7 +598,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
 /// persistent session should use `bitrouter acp serve` instead.
 ///
-/// `contract` is the optional `--result-schema` contract (TUI_SPEC §4): its
+/// `contract` is the optional `--result-schema` contract: its
 /// instruction rides the prompt, and the terminal `result` line gains
 /// `result`/`schema_ok` (+ `raw` on failure) fields.
 pub async fn prompt<W>(

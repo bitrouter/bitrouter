@@ -20,6 +20,17 @@ Supersedes the CLI framing of #672; builds on #613 (per-session ACP substrate).
 `acp attach` were removed from the substrate. The live connected-client paths
 described here remain.
 
+**Superseded by #749:** BitRouter is a routing proxy, not an agent
+orchestrator. The control-tower TUI, the fleet MCP bridge and its subagent
+tools, and `Harness::orchestrator_overlay` were all **deleted**, along with
+their CLI surfaces. Where this spec speaks of
+them, read it as a record of what shipped and was then withdrawn. What remains
+of it: the `launch` (interactive) / `spawn` (headless ACP sub-agent) verb
+split, the shared `harness.rs` catalog, routing-by-default with `--direct`, the
+fail-fast contract, and config synthesis — now folded into the single
+`Harness::launch_overlay`, which `launch` also uses to inject the tools/skills
+gateway MCP servers.
+
 ## 1. Motivation
 
 BitRouter has two agent-launching surfaces that grew independently:
@@ -48,7 +59,7 @@ resident ACP broker are different process topologies.
 
 An orchestrator has no manager — the human drives it through its own TUI, so
 it doesn't need ACP. Sub-agents are driven by a program (the orchestrator via
-CLI/NDJSON, a GUI via `--serve`, the future `bitrouter tui`), so ACP is their
+CLI/NDJSON, a GUI via `--serve`), so ACP is their
 native substrate. Every level of the tree routes generations through the
 daemon:
 
@@ -82,7 +93,7 @@ Non-goals (v1, tracked as follow-ups):
 
 - MCP tool surface for spawn (post-v1; see §11).
 - Permission relay from sub-agent to orchestrator (headless deny-all stands).
-- `bitrouter tui` integration (#604) — consumes this work, not part of it.
+- Manager-UI integration (#604) — later withdrawn entirely by #749.
 - Generation↔session span join — session-scoped virtual keys, with header
   injection as the `skip_auth` fallback (§10, v1.5).
 - Gemini/pi routing enablement beyond what §6 verifies.
@@ -122,8 +133,8 @@ bitrouter spawn <agent> --check                        # preflight only, no laun
   A catalog-known id that has no config entry is launched from its catalog
   invocation directly — no YAML edit required to spawn a blessed harness.
 - Exactly one of `-p` / `--serve` / `--check` is required. A bare
-  `bitrouter spawn <agent>` at a TTY errors with a hint (this is the slot
-  `bitrouter tui` fills later; we do not TTY-sniff a mode).
+  `bitrouter spawn <agent>` at a TTY errors with a hint; we do not TTY-sniff
+  a mode.
 - `bitrouter acp serve|prompt` remain as **hidden aliases** delegating to the
   new code path (the GUI's AcpFeed and existing docs keep working); `acp
   sessions` is unchanged and stays under `acp` (it operates
@@ -333,8 +344,8 @@ it ships as a fast-follow. Until then pi spawns with a
 (§8), i.e. today's behavior, not a regression.
 
 > **Shipped for the interactive facet** (`Routing::PiConfigDir`,
-> `Harness::orchestrator_overlay`): the `bitrouter tui` orchestrator and
-> attach synthesize `models.json` (model list from the daemon's
+> `Harness::launch_overlay`): interactive launches synthesize
+> `models.json` (model list from the daemon's
 > `/v1/models`) and select `--provider bitrouter --model <id>`; the model
 > default rides the CLI flag rather than a `settings.json`. The same
 > mechanism also routes **opencode** (`Routing::OpencodeConfig`, one
@@ -353,7 +364,7 @@ it ships as a fast-follow. Until then pi spawns with a
 > (Nous Hermes Agent — native `hermes acp`, ACP v1 with loadSession;
 > `Routing::HermesHome` synthesizes a `HERMES_HOME/config.yaml` with a
 > loopback `custom` provider — hermes trusts loopback custom endpoints —
-> plus `mcp_servers:` fleet injection, credential via `CUSTOM_API_KEY`) and
+> plus `mcp_servers:` gateway injection, credential via `CUSTOM_API_KEY`) and
 > `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`;
 > `Routing::OpenclawProfile` synthesizes an isolated profile —
 > `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`, `openclaw.json` with a
@@ -476,17 +487,17 @@ env/args overlay through `LaunchOptions` (the apps layer computes it; the
 substrate stays routing-agnostic); (c) route all credential choice through
 the single §5.4 resolver. (a) and (b) are required for §5 anyway.
 
-## 11. MCP follow-up (shipped — names as landed)
+## 11. MCP follow-up (shipped, then withdrawn by #749)
 
-**Shipped** as `bitrouter mcp serve --backend fleet` (TUI_SPEC §4): the tools
-landed as `spawn_subagent` / `prompt_subagent` / `subagent_status` /
-`subagent_diff` / `apply_subagent` / `merge_subagent` / `close_subagent` over
-the same launch path. Permission relaying landed with a different escalation
-home than sketched here: instead of tool-result relays to the orchestrator,
-a TUI-linked bridge routes gated requests to the **human's decision queue**
-over the fleet socket (TUI_SPEC §5); a headless bridge auto-denies high risk,
-logged. Nothing in v1 may assume the caller is a shell (hence the structured
-`session` NDJSON line, not stderr prose).
+A fleet MCP backend shipped on top of this launch path, exposing subagent
+spawn/manage tools plus a human-escalation bridge to the control tower's
+decision queue. #749 removed all of it along with the control tower: BitRouter
+routes calls, it does not orchestrate agents. No subagent tool surface remains
+in `bitrouter mcp serve`.
+
+What survives from this section's reasoning is the contract it forced: nothing
+in `spawn` may assume the caller is a shell (hence the structured `session`
+NDJSON line, not stderr prose).
 
 ## 12. Migration & lockstep checklist
 

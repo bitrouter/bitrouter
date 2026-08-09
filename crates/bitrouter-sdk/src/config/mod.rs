@@ -81,13 +81,9 @@ pub struct Config {
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bitrouter agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
-    /// Worktree isolation settings for fleet-managed subagents
-    /// (`bitrouter tui` spawns). All fields default — `worktrees:` is
-    /// optional in `bitrouter.yaml`.
+    /// Worktree isolation settings for isolated agent sessions. All fields
+    /// default — `worktrees:` is optional in `bitrouter.yaml`.
     pub worktrees: WorktreesConfig,
-    /// `bitrouter tui` settings. All fields default — `tui:` is optional
-    /// in `bitrouter.yaml`.
-    pub tui: TuiConfig,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's
@@ -126,7 +122,6 @@ impl Default for Config {
             server_tools: Default::default(),
             agents: HashMap::new(),
             worktrees: WorktreesConfig::default(),
-            tui: TuiConfig::default(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
@@ -225,27 +220,16 @@ pub enum EvalAuthorityKind {
     Generic,
 }
 
-/// `bitrouter tui` settings.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct TuiConfig {
-    /// The one-shot leader key that opens the TUI's which-key menu
-    /// (TUI_SPEC_V3 §3). `ctrl-<key>` form, where `<key>` is a single
-    /// character or `space` — e.g. `ctrl-space` (the default), `ctrl-]`,
-    /// `ctrl-\`. Unset or unparseable falls back to `ctrl-space`.
-    pub leader: Option<String>,
-}
-
-/// Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).
+/// Worktree isolation settings for isolated agent sessions.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct WorktreesConfig {
     /// Shell command run inside each **newly created** worktree before its
     /// agent launches — the bootstrap hook for untracked files a worktree
-    /// doesn't carry (copy `.env`, install deps). It executes code: the TUI
-    /// shows it for human approval on first use each session. The hook runs
+    /// doesn't carry (copy `.env`, install deps). It executes code, so a
+    /// caller that runs it must gate it behind human approval. The hook runs
     /// with cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,
-    /// and the subagent's allocated `PORT`.
+    /// and the session's allocated `PORT`.
     pub bootstrap: Option<String>,
     /// Port pool for per-subagent `PORT` allocation, so N dev servers don't
     /// collide. Defaults to 3100–3199.
@@ -257,7 +241,7 @@ pub struct WorktreesConfig {
     pub checks: Vec<String>,
 }
 
-/// An inclusive port range fleet-managed subagents draw their `PORT` from.
+/// An inclusive port range isolated agent sessions draw their `PORT` from.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PortPoolConfig {

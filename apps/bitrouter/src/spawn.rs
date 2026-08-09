@@ -1,6 +1,6 @@
 //! `bitrouter launch` — launch a coding-agent harness (Claude Code, Codex, …)
 //! as an interactive native-TUI child process with its API base URL pointed at
-//! the local BitRouter daemon. This is the *main orchestrator* surface; headless
+//! the local BitRouter daemon. This is the interactive surface; headless
 //! ACP sub-agents are `bitrouter spawn` (see [`crate::acp_cli`]). Both draw
 //! their routing knowledge from the shared [`crate::harness`] catalog.
 //!
@@ -312,12 +312,14 @@ pub async fn run(
         Vec::new()
     };
     let state_dir = launch_state_dir()?;
+    let gateways = launch_gateways(cfg, &base_url);
     let overlay = harness
         .launch_overlay(
             &base_url,
             &token,
             opts.model.as_deref(),
             &catalog,
+            &gateways,
             &state_dir,
         )
         .with_context(|| format!("assembling the '{}' launch overlay", harness.id))?;
@@ -414,6 +416,32 @@ async fn print_exit_summary(
         bold = p.bold,
         reset = p.reset,
     );
+}
+
+/// The gateway MCP servers a launched harness gets: the daemon's aggregate MCP
+/// endpoint (`bitrouter_tools`, only when `mcp.aggregate` is enabled) and the
+/// origin AgentSkills server (`bitrouter_skills`). See [`crate::gateways`].
+///
+/// Injection reaches only the harnesses that have a mechanism for it — claude
+/// (`--mcp-config`), codex (`-c mcp_servers.*`), opencode and hermes (their
+/// synthesized config files). `pi`, `openclaw`, `grok`, and `antigravity` have
+/// no injectable MCP surface and ignore these servers; that ceiling is the
+/// harnesses', not BitRouter's.
+fn launch_gateways(
+    cfg: &bitrouter_sdk::config::Config,
+    base_url: &str,
+) -> Vec<crate::harness::McpServer> {
+    let auth = crate::harness::resolve_gateway_auth(
+        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+        false,
+    )
+    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    let aggregate_route = cfg
+        .mcp
+        .aggregate
+        .enabled
+        .then(|| cfg.mcp.aggregate.route.clone());
+    crate::gateways::gateway_servers(base_url, &auth, aggregate_route.as_deref())
 }
 
 /// Whether this harness's overlay needs the daemon's advertised model ids —
@@ -1190,6 +1218,72 @@ impl InstallCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gateway servers `launch` builds from a default config, and their
+    /// arrival in each injectable harness's synthesized surface.
+    #[test]
+    fn launch_wires_the_tools_and_skills_gateways_into_the_overlay() {
+        let cfg = bitrouter_sdk::config::Config::default();
+        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
+        let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["bitrouter_tools", "bitrouter_skills"],
+            "the aggregate endpoint is on by default, so both gateways ride"
+        );
+        // The fleet bridge is gone: `launch` must never inject it.
+        assert!(!names.contains(&"bitrouter_fleet"));
+
+        // Every harness with an injectable MCP mechanism must actually carry
+        // the servers through synthesis. The catalog's other arms (pi,
+        // openclaw, grok, antigravity) have no mechanism and are excluded by
+        // design.
+        for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp"] {
+            let h = crate::harness::by_id(id).expect("catalog entry");
+            let dir = tempfile::tempdir().expect("tempdir");
+            let overlay = h
+                .launch_overlay(
+                    "http://127.0.0.1:4356",
+                    "tok",
+                    None,
+                    &[],
+                    &servers,
+                    dir.path(),
+                )
+                .expect("overlay");
+            // Injection surfaces either directly in the args (codex's
+            // `-c mcp_servers.*`) or inside a synthesized file that an arg
+            // (claude's `--mcp-config <path>`) or env var (opencode's
+            // `OPENCODE_CONFIG`, hermes's `HERMES_HOME`) points at. Read every
+            // path either side mentions and search the union.
+            let mut rendered = overlay.args.join(" ");
+            let paths = overlay
+                .args
+                .iter()
+                .chain(overlay.env.iter().map(|(_, v)| v));
+            for path in paths {
+                let path = std::path::Path::new(path);
+                for candidate in [path.to_path_buf(), path.join("config.yaml")] {
+                    rendered.push_str(&std::fs::read_to_string(candidate).unwrap_or_default());
+                }
+            }
+            for name in ["bitrouter_tools", "bitrouter_skills"] {
+                assert!(
+                    rendered.contains(name),
+                    "{id}: gateway `{name}` never reached the harness"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn launch_gateways_drops_tools_when_the_aggregate_is_disabled() {
+        let mut cfg = bitrouter_sdk::config::Config::default();
+        cfg.mcp.aggregate.enabled = false;
+        let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
+        let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["bitrouter_skills"]);
+    }
 
     #[test]
     fn listen_is_local_classifies_loopback_and_wildcard() {

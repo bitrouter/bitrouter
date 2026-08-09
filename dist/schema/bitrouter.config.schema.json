@@ -99,12 +99,8 @@
       "default": {}
     },
     "worktrees": {
-      "description": "Worktree isolation settings for fleet-managed subagents\n(`bitrouter tui` spawns). All fields default — `worktrees:` is\noptional in `bitrouter.yaml`.",
+      "description": "Worktree isolation settings for isolated agent sessions. All fields\ndefault — `worktrees:` is optional in `bitrouter.yaml`.",
       "$ref": "#/$defs/WorktreesConfig"
-    },
-    "tui": {
-      "description": "`bitrouter tui` settings. All fields default — `tui:` is optional\nin `bitrouter.yaml`.",
-      "$ref": "#/$defs/TuiConfig"
     },
     "inherit_defaults": {
       "description": "Whether providers inherit workspace defaults.",
@@ -1761,11 +1757,11 @@
       ]
     },
     "WorktreesConfig": {
-      "description": "Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).",
+      "description": "Worktree isolation settings for isolated agent sessions.",
       "type": "object",
       "properties": {
         "bootstrap": {
-          "description": "Shell command run inside each **newly created** worktree before its\nagent launches — the bootstrap hook for untracked files a worktree\ndoesn't carry (copy `.env`, install deps). It executes code: the TUI\nshows it for human approval on first use each session. The hook runs\nwith cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,\nand the subagent's allocated `PORT`.",
+          "description": "Shell command run inside each **newly created** worktree before its\nagent launches — the bootstrap hook for untracked files a worktree\ndoesn't carry (copy `.env`, install deps). It executes code, so a\ncaller that runs it must gate it behind human approval. The hook runs\nwith cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,\nand the session's allocated `PORT`.",
           "type": [
             "string",
             "null"
@@ -1787,7 +1783,7 @@
       }
     },
     "PortPoolConfig": {
-      "description": "An inclusive port range fleet-managed subagents draw their `PORT` from.",
+      "description": "An inclusive port range isolated agent sessions draw their `PORT` from.",
       "type": "object",
       "properties": {
         "from": {
@@ -1805,20 +1801,6 @@
           "minimum": 0,
           "maximum": 65535,
           "default": 3199
-        }
-      }
-    },
-    "TuiConfig": {
-      "description": "`bitrouter tui` settings.",
-      "type": "object",
-      "properties": {
-        "leader": {
-          "description": "The one-shot leader key that opens the TUI's which-key menu\n(TUI_SPEC_V3 §3). `ctrl-<key>` form, where `<key>` is a single\ncharacter or `space` — e.g. `ctrl-space` (the default), `ctrl-]`,\n`ctrl-\\`. Unset or unparseable falls back to `ctrl-space`.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
         }
       }
     },
