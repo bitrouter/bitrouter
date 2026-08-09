@@ -1,11 +1,10 @@
 //! The per-repo `.bitrouter/` state directory — created **self-ignoring**.
 //!
-//! Session records and other runtime files live under
-//! `<base_repo>/.bitrouter/`. None of it belongs in version control (records
-//! carry pids and absolute paths), so the directory is created with a
-//! `.gitignore` containing `*` — the same trick cargo uses for `target/` —
-//! instead of trusting every repo to ignore it. An existing `.gitignore` is
-//! never overwritten.
+//! Throwaway runtime files (synthesized harness configs and the like) live
+//! under `<repo>/.bitrouter/`. None of it belongs in version control, so the
+//! directory is created with a `.gitignore` containing `*` — the same trick
+//! cargo uses for `target/` — instead of trusting every repo to ignore it. An
+//! existing `.gitignore` is never overwritten.
 
 use std::path::Path;
 
@@ -20,8 +19,6 @@ pub fn ensure_self_ignored(dot_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Repoint this process's stderr (fd 2) at `path` (created, append).
-///
 #[cfg(test)]
 mod tests {
     use super::*;

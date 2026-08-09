@@ -1,6 +1,6 @@
 //! `bitrouter acp` subcommands — headless ACP session surface.
 //!
-//! Three entry points:
+//! Two entry points:
 //!
 //! - [`serve`] — launch a session and expose it as a vanilla ACP Agent over
 //!   **stdio** until the manager disconnects. Used by GUIs and orchestrating
@@ -165,7 +165,7 @@ impl RoutingError {
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
 /// unroutable harness — each warned to stderr). Fails fast — before the
-/// caller creates any session record — on an unreachable daemon or a missing
+/// caller spawns any agent process — on an unreachable daemon or a missing
 /// required credential.
 pub async fn apply_routing(
     source: &ConfigSource,
@@ -547,13 +547,13 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         std::process::exit(1);
     }
     let catalog = catalog_from_config(&config)?;
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
+    let cwd = std::env::current_dir().context("resolving current directory")?;
     // Deferred open: the upstream `session/new` runs when the manager sends
     // its own `session/new`, so the manager's cwd + mcpServers are relayed.
     let session = bitrouter_substrate::engine::Session::launch_deferred(
         &catalog,
         agent_id,
-        base_repo.clone(),
+        cwd.clone(),
         options,
     )
     .await
@@ -563,8 +563,8 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
     let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
 
-    // No manager left: shut the session down deliberately so its record is
-    // settled (same semantics as `prompt`). Once serving ends, the forwarding
+    // No manager left: shut the session down deliberately so the agent child
+    // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
     // tasks have released their clones, so we are the sole owner.
     match Arc::try_unwrap(session) {
         Ok(session) => session
@@ -614,7 +614,7 @@ where
         routing,
     } = ctx;
     // Route by default; fail fast with a single structured NDJSON `error`
-    // line BEFORE any session side effect (no record written).
+    // line BEFORE any session side effect (no agent process spawned).
     let via = match apply_routing(source, &mut config, agent_id, &routing).await {
         Ok(via) => via,
         Err(e) => {
@@ -625,14 +625,13 @@ where
     };
 
     let catalog = catalog_from_config(&config)?;
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session =
-        bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, options)
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let session = bitrouter_substrate::engine::Session::launch(&catalog, agent_id, cwd, options)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
 
-    // First line: correlate this session's record with the cost/metering the
+    // First line: correlate this session with the cost/metering the
     // orchestrator later queries. `via` is null when running direct.
     write_ndjson_line(
         out,

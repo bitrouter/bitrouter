@@ -10,7 +10,9 @@ pub enum SessionStatus {
     Exited,
 }
 
-/// Three-tier identity: `record_id` is the stable, manager-facing id;
+/// Three-tier identity: `record_id` is the stable, manager-facing id — the
+/// id the down-facing endpoint answers `session/new` with, minted locally and
+/// unchanged for the life of the session;
 /// `acp_session_id` is the ACP wire id from upstream `session/new`;
 /// `agent_session_id` is the provider-native id from response `_meta.agentSessionId`
 /// (optional, never synthesized).

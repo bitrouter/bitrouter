@@ -4,7 +4,6 @@ pub mod down;
 pub mod engine;
 pub mod executor;
 pub mod permissions;
-pub mod record;
 pub mod session;
 pub mod telemetry;
 pub mod translate;
