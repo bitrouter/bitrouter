@@ -156,6 +156,32 @@ mod tests {
         }
     }
 
+    /// Records written before the worktree fields were dropped must still
+    /// load. Every other test here round-trips through `write` -> `list`,
+    /// which can never catch a schema break — this one parses an on-disk
+    /// literal, so it is the only guard on the direction users actually hit
+    /// (a new binary reading records an older one left behind).
+    #[test]
+    fn legacy_record_with_dropped_worktree_fields_still_parses() {
+        let legacy = r#"{
+            "record_id": "r1",
+            "agent_id": "claude",
+            "acp_session_id": "u1",
+            "agent_session_id": null,
+            "pid": 4242,
+            "started_at": 1750000000,
+            "status": "running",
+            "ended_at": null,
+            "worktree": "/repo/.bitrouter/worktrees/claude-abc",
+            "branch": "bitrouter/claude-abc",
+            "base_ref": "deadbeef"
+        }"#;
+        let parsed: SessionRecord = serde_json::from_str(legacy).expect("legacy record parses");
+        assert_eq!(parsed.record_id, "r1");
+        assert_eq!(parsed.status, RecordStatus::Running);
+        assert_eq!(parsed.acp_session_id.as_deref(), Some("u1"));
+    }
+
     #[tokio::test]
     async fn writes_are_atomic_and_leave_no_temp_files() {
         let base = tempfile::tempdir().expect("tempdir");

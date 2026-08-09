@@ -15,8 +15,8 @@
 //!   upstream `auth_methods` are **not** relayed (we answer `authenticate`
 //!   with method-not-found).
 //! - `session/new` → opens the upstream session, relaying the manager's `cwd`
-//!   and `mcpServers`
-//!   **verbatim** — this is how a manager provides fs/terminal-style tooling
+//!   and `mcpServers` **verbatim** — this is how a manager provides
+//!   fs/terminal-style tooling
 //!   in the v2-aligned model (client-side MCP servers, not the removed
 //!   `fs/*`/`terminal/*` surface). Returns the session's `record_id` as the
 //!   manager-facing session id; the upstream `acp_session_id` stays internal.
@@ -232,8 +232,8 @@ fn serve_on(
         // ── session/new ─────────────────────────────────────────────────────
         .on_receive_request(
             // Opens the upstream session, relaying the manager's cwd +
-            // mcpServers. For a
-            // session that is already open — the immediate-open launch path,
+            // mcpServers. For a session that is already open — the
+            // immediate-open launch path,
             // or a repeated session/new — this is a no-op that answers with
             // the same stable record_id. Driven off the dispatch path: the
             // open is an upstream round-trip.

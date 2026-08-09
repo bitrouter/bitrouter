@@ -70,9 +70,6 @@ const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 /// Options for [`Session::launch`].
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
-    /// Extra environment for the agent child, overlaid on the transport's
-    /// `env`.
-    pub env: Vec<(String, String)>,
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
     /// ambient credentials from crossing into an agent process while still
@@ -99,8 +96,6 @@ struct BuildArgs {
     base_repo: PathBuf,
     /// The session's stable manager-facing record id, minted in `launch_inner`.
     record_id: String,
-    /// Extra environment overlaid on the transport's `env` for the child.
-    env: Vec<(String, String)>,
     /// Environment names stripped from the child before the explicit overlay.
     strip_inherited_env: Vec<String>,
     turn_timeout: Option<Duration>,
@@ -201,7 +196,6 @@ impl Session {
         open_now: bool,
     ) -> anyhow::Result<Self> {
         let LaunchOptions {
-            env,
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
@@ -225,7 +219,6 @@ impl Session {
                 transport,
                 base_repo,
                 record_id,
-                env,
                 strip_inherited_env,
                 turn_timeout,
                 mcp_servers,
@@ -242,7 +235,6 @@ impl Session {
             transport,
             base_repo,
             record_id,
-            env: extra_env,
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
@@ -254,16 +246,8 @@ impl Session {
         // `session/new` happens later — immediately (`open_now`) for the
         // headless/prompt path, or when the manager sends its own
         // `session/new` (whose cwd + mcpServers are relayed) for `serve`.
-        // Launch options overlay the transport env.
-        let env = if extra_env.is_empty() {
-            env.clone()
-        } else {
-            let mut merged = env.clone();
-            merged.extend(extra_env.iter().cloned());
-            merged
-        };
         let conn = Arc::new(
-            UpstreamConnection::spawn_with_stripped_env(command, args, &env, &strip_inherited_env)
+            UpstreamConnection::spawn_with_stripped_env(command, args, env, &strip_inherited_env)
                 .await?,
         );
 
