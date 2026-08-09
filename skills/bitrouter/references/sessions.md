@@ -17,9 +17,6 @@ bitrouter acp serve --agent <id> [--turn-timeout SECS] [--config PATH]
 # One-shot headless: launch, send one prompt, stream NDJSON output, exit
 bitrouter acp prompt --agent <id> [--turn-timeout SECS] [--no-wait] \
   [--config PATH] <text>
-
-# List this repo's session records (.bitrouter/sessions/), newest first
-bitrouter acp sessions
 ```
 
 **Routing (default on).** `bitrouter spawn <agent> -p|--serve` is the newer umbrella over `acp prompt|serve` (same code path; `acp` remains a stable alias). Both **route the sub-agent's LLM traffic through the daemon by default**, using per-harness knowledge from the shared catalog (so `bitrouter launch claude` and `bitrouter spawn claude-acp` inject identical gateway env/args). Opt out with `--direct`; pin the model with `--model`; override the gateway with `--base-url`; skip daemon auto-start with `--no-start`. If the daemon is unreachable (after auto-start) or `skip_auth: false` and no `BITROUTER_API_KEY` is set, the launch **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line (`-p`) or a stderr error (`--serve`). The `-p` stream's first line is a `session` correlation line carrying `record_id` + `via` (the daemon base URL, or `null` when direct). Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet; `hermes-acp` also routes headless when you export `HERMES_HOME` pointing at a dir whose `config.yaml` declares the loopback `custom` provider plus `CUSTOM_API_KEY`) and non-catalog agents warn and run direct. See `references/cli.md` → "Harness launch & spawn".
@@ -43,7 +40,7 @@ Each line is a self-describing JSON object with a `type` field (snake_case):
 
 ## Session records
 
-Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, pid, start/end timestamps, status — and shutdown settles it to `exited`. Records are written **atomically** (temp + rename). `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown). The `.bitrouter/` state dir is created **self-ignoring** (a `.gitignore` containing `*`, cargo-style), so records never land in version control by accident.
+Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, pid, start/end timestamps, status — and shutdown settles it to `exited`. Records are written **atomically** (temp + rename). A `running` record whose pid is gone is stale — the substrate was killed without shutdown. The `.bitrouter/` state dir is created **self-ignoring** (a `.gitignore` containing `*`, cargo-style), so records never land in version control by accident.
 
 ## One agent per session (D8)
 

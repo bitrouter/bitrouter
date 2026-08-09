@@ -281,7 +281,6 @@ Prints a YAML stub for the named catalog agent. Paste the output under `agents:`
 ```
 bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [-c <path>] <text>
-bitrouter acp sessions
 ```
 
 Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
