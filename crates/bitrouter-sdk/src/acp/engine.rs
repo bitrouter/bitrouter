@@ -50,6 +50,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use crate::acp::executor::SessionExecutor;
 use crate::acp::permissions::PermissionRegistry;
 use crate::acp::session::SessionState;
+use crate::acp::settlement::AcpSettlementRecorder;
 use crate::acp::telemetry::{RequestCompleted, TelemetryHook};
 use crate::acp::translate::SessionUpdateKind;
 use crate::acp::turn::TurnController;
@@ -66,7 +67,7 @@ const TURN_QUEUE_BOUND: usize = 64;
 const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 
 /// Options for [`Session::launch`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct LaunchOptions {
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
@@ -83,6 +84,25 @@ pub struct LaunchOptions {
     /// (`launch_deferred`) relays the **manager's** descriptors via
     /// [`Session::open`] instead.
     pub mcp_servers: Vec<McpServer>,
+    /// Recorders handed this session's per-turn facts (see
+    /// [`crate::acp::settlement`]). The SDK emits facts; what a turn was
+    /// *worth* is the recorder's business.
+    pub settlement_recorders: Vec<Arc<dyn AcpSettlementRecorder>>,
+}
+
+/// Hand-written because a recorder is a trait object with no `Debug` bound —
+/// requiring one would force every consumer's recorder to be printable for the
+/// sake of this impl. The count is what a log line needs anyway.
+impl std::fmt::Debug for LaunchOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LaunchOptions")
+            .field("strip_inherited_env", &self.strip_inherited_env)
+            .field("turn_timeout", &self.turn_timeout)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("settlement_recorders", &self.settlement_recorders.len())
+            .finish()
+    }
 }
 
 /// Everything [`Session::build`] needs beyond the agent id; bundled so the
@@ -100,6 +120,8 @@ struct BuildArgs {
     /// `mcpServers` for the immediate `session/new` (unused when deferring —
     /// [`Session::open`] then carries the manager's descriptors).
     mcp_servers: Vec<McpServer>,
+    /// Recorders for this session's per-turn settlement facts.
+    settlement_recorders: Vec<Arc<dyn AcpSettlementRecorder>>,
     /// Run the upstream `session/new` right away (headless/prompt path) rather
     /// than deferring to [`Session::open`] (serve path).
     open_now: bool,
@@ -195,6 +217,7 @@ impl Session {
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
+            settlement_recorders,
         } = options;
         // ── Resolve the agent's stdio transport ────────────────────────────
         let transport = catalog
@@ -219,6 +242,7 @@ impl Session {
                 strip_inherited_env,
                 turn_timeout,
                 mcp_servers,
+                settlement_recorders,
                 open_now,
             },
         )
@@ -235,6 +259,7 @@ impl Session {
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
+            settlement_recorders,
             open_now,
         } = args;
         let AcpTransport::Stdio { command, args, env } = &transport;
@@ -298,7 +323,13 @@ impl Session {
         builder
             .routing_table(Arc::new(PinnedTable { target }))
             .executor(executor)
-            .execution_hook(TelemetryHook::new(telemetry_tx, conn.context_usage()));
+            .execution_hook(TelemetryHook::new(telemetry_tx, conn.context_usage()))
+            // The same usage slot the telemetry hook snapshots also fills the
+            // settlement facts' `cost_facts`.
+            .context_usage(conn.context_usage());
+        for recorder in settlement_recorders {
+            builder.settlement_recorder(recorder);
+        }
         let pipeline = Arc::new(
             builder
                 .build()
@@ -929,6 +960,71 @@ mod tests {
             .map(|e| e.file_name())
             .collect();
         assert!(entries.is_empty(), "cwd must stay untouched: {entries:?}");
+    }
+
+    /// The settlement seam end-to-end: a recorder registered through
+    /// [`LaunchOptions`] receives one facts context per turn, carrying the
+    /// agent, the stop reason, and the context-window occupancy the stub
+    /// streamed mid-turn. Facts only — the SDK never scores the turn.
+    #[tokio::test]
+    async fn settlement_recorder_receives_turn_facts() {
+        use std::sync::Mutex;
+
+        use crate::acp::settlement::{AcpSettlementContext, AcpSettlementRecorder};
+
+        #[derive(Default)]
+        struct Collecting {
+            seen: Mutex<Vec<AcpSettlementContext>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AcpSettlementRecorder for Collecting {
+            async fn record(&self, ctx: &AcpSettlementContext) -> crate::error::Result<()> {
+                if let Ok(mut seen) = self.seen.lock() {
+                    seen.push(ctx.clone());
+                }
+                Ok(())
+            }
+        }
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+        let recorder = std::sync::Arc::new(Collecting::default());
+
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions {
+                settlement_recorders: vec![recorder.clone()],
+                ..LaunchOptions::default()
+            },
+        )
+        .await
+        .expect("launch");
+
+        let resp = session.prompt("hi").await.expect("prompt");
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+        let seen: Vec<AcpSettlementContext> = {
+            let guard = recorder.seen.lock().expect("lock");
+            guard.clone()
+        };
+        assert_eq!(seen.len(), 1, "exactly one facts context per turn");
+        let facts = &seen[0];
+        assert!(!facts.turn_id.is_empty());
+        assert_eq!(facts.agent, "stub");
+        assert_eq!(facts.stop_reason, "EndTurn");
+        assert_eq!(
+            facts.cost_facts,
+            Some(crate::acp::settlement::AcpCostFacts {
+                context_used: 1500,
+                context_size: 200_000,
+            }),
+            "the stub's mid-turn usage_update must reach the settlement facts"
+        );
+
+        session.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
