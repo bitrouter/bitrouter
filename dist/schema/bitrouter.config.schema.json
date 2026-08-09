@@ -98,10 +98,6 @@
       },
       "default": {}
     },
-    "worktrees": {
-      "description": "Worktree isolation settings for isolated agent sessions. All fields\ndefault — `worktrees:` is optional in `bitrouter.yaml`.",
-      "$ref": "#/$defs/WorktreesConfig"
-    },
     "inherit_defaults": {
       "description": "Whether providers inherit workspace defaults.",
       "type": "boolean",
@@ -1755,54 +1751,6 @@
           ]
         }
       ]
-    },
-    "WorktreesConfig": {
-      "description": "Worktree isolation settings for isolated agent sessions.",
-      "type": "object",
-      "properties": {
-        "bootstrap": {
-          "description": "Shell command run inside each **newly created** worktree before its\nagent launches — the bootstrap hook for untracked files a worktree\ndoesn't carry (copy `.env`, install deps). It executes code, so a\ncaller that runs it must gate it behind human approval. The hook runs\nwith cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,\nand the session's allocated `PORT`.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "ports": {
-          "description": "Port pool for per-subagent `PORT` allocation, so N dev servers don't\ncollide. Defaults to 3100–3199.",
-          "$ref": "#/$defs/PortPoolConfig"
-        },
-        "checks": {
-          "description": "Verification checks (shell commands, run in the subagent's worktree)\nthat must pass before its finished turn is \"ready to review\". A\nfailing check loops back to the subagent, not the human. Empty by\ndefault.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        }
-      }
-    },
-    "PortPoolConfig": {
-      "description": "An inclusive port range isolated agent sessions draw their `PORT` from.",
-      "type": "object",
-      "properties": {
-        "from": {
-          "description": "First port in the pool (inclusive).",
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 3100
-        },
-        "to": {
-          "description": "Last port in the pool (inclusive).",
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0,
-          "maximum": 65535,
-          "default": 3199
-        }
-      }
     },
     "RegistryConfig": {
       "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",

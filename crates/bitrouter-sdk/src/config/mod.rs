@@ -81,9 +81,6 @@ pub struct Config {
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bitrouter agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
-    /// Worktree isolation settings for isolated agent sessions. All fields
-    /// default — `worktrees:` is optional in `bitrouter.yaml`.
-    pub worktrees: WorktreesConfig,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's
@@ -121,7 +118,6 @@ impl Default for Config {
             mcp_servers: HashMap::new(),
             server_tools: Default::default(),
             agents: HashMap::new(),
-            worktrees: WorktreesConfig::default(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
@@ -218,46 +214,6 @@ pub enum EvalAuthorityKind {
     /// Evaluator without a stronger domain-specific class.
     #[default]
     Generic,
-}
-
-/// Worktree isolation settings for isolated agent sessions.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct WorktreesConfig {
-    /// Shell command run inside each **newly created** worktree before its
-    /// agent launches — the bootstrap hook for untracked files a worktree
-    /// doesn't carry (copy `.env`, install deps). It executes code, so a
-    /// caller that runs it must gate it behind human approval. The hook runs
-    /// with cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,
-    /// and the session's allocated `PORT`.
-    pub bootstrap: Option<String>,
-    /// Port pool for per-subagent `PORT` allocation, so N dev servers don't
-    /// collide. Defaults to 3100–3199.
-    pub ports: PortPoolConfig,
-    /// Verification checks (shell commands, run in the subagent's worktree)
-    /// that must pass before its finished turn is "ready to review". A
-    /// failing check loops back to the subagent, not the human. Empty by
-    /// default.
-    pub checks: Vec<String>,
-}
-
-/// An inclusive port range isolated agent sessions draw their `PORT` from.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct PortPoolConfig {
-    /// First port in the pool (inclusive).
-    pub from: u16,
-    /// Last port in the pool (inclusive).
-    pub to: u16,
-}
-
-impl Default for PortPoolConfig {
-    fn default() -> Self {
-        Self {
-            from: 3100,
-            to: 3199,
-        }
-    }
 }
 
 /// Current routing-policy artifact configuration.
