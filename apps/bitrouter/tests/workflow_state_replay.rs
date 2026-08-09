@@ -18,7 +18,9 @@ use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
-use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
+use bitrouter::workflow_state::decision::{
+    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
+};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::online::OnlineWorkflowState;
@@ -913,6 +915,69 @@ fn benchmark_bundle_accepts_equivalent_native_and_generic_request_id_joins() {
         &[terminus_decision],
     )
     .expect("a native Terminus bundle must not require private identity headers");
+}
+
+#[test]
+fn benchmark_bundle_joins_opaque_decisions_by_ingress_request_commitment() {
+    let trace = benchmark_trace("br-bench-request-1");
+    let usage = computed_usage("br-bench-request-1", "openai", "gpt-test", 10, 2, 30);
+    let mut decision = benchmark_decision("trajectory-request-opaque");
+    decision.ingress_request_id_sha256 = Some(ingress_request_id_sha256("br-bench-request-1"));
+
+    WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[trace],
+        &[usage],
+        &[decision],
+    )
+    .expect("an opaque policy identity must join through its ingress commitment");
+}
+
+#[test]
+fn benchmark_bundle_rejects_mixed_or_duplicate_ingress_commitments() {
+    let traces = vec![benchmark_trace("req-1"), benchmark_trace("req-2")];
+    let usage = vec![
+        computed_usage("req-1", "openai", "gpt-test", 10, 2, 30),
+        computed_usage("req-2", "openai", "gpt-test", 10, 2, 30),
+    ];
+    let mut committed = benchmark_decision("trajectory-request-1");
+    committed.ingress_request_id_sha256 = Some(ingress_request_id_sha256("req-1"));
+    let legacy = benchmark_decision("req-2");
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &traces,
+        &usage,
+        &[committed.clone(), legacy],
+    )
+    .expect_err("mixed committed and legacy decision identities must fail closed");
+    assert!(error.to_string().contains("mix"), "{error}");
+
+    let mut duplicate = benchmark_decision("trajectory-request-2");
+    duplicate.ingress_request_id_sha256 = committed.ingress_request_id_sha256.clone();
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &traces,
+        &usage,
+        &[committed, duplicate],
+    )
+    .expect_err("duplicate ingress commitments must fail closed");
+    assert!(error.to_string().contains("duplicate"), "{error}");
+}
+
+#[test]
+fn reward_feedback_joins_opaque_decisions_by_ingress_request_commitment() {
+    let trace = benchmark_trace("br-bench-reward-1");
+    let usage = computed_usage("br-bench-reward-1", "openai", "gpt-test", 10, 2, 30);
+    let mut decision = benchmark_decision("trajectory-request-reward-opaque");
+    decision.ingress_request_id_sha256 = Some(ingress_request_id_sha256("br-bench-reward-1"));
+    let outcome = BenchmarkOutcomeRecord::new("episode-a", "terminal-bench/regex-log", 1.0)
+        .with_request_id("br-bench-reward-1");
+
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[trace],
+        &[usage],
+        &[outcome],
+        &[decision],
+    )
+    .expect("reward feedback must use the same opaque ingress commitment join");
 }
 
 #[test]
