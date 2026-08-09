@@ -1734,6 +1734,27 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.04,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "deepseek-v4-flash-0731",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.028,
               "no_cache": 0.14
             },
@@ -4376,6 +4397,22 @@
           },
           "provider": "redpill",
           "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "tinfoil",
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-07-16"
@@ -8236,6 +8273,28 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.28,
+              "cache_write": 0.0,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": [
             "openai",
