@@ -41,6 +41,18 @@ serde-saphyr = { workspace = true, optional = true }
 
 # `acp` feature — typed ACP schema payloads (PromptRequest / PromptResponse / …)
 agent-client-protocol-schema = { workspace = true, optional = true }
+# `acp` feature — the ACP SDK proper: the `Agent`/`Client` roles, connection
+# builders, and stdio transport the live thin proxy (`acp::up` / `acp::down`)
+# drives. Only the runtime needs it; the pure-routing pipeline does not.
+agent-client-protocol = { workspace = true, optional = true }
+# `acp` feature — the proxy's stream/compat glue: `BroadcastStream` for the
+# fan-out planes and `tokio_util::compat` to hand the child's tokio pipes to
+# the futures-io based ACP SDK.
+tokio-stream = { workspace = true, features = ["sync"], optional = true }
+# `acp` feature — the ACP runtime's error type. The routing pipeline uses
+# `BitrouterError`; the session engine surfaces process/handshake failures,
+# which are contextual chains rather than gateway status codes.
+anyhow = { workspace = true, optional = true }
 
 # `mcp` feature — official Rust MCP SDK.
 # <https://github.com/modelcontextprotocol/rust-sdk>
@@ -57,10 +69,28 @@ config_file = ["dep:serde-saphyr", "tokio/fs"]
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
 # can plug in a custom Executor without pulling rmcp.
 mcp = ["dep:rmcp", "tokio/process"]
-# `ConfigAcpRoutingTable` for the `acp` pure-routing pipeline.
-# Without this feature the SDK still exposes `acp::Pipeline`, hook traits,
-# and the `AcpTransport` enum, so a consumer can plug in a custom Executor.
-acp = ["dep:agent-client-protocol-schema", "tokio/process", "tokio/io-util"]
+# The ACP thin proxy: `ConfigAcpRoutingTable` for the pure-routing pipeline
+# plus the live runtime (`acp::up`/`engine`/`down`) that drives one agent
+# child as one session. Without this feature the SDK still exposes the
+# `AcpTransport` enum, `AcpTarget`, and the `RoutingTable` trait, so a
+# consumer can wire ACP routing without pulling the ACP SDK in.
+acp = [
+    "dep:agent-client-protocol-schema",
+    "dep:agent-client-protocol",
+    "dep:tokio-stream",
+    "dep:anyhow",
+    "dep:rustix",
+    "tokio/process",
+    "tokio/io-util",
+    "tokio/rt-multi-thread",
+    "tokio-util/compat",
+]
+
+[target.'cfg(unix)'.dependencies]
+# `acp` feature — safe `killpg(2)` for reaping an agent child's whole process
+# group when the ACP SDK's own child guard is not enough. `rustix` rather than
+# `libc` because this crate is `#![forbid(unsafe_code)]`.
+rustix = { workspace = true, features = ["process"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = [
@@ -71,3 +101,5 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "test-util",
 ] }
+# `acp` runtime tests launch stub agents in throwaway working directories.
+tempfile.workspace = true
