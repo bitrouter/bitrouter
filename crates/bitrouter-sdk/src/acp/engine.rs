@@ -26,36 +26,35 @@
 //! `Arc<UpstreamConnection>` clones (the pipeline's executor, a mid-turn
 //! worker) only keep the struct alive, not the connection: their subsequent
 //! calls fail fast on the closed command channel. If the connection ended on
-//! its own earlier (agent crash), shutdown is a no-op for the connection and
-//! still settles the session's durable record.
+//! its own earlier (agent crash), shutdown is a no-op for the connection.
 
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use crate::acp::{
+    AcpRequest, AcpRequestPayload, AcpTarget, AcpTransport, ConfigAcpRoutingTable, Pipeline,
+    PipelineBuilder, RoutingTable,
+};
+use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result as SdkResult};
 use agent_client_protocol_schema::v1::{
     ContentBlock, McpServer, PromptRequest, PromptResponse, SessionId, SessionUpdate, StopReason,
     TextContent,
 };
 use async_trait::async_trait;
-use bitrouter_sdk::acp::{
-    AcpRequest, AcpRequestPayload, AcpTarget, AcpTransport, ConfigAcpRoutingTable, Pipeline,
-    PipelineBuilder, RoutingTable,
-};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::error::{BitrouterError, Result as SdkResult};
 use futures::Stream;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
-use crate::executor::SessionExecutor;
-use crate::permissions::PermissionRegistry;
-use crate::record::{RecordStatus, RecordStore, SessionRecord, now_unix};
-use crate::session::{SessionState, SessionStatus};
-use crate::telemetry::{RequestCompleted, TelemetryHook};
-use crate::translate::SessionUpdateKind;
-use crate::turn::TurnController;
-use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
+use crate::acp::executor::SessionExecutor;
+use crate::acp::permissions::PermissionRegistry;
+use crate::acp::session::SessionState;
+use crate::acp::settlement::AcpSettlementRecorder;
+use crate::acp::telemetry::{RequestCompleted, TelemetryHook};
+use crate::acp::translate::SessionUpdateKind;
+use crate::acp::turn::TurnController;
+use crate::acp::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
 /// before [`TurnController::try_submit`] reports backpressure. `prompt` uses the
@@ -68,7 +67,7 @@ const TURN_QUEUE_BOUND: usize = 64;
 const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 
 /// Options for [`Session::launch`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct LaunchOptions {
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
@@ -85,16 +84,35 @@ pub struct LaunchOptions {
     /// (`launch_deferred`) relays the **manager's** descriptors via
     /// [`Session::open`] instead.
     pub mcp_servers: Vec<McpServer>,
+    /// Recorders handed this session's per-turn facts (see
+    /// [`crate::acp::settlement`]). The SDK emits facts; what a turn was
+    /// *worth* is the recorder's business.
+    pub settlement_recorders: Vec<Arc<dyn AcpSettlementRecorder>>,
+}
+
+/// Hand-written because a recorder is a trait object with no `Debug` bound —
+/// requiring one would force every consumer's recorder to be printable for the
+/// sake of this impl. The count is what a log line needs anyway.
+impl std::fmt::Debug for LaunchOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LaunchOptions")
+            .field("strip_inherited_env", &self.strip_inherited_env)
+            .field("turn_timeout", &self.turn_timeout)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("settlement_recorders", &self.settlement_recorders.len())
+            .finish()
+    }
 }
 
 /// Everything [`Session::build`] needs beyond the agent id; bundled so the
 /// launch paths stay readable.
 struct BuildArgs {
     transport: AcpTransport,
-    /// The repository the session runs in: the upstream `session/new` cwd
-    /// (unless a manager relays its own) and the root of the record store.
-    base_repo: PathBuf,
-    /// The session's stable manager-facing record id, minted in `launch_inner`.
+    /// The working directory the session runs in — the upstream `session/new`
+    /// cwd, unless a manager relays its own.
+    cwd: PathBuf,
+    /// The session's stable manager-facing id, minted in `launch_inner`.
     record_id: String,
     /// Environment names stripped from the child before the explicit overlay.
     strip_inherited_env: Vec<String>,
@@ -102,6 +120,8 @@ struct BuildArgs {
     /// `mcpServers` for the immediate `session/new` (unused when deferring —
     /// [`Session::open`] then carries the manager's descriptors).
     mcp_servers: Vec<McpServer>,
+    /// Recorders for this session's per-turn settlement facts.
+    settlement_recorders: Vec<Arc<dyn AcpSettlementRecorder>>,
     /// Run the upstream `session/new` right away (headless/prompt path) rather
     /// than deferring to [`Session::open`] (serve path).
     open_now: bool,
@@ -126,7 +146,7 @@ impl RoutingTable for PinnedTable {
 
 /// One live session: upstream connection + SDK pipeline + turn queue.
 pub struct Session {
-    /// Manager-facing identity + status.
+    /// Manager-facing identity.
     pub state: SessionState,
     /// The upstream ACP connection (agent child). Shared with the pipeline's
     /// executor; see the module-level shutdown note.
@@ -136,41 +156,39 @@ pub struct Session {
     /// Serialises prompts into ordered turns, each carrying the prompt's
     /// content blocks verbatim and yielding a [`PromptResponse`].
     turn: TurnController<Vec<ContentBlock>, PromptResponse>,
-    /// The repository the session runs in — the `session/new` cwd fallback
-    /// when no manager relays one of its own.
-    base_repo: PathBuf,
+    /// The working directory the session runs in — the `session/new` cwd
+    /// fallback when no manager relays one of its own.
+    cwd: PathBuf,
     /// Wire identity, set exactly once — at launch (immediate open) or when
     /// the manager's `session/new` arrives ([`Session::open`]).
     wire: Arc<OnceLock<UpstreamSessionIds>>,
-    /// The session's durable on-disk record; wire ids added at open, settled
-    /// to `Exited` at shutdown. Mutex because `open` runs behind `&self`.
-    record: std::sync::Mutex<SessionRecord>,
-    /// Persists [`Self::record`] under `<base_repo>/.bitrouter/sessions/`.
-    records: RecordStore,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
     /// Session-scoped registry of outstanding permission requests. The sole
     /// consumer of the upstream (take-once) permission stream; re-exposes it as a
     /// re-subscribable stream so a reattached manager sees the outstanding set
-    /// instead of an empty stream. See [`crate::permissions`].
+    /// instead of an empty stream. See [`crate::acp::permissions`].
     permissions: Arc<PermissionRegistry>,
 }
 
 impl Session {
     /// Launch a session and **open it immediately**: resolve `agent_id` in
     /// `catalog`, spawn the upstream connection, run `initialize` +
-    /// `session/new` (cwd = `base_repo`, `mcpServers` from
-    /// [`LaunchOptions::mcp_servers`]), build the pipeline and turn queue, and
-    /// record the session identity. Used by the headless `prompt` path and
-    /// library callers that have no manager to relay from.
+    /// `session/new` (with `cwd` and the `mcpServers` from
+    /// [`LaunchOptions::mcp_servers`]), and build the pipeline and turn queue.
+    /// Used by the headless `prompt` path and library callers that have no
+    /// manager to relay from.
+    ///
+    /// `cwd` is **caller-prepared**: the gateway runs the agent in the
+    /// directory it is handed and never provisions one itself.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
-        base_repo: PathBuf,
+        cwd: PathBuf,
         options: LaunchOptions,
     ) -> anyhow::Result<Self> {
-        Self::launch_inner(catalog, agent_id, base_repo, options, true).await
+        Self::launch_inner(catalog, agent_id, cwd, options, true).await
     }
 
     /// Launch a session with the upstream `session/new` **deferred**: the
@@ -182,16 +200,16 @@ impl Session {
     pub async fn launch_deferred(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
-        base_repo: PathBuf,
+        cwd: PathBuf,
         options: LaunchOptions,
     ) -> anyhow::Result<Self> {
-        Self::launch_inner(catalog, agent_id, base_repo, options, false).await
+        Self::launch_inner(catalog, agent_id, cwd, options, false).await
     }
 
     async fn launch_inner(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
-        base_repo: PathBuf,
+        cwd: PathBuf,
         options: LaunchOptions,
         open_now: bool,
     ) -> anyhow::Result<Self> {
@@ -199,6 +217,7 @@ impl Session {
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
+            settlement_recorders,
         } = options;
         // ── Resolve the agent's stdio transport ────────────────────────────
         let transport = catalog
@@ -208,20 +227,22 @@ impl Session {
 
         // ── Identity (D8/D10) ──────────────────────────────────────────────
         // `record_id` is a STABLE, distinct manager-facing id — minted here,
-        // NOT the upstream `acp_session_id`. Keeping it separate from the wire
-        // id lets the manager-facing id survive an upstream reconnect (v2)
-        // while the upstream wire id can change.
+        // NOT the upstream `acp_session_id`. It is the id this session answers
+        // `session/new` with on the down-facing wire; keeping it separate from
+        // the upstream wire id lets the manager-facing id survive an upstream
+        // reconnect (v2) while the upstream wire id can change.
         let record_id = uuid::Uuid::new_v4().to_string();
 
         Self::build(
             agent_id,
             BuildArgs {
                 transport,
-                base_repo,
+                cwd,
                 record_id,
                 strip_inherited_env,
                 turn_timeout,
                 mcp_servers,
+                settlement_recorders,
                 open_now,
             },
         )
@@ -233,11 +254,12 @@ impl Session {
     async fn build(agent_id: &str, args: BuildArgs) -> anyhow::Result<Self> {
         let BuildArgs {
             transport,
-            base_repo,
+            cwd,
             record_id,
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
+            settlement_recorders,
             open_now,
         } = args;
         let AcpTransport::Stdio { command, args, env } = &transport;
@@ -251,11 +273,10 @@ impl Session {
                 .await?,
         );
 
-        // The record id was minted in `launch_inner`. The down-facing
+        // The manager-facing id was minted in `launch_inner`. The down-facing
         // `SessionAgent` returns `record_id` for `session/new`; the upstream
         // `acp_session_id` stays internal.
         let mut state = SessionState::new(record_id, agent_id.to_string());
-        state.status = SessionStatus::Idle;
 
         // Wire identity slot: set exactly once, either right below (`open_now`)
         // or by `Session::open` when the manager's `session/new` arrives. The
@@ -263,7 +284,7 @@ impl Session {
         // open fails with a clear error.
         let wire: Arc<OnceLock<UpstreamSessionIds>> = Arc::new(OnceLock::new());
         if open_now {
-            let ids = conn.new_session(base_repo.clone(), mcp_servers).await?;
+            let ids = conn.new_session(cwd.clone(), mcp_servers).await?;
             state.set_acp_session_id(ids.acp_session_id.clone());
             if let Some(agent_sid) = &ids.agent_session_id {
                 state.set_agent_session_id(agent_sid.clone());
@@ -275,7 +296,7 @@ impl Session {
         // One pump drains the upstream permission stream into a session-scoped
         // registry; every manager connection (re)subscribes to the registry, so a
         // reattached manager sees any permission that was outstanding when it
-        // left instead of an empty stream. See `crate::permissions`.
+        // left instead of an empty stream. See `crate::acp::permissions`.
         let permissions = Arc::new(PermissionRegistry::new());
 
         {
@@ -302,7 +323,13 @@ impl Session {
         builder
             .routing_table(Arc::new(PinnedTable { target }))
             .executor(executor)
-            .execution_hook(TelemetryHook::new(telemetry_tx, conn.context_usage()));
+            .execution_hook(TelemetryHook::new(telemetry_tx, conn.context_usage()))
+            // The same usage slot the telemetry hook snapshots also fills the
+            // settlement facts' `cost_facts`.
+            .context_usage(conn.context_usage());
+        for recorder in settlement_recorders {
+            builder.settlement_recorder(recorder);
+        }
         let pipeline = Arc::new(
             builder
                 .build()
@@ -387,33 +414,13 @@ impl Session {
             )
         };
 
-        // ── Durable session record ─────────────────────────────────────────
-        // Best-effort: a record-write failure must not fail the launch, but it
-        // is surfaced because managers depend on records existing.
-        let record = SessionRecord {
-            record_id: state.record_id.clone(),
-            agent_id: state.agent_id.clone(),
-            acp_session_id: state.acp_session_id.clone(),
-            agent_session_id: state.agent_session_id.clone(),
-            pid: std::process::id(),
-            started_at: now_unix(),
-            status: RecordStatus::Running,
-            ended_at: None,
-        };
-        let records = RecordStore::new(&base_repo);
-        if let Err(e) = records.write(&record).await {
-            tracing::warn!(error = %e, "failed to write session record");
-        }
-
         Ok(Self {
             state,
             conn,
             pipeline,
             turn,
-            base_repo,
+            cwd,
             wire,
-            record: std::sync::Mutex::new(record),
-            records,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
             permissions,
         })
@@ -421,8 +428,8 @@ impl Session {
 
     /// Open the upstream session (`session/new`) for a
     /// [`launch_deferred`](Self::launch_deferred) session, relaying the
-    /// **manager's** `cwd` and `mcpServers`. Without a relayed `cwd` the base
-    /// repo is used.
+    /// **manager's** `cwd` and `mcpServers`. Without a relayed `cwd` the
+    /// launch cwd is used.
     ///
     /// Idempotent: opening an already-open session (including one launched
     /// with the immediate-open [`launch`](Self::launch)) is a no-op — the
@@ -437,25 +444,10 @@ impl Session {
             tracing::debug!("session already open; ignoring session/new arguments");
             return Ok(());
         }
-        let cwd = manager_cwd.unwrap_or_else(|| self.base_repo.clone());
+        let cwd = manager_cwd.unwrap_or_else(|| self.cwd.clone());
         let ids = self.conn.new_session(cwd, mcp_servers).await?;
         // A concurrent open may have won the race; first one in wins.
-        if self.wire.set(ids.clone()).is_err() {
-            return Ok(());
-        }
-        // Persist the wire identity into the durable record.
-        let updated = {
-            let mut guard = match self.record.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            guard.acp_session_id = Some(ids.acp_session_id.clone());
-            guard.agent_session_id = ids.agent_session_id.clone();
-            guard.clone()
-        };
-        if let Err(e) = self.records.write(&updated).await {
-            tracing::warn!(error = %e, "failed to update session record after open");
-        }
+        let _ = self.wire.set(ids);
         Ok(())
     }
 
@@ -521,7 +513,7 @@ impl Session {
         self.telemetry_rx.lock().ok().and_then(|mut g| g.take())
     }
 
-    /// The session's identity + status.
+    /// The session's identity.
     pub fn state(&self) -> &SessionState {
         &self.state
     }
@@ -532,15 +524,13 @@ impl Session {
         self.conn.upstream_init()
     }
 
-    /// Tears the upstream connection down deterministically (killing the agent
-    /// child) and settles the session's durable record.
+    /// Tears the upstream connection down deterministically, killing the agent
+    /// child.
     pub async fn shutdown(self) -> anyhow::Result<()> {
         let Session {
             conn,
             pipeline,
             turn,
-            record,
-            records,
             ..
         } = self;
 
@@ -549,24 +539,13 @@ impl Session {
         drop(pipeline);
 
         // Explicit teardown: the command loop exits, the connection drops, and
-        // the agent child is killed; returns once the driver confirms. A
-        // failure must not skip record settlement, so it is logged instead of
-        // propagated.
+        // the agent child is killed; returns once the driver confirms. An
+        // unconfirmed teardown is logged rather than propagated — the caller
+        // asked to shut down and there is nothing left to retry.
         if let Err(e) = conn.shutdown().await {
             tracing::warn!(error = %e, "upstream teardown unconfirmed; child may not have terminated");
         }
         drop(conn);
-
-        // Settle the durable record last so it reflects the final state.
-        let mut record = match record.into_inner() {
-            Ok(record) => record,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        record.status = RecordStatus::Exited;
-        record.ended_at = Some(now_unix());
-        if let Err(e) = records.write(&record).await {
-            tracing::warn!(error = %e, "failed to update session record");
-        }
         Ok(())
     }
 }
@@ -575,8 +554,8 @@ impl Session {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
     use agent_client_protocol_schema::v1::StopReason;
-    use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
     use futures::StreamExt;
 
     use super::{LaunchOptions, Session};
@@ -658,28 +637,33 @@ mod tests {
     /// Deferred launch: prompting before `open` fails with a clear error;
     /// `open` relays the manager's `mcpServers` (and cwd) into the upstream
     /// `session/new` — the stub proves it by echoing a marker session id when
-    /// the request carried the probe MCP server; the wire id lands in the
-    /// durable record.
+    /// the request carried the probe MCP server.
     #[tokio::test]
     async fn deferred_launch_relays_manager_mcp_servers_on_open() {
         use agent_client_protocol_schema::v1::{McpServer, McpServerStdio};
 
+        // The stub reports what it saw on `session/new` back through the
+        // *prompt* stream: the manager-relayed `mcpServers` never reach the
+        // manager-facing `state()` on a deferred launch (the wire id stays
+        // internal), so the update stream is the observable proof.
         const RELAY_STUB: &str = r#"
+            saw="no-mcp"
             while read line; do
               id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
               case "$line" in
                 *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
                 *session/new*)
                     case "$line" in
-                      *relay-probe-server*) sid="saw-mcp";;
-                      *) sid="no-mcp";;
+                      *relay-probe-server*) saw="saw-mcp";;
                     esac
-                    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"%s"}}\n' "$id" "$sid";;
-                *session/prompt*) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s"}}}}\n' "$saw"
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "relay".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -708,30 +692,26 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        // Open with the manager's cwd + an MCP server; the stub marks the
-        // session id when it sees the server in the request.
+        // Open with the manager's cwd + an MCP server; the stub records that it
+        // saw the server in the request.
         let probe = McpServer::Stdio(McpServerStdio::new("relay-probe-server", "probe-cmd"));
         session
             .open(Some(base.path().to_path_buf()), vec![probe])
             .await
             .expect("open");
 
-        // The relayed request produced the marker wire id, persisted into the
-        // durable record.
-        let records = crate::record::RecordStore::new(base.path())
-            .list()
-            .await
-            .expect("list records");
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].acp_session_id.as_deref(),
-            Some("saw-mcp"),
-            "upstream session/new must carry the manager's mcpServers"
-        );
-
-        // Prompting now works, and open is idempotent.
+        // Prompting now works, and the stub reports the manager's mcpServers
+        // reached the upstream `session/new`.
+        let mut updates = session.updates();
         let resp = session.prompt("hi").await.expect("prompt after open");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        let ev = updates.next().await.expect("streamed update");
+        assert!(
+            format!("{ev:?}").contains("saw-mcp"),
+            "upstream session/new must carry the manager's mcpServers: {ev:?}"
+        );
+
+        // Open is idempotent.
         session
             .open(None, vec![])
             .await
@@ -761,7 +741,7 @@ mod tests {
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "relay".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -922,7 +902,7 @@ mod tests {
               esac
             done
         "#;
-        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+        let cfg = crate::acp::AcpAgentConfig {
             name: "stall".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
@@ -957,10 +937,10 @@ mod tests {
         session.shutdown().await.expect("shutdown");
     }
 
+    /// A launch leaves nothing behind in the cwd: the gateway runs the agent in
+    /// the directory it was handed and writes no durable state of its own.
     #[tokio::test]
-    async fn session_record_written_running_then_exited() {
-        use crate::record::{RecordStatus, RecordStore};
-
+    async fn launch_writes_nothing_into_the_cwd() {
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
@@ -972,22 +952,79 @@ mod tests {
         )
         .await
         .expect("launch");
-        let record_id = session.state().record_id.clone();
-
-        let store = RecordStore::new(base.path());
-        let records = store.list().await.expect("list");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].record_id, record_id);
-        assert_eq!(records[0].status, RecordStatus::Running);
-        assert_eq!(records[0].pid, std::process::id());
-        assert!(records[0].ended_at.is_none());
-
         session.shutdown().await.expect("shutdown");
 
-        let records = store.list().await.expect("list");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].status, RecordStatus::Exited);
-        assert!(records[0].ended_at.is_some());
+        let entries: Vec<_> = std::fs::read_dir(base.path())
+            .expect("read cwd")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert!(entries.is_empty(), "cwd must stay untouched: {entries:?}");
+    }
+
+    /// The settlement seam end-to-end: a recorder registered through
+    /// [`LaunchOptions`] receives one facts context per turn, carrying the
+    /// agent, the stop reason, and the context-window occupancy the stub
+    /// streamed mid-turn. Facts only — the SDK never scores the turn.
+    #[tokio::test]
+    async fn settlement_recorder_receives_turn_facts() {
+        use std::sync::Mutex;
+
+        use crate::acp::settlement::{AcpSettlementContext, AcpSettlementRecorder};
+
+        #[derive(Default)]
+        struct Collecting {
+            seen: Mutex<Vec<AcpSettlementContext>>,
+        }
+
+        #[async_trait::async_trait]
+        impl AcpSettlementRecorder for Collecting {
+            async fn record(&self, ctx: &AcpSettlementContext) -> crate::error::Result<()> {
+                if let Ok(mut seen) = self.seen.lock() {
+                    seen.push(ctx.clone());
+                }
+                Ok(())
+            }
+        }
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+        let recorder = std::sync::Arc::new(Collecting::default());
+
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions {
+                settlement_recorders: vec![recorder.clone()],
+                ..LaunchOptions::default()
+            },
+        )
+        .await
+        .expect("launch");
+
+        let resp = session.prompt("hi").await.expect("prompt");
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+        let seen: Vec<AcpSettlementContext> = {
+            let guard = recorder.seen.lock().expect("lock");
+            guard.clone()
+        };
+        assert_eq!(seen.len(), 1, "exactly one facts context per turn");
+        let facts = &seen[0];
+        assert!(!facts.turn_id.is_empty());
+        assert_eq!(facts.agent, "stub");
+        assert_eq!(facts.stop_reason, "EndTurn");
+        assert_eq!(
+            facts.cost_facts,
+            Some(crate::acp::settlement::AcpCostFacts {
+                context_used: 1500,
+                context_size: 200_000,
+            }),
+            "the stub's mid-turn usage_update must reach the settlement facts"
+        );
+
+        session.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
@@ -1014,7 +1051,7 @@ mod tests {
         // The stub streamed a usage_update mid-turn; the hook snapshots it.
         assert_eq!(
             record.context,
-            Some(crate::telemetry::ContextUsage {
+            Some(crate::acp::telemetry::ContextUsage {
                 used: 1500,
                 size: 200_000,
             })

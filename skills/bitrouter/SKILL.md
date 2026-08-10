@@ -255,7 +255,7 @@ Read these on demand — don't load them all upfront.
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
-| `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, session records, one-agent-per-session, turn queue, identity, v1 limits |
+| `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, caller-prepared cwd, one-agent-per-session, turn queue, identity, v1 limits |
 
 ## 7. Gotchas
 

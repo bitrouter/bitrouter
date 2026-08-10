@@ -467,8 +467,24 @@ fn launch_state_dir() -> Result<PathBuf> {
         .context("resolving the working directory for synthesized harness config")?
         .join(".bitrouter");
     // Best-effort — a missing/unwritable ignore file must not block a launch.
-    let _ = bitrouter_substrate::dotdir::ensure_self_ignored(&dot_dir);
+    let _ = ensure_self_ignored(&dot_dir);
     Ok(dot_dir.join("launch"))
+}
+
+/// Create `dot_dir` (and parents) if needed and drop a self-ignoring
+/// `.gitignore` into it unless one already exists.
+///
+/// Nothing under `<repo>/.bitrouter/` belongs in version control, so the
+/// directory is created with a `.gitignore` containing `*` — the same trick
+/// cargo uses for `target/` — instead of trusting every repo to ignore it. A
+/// `.gitignore` a user wrote themselves is never overwritten.
+fn ensure_self_ignored(dot_dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dot_dir)?;
+    let gitignore = dot_dir.join(".gitignore");
+    if !gitignore.exists() {
+        std::fs::write(&gitignore, "*\n")?;
+    }
+    Ok(())
 }
 
 /// Best-effort fetch of the daemon's advertised model ids (`GET /v1/models`),
@@ -1218,6 +1234,31 @@ impl InstallCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_dir_is_created_self_ignoring() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let dot = base.path().join(".bitrouter");
+        ensure_self_ignored(&dot).expect("ensure");
+        assert_eq!(
+            std::fs::read_to_string(dot.join(".gitignore")).expect("read"),
+            "*\n"
+        );
+    }
+
+    #[test]
+    fn dot_dir_never_overwrites_an_existing_gitignore() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let dot = base.path().join(".bitrouter");
+        std::fs::create_dir_all(&dot).expect("mkdir");
+        std::fs::write(dot.join(".gitignore"), "launch/\n").expect("write");
+        ensure_self_ignored(&dot).expect("ensure");
+        assert_eq!(
+            std::fs::read_to_string(dot.join(".gitignore")).expect("read"),
+            "launch/\n",
+            "a user-authored ignore file is preserved"
+        );
+    }
 
     /// The gateway servers `launch` builds from a default config, and their
     /// arrival in each injectable harness's synthesized surface.

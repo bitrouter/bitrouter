@@ -38,9 +38,9 @@ Each line is a self-describing JSON object with a `type` field (snake_case):
 | `result` | Terminal line — carries `stop_reason` (ACP wire spelling, e.g. `"end_turn"`) |
 | `submitted` | Only with `--no-wait` — emitted after enqueue, then the process exits |
 
-## Session records
+## Caller-prepared cwd, no durable state
 
-Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, pid, start/end timestamps, status — and shutdown settles it to `exited`. Records are written **atomically** (temp + rename). A `running` record whose pid is gone is stale — the substrate was killed without shutdown. The `.bitrouter/` state dir is created **self-ignoring** (a `.gitignore` containing `*`, cargo-style), so records never land in version control by accident.
+A session runs the agent in the **cwd it is handed** (`bitrouter acp serve|prompt` use the process's current directory) and writes nothing durable of its own — no session records, no state directory. Directory isolation, if you want it, is something the orchestrator wraps around the session, not something the session provisions.
 
 ## One agent per session (D8)
 
@@ -56,7 +56,7 @@ Each session carries three identity fields:
 
 | Field | Source | Purpose |
 |---|---|---|
-| `record_id` | Locally generated (UUID) | Stable local handle, survives wire/provider changes |
+| `record_id` | Locally generated (UUID) | Manager-facing session id — what the down-facing `session/new` answers with; survives wire/provider changes |
 | `acp_session_id` | Returned by upstream `session/new` | ACP protocol session identity |
 | `agent_session_id` | Optional — from `_meta.agentSessionId`, never synthesized | Agent's own session handle; hook for v2 resume |
 
