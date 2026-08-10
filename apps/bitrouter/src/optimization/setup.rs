@@ -79,6 +79,7 @@ pub async fn existing_tier_routes(
     ))
 }
 
+#[cfg(not(windows))]
 fn matches_target(
     target: Option<&bitrouter_sdk::config::PolicyModelTarget>,
     model: &str,
