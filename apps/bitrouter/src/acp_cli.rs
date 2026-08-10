@@ -11,9 +11,6 @@
 //!   after the prompt resolves (or immediately after submission when `no_wait`
 //!   is true).
 //!
-//! - [`sessions`] — list the durable session records under the current repo's
-//!   `.bitrouter/sessions/`, newest first.
-//!
 //! ## NDJSON format
 //!
 //! Update lines carry the [`SessionUpdateKind`] directly — the `type` tag
