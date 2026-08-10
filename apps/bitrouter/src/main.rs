@@ -1343,7 +1343,10 @@ enum AcpCmd {
     /// manager disconnects. Intended for GUIs and orchestrating agents that
     /// speak ACP directly.
     Serve {
-        /// Agent id — must exist under `agents:` in the config.
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs
+        /// no config entry.
         #[arg(long)]
         agent: String,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
@@ -1375,7 +1378,10 @@ enum AcpCmd {
     /// a `type` field (e.g. `message_chunk`, `tool_call`). The final line has
     /// `type: result` with a `stop_reason` field.
     Prompt {
-        /// Agent id — must exist under `agents:` in the config.
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs
+        /// no config entry.
         #[arg(long)]
         agent: String,
         /// Per-turn deadline in seconds. On elapse the agent is asked to

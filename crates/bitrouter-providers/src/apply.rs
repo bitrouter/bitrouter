@@ -49,8 +49,8 @@ pub fn zero_config() -> Config {
             continue;
         };
         // Go through `bitrouter_sdk::config::env_lookup` so a daemon-
-        // side override map (installed by the CLI's `bitrouter reload
-        // --env`) takes precedence over `std::env::var`. This is what
+        // side override map (installed by the CLI's `bitrouter reload`)
+        // takes precedence over `std::env::var`. This is what
         // lets a newly-exported API key flow into the running daemon's
         // auto-enabled provider list without a full restart.
         if bitrouter_sdk::config::env_lookup(env_var)
@@ -68,8 +68,9 @@ pub fn zero_config() -> Config {
 /// Provider → credential-env-var pairs for every provider the OSS can
 /// env-authenticate: the compiled-in cloud gateway plus every env-keyed,
 /// mergeable provider in the **disk-cached** registry (OAuth / native providers
-/// have no env var and are omitted). Used by the onboarding hint and `bitrouter
-/// reload --env`. On a never-fetched host the cache is absent, so only the
+/// have no env var and are omitted). Used by the onboarding hint and by
+/// `bitrouter reload`, which snapshots these vars from the CLI's environment and
+/// hands them to the daemon. On a never-fetched host the cache is absent, so only the
 /// cloud gateway is listed until the first successful fetch populates it.
 pub fn zero_config_env_var_providers() -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = builtin::all()
