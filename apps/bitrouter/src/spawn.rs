@@ -527,10 +527,15 @@ pub const HOSTED_ENV_UNSET: &[&str] = &[
 /// The child env for hosted mode: the routing overlay **verbatim**, plus the
 /// terminal-identity corrections above.
 ///
+/// Gated with its only caller, [`exec_hosted`]: an item whose consumers are
+/// all behind a `cfg` has to carry the same `cfg`, or the platform that
+/// excludes them sees dead code.
+///
 /// The routing half is byte-identical to plain `launch` by construction — it
 /// is the same [`ChildLaunch`] from the same [`prepare`]. Only terminal
 /// identity may differ, and only by the three lists, which
 /// `hosted_env_differs_only_by_the_allowlist` pins.
+#[cfg(unix)]
 fn hosted_env(launch: &ChildLaunch) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![
         ("TERM".to_string(), "xterm-256color".to_string()),
@@ -1780,6 +1785,7 @@ mod tests {
         assert!(is_launch_token(&minted), "{minted}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn hosted_env_differs_only_by_the_allowlist() {
         // The requirement `--tui` lives or dies on: the routing half of the
@@ -1820,6 +1826,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_routing_overlay_outranks_terminal_identity() {
         // A harness that legitimately wants its own TERM (or any key we also

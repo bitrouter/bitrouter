@@ -1493,15 +1493,18 @@ mod tests {
     /// the correct outcome. Sizing these to "about how long it should take"
     /// is what makes a suite flaky under parallel load — the assertion then
     /// reports CPU contention rather than a defect.
+    #[cfg(not(windows))]
     const GENEROUS_TIMEOUT_SECS: u64 = 60;
 
     /// The **timeout** path is the one place a short deadline is the subject
     /// of the test, so it stays short — and the child instead sleeps far
     /// longer than the runner should ever let it, so "we cut it short" is
     /// unmistakable rather than a narrow tolerance.
+    #[cfg(not(windows))]
     const TIMEOUT_UNDER_TEST_SECS: u64 = 1;
 
     /// How long the timed-out child would sleep if nothing stopped it.
+    #[cfg(not(windows))]
     const UNINTERRUPTED_CHILD_SECS: u64 = 120;
 
     /// Upper bound on the timed-out run. Legitimate teardown after the
@@ -1509,6 +1512,7 @@ mod tests {
     /// drain in `run_workflow_command`, so ~7s is the honest worst case; this
     /// sits well above that and *far* below [`UNINTERRUPTED_CHILD_SECS`], which
     /// is what makes it a real assertion instead of a stopwatch.
+    #[cfg(not(windows))]
     const TEARDOWN_CEILING_SECS: u64 = 30;
 
     #[cfg(not(windows))]
