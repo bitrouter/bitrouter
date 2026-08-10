@@ -543,7 +543,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // opted out. Fail fast to stderr — before speaking any ACP — so a manager
     // handles "child failed to start" rather than a mid-session provider error.
     if let Err(e) = apply_routing(source, &mut config, agent_id, &routing).await {
-        eprintln!("spawn: {}\n  hint: {}", e.message(), e.hint());
+        eprintln!("error: {}\n  hint: {}", e.message(), e.hint());
         std::process::exit(1);
     }
     let catalog = catalog_from_config(&config)?;
