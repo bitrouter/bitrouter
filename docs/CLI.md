@@ -94,9 +94,20 @@ Any provider API keys present in the current environment are forwarded to the da
 
 ```
 bitrouter status [-c <path>] [--socket <path>]
+bitrouter status --watch             # live view of what the router is doing
 ```
 
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
+
+`--watch` (`-w`) opens a live, self-refreshing view instead: a newest-first stream of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a header stating daemon state and a footer carrying today's spend and the trailing-minute rate. It refreshes once a second and reads the metering store directly, so it also works with **no daemon running** (the header says `history only` rather than showing an empty list that looks like idleness).
+
+Keys: `↑`/`↓` or `j`/`k` move, `g` jumps to the live edge and re-arms auto-follow, `G` to the oldest row, `?` help, `q` quit. The view is read-only apart from two keys that run existing commands and echo what they ran: `r` reloads the daemon, and `e` opens `bitrouter.yaml` in `$VISUAL`/`$EDITOR` then reloads. It never writes config itself and never handles a credential — use `bitrouter providers login` for those.
+
+Moving the cursor off the newest row pauses auto-follow (the footer says `paused`), so reading history is not interrupted by incoming requests.
+
+Piped or redirected, `--watch` prints **one** snapshot as a plain table and exits, so `bitrouter status --watch | …` stays scriptable. Bare `bitrouter status` is unchanged.
+
+Unix only; on Windows `--watch` is rejected with a message rather than half-working.
 
 ---
 
@@ -288,10 +299,30 @@ Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over 
 ### `bitrouter launch`
 
 ```
-bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] [--tui] -- <agent args…>
 ```
 
 Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
+
+Before handing over, `launch` prints one line stating what the harness actually got — whether it is routed, and whether the tools/skills gateways reached it. That ceiling is the harness's, not BitRouter's: `pi` and `openclaw` expose no MCP mechanism to inject into, and `grok`/`agy` are own-auth subscription clients whose traffic never traverses the daemon.
+
+```
+launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skills ✓
+launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
+launch: grok · own-auth · not routed · not metered
+```
+
+#### `--tui` (opt-in)
+
+Hosts the harness **inside BitRouter's terminal**, with a persistent status row underneath showing the harness, pinned model, the provider that actually served, tokens, cache, and spend for this launch.
+
+An emulator is required rather than chosen: some harnesses render inline on the main screen and others take the alternate screen, and an alt-screen app owns the whole display — so a reserved status line cannot survive one. To guarantee the row for every harness, BitRouter owns the screen and composites.
+
+**The cost is scrollback.** Hosted, history belongs to BitRouter rather than your terminal: terminal search and selection no longer see the agent's output, and copy routes through an OSC-52 relay. That is daily friction, so plain `launch` stays the default and the recommended daily driver. Drop the flag to go back to launching the harness directly — every error raised from inside the wrapper says so.
+
+The child's environment and arguments are identical to plain `launch` apart from terminal identity (`TERM`, `COLORTERM`, and clearing inherited `TERM_PROGRAM`/`KITTY_*`/`WEZTERM_*`/`ITERM_*`/`ALACRITTY_*`, which would otherwise lie about the terminal the harness is talking to). Routing is byte-identical by construction — both modes build the child from one function.
+
+`--tui` conflicts with `--check` (which preflights and exits, so there is no display to attach to), requires a terminal, and is unix-only today. Without a per-launch credential (i.e. when you supply your own `BITROUTER_API_KEY`), the row's spend is daemon-wide and says `(all callers)`.
 
 `-a/--agent` takes any catalog harness with an interactive binary: **`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`** (the catalog id `antigravity` also resolves to `agy`). An unknown id fails up front with the available list. Each harness is routed by its own mechanism, all from the shared catalog:
 

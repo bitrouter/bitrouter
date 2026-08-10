@@ -13,6 +13,9 @@ pub struct Model {
     pub user_id: String,
     /// API key id that made the request.
     pub api_key_id: String,
+    /// The `bitrouter launch` session this request belongs to, when one minted
+    /// the credential it arrived with. `None` for every other caller.
+    pub launch_id: Option<String>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.

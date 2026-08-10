@@ -127,7 +127,7 @@ pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness
 /// The `--agent` value a harness is displayed as: its interactive binary
 /// (falling back to the catalog id, which cannot happen for a resolved
 /// launch target).
-fn launch_id(h: &crate::harness::Harness) -> &'static str {
+fn harness_id(h: &crate::harness::Harness) -> &'static str {
     h.interactive_binary.unwrap_or(h.id)
 }
 
@@ -135,22 +135,50 @@ fn launch_id(h: &crate::harness::Harness) -> &'static str {
 /// from the shared [`crate::harness`] catalog's [`RoutingOverlay`], so the
 /// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ChildLaunch {
+pub struct ChildLaunch {
     /// Environment overrides for the child process.
-    env: Vec<(String, String)>,
+    pub env: Vec<(String, String)>,
     /// Arguments inserted before the user's forwarded args.
-    args_prefix: Vec<String>,
+    pub args_prefix: Vec<String>,
 }
 
 /// Resolve the gateway bearer credential for a `bitrouter launch` child by
 /// precedence: a token the user already exported for the harness →
-/// `BITROUTER_API_KEY` → the local placeholder (valid under `skip_auth: true`,
-/// the `bitrouter init` default; the harness merely needs *some* credential to
-/// start).
+/// `BITROUTER_API_KEY` → a freshly minted per-launch token (valid under
+/// `skip_auth: true`, the `bitrouter init` default; the harness merely needs
+/// *some* credential to start).
+///
+/// The last rung used to be a fixed placeholder. Minting a unique token there
+/// instead is what makes per-launch spend answerable (#795): `launch` already
+/// injects this credential into every routed harness through whatever
+/// mechanism that harness has, so it is the one field BitRouter controls
+/// uniformly across exactly the set of harnesses that are metered at all —
+/// which a custom header would not be (four of eight have no way to send one).
+///
+/// **A user-supplied credential always wins, and is never tagged.** The two
+/// upper rungs are real authentication; rewriting them to attach attribution
+/// would break `skip_auth: false` outright. Those launches fall back to the
+/// unattributed window summary, and [`print_exit_summary`] says so rather than
+/// implying a precision it does not have.
 fn resolve_launch_token(parent_auth: Option<String>, bitrouter_key: Option<String>) -> String {
     parent_auth
         .or(bitrouter_key)
-        .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string())
+        .unwrap_or_else(mint_launch_token)
+}
+
+/// A fresh opaque per-launch attribution token.
+fn mint_launch_token() -> String {
+    format!(
+        "{}{}",
+        bitrouter_sdk::caller::LAUNCH_TOKEN_PREFIX,
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// Whether a resolved credential is one we minted — i.e. whether this launch's
+/// requests will carry its own attribution, or fall back to the window.
+fn is_launch_token(token: &str) -> bool {
+    bitrouter_sdk::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
 }
 
 /// Options gathered from the CLI for one `launch` invocation.
@@ -244,19 +272,68 @@ impl CliReport for SpawnCheckReport {
     }
 }
 
-/// Run `bitrouter launch`. Resolves the base URL from `cfg`, locates the agent
-/// binary (offering to install it if missing and permitted), ensures the local
-/// daemon is up (auto-starting it when down), then execs the agent with the
-/// routing environment injected. On success this **does not return** — it exits
-/// the process with the agent's exit code, the way a launcher like
+/// Everything `launch` resolves before a child exists: the binary, the routing
+/// overlay, the args forwarded after `--`, and the inputs the exit summary
+/// needs.
+///
+/// This is the seam that keeps the display modes honest. Both
+/// [`exec_inherited`] (plain `launch`) and the hosted mode consume one
+/// `Prepared` built by one [`prepare`], so "the wrapped mode is a strict
+/// superset of `launch` in child behavior" is true **by construction** rather
+/// than by test discipline — there is one producer of the child's env and args,
+/// and the display choice branches strictly after it.
+///
+/// `agent_args` lives here rather than being threaded separately precisely
+/// because it is part of that guarantee: everything the user typed after `--`
+/// must be inside the compared surface, not beside it.
+pub struct Prepared<'a> {
+    /// Resolved harness binary.
+    pub binary: PathBuf,
+    /// The routing overlay: env to set and args to prepend.
+    pub launch: ChildLaunch,
+    /// Args forwarded verbatim, appended after [`ChildLaunch::args_prefix`].
+    pub agent_args: Vec<String>,
+    /// The gateway base URL the harness was pointed at.
+    pub base_url: String,
+    /// The catalog harness being launched.
+    pub harness: &'static crate::harness::Harness,
+    /// Config source, for the exit summary's metering read.
+    pub source: &'a crate::paths::ConfigSource,
+    /// The attribution token this launch minted, when it owns the credential
+    /// slot. `None` when the user supplied their own key — spend then falls
+    /// back to the unattributed time window.
+    pub launch_id: Option<String>,
+    /// The model pinned for this launch, named in the hosted status row.
+    pub model: Option<String>,
+    /// Stamped before the child exists, so the exit summary's window covers
+    /// exactly the wrapped session. Nothing between here and the spawn spends.
+    pub session_start: chrono::DateTime<chrono::Utc>,
+}
+
+/// Run `bitrouter launch`: [`prepare`] the child, then run it with the
+/// terminal inherited. On success this **does not return** — it exits the
+/// process with the agent's exit code, the way a launcher like
 /// `git <subcommand>` propagates its child's status.
 pub async fn run(
     source: &crate::paths::ConfigSource,
     cfg: &bitrouter_sdk::config::Config,
     opts: SpawnOptions,
 ) -> Result<()> {
+    let prepared = prepare(source, cfg, opts).await?;
+    exec_inherited(prepared).await
+}
+
+/// Resolve the base URL from `cfg`, locate the agent binary (offering to
+/// install it if missing and permitted), ensure the local daemon is up
+/// (auto-starting it when down), assemble the routing overlay, and state what
+/// the harness is actually getting (§796) — everything up to, but not
+/// including, the child process.
+pub async fn prepare<'a>(
+    source: &'a crate::paths::ConfigSource,
+    cfg: &bitrouter_sdk::config::Config,
+    opts: SpawnOptions,
+) -> Result<Prepared<'a>> {
     let harness = opts.agent;
-    let agent_id = launch_id(harness);
 
     let base_url = match &opts.base_url {
         Some(explicit) => explicit.clone(),
@@ -331,30 +408,210 @@ pub async fn run(
     };
 
     let p = Palette::for_stderr();
+    eprintln!("{}", startup_line(harness, &base_url, &gateways, &p));
+
+    Ok(Prepared {
+        binary,
+        launch,
+        agent_args: opts.agent_args,
+        base_url,
+        harness,
+        source,
+        launch_id: is_launch_token(&token).then(|| token.clone()),
+        model: opts.model.clone(),
+        // Timestamp the wrapped session so the exit summary can attribute
+        // spend to exactly this run of the agent.
+        session_start: chrono::Utc::now(),
+    })
+}
+
+/// The one line `launch` prints before handing the terminal over (#796):
+/// what the harness is actually getting, stated once where it is actionable.
+///
+/// Degrades **honestly**. A blank field reads as broken; `own-auth · not
+/// routed · not metered` reads as true. The tools/skills ceiling is the
+/// harness's — `pi` and `openclaw` expose no MCP mechanism to inject into —
+/// and a user should learn that here rather than by noticing the tools are
+/// missing later.
+fn startup_line(
+    harness: &crate::harness::Harness,
+    base_url: &str,
+    gateways: &[crate::harness::McpServer],
+    p: &Palette,
+) -> String {
+    let agent_id = harness_id(harness);
+    let head = format!(
+        "{cyan}{bold}launch:{reset} {bold}{agent_id}{reset}",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+    );
+
+    // Own-auth harnesses are subscription clients whose sessions the daemon
+    // itself borrows as providers — routing them through BitRouter would loop
+    // back to the same backend on the same credential. Their traffic never
+    // reaches the daemon, so there is nothing to meter.
     if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
-        // Own-auth harnesses are subscription clients whose sessions the
-        // daemon itself borrows as providers — routing them through BitRouter
-        // would loop back to the same backend on the same credential.
-        eprintln!(
-            "{cyan}{bold}launch:{reset} launching {bold}{agent_id}{reset} with its own \
-             subscription auth — not routed through BitRouter",
-            cyan = p.cyan,
-            bold = p.bold,
-            reset = p.reset,
-        );
-    } else {
-        eprintln!(
-            "{cyan}{bold}launch:{reset} launching {bold}{agent_id}{reset} via BitRouter ({})",
-            base_url,
-            cyan = p.cyan,
-            bold = p.bold,
-            reset = p.reset,
-        );
+        return format!("{head} · own-auth · not routed · not metered");
     }
 
+    let mut line = format!("{head} · routed via bitrouter ({base_url})");
+    let named = |name: &str| gateways.iter().any(|s| s.name == name);
+    if harness.injects_mcp() {
+        line.push_str(&format!(
+            " · tools {} skills {}",
+            mark(named(crate::gateways::TOOLS_SERVER), p),
+            mark(named(crate::gateways::SKILLS_SERVER), p),
+        ));
+    } else {
+        line.push_str(&format!(
+            " · tools {} skills {} ({agent_id} has no MCP mechanism)",
+            mark(false, p),
+            mark(false, p),
+        ));
+    }
+    line
+}
+
+/// `✓` / `✗`, colored when the stream takes color. A missing capability is
+/// dimmed, not red: it is a harness ceiling being reported, not a failure.
+fn mark(on: bool, p: &Palette) -> String {
+    if on {
+        format!("{}✓{}", p.green, p.reset)
+    } else {
+        format!("{}✗{}", p.dim, p.reset)
+    }
+}
+
+/// The child's argv tail: the routing prefix first, then everything the user
+/// forwarded after `--`.
+///
+/// Every display mode builds its child from this one function. That is what
+/// makes "the hosted mode passes identical args" a structural property rather
+/// than a promise policed by tests — there is nowhere else for the argv to be
+/// assembled differently.
+fn child_args(launch: &ChildLaunch, agent_args: &[String]) -> Vec<String> {
+    let mut args = launch.args_prefix.clone();
+    args.extend_from_slice(agent_args);
+    args
+}
+
+/// Env keys the host **sets**, because the emulator's real capabilities differ
+/// from the outer terminal's. `TERM` must promise only what we render:
+/// passing through `xterm-kitty` invites graphics sequences the emulator
+/// cannot draw.
+pub const HOSTED_ENV_SET: &[&str] = &["TERM", "COLORTERM"];
+
+/// Env keys `portable-pty` may add when absent in the parent.
+pub const HOSTED_ENV_MAY_ADD: &[&str] = &["SHELL"];
+
+/// Env keys the host **unsets**: inherited values that would lie about the
+/// terminal the child is actually talking to, and would steer harnesses onto
+/// rendering paths the emulator does not implement.
+pub const HOSTED_ENV_UNSET: &[&str] = &[
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_PANE",
+    "WEZTERM_UNIX_SOCKET",
+    "ITERM_SESSION_ID",
+    "ALACRITTY_SOCKET",
+    "ALACRITTY_LOG",
+    "ALACRITTY_WINDOW_ID",
+    "LINES",
+    "COLUMNS",
+];
+
+/// The child env for hosted mode: the routing overlay **verbatim**, plus the
+/// terminal-identity corrections above.
+///
+/// The routing half is byte-identical to plain `launch` by construction — it
+/// is the same [`ChildLaunch`] from the same [`prepare`]. Only terminal
+/// identity may differ, and only by the three lists, which
+/// `hosted_env_differs_only_by_the_allowlist` pins.
+fn hosted_env(launch: &ChildLaunch) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = vec![
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+    ];
+    for key in HOSTED_ENV_UNSET {
+        // `CommandBuilder` inherits the parent environment, so a lying value
+        // has to be actively overwritten; there is no "unset" in the overlay.
+        env.push(((*key).to_string(), String::new()));
+    }
+    // The overlay lands last so routing always wins over terminal identity.
+    env.extend(launch.env.iter().cloned());
+    env
+}
+
+/// Run the prepared child **hosted** inside BitRouter's emulator, with the
+/// status row pinned underneath (`--tui`).
+#[cfg(unix)]
+pub async fn exec_hosted(prepared: Prepared<'_>) -> Result<()> {
+    let Prepared {
+        binary,
+        launch,
+        agent_args,
+        harness,
+        source,
+        session_start,
+        launch_id,
+        model,
+        ..
+    } = prepared;
+
+    let socket = {
+        let cfg = crate::paths::load_config(source).await?;
+        crate::daemon::resolve_socket_path(
+            source.home().join("bitrouter.yaml").as_path(),
+            &cfg.server.control_socket,
+        )
+    };
+    let ctx = crate::tui::host::HostContext {
+        source,
+        socket,
+        harness,
+        launch_id: launch_id.clone(),
+        model,
+    };
+    let code = crate::tui::host::run(
+        &binary.display().to_string(),
+        &child_args(&launch, &agent_args),
+        &hosted_env(&launch),
+        ctx,
+    )
+    .await?;
+
+    print_exit_summary(
+        source,
+        launch_id.as_deref(),
+        session_start,
+        &Palette::for_stderr(),
+    )
+    .await;
+    std::process::exit(code);
+}
+
+/// Run the prepared child with the terminal **inherited** — the harness owns
+/// the real tty, which is exactly what its authors tested against. Does not
+/// return: it exits with the child's status.
+pub async fn exec_inherited(prepared: Prepared<'_>) -> Result<()> {
+    let Prepared {
+        binary,
+        launch,
+        agent_args,
+        harness,
+        source,
+        session_start,
+        launch_id,
+        ..
+    } = prepared;
+    let agent_id = harness_id(harness);
+
     let mut cmd = tokio::process::Command::new(&binary);
-    cmd.args(&launch.args_prefix);
-    cmd.args(&opts.agent_args);
+    cmd.args(child_args(&launch, &agent_args));
     for (k, v) in &launch.env {
         cmd.env(k, v);
     }
@@ -365,16 +622,18 @@ pub async fn run(
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
 
-    // Timestamp the wrapped session so the exit summary can attribute
-    // spend to exactly this run of the agent.
-    let session_start = chrono::Utc::now();
-
     let status = cmd
         .status()
         .await
         .with_context(|| format!("spawning agent '{agent_id}' ({})", binary.display()))?;
 
-    print_exit_summary(source, session_start, &p).await;
+    print_exit_summary(
+        source,
+        launch_id.as_deref(),
+        session_start,
+        &Palette::for_stderr(),
+    )
+    .await;
 
     // Propagate the agent's exit code. A launcher should be transparent: the
     // shell sees the agent's status, not bitrouter's.
@@ -387,8 +646,16 @@ pub async fn run(
 /// a `--base-url` pointed at Cloud) — a launcher must never turn a
 /// clean exit into noise or an error. Printed to stderr like every
 /// other spawn diagnostic; stdout belongs to the child.
+///
+/// With `launch_id` the figure is **this launch's**, even with other agents
+/// running concurrently. Without one — the user supplied their own gateway
+/// credential, so nothing we minted rode along — it falls back to the time
+/// window, which is every caller's traffic during the session, and the line
+/// says so. The old wording called that "session spend" unconditionally; with
+/// two agents running it was quietly wrong.
 async fn print_exit_summary(
     source: &crate::paths::ConfigSource,
+    launch_id: Option<&str>,
     session_start: chrono::DateTime<chrono::Utc>,
     p: &Palette,
 ) {
@@ -400,17 +667,23 @@ async fn print_exit_summary(
         start: session_start,
         end: chrono::Utc::now(),
     };
-    let (Ok(session), Ok(today)) = (
-        store.spend_summary(window).await,
-        store.spend_summary(TimeWindow::Today).await,
-    ) else {
+    let session = match launch_id {
+        Some(id) => store.spend_summary_for_launch(id, window).await,
+        None => store.spend_summary(window).await,
+    };
+    let (Ok(session), Ok(today)) = (session, store.spend_summary(TimeWindow::Today).await) else {
         return;
     };
     if session.requests == 0 {
         return;
     }
+    let scope = if launch_id.is_some() {
+        "session spend"
+    } else {
+        "spend since launch (all callers)"
+    };
     eprintln!(
-        "{cyan}{bold}launch:{reset} session spend {bold}{}{reset} ({} requests) · today {}",
+        "{cyan}{bold}launch:{reset} {scope} {bold}{}{reset} ({} requests) · today {}",
         crate::metering::fmt_usd(session.spend_micro_usd),
         session.requests,
         crate::metering::fmt_usd(today.spend_micro_usd),
@@ -527,7 +800,7 @@ pub async fn check(
     opts: &SpawnOptions,
 ) -> Result<SpawnCheckReport> {
     let harness = opts.agent;
-    let agent_id = launch_id(harness);
+    let agent_id = harness_id(harness);
     let binary = harness.interactive_binary.unwrap_or(harness.id);
     let is_codex = matches!(harness.routing, crate::harness::Routing::CodexArgs);
     let base_url = opts
@@ -1266,6 +1539,102 @@ mod tests {
     /// The gateway servers `launch` builds from a default config, and their
     /// arrival in each injectable harness's synthesized surface.
     #[test]
+    fn child_args_put_the_routing_prefix_before_forwarded_args() {
+        // Order is load-bearing: the harness's own flags must be able to
+        // override BitRouter's prefix, never the other way round.
+        let launch = ChildLaunch {
+            env: vec![],
+            args_prefix: vec!["-c".into(), "model=x".into()],
+        };
+        let forwarded = vec!["--search".to_string(), "-m".to_string(), "mine".to_string()];
+        assert_eq!(
+            child_args(&launch, &forwarded),
+            ["-c", "model=x", "--search", "-m", "mine"]
+        );
+        // Nothing is dropped when there is no prefix, and nothing is invented
+        // when there is nothing forwarded.
+        assert_eq!(
+            child_args(
+                &ChildLaunch {
+                    env: vec![],
+                    args_prefix: vec![]
+                },
+                &forwarded
+            ),
+            forwarded
+        );
+        assert!(
+            child_args(
+                &ChildLaunch {
+                    env: vec![],
+                    args_prefix: vec![]
+                },
+                &[]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn startup_line_states_routing_and_tool_availability() {
+        let p = Palette::none();
+        let cfg = bitrouter_sdk::config::Config::default();
+        let gateways = launch_gateways(&cfg, "http://127.0.0.1:4356");
+        let line = |id: &str| {
+            startup_line(
+                crate::harness::by_id(id).expect("catalog"),
+                "http://127.0.0.1:4356",
+                &gateways,
+                &p,
+            )
+        };
+
+        // Fully-capable harness: routed, both gateways land.
+        let claude = line("claude-acp");
+        assert!(claude.contains("routed via bitrouter"), "{claude}");
+        assert!(claude.contains("tools ✓ skills ✓"), "{claude}");
+
+        // Routed, but the harness has nowhere to put MCP servers. The reason
+        // is stated — a bare ✗ would read as a BitRouter failure.
+        let pi = line("pi-acp");
+        assert!(pi.contains("routed via bitrouter"), "{pi}");
+        assert!(pi.contains("tools ✗ skills ✗"), "{pi}");
+        assert!(pi.contains("no MCP mechanism"), "{pi}");
+
+        // Own-auth: degrade honestly rather than showing blanks.
+        let grok = line("grok");
+        assert!(
+            grok.contains("own-auth · not routed · not metered"),
+            "{grok}"
+        );
+        assert!(
+            !grok.contains("tools"),
+            "an unrouted harness must not advertise gateways at all: {grok}"
+        );
+    }
+
+    #[test]
+    fn startup_line_reports_a_disabled_aggregate_as_a_missing_tools_gateway() {
+        // `mcp.aggregate` off means `bitrouter_tools` is never injected. The
+        // line must say so rather than claiming tools the harness never got.
+        let p = Palette::none();
+        let skills_only = vec![crate::harness::McpServer {
+            name: crate::gateways::SKILLS_SERVER.to_string(),
+            transport: crate::harness::McpTransport::Stdio {
+                command: "bitrouter".into(),
+                args: vec![],
+            },
+        }];
+        let line = startup_line(
+            crate::harness::by_id("claude-acp").expect("catalog"),
+            "http://127.0.0.1:4356",
+            &skills_only,
+            &p,
+        );
+        assert!(line.contains("tools ✗ skills ✓"), "{line}");
+    }
+
+    #[test]
     fn launch_wires_the_tools_and_skills_gateways_into_the_overlay() {
         let cfg = bitrouter_sdk::config::Config::default();
         let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
@@ -1405,11 +1774,87 @@ mod tests {
             resolve_launch_token(None, Some("brk_key".into())),
             "brk_key"
         );
-        // Neither set → the local placeholder so the harness still starts.
-        assert_eq!(
-            resolve_launch_token(None, None),
-            crate::harness::PLACEHOLDER_API_KEY
-        );
+        // Neither set → a freshly minted, per-launch attribution token, so
+        // the harness still starts *and* its spend is answerable.
+        let minted = resolve_launch_token(None, None);
+        assert!(is_launch_token(&minted), "{minted}");
+    }
+
+    #[test]
+    fn hosted_env_differs_only_by_the_allowlist() {
+        // The requirement `--tui` lives or dies on: the routing half of the
+        // child env is byte-identical to plain `launch`. Only terminal
+        // identity may differ, and only by the documented lists — anything
+        // else means the hosted child is being routed differently, which is
+        // the drift the whole `prepare`/`exec` seam exists to prevent.
+        let launch = ChildLaunch {
+            env: vec![
+                ("ANTHROPIC_BASE_URL".to_string(), "http://x:1".to_string()),
+                ("ANTHROPIC_AUTH_TOKEN".to_string(), "brl_tok".to_string()),
+            ],
+            args_prefix: vec![],
+        };
+        let hosted = hosted_env(&launch);
+
+        // Every routing pair survives verbatim.
+        for (key, value) in &launch.env {
+            assert!(
+                hosted.iter().any(|(k, v)| k == key && v == value),
+                "{key} must reach the hosted child unchanged"
+            );
+        }
+
+        // And nothing outside the allowlist was invented.
+        let allowed: Vec<&str> = HOSTED_ENV_SET
+            .iter()
+            .chain(HOSTED_ENV_MAY_ADD)
+            .chain(HOSTED_ENV_UNSET)
+            .copied()
+            .collect();
+        for (key, _) in &hosted {
+            let from_overlay = launch.env.iter().any(|(k, _)| k == key);
+            assert!(
+                from_overlay || allowed.contains(&key.as_str()),
+                "hosted mode set `{key}`, which is neither routing nor in the allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn the_routing_overlay_outranks_terminal_identity() {
+        // A harness that legitimately wants its own TERM (or any key we also
+        // touch) must win: routing is the contract, terminal identity is our
+        // correction to it.
+        let launch = ChildLaunch {
+            env: vec![("TERM".to_string(), "harness-choice".to_string())],
+            args_prefix: vec![],
+        };
+        let hosted = hosted_env(&launch);
+        let last_term = hosted
+            .iter()
+            .rfind(|(k, _)| k == "TERM")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(last_term, Some("harness-choice"));
+    }
+
+    #[test]
+    fn only_a_minted_credential_is_treated_as_attribution() {
+        // A user's own key must never be re-read as a launch tag: it is real
+        // authentication, and mislabelling it would both break `skip_auth:
+        // false` and attribute someone else's traffic to this launch.
+        assert!(!is_launch_token("user-token"));
+        assert!(!is_launch_token("brk_key"));
+        assert!(!is_launch_token(crate::harness::PLACEHOLDER_API_KEY));
+        assert!(is_launch_token(&mint_launch_token()));
+    }
+
+    #[test]
+    fn every_launch_mints_a_distinct_token() {
+        // Two concurrent launches sharing a token would merge into one
+        // bucket — the exact failure per-launch attribution exists to fix.
+        let a = mint_launch_token();
+        let b = mint_launch_token();
+        assert_ne!(a, b);
     }
 
     #[test]

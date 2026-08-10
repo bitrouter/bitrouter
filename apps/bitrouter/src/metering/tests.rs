@@ -1296,3 +1296,131 @@ fn price_override_rejects_negative_or_non_finite_rates() {
         );
     }
 }
+
+#[tokio::test]
+async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    // Distinct request ids (ctx keys them off the token counts) settled in
+    // ascending order, so "newest first" is observable.
+    for n in 1..=5u64 {
+        recorder.record(&mut ctx("k", n, n)).await?;
+    }
+
+    let rows = store.recent_requests(TimeWindow::ThisMonth, 3).await?;
+    assert_eq!(rows.len(), 3, "the limit bounds what the view ever loads");
+
+    // Rows carry exactly the three fields `export_usage` drops — the reason
+    // this query exists at all.
+    let first = &rows[0];
+    assert!(
+        !first.created_at.is_empty(),
+        "timestamp is rendered per row"
+    );
+    assert_eq!(first.latency_ms, 100, "latency is rendered per row");
+    assert!(
+        first.estimated_charge_micro_usd > 0,
+        "cost is rendered per row"
+    );
+    assert_eq!(first.model_id, "gpt-5");
+    assert_eq!(first.provider_id, "openai");
+
+    // Newest first: the descending order must be stable against the tie in
+    // `created_at` that a fast test run produces, which the request_id tiebreak
+    // provides.
+    let all = store.recent_requests(TimeWindow::ThisMonth, 100).await?;
+    assert_eq!(all.len(), 5);
+    let mut sorted = all.clone();
+    sorted.sort_by(|a, b| (&b.created_at, &b.request_id).cmp(&(&a.created_at, &a.request_id)));
+    assert_eq!(all, sorted, "recent_requests must return newest-first");
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_total_rate_counts_every_caller_not_one_key() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    // Two distinct callers — the shape of a default `skip_auth` install that
+    // also serves a real key.
+    recorder.record(&mut ctx("local", 10, 5)).await?;
+    recorder.record(&mut ctx("brk_real", 20, 7)).await?;
+
+    let scoped = store.get_rate("local").await?;
+    assert_eq!(scoped.requests_per_minute, 1.0, "per-key stays per-key");
+
+    let total = store.get_total_rate().await?;
+    assert_eq!(total.requests_per_minute, 2.0);
+    assert_eq!(total.tokens_per_minute, (10 + 5 + 20 + 7) as f64);
+    Ok(())
+}
+
+/// The acceptance criterion of #795: two concurrent launches on a default
+/// (`skip_auth: true`) install report **separate** spend.
+#[tokio::test]
+async fn concurrent_launches_report_separate_spend() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    // Both agents are the same synthetic `local` caller — that is the whole
+    // difficulty. Only the launch tag distinguishes them.
+    let mut a = ctx("local", 10, 5);
+    a.caller = CallerContext::local_launch("brl_aaa");
+    let mut b = ctx("local", 20, 7);
+    b.caller = CallerContext::local_launch("brl_bbb");
+    // A third caller with no launch at all: a direct API client, an editor
+    // plugin, a spawned sub-agent. It must land in neither bucket.
+    let mut untagged = ctx("local", 100, 100);
+    untagged.caller = CallerContext::local();
+
+    recorder.record(&mut a).await?;
+    recorder.record(&mut b).await?;
+    recorder.record(&mut untagged).await?;
+
+    let a_spend = store
+        .spend_summary_for_launch("brl_aaa", TimeWindow::ThisMonth)
+        .await?;
+    let b_spend = store
+        .spend_summary_for_launch("brl_bbb", TimeWindow::ThisMonth)
+        .await?;
+
+    // 10×2 + 5×10 = 70 µ$ ; 20×2 + 7×10 = 110 µ$
+    assert_eq!(a_spend.requests, 1);
+    assert_eq!(a_spend.spend_micro_usd, 70);
+    assert_eq!(b_spend.requests, 1);
+    assert_eq!(b_spend.spend_micro_usd, 110);
+
+    // Daemon-wide totals are unchanged by the new dimension — the existing
+    // queries must keep seeing everything, including the untagged row.
+    let all = store.spend_summary(TimeWindow::ThisMonth).await?;
+    assert_eq!(all.requests, 3);
+    assert_eq!(all.spend_micro_usd, 70 + 110 + (100 * 2 + 100 * 10));
+
+    // An unknown launch is empty, not an error and not everything.
+    let none = store
+        .spend_summary_for_launch("brl_never", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(none.requests, 0);
+    assert_eq!(none.spend_micro_usd, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_untagged_caller_is_still_recorded_just_not_attributed() -> Result<()> {
+    // "Requests made outside a launch are still attributed sanely (not
+    // silently dropped)" — the acceptance list's easiest item to break.
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    recorder.record(&mut ctx("brk_direct", 10, 5)).await?;
+
+    assert_eq!(
+        store.get_spend("brk_direct", TimeWindow::ThisMonth).await?,
+        70
+    );
+    let rows = store.recent_requests(TimeWindow::ThisMonth, 10).await?;
+    assert_eq!(rows.len(), 1, "the row exists");
+    Ok(())
+}

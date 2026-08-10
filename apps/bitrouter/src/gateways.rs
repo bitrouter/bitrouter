@@ -35,10 +35,15 @@ use agent_client_protocol::schema::v1 as acp;
 
 use crate::harness::{McpServer, McpTransport};
 
+/// Name of the aggregate tool-gateway MCP server injected into a harness.
+pub const TOOLS_SERVER: &str = "bitrouter_tools";
+/// Name of the origin AgentSkills MCP server injected into a harness.
+pub const SKILLS_SERVER: &str = "bitrouter_skills";
+
 /// The gateway servers for a daemon at `base_url`, authenticating with
 /// `auth`. `aggregate_route` is the daemon's aggregate MCP path
 /// (`mcp.aggregate.route`); `None` (aggregate disabled) omits the
-/// `bitrouter_tools` server.
+/// [`TOOLS_SERVER`].
 pub fn gateway_servers(
     base_url: &str,
     auth: &str,
@@ -47,7 +52,7 @@ pub fn gateway_servers(
     let mut servers = Vec::new();
     if let Some(route) = aggregate_route {
         servers.push(McpServer {
-            name: "bitrouter_tools".to_string(),
+            name: TOOLS_SERVER.to_string(),
             transport: McpTransport::Http {
                 url: join_route(base_url, route),
                 // Same convention as the models routing overlay: always send
@@ -58,7 +63,7 @@ pub fn gateway_servers(
         });
     }
     servers.push(McpServer {
-        name: "bitrouter_skills".to_string(),
+        name: SKILLS_SERVER.to_string(),
         transport: McpTransport::Stdio {
             command: std::env::current_exe()
                 .map(|p| p.display().to_string())
