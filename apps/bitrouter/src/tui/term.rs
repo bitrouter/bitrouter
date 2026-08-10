@@ -1128,8 +1128,8 @@ mod fixture_replay {
             );
         }
         assert!(
-            checked >= 8,
-            "expected a recording per catalog harness, found {checked} — \
+            checked >= 4,
+            "expected a recording per launch-supported harness, found {checked} — \
              see fixtures/README.md for how to record one"
         );
     }

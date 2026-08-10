@@ -2,14 +2,20 @@
 
 Status: **layers 1–2 automated; layer 3 the manual pass** · Gate for #782
 
-Hosting eight full-screen TUI apps inside a nested emulator is the real
+Hosting a full-screen TUI app inside a nested emulator is the real
 engineering risk in `bitrouter launch --tui`. This is how that risk is checked,
 and — as importantly — what the check does *not* cover.
 
 ## The two failure sources
 
-They need different machinery, and conflating them is what made the original
-48-check matrix look both essential and unaffordable:
+`launch` supports four harnesses — **claude, codex, opencode, pi**. `hermes`,
+`openclaw`, `grok`, and `agy` were dropped from `launch` precisely because of
+this document: every promise `launch` makes has to be re-checked per harness
+against upstream releases nobody here controls, and four is a surface that can
+be kept honest where eight was a claim that could not.
+
+The two failure sources need different machinery, and conflating them is what
+made the original matrix look both essential and unaffordable:
 
 | Failure | Caught by | When |
 |---|---|---|
@@ -45,7 +51,7 @@ naming the bug. A test suite that has never been seen to fail is not evidence.
 ## Layer 2 — recorded harness output (automated)
 
 `apps/bitrouter/src/tui/fixtures/harness-*.vt`, replayed by
-`term.rs::fixture_replay`. Real byte streams from all eight catalog harnesses,
+`term.rs::fixture_replay`. Real byte streams from the four supported harnesses,
 fed in 13-byte chunks because an escape sequence split across a read boundary
 is a classic emulator bug that whole-buffer feeding never surfaces.
 
@@ -82,11 +88,7 @@ run once under `NO_COLOR=1`.
 | claude | | | | |
 | codex | | | | |
 | opencode | | | | |
-| pi | | | | |
-| hermes | | | | |
-| openclaw | | | | |
-| grok | | | | own-auth: bar must read `not routed · not metered` |
-| agy | | | | own-auth: same |
+| pi | | | | no MCP mechanism: startup line must say `tools ✗ skills ✗` |
 
 ## The gate (redefined)
 
@@ -99,7 +101,7 @@ job, because it launders "unverified" into "we have CI for that."
 **`--tui` clears the gate when:**
 
 - [ ] layers 1 and 2 are green in CI (they are, and they run on every commit)
-- [ ] layer 3 has been run once against all eight harnesses, with the table above filled in
+- [ ] layer 3 has been run once against all four supported harnesses, with the table above filled in
 - [ ] the flag has been opt-in through at least two release cycles with no unresolved rendering reports
 
 Scheduled live-harness smoke (installing the latest of each and asserting
@@ -109,6 +111,9 @@ day someone reports a harness-specific rendering bug — that report is the
 evidence that the recurring cost is justified. Until then the flag is opt-in,
 the population is self-selected, and a bug report is the cheaper detector.
 
-**Permanently manual:** `grok` and `agy` are proprietary, auth-gated
-subscription clients. They cannot be installed in CI, so no automated tier will
-ever cover them.
+**Out of scope entirely:** `hermes`, `openclaw`, `grok`, and `agy` are no
+longer launch-supported, so they are not in this matrix. They remain catalog
+harnesses — runnable directly, and drivable headlessly via `bitrouter spawn` —
+and `grok`/`agy` remain **providers**, whose subscription sessions the daemon
+borrows to serve other requests. None of that is affected by their removal from
+`launch`.

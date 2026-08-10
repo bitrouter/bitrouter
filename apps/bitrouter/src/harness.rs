@@ -398,6 +398,26 @@ impl Harness {
         }
     }
 
+    /// Whether `bitrouter launch` will host this harness.
+    ///
+    /// Separate from owning an [`interactive_binary`](Self::interactive_binary):
+    /// `hermes`, `openclaw`, `grok`, and `agy` still have one, and can still be
+    /// run directly or driven headlessly by `bitrouter spawn` — `launch` simply
+    /// no longer claims to support them.
+    ///
+    /// The reason is verification, not capability. `launch` promises routing,
+    /// gateway injection, and (under `--tui`) a hosted terminal, and each of
+    /// those promises has to be checked per harness against upstream releases
+    /// nobody here controls. Four is a surface we can actually keep honest;
+    /// eight was a claim we could not.
+    ///
+    /// `grok` and `agy` additionally remain **providers** — the daemon borrows
+    /// their subscription sessions to serve other requests — which is a
+    /// separate stack entirely and is untouched by this.
+    pub fn launch_supported(&self) -> bool {
+        matches!(self.id, "claude-acp" | "codex-acp" | "opencode" | "pi-acp")
+    }
+
     /// Whether [`Self::launch_overlay`] can inject MCP servers (the
     /// `bitrouter_tools` / `bitrouter_skills` gateways) into this harness.
     ///

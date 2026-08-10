@@ -389,10 +389,8 @@ enum Command {
     ///
     /// Harnesses that route by env/args (claude, codex) are launched without
     /// touching any config file. Those that can only be routed by config
-    /// (opencode, pi, hermes, openclaw) get one synthesized under
-    /// `.bitrouter/launch/` — your own agent config is still never modified.
-    /// The own-auth clients (grok, agy) are subscription sessions the daemon
-    /// borrows, so they launch unrouted.
+    /// (opencode, pi) get one synthesized under `.bitrouter/launch/` — your
+    /// own agent config is still never modified.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
@@ -400,9 +398,10 @@ enum Command {
     /// binary is offered for install via its official native installer; other
     /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch: `claude`, `codex`, `opencode`, `pi`,
-        /// `hermes`, `openclaw`, `grok`, or `agy` (the catalog id
-        /// `antigravity` also resolves to `agy`).
+        /// Which agent harness to launch: `claude`, `codex`, `opencode`, or
+        /// `pi` (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also
+        /// resolve). `hermes`, `openclaw`, `grok`, and `agy` are no longer
+        /// launch-supported — run them directly or via `bitrouter spawn`.
         #[arg(short, long, value_name = "ID")]
         agent: String,
         /// Pin the harness's model to a daemon-routable id (e.g. the explicit

@@ -103,25 +103,57 @@ pub struct AgentSpec {
 }
 
 /// Resolve a `bitrouter launch --agent` value to its catalog harness. Accepts
-/// the interactive binary name (`claude`, `codex`, `opencode`, `pi`, `hermes`,
-/// `openclaw`, `grok`, `agy`) and the catalog id (`antigravity`, `claude-acp`,
-/// …). An unknown value is a caller mistake, so the error is a
-/// [`BitrouterError::BadRequest`] — the CLI's error envelope reports it as
-/// `kind: "bad_request"`, not `internal` — and lists what is available.
+/// the interactive binary name (`claude`, `codex`, `opencode`, `pi`) and the
+/// catalog id (`claude-acp`, `pi-acp`, …). An unknown value is a caller
+/// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
+/// envelope reports it as `kind: "bad_request"`, not `internal` — and lists
+/// what is available.
+///
+/// A harness that exists in the catalog but is no longer launch-supported gets
+/// a *different* message from an unknown one. "Not a launchable harness —
+/// available: …" would read as "you typo'd" to someone whose working command
+/// stopped working, and send them looking for a spelling mistake that isn't
+/// there.
 pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
-    crate::harness::by_interactive_binary(id)
-        .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()))
-        .ok_or_else(|| {
-            let mut available: Vec<&str> = crate::harness::CATALOG
-                .iter()
-                .filter_map(|h| h.interactive_binary)
-                .collect();
-            available.sort_unstable();
-            anyhow::Error::new(BitrouterError::bad_request(format!(
-                "'{id}' is not a launchable harness — available: {}",
-                available.join(", ")
-            )))
-        })
+    let known = crate::harness::by_interactive_binary(id)
+        .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()));
+    if let Some(harness) = known
+        && !harness.launch_supported()
+    {
+        let name = harness.interactive_binary.unwrap_or(harness.id);
+        // Only offer `spawn` to a harness that actually has a headless ACP
+        // adapter. grok and agy have none, and sending someone to a command
+        // that will reject them next is worse than the original refusal.
+        let alternative = if harness.acp_command.is_some() {
+            format!(
+                " — run it directly, or drive it headlessly with `bitrouter spawn {}`",
+                harness.id
+            )
+        } else {
+            " — run it directly (it has no headless adapter either)".to_string()
+        };
+        return Err(anyhow::Error::new(BitrouterError::bad_request(format!(
+            "'{name}' is no longer supported by `bitrouter launch`{alternative}. Supported: {}",
+            launchable().join(", ")
+        ))));
+    }
+    known.ok_or_else(|| {
+        anyhow::Error::new(BitrouterError::bad_request(format!(
+            "'{id}' is not a launchable harness — available: {}",
+            launchable().join(", ")
+        )))
+    })
+}
+
+/// The interactive binaries `launch` supports, sorted for a stable message.
+fn launchable() -> Vec<&'static str> {
+    let mut names: Vec<&str> = crate::harness::CATALOG
+        .iter()
+        .filter(|h| h.launch_supported())
+        .filter_map(|h| h.interactive_binary)
+        .collect();
+    names.sort_unstable();
+    names
 }
 
 /// The `--agent` value a harness is displayed as: its interactive binary
@@ -1887,32 +1919,67 @@ mod tests {
     }
 
     #[test]
-    fn resolve_launch_agent_accepts_every_interactive_catalog_harness() {
-        // `launch --agent` takes every catalog harness with an interactive
-        // binary, by binary name…
-        for h in crate::harness::CATALOG {
-            let Some(binary) = h.interactive_binary else {
-                continue;
-            };
+    fn resolve_launch_agent_accepts_every_supported_harness() {
+        // `launch --agent` takes every *supported* harness, by binary name…
+        for h in crate::harness::CATALOG
+            .iter()
+            .filter(|h| h.launch_supported())
+        {
+            let binary = h.interactive_binary.expect("supported implies a binary");
             let resolved = resolve_launch_agent(binary).expect("resolves by binary");
             assert_eq!(resolved.id, h.id, "{binary}");
-            // …and by catalog id (`antigravity` → `agy`).
+            // …and by catalog id (`pi-acp` → `pi`).
             let by_id = resolve_launch_agent(h.id).expect("resolves by catalog id");
             assert_eq!(by_id.id, h.id);
         }
         // The full expected surface, spelled out so a catalog change is a
         // deliberate CLI change.
-        let mut accepted: Vec<&str> = crate::harness::CATALOG
-            .iter()
-            .filter_map(|h| h.interactive_binary)
-            .collect();
-        accepted.sort_unstable();
-        assert_eq!(
-            accepted,
-            vec![
-                "agy", "claude", "codex", "grok", "hermes", "openclaw", "opencode", "pi"
-            ]
-        );
+        assert_eq!(launchable(), vec!["claude", "codex", "opencode", "pi"]);
+    }
+
+    #[test]
+    fn a_dropped_harness_is_told_it_was_dropped_not_that_it_is_a_typo() {
+        // These still exist in the catalog, still have an interactive binary,
+        // and still work as ACP agents — `launch` just no longer claims them.
+        // Someone whose working command stopped working must not be sent
+        // hunting for a spelling mistake.
+        for name in ["hermes", "openclaw", "grok", "agy"] {
+            let error = resolve_launch_agent(name)
+                .expect_err(&format!("{name} must be rejected by launch"))
+                .to_string();
+            assert!(error.contains("no longer supported"), "{name}: {error}");
+            // Only harnesses that actually have a headless adapter are sent
+            // to `spawn`; grok and agy have none, and pointing them at a
+            // command that would reject them next is worse than the refusal.
+            let harness = crate::harness::by_interactive_binary(name).expect("catalog");
+            if harness.acp_command.is_some() {
+                assert!(
+                    error.contains(&format!("bitrouter spawn {}", harness.id)),
+                    "{name}: must name the surface that still drives it: {error}"
+                );
+            } else {
+                assert!(
+                    !error.contains("bitrouter spawn"),
+                    "{name} has no ACP adapter; the message must not offer one: {error}"
+                );
+                assert!(error.contains("run it directly"), "{name}: {error}");
+            }
+            assert!(
+                !error.contains("is not a launchable harness"),
+                "{name}: that is the unknown-id message: {error}"
+            );
+            // Still resolvable as a catalog entry — this is a launch policy,
+            // not a deletion.
+            assert!(
+                crate::harness::by_interactive_binary(name).is_some(),
+                "{name}"
+            );
+        }
+        // The catalog id spelling is rejected the same way.
+        let error = resolve_launch_agent("antigravity")
+            .expect_err("catalog id must be rejected too")
+            .to_string();
+        assert!(error.contains("no longer supported"), "{error}");
     }
 
     #[test]
@@ -1924,11 +1991,16 @@ mod tests {
         let err = resolve_launch_agent("nope").expect_err("unknown id");
         let msg = err.to_string();
         assert!(msg.contains("is not a launchable harness"), "{msg}");
-        // The message lists the fix.
-        for id in [
-            "claude", "codex", "opencode", "pi", "hermes", "openclaw", "grok", "agy",
-        ] {
+        // The message lists the fix — only what `launch` actually supports,
+        // so it never advertises a harness that would then be refused.
+        for id in ["claude", "codex", "opencode", "pi"] {
             assert!(msg.contains(id), "{msg} should list {id}");
+        }
+        for dropped in ["hermes", "openclaw", "grok", "agy"] {
+            assert!(
+                !msg.contains(dropped),
+                "{msg} must not offer {dropped}, which launch would reject"
+            );
         }
         // A typo is the caller's mistake, not a BitRouter fault: the error
         // envelope must report `bad_request`, never `internal`.

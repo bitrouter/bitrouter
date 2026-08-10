@@ -5,7 +5,7 @@ engineering risk in `bitrouter launch --tui`, and it is **not** a one-time
 risk: harness releases are frequent and outside our control, so an upstream
 rendering change can regress the wrapper without either project noticing.
 
-A 48-check manual matrix (8 harnesses × 6 behaviours) does not get re-run. So
+A manual matrix of every harness × every behaviour does not get re-run. So
 it is split into layers, and this directory is one of them.
 
 | Layer | Covers | Runs |
@@ -22,7 +22,8 @@ why, and for what that leaves uncovered.
 - **Synthetic** (`main_screen_colors`, `alt_screen_app`, `mouse_reporting`,
   `bracketed_paste`) — small and readable, each pinning one emulator behaviour
   the wrapper depends on.
-- **`harness-*.vt`** — real byte streams from all eight catalog harnesses.
+- **`harness-*.vt`** — real byte streams from the four harnesses `launch`
+  supports (claude, codex, opencode, pi).
 
 ## Recording a new one
 
