@@ -82,7 +82,7 @@ mcp/
 ├── src/
 │   ├── lib.rs          # serve() / install() entry points, Transport / BackendKind
 │   ├── backend/        # Backend trait + LocalBackend / CloudBackend (thin reqwest)
-│   ├── capabilities/   # port traits: Fleet, CostQuery, RoutingQuery, SkillsQuery, HumanBridge + schemas
+│   ├── capabilities/   # port traits: RoutingQuery, SkillsQuery, SkillCatalog + schemas
 │   ├── error.rs        # ToolError — the substrate-free error a port returns
 │   ├── server.rs       # rmcp handler, named router blocks, Builder, serving
 │   └── install.rs      # render / merge client config blocks

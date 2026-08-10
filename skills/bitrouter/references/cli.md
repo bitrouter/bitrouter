@@ -257,7 +257,7 @@ Two verbs, split by role. `launch` runs a harness as an **interactive native
 TUI** (the human is the orchestrator); `spawn` runs an **ACP-compatible harness
 as a headless sub-agent** (a program is the orchestrator). Both route the
 harness's LLM traffic through the daemon, drawing per-harness routing knowledge
-from one shared catalog, so `launch claude` and `spawn claude-acp` inject
+from one shared catalog, so `launch -a claude` and `spawn claude-acp` inject
 identical gateway env/args. `launch` additionally routes the harnesses env/args
 *cannot* reach (opencode, pi, hermes, openclaw) by synthesizing a throwaway
 config file — headless `spawn` still runs those direct with a note.
@@ -282,11 +282,9 @@ config file — headless `spawn` still runs those direct with a note.
 **`spawn -p` first line** is a `session` correlation line: `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when direct), so an orchestrator can join the session to the daemon's cost/metering. Then the normal NDJSON update stream follows.
 
 
-## Unimplemented in v1.0
+## Not in the proxy binary
 
-These print `not implemented in v1.0` today and are unlikely to land in the proxy binary:
-
-- `bitrouter wallet` — OWS wallet integration lives in the separate `ows` workspace, not in the proxy binary.
+- `bitrouter wallet` does **not** exist — it exits with `unrecognized subcommand`. OWS wallet integration lives in the separate `ows` workspace and is unlikely to land here.
 
 ## Config resolution
 

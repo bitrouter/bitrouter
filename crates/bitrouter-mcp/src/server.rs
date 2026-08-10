@@ -261,7 +261,7 @@ impl BitrouterMcp {
     }
 }
 
-// ── the orchestrator profile's routing slice (guarded on `self.routing`) ──
+// ── the router profile's routing slice (guarded on `self.routing`) ──
 #[tool_router(router = routing_router)]
 impl BitrouterMcp {
     #[tool(
@@ -282,7 +282,7 @@ impl BitrouterMcp {
     }
 }
 
-// ── the orchestrator profile's skills slice (guarded on `self.skills`) ──
+// ── the skills profile's slice (guarded on `self.skills`) ──
 #[tool_router(router = skills_router)]
 impl BitrouterMcp {
     #[tool(
