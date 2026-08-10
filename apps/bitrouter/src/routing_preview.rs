@@ -1,5 +1,5 @@
-//! The routing-preview adapter — the app side of the orchestrator profile's
-//! `route_preview` tool (TUI_SPEC §4, PR-2 B1).
+//! The routing-preview adapter — the app side of the `route_preview` tool the
+//! stdio/local `bitrouter mcp serve` profile wires.
 //!
 //! Implements `bitrouter-mcp`'s
 //! [`RoutingQuery`] port by

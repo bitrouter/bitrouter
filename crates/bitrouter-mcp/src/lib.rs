@@ -77,10 +77,15 @@ pub struct ServeOptions {
     /// the HTTP transport is multi-tenant and per-caller spend isn't
     /// what the local metering database holds).
     pub cost_footer: Option<std::sync::Arc<dyn server::CostFooter>>,
+    /// Optional routing-introspection port backing `route_preview` (stdio
+    /// transport only — it reads the serving machine's own routing table,
+    /// which is not what a multi-tenant HTTP caller is asking about).
+    pub routing: Option<std::sync::Arc<dyn capabilities::routing::RoutingQuery>>,
 }
 
-/// Run the MCP server to completion. This is the completion-only (public)
-/// entry point; the orchestrator profile is assembled directly through
+/// Run the MCP server to completion: the router profile (completion, plus
+/// `route_preview` when a routing port is wired). Other profiles — the skills
+/// origin server — are assembled directly through
 /// [`server::BitrouterMcp::builder`] by the embedding binary.
 pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     let backend = server::build_backend(
@@ -92,8 +97,11 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     )?;
     match opts.transport {
         Transport::Stdio => {
-            let server = server::BitrouterMcp::builder().completion(backend).build();
-            server::serve_stdio(server, opts.cost_footer).await
+            let mut builder = server::BitrouterMcp::builder().completion(backend);
+            if let Some(routing) = opts.routing {
+                builder = builder.routing(routing);
+            }
+            server::serve_stdio(builder.build(), opts.cost_footer).await
         }
         Transport::Http => {
             let require_auth = matches!(opts.backend, BackendKind::Cloud);

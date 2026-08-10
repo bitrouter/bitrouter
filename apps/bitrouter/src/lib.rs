@@ -5,7 +5,7 @@
 //! the home of v0's `load_builtin_plugins` equivalent.
 //!
 //! Assembly sits **above** the SDK and the plugins (`plugins → sdk`, sdk never
-//! depends back) — see. The `bin` target (`main.rs`) is the CLI/TUI
+//! depends back) — see. The `bin` target (`main.rs`) is the CLI
 //! entry point and a thin shell over this lib.
 
 #![forbid(unsafe_code)]
@@ -24,8 +24,6 @@ pub mod daemon;
 pub mod db;
 pub mod error_report;
 pub mod eval;
-pub mod fleet;
-pub mod fleet_mcp;
 pub mod gateways;
 pub mod harness;
 pub mod mcp_registry;
@@ -40,7 +38,6 @@ pub mod policy_lock;
 pub mod policy_table_router;
 pub mod reload;
 pub mod result_contract;
-pub mod risk;
 pub mod routing_preview;
 pub mod skills;
 pub mod skills_catalog;
@@ -49,8 +46,6 @@ pub mod spawn;
 pub mod style;
 pub mod tools;
 pub mod trajectory;
-#[cfg(feature = "tui")]
-pub mod tui;
 pub mod update;
 pub mod workflow_state;
 

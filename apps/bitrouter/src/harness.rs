@@ -4,8 +4,10 @@
 //! A harness is drivable in either of two facets:
 //!
 //! - **interactive** (`bitrouter launch`) — the harness's own native TUI
-//!   (`claude`, `codex`), launched as a child with its LLM traffic env-wrapped
-//!   to the daemon; the human drives it directly.
+//!   (`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`,
+//!   `agy`), launched as a child with its LLM traffic pointed at the daemon —
+//!   by env/args where that suffices, otherwise through a synthesized config
+//!   file ([`Harness::launch_overlay`]); the human drives it directly.
 //! - **ACP** (`bitrouter spawn`) — a headless ACP adapter
 //!   (`@zed-industries/claude-code-acp`, …) driven as a sub-agent by a program.
 //!
@@ -51,7 +53,7 @@ pub struct Harness {
     /// the YAML key carries no semantics). Usually the adapter package name.
     pub package_marker: &'static str,
     /// The interactive native-TUI binary for `bitrouter launch`, when the
-    /// harness has one. `None` for adapter-only harnesses (gemini, pi).
+    /// harness has one. `None` for adapter-only harnesses (gemini).
     pub interactive_binary: Option<&'static str>,
     /// How this harness's LLM traffic is pointed at the daemon.
     pub routing: Routing,
@@ -92,7 +94,7 @@ pub enum Routing {
     /// `OPENCODE_CONFIG` points at, and routing, the default model, and MCP
     /// injection all ride that one synthesized file. There is no pure
     /// env/args overlay — headless spawn launches direct with a note; the
-    /// interactive facet synthesizes via [`Harness::orchestrator_overlay`].
+    /// interactive facets synthesize via [`Harness::launch_overlay`].
     OpencodeConfig,
     /// Config-dir synthesis (pi — SPAWN_SPEC §6.4): pi has no base-URL env
     /// var, so routing synthesizes a `models.json` in a per-launch dir and
@@ -104,7 +106,7 @@ pub enum Routing {
     /// (`model.provider: custom` + a loopback `base_url` — hermes trusts
     /// loopback custom endpoints) in a per-launch dir, points `HERMES_HOME`
     /// at it, and passes the credential via `CUSTOM_API_KEY`. The same file
-    /// carries the default model and `mcp_servers` (fleet bridge).
+    /// carries the default model and `mcp_servers` (the gateway servers).
     /// Interactive facet only; headless spawn launches direct with a note
     /// (hermes then uses the user's own `~/.hermes` provider).
     HermesHome,
@@ -361,8 +363,9 @@ impl Harness {
 
     /// Whether this harness routes through pure env/args injection (the
     /// headless-spawn facet). Config-synthesis harnesses (opencode, pi)
-    /// route only through [`Self::orchestrator_overlay`] — headless callers
-    /// launch them direct with a note.
+    /// route only through [`Self::launch_overlay`] — headless callers launch
+    /// them direct
+    /// with a note.
     pub fn env_args_routable(&self) -> bool {
         matches!(self.routing, Routing::Env { .. } | Routing::CodexArgs)
     }
@@ -379,8 +382,10 @@ impl Harness {
     }
 
     /// Whether `--model` can be applied to this harness on the pure
-    /// env/args path. Config-synthesis harnesses pin their model through
-    /// [`Self::orchestrator_overlay`] instead.
+    /// env/args path (the headless-spawn / direct-pin facet). Config-synthesis
+    /// harnesses pin their model through [`Self::launch_overlay`] instead, so
+    /// an interactive caller must
+    /// not read this as "cannot pin".
     pub fn supports_model_pin(&self) -> bool {
         match self.routing {
             Routing::Env { model_env, .. } => model_env.is_some(),
@@ -393,18 +398,27 @@ impl Harness {
         }
     }
 
-    /// Interactive-orchestrator overlay (TUI_SPEC §2): the routing overlay
-    /// plus MCP-bridge injection, synthesizing config files under
-    /// `state_dir` for the config-routed harnesses (opencode, pi).
+    /// Interactive-launch overlay (`bitrouter launch`): the full routing
+    /// overlay for *any* interactive harness — including the ones env/args
+    /// cannot route, whose config files are synthesized under `state_dir`
+    /// (opencode's `OPENCODE_CONFIG`, pi's `PI_CODING_AGENT_DIR`, hermes's
+    /// `HERMES_HOME`, openclaw's profile) — plus injection of the `mcp`
+    /// gateway servers, where the harness has an MCP mechanism.
     ///
-    /// `catalog` is the daemon's advertised model ids — it fills the
+    /// `catalog` is the daemon's advertised model ids; it fills the
     /// synthesized providers' model lists so the harness's own model picker
     /// shows what the daemon can serve. `model` pins the model (and becomes
-    /// the synthesized default); when absent, the first catalog entry is
-    /// the default. `mcp` lists the servers to inject where the harness has
-    /// an MCP mechanism — pi has none, so its orchestrator runs without
-    /// them.
-    pub fn orchestrator_overlay(
+    /// the synthesized default); when absent, the first catalog entry is the
+    /// default. Own-auth harnesses (grok, agy) are never redirected — they
+    /// only get `--model` as their native flag.
+    ///
+    /// MCP injection rides the *same* synthesized artifact as routing for the
+    /// config-file harnesses (one `OPENCODE_CONFIG` JSON, one
+    /// `HERMES_HOME/config.yaml`), so the two facets cannot be layered into
+    /// separate methods — an empty `mcp` is simply a launch with no gateways.
+    /// `pi`, `openclaw`, `grok`, and `antigravity` have no injectable MCP
+    /// mechanism at all and ignore `mcp` entirely.
+    pub fn launch_overlay(
         &self,
         base_url: &str,
         auth: &str,
@@ -552,7 +566,7 @@ impl Harness {
             }
             // hermes: synthesize an isolated `HERMES_HOME` whose config.yaml
             // routes via a `custom` loopback provider (hermes trusts loopback
-            // custom endpoints) and carries the fleet MCP server; the
+            // custom endpoints) and carries the injected MCP servers; the
             // credential rides `CUSTOM_API_KEY`. The file is written as JSON
             // — hermes parses config.yaml with a YAML 1.2 loader, and JSON
             // is a YAML subset — so no YAML serializer dependency is needed.
@@ -687,12 +701,11 @@ impl Harness {
     }
 }
 
-/// An MCP server to inject into an orchestrator harness — the TUI's fleet
-/// bridge plus the gateway servers (`bitrouter_tools` / `bitrouter_skills`,
-/// see `crate::gateways`).
+/// An MCP server to inject into a launched harness — the gateway servers
+/// (`bitrouter_tools` / `bitrouter_skills`, see `crate::gateways`).
 #[derive(Debug, Clone)]
 pub struct McpServer {
-    /// Server name as the harness will list it (e.g. `bitrouter_fleet`).
+    /// Server name as the harness will list it (e.g. `bitrouter_tools`).
     pub name: String,
     /// How the harness dials it.
     pub transport: McpTransport,
@@ -906,7 +919,7 @@ mod tests {
             // The orchestrator overlay sets no env (no redirection) and
             // forwards --model as the harness's native flag.
             let o = h
-                .orchestrator_overlay(
+                .launch_overlay(
                     "http://x:1",
                     "t",
                     Some("some-model"),
@@ -918,7 +931,7 @@ mod tests {
             assert!(o.env.is_empty(), "{id}: no redirection env");
             assert_eq!(o.args, vec![flag, "some-model"], "{id}");
             let bare = h
-                .orchestrator_overlay("http://x:1", "t", None, &[], &[], dir.path())
+                .launch_overlay("http://x:1", "t", None, &[], &[], dir.path())
                 .expect("overlay");
             assert_eq!(bare, RoutingOverlay::default(), "{id}: bare launch");
         }
@@ -1104,19 +1117,14 @@ mod tests {
         assert!(by_id("codex-acp").unwrap().env_args_routable());
     }
 
-    // ── Orchestrator overlays (TUI facet). ──
+    // ── Launch overlays (config synthesis + MCP injection). ──
 
     fn mcp() -> McpServer {
         McpServer {
-            name: "bitrouter_fleet".into(),
+            name: "bitrouter_stdio".into(),
             transport: McpTransport::Stdio {
                 command: "/bin/bitrouter".into(),
-                args: vec![
-                    "mcp".into(),
-                    "serve".into(),
-                    "--backend".into(),
-                    "fleet".into(),
-                ],
+                args: vec!["mcp".into(), "serve".into()],
             },
         }
     }
@@ -1134,11 +1142,11 @@ mod tests {
     }
 
     #[test]
-    fn claude_orchestrator_overlay_writes_mcp_config_and_flag() {
+    fn claude_launch_overlay_writes_mcp_config_and_flag() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("claude-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
+            .launch_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
             .expect("overlay");
         assert_eq!(o.args[0], "--mcp-config");
         let config: serde_json::Value =
@@ -1146,10 +1154,10 @@ mod tests {
                 .expect("json");
         // Stdio entry: bare command/args.
         assert_eq!(
-            config["mcpServers"]["bitrouter_fleet"]["command"],
+            config["mcpServers"]["bitrouter_stdio"]["command"],
             "/bin/bitrouter"
         );
-        assert_eq!(config["mcpServers"]["bitrouter_fleet"]["args"][3], "fleet");
+        assert_eq!(config["mcpServers"]["bitrouter_stdio"]["args"][1], "serve");
         // HTTP entry: explicit type (a url without type is a hard error in
         // Claude Code) plus the auth header as an object.
         let tools = &config["mcpServers"]["bitrouter_tools"];
@@ -1161,23 +1169,21 @@ mod tests {
     }
 
     #[test]
-    fn codex_orchestrator_overlay_appends_mcp_toml_overrides() {
+    fn codex_launch_overlay_appends_mcp_toml_overrides() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("codex-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
+            .launch_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
             .expect("overlay");
         assert!(
             o.args
-                .contains(&"mcp_servers.bitrouter_fleet.command=\"/bin/bitrouter\"".to_string()),
+                .contains(&"mcp_servers.bitrouter_stdio.command=\"/bin/bitrouter\"".to_string()),
             "{:?}",
             o.args
         );
         assert!(
-            o.args.contains(
-                &"mcp_servers.bitrouter_fleet.args=[\"mcp\",\"serve\",\"--backend\",\"fleet\"]"
-                    .to_string()
-            ),
+            o.args
+                .contains(&"mcp_servers.bitrouter_stdio.args=[\"mcp\",\"serve\"]".to_string()),
             "{:?}",
             o.args
         );
@@ -1201,11 +1207,11 @@ mod tests {
     }
 
     #[test]
-    fn hermes_orchestrator_overlay_synthesizes_home_dir() {
+    fn hermes_launch_overlay_synthesizes_home_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("hermes-acp").unwrap();
         let o = h
-            .orchestrator_overlay(
+            .launch_overlay(
                 "http://127.0.0.1:4356",
                 "tok",
                 Some("supergrok:grok-4.5"),
@@ -1226,7 +1232,7 @@ mod tests {
         assert_eq!(config["model"]["base_url"], "http://127.0.0.1:4356/v1");
         assert_eq!(config["model"]["default"], "supergrok:grok-4.5");
         assert_eq!(
-            config["mcp_servers"]["bitrouter_fleet"]["command"],
+            config["mcp_servers"]["bitrouter_stdio"]["command"],
             "/bin/bitrouter"
         );
         // HTTP entry: url presence selects the transport; auth is a header.
@@ -1237,11 +1243,11 @@ mod tests {
     }
 
     #[test]
-    fn openclaw_orchestrator_overlay_synthesizes_profile() {
+    fn openclaw_launch_overlay_synthesizes_profile() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("openclaw").unwrap();
         let o = h
-            .orchestrator_overlay(
+            .launch_overlay(
                 "http://127.0.0.1:4356",
                 "tok",
                 Some("supergrok:grok-4.5"),
@@ -1277,12 +1283,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_orchestrator_overlay_synthesizes_one_config_file() {
+    fn opencode_launch_overlay_synthesizes_one_config_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("opencode").unwrap();
         let catalog = vec!["x-ai/grok-4.5".to_string()];
         let o = h
-            .orchestrator_overlay(
+            .launch_overlay(
                 "http://127.0.0.1:4356",
                 "tok",
                 Some("supergrok:grok-4.5"),
@@ -1306,9 +1312,9 @@ mod tests {
         assert!(config["provider"]["bitrouter"]["models"]["x-ai/grok-4.5"].is_object());
         // The MCP bridge rides the same file, command+args folded into one
         // invocation array.
-        assert_eq!(config["mcp"]["bitrouter_fleet"]["type"], "local");
+        assert_eq!(config["mcp"]["bitrouter_stdio"]["type"], "local");
         assert_eq!(
-            config["mcp"]["bitrouter_fleet"]["command"][0],
+            config["mcp"]["bitrouter_stdio"]["command"][0],
             "/bin/bitrouter"
         );
         // HTTP entry: opencode's remote type with the auth header.
@@ -1325,7 +1331,7 @@ mod tests {
         let h = by_id("opencode").unwrap();
         let catalog = vec!["a/one".to_string(), "b/two".to_string()];
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &catalog, &[], dir.path())
+            .launch_overlay("http://x:1", "t", None, &catalog, &[], dir.path())
             .expect("overlay");
         let config: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&o.env[0].1).expect("written"))
@@ -1335,12 +1341,12 @@ mod tests {
     }
 
     #[test]
-    fn pi_orchestrator_overlay_synthesizes_agent_dir_and_flags() {
+    fn pi_launch_overlay_synthesizes_agent_dir_and_flags() {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("pi-acp").unwrap();
         let catalog = vec!["x-ai/grok-4.5".to_string()];
         let o = h
-            .orchestrator_overlay(
+            .launch_overlay(
                 "http://127.0.0.1:4356",
                 "tok",
                 Some("supergrok:grok-4.5"),
@@ -1374,12 +1380,143 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("pi-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], &[], dir.path())
+            .launch_overlay("http://x:1", "t", None, &[], &[], dir.path())
             .expect("overlay");
         assert!(
             o.args.is_empty(),
             "no routable model — pi keeps its own defaults"
         );
+    }
+
+    // ── Launch overlays (`bitrouter launch` facet with no gateways wired). ──
+
+    #[test]
+    fn opencode_launch_overlay_routes_to_the_gateway_without_mcp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let h = by_id("opencode").unwrap();
+        let catalog = vec!["x-ai/grok-4.5".to_string()];
+        let o = h
+            .launch_overlay(
+                "http://127.0.0.1:4356",
+                "tok",
+                None,
+                &catalog,
+                &[],
+                dir.path(),
+            )
+            .expect("overlay");
+        let (key, path) = &o.env[0];
+        assert_eq!(key, "OPENCODE_CONFIG");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("written")).expect("json");
+        assert_eq!(
+            config["provider"]["bitrouter"]["options"]["baseURL"],
+            "http://127.0.0.1:4356/v1"
+        );
+        assert_eq!(config["provider"]["bitrouter"]["options"]["apiKey"], "tok");
+        assert_eq!(config["model"], "bitrouter/x-ai/grok-4.5");
+        // No gateways passed in — no `mcp` block synthesized.
+        assert!(config.get("mcp").is_none(), "no servers, no mcp block");
+    }
+
+    #[test]
+    fn pi_launch_overlay_pins_the_requested_model() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let h = by_id("pi-acp").unwrap();
+        let catalog = vec!["x-ai/grok-4.5".to_string()];
+        let o = h
+            .launch_overlay(
+                "http://127.0.0.1:4356",
+                "tok",
+                Some("supergrok:grok-4.5"),
+                &catalog,
+                &[],
+                dir.path(),
+            )
+            .expect("overlay");
+        // `supports_model_pin()` is false for pi (no env/args path), yet the
+        // synthesis path pins the model — an interactive caller must not warn.
+        assert!(!h.supports_model_pin());
+        assert_eq!(
+            o.args,
+            vec!["--provider", "bitrouter", "--model", "supergrok:grok-4.5"]
+        );
+        let (key, agent_dir) = &o.env[0];
+        assert_eq!(key, "PI_CODING_AGENT_DIR");
+        let models: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(std::path::Path::new(agent_dir).join("models.json"))
+                .expect("models.json written"),
+        )
+        .expect("json");
+        let provider = &models["providers"]["bitrouter"];
+        assert_eq!(provider["baseUrl"], "http://127.0.0.1:4356/v1");
+        assert_eq!(provider["models"][1]["id"], "supergrok:grok-4.5");
+    }
+
+    #[test]
+    fn claude_launch_overlay_injects_no_mcp_config_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for id in ["claude-acp", "codex-acp"] {
+            let h = by_id(id).unwrap();
+            let o = h
+                .launch_overlay("http://x:1", "t", None, &[], &[], dir.path())
+                .expect("overlay");
+            assert_eq!(
+                o,
+                h.routing_overlay("http://x:1", "t", None),
+                "{id}: launch with no gateways is the plain routing overlay"
+            );
+            assert!(
+                o.args.iter().all(|a| !a.contains("mcp")),
+                "{id}: no MCP injection"
+            );
+        }
+    }
+
+    #[test]
+    fn own_auth_launch_overlay_never_redirects() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (id, flag) in [("grok", "-m"), ("antigravity", "--model")] {
+            let h = by_id(id).unwrap();
+            let o = h
+                .launch_overlay(
+                    "http://127.0.0.1:4356",
+                    "tok",
+                    Some("some-model"),
+                    &["x-ai/grok-4.5".to_string()],
+                    &[],
+                    dir.path(),
+                )
+                .expect("overlay");
+            assert!(o.env.is_empty(), "{id}: never redirected to the gateway");
+            assert_eq!(o.args, vec![flag, "some-model"], "{id}");
+        }
+    }
+
+    #[test]
+    fn gateway_injection_is_the_only_difference_the_servers_make() {
+        // One synthesis, one method: passing gateway servers adds their
+        // injection and changes nothing else about the routing overlay.
+        for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp", "grok"] {
+            let h = by_id(id).unwrap();
+            let a = tempfile::tempdir().expect("tempdir");
+            let b = tempfile::tempdir().expect("tempdir");
+            let bare = h
+                .launch_overlay("http://x:1", "t", Some("m"), &[], &[], a.path())
+                .expect("bare overlay");
+            let with_gateways = h
+                .launch_overlay("http://x:1", "t", Some("m"), &[], &[mcp()], b.path())
+                .expect("gateway overlay");
+            // Paths differ by state dir; compare env keys.
+            let keys = |o: &RoutingOverlay| -> Vec<String> {
+                o.env.iter().map(|(k, _)| k.clone()).collect()
+            };
+            assert_eq!(keys(&bare), keys(&with_gateways), "{id}");
+            assert!(
+                with_gateways.args.len() >= bare.args.len(),
+                "{id}: injection only ever adds args"
+            );
+        }
     }
 
     #[test]

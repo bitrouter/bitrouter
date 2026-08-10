@@ -1,5 +1,5 @@
-//! The skills-introspection adapter — the app side of the orchestrator
-//! profile's `skills_search` / `skills_get` tools (TUI_SPEC §4, PR-2 B2).
+//! The skills-introspection adapter — the app side of the `skills_search` /
+//! `skills_get` tools served by `bitrouter mcp serve --backend skills`.
 //!
 //! Implements `bitrouter-mcp`'s
 //! [`SkillsQuery`] port over

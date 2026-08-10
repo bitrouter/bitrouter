@@ -370,23 +370,38 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness (Claude Code or Codex) as an interactive
-    /// native-TUI child, with its API base URL pointed at the local BitRouter
-    /// daemon — no agent config files are touched. The human drives the
-    /// harness's own TUI directly; this is the *main orchestrator* surface (use
-    /// `bitrouter spawn` for headless ACP sub-agents). Follows `cargo run`'s
-    /// separator convention: bitrouter options come before `--`, everything
-    /// after `--` is forwarded to the agent verbatim, e.g.
-    /// `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
+    /// Launch a coding-agent harness as an interactive native-TUI child, with
+    /// its API base URL pointed at the local BitRouter daemon. The human drives
+    /// the harness's own TUI directly (use `bitrouter spawn` for headless ACP
+    /// sub-agents). Follows `cargo run`'s separator convention: bitrouter
+    /// options come before `--`, everything after `--` is forwarded to the
+    /// agent verbatim, e.g. `bitrouter launch -a codex -- --search`.
+    ///
+    /// Harnesses that route by env/args (claude, codex) are launched without
+    /// touching any config file. Those that can only be routed by config
+    /// (opencode, pi, hermes, openclaw) get one synthesized under
+    /// `.bitrouter/launch/` — your own agent config is still never modified.
+    /// The own-auth clients (grok, agy) are subscription sessions the daemon
+    /// borrows, so they launch unrouted.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bitrouter init`). A missing agent binary is offered
-    /// for install via its official native installer.
+    /// default written by `bitrouter init`). A missing `claude` / `codex`
+    /// binary is offered for install via its official native installer; other
+    /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch.
-        #[arg(short, long, value_enum)]
-        agent: bitrouter::spawn::SpawnAgent,
+        /// Which agent harness to launch: `claude`, `codex`, `opencode`, `pi`,
+        /// `hermes`, `openclaw`, `grok`, or `agy` (the catalog id
+        /// `antigravity` also resolves to `agy`).
+        #[arg(short, long, value_name = "ID")]
+        agent: String,
+        /// Pin the harness's model to a daemon-routable id (e.g. the explicit
+        /// `provider/model` form). Applied through whatever mechanism the
+        /// harness has — a model env var, a `-c model=` override, the
+        /// synthesized config's default, or the harness's own flag for the
+        /// own-auth clients (grok, agy).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
         /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
         /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
         /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
@@ -449,13 +464,6 @@ enum Command {
         /// Never auto-start a local daemon when none is running — fail fast.
         #[arg(long)]
         no_start: bool,
-        /// Provision (or reuse) a git worktree for the session.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends (only one this session
-        /// created). Off by default — removal discards uncommitted work.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
@@ -544,36 +552,6 @@ enum Command {
     Acp {
         #[command(subcommand)]
         cmd: AcpCmd,
-    },
-    /// Launch the composite multi-agent TUI: a left rail (roster sorted by
-    /// who needs you, radar strip, decision + review queues) beside the
-    /// primary pane. `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
-    /// hosts that harness's REAL native TUI in a PTY pane (the orchestrator —
-    /// keys pass through; `Ctrl-Space` is the one manager leader; `Ctrl-C`
-    /// interrupts the agent, not the TUI) with the fleet MCP bridge injected
-    /// where the harness supports MCP (pi/openclaw/grok/agy have no
-    /// mechanism). grok and agy
-    /// launch with their own subscription auth (the daemon borrows those
-    /// same sessions as providers). A configured `agents:` id instead
-    /// renders that ACP agent from typed events. `Ctrl-Space n` spawns
-    /// worktree-isolated ACP subagents either way.
-    #[cfg(feature = "tui")]
-    Tui {
-        /// The primary agent: a native harness (`claude`, `codex`,
-        /// `opencode`, `pi`, `grok`, `agy`/`antigravity`) hosted in a PTY
-        /// as the orchestrator, or a configured `agents:` entry rendered
-        /// from ACP events.
-        #[arg(short, long)]
-        agent: String,
-        /// Optional git worktree name for the first session (ACP agents only).
-        #[arg(short, long)]
-        worktree: Option<String>,
-        /// Pin the orchestrator's model (a daemon-routable id, e.g.
-        /// `anthropic/claude-sonnet-5` or the explicit `provider:model`
-        /// form). Defaults to the harness's own configuration (claude,
-        /// codex) or the daemon's first advertised model (opencode, pi).
-        #[arg(short, long)]
-        model: Option<String>,
     },
 }
 
@@ -769,8 +747,7 @@ enum McpAction {
         /// `stdio` (local daemon) or `http` (cloud).
         #[arg(long, value_enum, default_value_t = McpTransport::Stdio)]
         transport: McpTransport,
-        /// `local`, `cloud`, `fleet`, or `skills`. Defaults: stdio→local,
-        /// http→cloud.
+        /// `local`, `cloud`, or `skills`. Defaults: stdio→local, http→cloud.
         #[arg(long, value_enum)]
         backend: Option<McpBackend>,
         /// Local daemon root.
@@ -785,16 +762,6 @@ enum McpAction {
         /// HTTP bind address.
         #[arg(long, default_value = "127.0.0.1:4357")]
         bind: String,
-        /// (fleet backend only) Grant the orchestrator write autonomy:
-        /// apply_subagent/merge_subagent may integrate into the base repo.
-        /// Off by default — writes are human-gated.
-        #[arg(long)]
-        allow_writes: bool,
-        /// (fleet backend only) Spend ceiling in USD. spawn_subagent/
-        /// prompt_subagent refuse once today's machine-wide spend reaches it.
-        /// Unset = unlimited.
-        #[arg(long)]
-        budget_usd: Option<f64>,
     },
     /// Write/print the client config block.
     Install {
@@ -853,12 +820,9 @@ enum McpBackend {
     Local,
     /// BitRouter Cloud at `api.bitrouter.ai`.
     Cloud,
-    /// The fleet bridge: tools that spawn/manage worktree-isolated ACP
-    /// subagents for an orchestrating harness (TUI_SPEC §4). Stdio only.
-    Fleet,
     /// The origin AgentSkills server: `skills_search`/`skills_get` over the
     /// installed-skills root (the `bitrouter_skills` gateway server every
-    /// TUI-launched harness gets). Stdio only.
+    /// launched harness gets). Stdio only.
     Skills,
 }
 
@@ -1382,16 +1346,6 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists). When
-        /// omitted the session runs in the current directory.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1424,15 +1378,6 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists).
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1462,10 +1407,6 @@ enum AcpCmd {
         /// The prompt text to send.
         text: String,
     },
-    /// List the session records under the current repo's
-    /// `.bitrouter/sessions/`, newest first. A `running` record whose process
-    /// no longer exists is shown as `dead`.
-    Sessions,
 }
 
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -1705,6 +1646,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
             agent,
+            model,
             config,
             base_url,
             no_install,
@@ -1713,7 +1655,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
-                agent,
+                agent: bitrouter::spawn::resolve_launch_agent(&agent)?,
+                model,
                 agent_args,
                 base_url,
                 no_install,
@@ -1731,8 +1674,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             model,
             base_url,
             no_start,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             result_schema,
@@ -1762,7 +1703,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     legacy.spec().id
                 );
                 let opts = bitrouter::spawn::SpawnOptions {
-                    agent: legacy,
+                    agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
+                    model: model.clone(),
                     agent_args,
                     base_url,
                     no_install,
@@ -1797,11 +1739,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     std::process::exit(report.exit_code());
                 }
             } else if serve {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
                     config: cfg,
@@ -1811,11 +1749,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 };
                 bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 // A malformed schema fails fast, before any session side effect.
                 let contract = result_schema
                     .as_deref()
@@ -1842,12 +1776,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
-        #[cfg(feature = "tui")]
-        Command::Tui {
-            agent,
-            worktree,
-            model,
-        } => bitrouter::tui::run(&agent, worktree.as_deref(), model.as_deref()).await,
         Command::Update {
             check,
             tag,
@@ -2318,95 +2246,6 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
     }
 }
 
-/// `CostQuery` over the local metering database — backs the orchestrator
-/// profile's `fleet_cost` tool. Reuses the same read-side query as
-/// [`LocalCostFooter`] (today's spend) and adds an all-time total, so the
-/// orchestrator can weigh spend against progress mid-session. No substrate.
-struct MeteringCost {
-    source: bitrouter::paths::ConfigSource,
-    /// The `--budget-usd` ceiling in micro-USD, surfaced as `budget_usd` /
-    /// `remaining_usd` so the orchestrator can self-pace. `None` = unlimited.
-    budget_micro_usd: Option<u64>,
-}
-
-impl MeteringCost {
-    fn new(source: bitrouter::paths::ConfigSource, budget_micro_usd: Option<u64>) -> Self {
-        Self {
-            source,
-            budget_micro_usd,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
-    async fn snapshot(&self) -> Result<serde_json::Value, bitrouter_mcp::error::ToolError> {
-        use bitrouter::metering::store::TimeWindow;
-        let store = bitrouter::metering::reader::open_readonly(&self.source)
-            .await
-            .ok_or_else(|| {
-                bitrouter_mcp::error::ToolError::new(
-                    "metering database unavailable (no requests recorded yet)",
-                )
-            })?;
-        let today = store.spend_summary(TimeWindow::Today).await.map_err(|e| {
-            bitrouter_mcp::error::ToolError::new(format!("reading today's spend: {e}"))
-        })?;
-        // All-time: a Custom window from the epoch (spend_summary filters on
-        // `created_at >= start`, so an epoch start counts every settled row).
-        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now);
-        let total = store
-            .spend_summary(TimeWindow::Custom {
-                start: epoch,
-                end: chrono::Utc::now(),
-            })
-            .await
-            .map_err(|e| {
-                bitrouter_mcp::error::ToolError::new(format!("reading total spend: {e}"))
-            })?;
-        let mut snapshot = serde_json::json!({
-            "today": {
-                "spend_micro_usd": today.spend_micro_usd,
-                "spend_usd": bitrouter::metering::fmt_usd(today.spend_micro_usd),
-                "requests": today.requests,
-            },
-            "total": {
-                "spend_micro_usd": total.spend_micro_usd,
-                "spend_usd": bitrouter::metering::fmt_usd(total.spend_micro_usd),
-                "requests": total.requests,
-            },
-        });
-        // Surface the spend ceiling (TUI_SPEC §5) so the orchestrator can
-        // self-pace. Enforced against the same `today` figure in `SubstrateFleet`.
-        if let Some(ceiling) = self.budget_micro_usd {
-            let remaining = ceiling.saturating_sub(today.spend_micro_usd);
-            snapshot["budget"] = serde_json::json!({
-                "budget_micro_usd": ceiling,
-                "budget_usd": bitrouter::metering::fmt_usd(ceiling),
-                "remaining_micro_usd": remaining,
-                "remaining_usd": bitrouter::metering::fmt_usd(remaining),
-                "over_budget": today.spend_micro_usd >= ceiling,
-                "note": "ceiling applies to today's machine-wide spend; spawn/prompt refuse once reached",
-            });
-        }
-        Ok(snapshot)
-    }
-}
-
-/// The fleet-only `mcp serve` flags that were set on a non-fleet backend, so
-/// the caller can print an "ignored" note for each (mirroring `--allow-writes`).
-/// Returned rather than printed inline so the applicability rule is unit-testable.
-fn non_fleet_flag_notes(allow_writes: bool, budget_usd: Option<f64>) -> Vec<&'static str> {
-    let mut notes = Vec::new();
-    if allow_writes {
-        notes.push("--allow-writes");
-    }
-    if budget_usd.is_some() {
-        notes.push("--budget-usd");
-    }
-    notes
-}
-
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -2416,130 +2255,13 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             cloud_url,
             token,
             bind,
-            allow_writes,
-            budget_usd,
         } => {
-            // The fleet bridge is a different server (subagent tools over the
-            // substrate), not a completion backend — and stdio-only: its
-            // tools mutate (spawn processes, write the repo), so they must
-            // inherit the orchestrator's process identity rather than ride
-            // the unauthenticated HTTP→local path.
-            if backend == Some(McpBackend::Fleet) {
-                if matches!(transport, McpTransport::Http) {
-                    anyhow::bail!(
-                        "the fleet backend is stdio-only (its tools mutate; HTTP has no local auth story yet)"
-                    );
-                }
-                let source = bitrouter::paths::resolve_config(None)?;
-                let cfg = bitrouter::paths::load_config(&source).await?;
-                let catalog = bitrouter_sdk::acp::ConfigAcpRoutingTable::from_configs(
-                    cfg.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
-                )
-                .context("building acp catalog from config.agents")?;
-                let base_repo = std::env::current_dir().context("resolving current directory")?;
-                // Resolve the daemon control socket so `route_preview` prefers
-                // the live daemon (subscription providers, reloads) and only
-                // falls back to static config when it's unreachable — the same
-                // order `bitrouter route` uses. Best-effort: an unresolved
-                // socket just means config-only resolution.
-                let route_socket = resolve_client_socket_from(&source, None).await.ok();
-                let routing = std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(
-                    &cfg,
-                    route_socket,
-                ));
-                // Spend circuit breaker (TUI_SPEC §5). The ceiling is enforced
-                // (in `SubstrateFleet`) and displayed (in `fleet_cost`) against
-                // the same figure — today's machine-wide spend — so both agree.
-                let budget_micro_usd = budget_usd
-                    .map(bitrouter::fleet_mcp::budget_usd_to_micro)
-                    .transpose()?;
-                let budget = budget_micro_usd.map(|micro| {
-                    bitrouter::fleet_mcp::BudgetCeiling::new(
-                        micro,
-                        std::sync::Arc::new(bitrouter::fleet_mcp::MeteringSpend::new(
-                            source.clone(),
-                        )),
-                    )
-                });
-                // Capability-gated Tasks elicitation seam (PR-3 B2): one shared
-                // state, populated handler-side at the first fleet tool call
-                // (client capability + peer) and read app-side from the
-                // permission path. Off for every client that hasn't declared
-                // the capability — default escalation behavior is unchanged.
-                let escalation = bitrouter_mcp::capabilities::escalation::EscalationState::new();
-                // Gateway descriptors for every spawned subagent's
-                // `session/new`: the aggregate MCP endpoint (when enabled)
-                // and the skills origin server — the same pair the
-                // orchestrator gets via config synthesis.
-                let auth = bitrouter::harness::resolve_gateway_auth(
-                    std::env::var(bitrouter::harness::BITROUTER_API_KEY_ENV).ok(),
-                    false,
-                )
-                .unwrap_or_else(|| bitrouter::harness::PLACEHOLDER_API_KEY.to_string());
-                let aggregate_route = cfg
-                    .mcp
-                    .aggregate
-                    .enabled
-                    .then(|| cfg.mcp.aggregate.route.clone());
-                let subagent_mcp: Vec<_> = bitrouter::gateways::gateway_servers(
-                    &local_url,
-                    &auth,
-                    aggregate_route.as_deref(),
-                )
-                .iter()
-                .map(bitrouter::gateways::to_acp)
-                .collect();
-                // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
-                // ports (the human bridge rides the same fleet socket).
-                let fleet = std::sync::Arc::new(
-                    bitrouter::fleet_mcp::SubstrateFleet::connect(
-                        catalog,
-                        base_repo,
-                        cfg.worktrees.clone(),
-                        allow_writes,
-                        budget,
-                        Some(escalation.clone()),
-                        subagent_mcp,
-                    )
-                    .await,
-                );
-                // The orchestrator profile is the union — completion + fleet +
-                // cost + the tier-2 introspection/escalation ports, stdio-only.
-                // Completion routes to the same local daemon the TUI runs; cost
-                // reads the shared metering database; routing reads the config;
-                // the human bridge rides the fleet socket. Skills are NOT wired
-                // here: they ship as the separate `bitrouter_skills` server
-                // (`--backend skills`) every harness gets, so wiring them into
-                // this bridge too would list the tools twice.
-                let server = bitrouter_mcp::server::BitrouterMcp::builder()
-                    .completion_local(&local_url)
-                    .fleet(fleet.clone())
-                    .human(fleet)
-                    .cost(std::sync::Arc::new(MeteringCost::new(
-                        source,
-                        budget_micro_usd,
-                    )))
-                    .routing(routing)
-                    // Source the cap value from the app so the instructions
-                    // quote the real cap (no cross-crate magic number).
-                    .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
-                    // Share the escalation state so the handler can record the
-                    // client capability + peer for the (gated) elicitation seam.
-                    .escalation(escalation)
-                    .build();
-                // No `complete`/`status` cost footer here (unlike the public
-                // stdio path): the orchestrator profile carries the richer
-                // `fleet_cost` tool, so the per-result footer would be
-                // redundant. Intentional asymmetry.
-                return bitrouter_mcp::server::serve_stdio(server, None).await;
-            }
-            for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
-                eprintln!("note: {flag} only applies to --backend fleet; ignored");
-            }
             // The skills backend is the origin AgentSkills server over the
             // installed-skills root — the `bitrouter_skills` gateway server
-            // harnesses launch as a subprocess. Stdio-only, mirroring the
-            // fleet bridge's transport posture.
+            // harnesses launch as a subprocess. Stdio-only: it serves the
+            // caller's own installed-skills tree, so it must inherit the
+            // launching process's identity rather than ride an
+            // unauthenticated HTTP listener.
             //
             // Two surfaces over the same root, deliberately: the
             // `skills_search` / `skills_get` *tools*, which any MCP client can
@@ -2564,13 +2286,13 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 return bitrouter_mcp::server::serve_stdio(server, None).await;
             }
             let transport = bitrouter_mcp::Transport::from(transport);
-            // Fleet and skills were handled and returned above. Local/Cloud
-            // map straight across; an unset backend takes the transport
-            // default (stdio→local, http→cloud).
+            // Skills was handled and returned above. Local/Cloud map straight
+            // across; an unset backend takes the transport default
+            // (stdio→local, http→cloud).
             let backend = match backend {
                 Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
                 Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
-                Some(McpBackend::Fleet) | Some(McpBackend::Skills) | None => match transport {
+                Some(McpBackend::Skills) | None => match transport {
                     bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
                     bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
                 },
@@ -2583,16 +2305,42 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             }
             // The spend footer only makes sense where the local metering
             // database *is* the caller's spend: stdio → local daemon.
+            let local_stdio = matches!(
+                (transport, backend),
+                (
+                    bitrouter_mcp::Transport::Stdio,
+                    bitrouter_mcp::BackendKind::Local
+                )
+            );
+            let source = local_stdio
+                .then(|| bitrouter::paths::resolve_config(None).ok())
+                .flatten();
             let cost_footer: Option<std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>> =
-                match (transport, backend) {
-                    (bitrouter_mcp::Transport::Stdio, bitrouter_mcp::BackendKind::Local) => {
-                        bitrouter::paths::resolve_config(None).ok().map(|source| {
-                            std::sync::Arc::new(LocalCostFooter { source })
-                                as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
-                        })
+                source.clone().map(|source| {
+                    std::sync::Arc::new(LocalCostFooter { source })
+                        as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
+                });
+            // `route_preview` reads this machine's routing table, so it rides
+            // the same pairing as the spend footer: stdio → local daemon. It
+            // prefers the live daemon's view (subscription providers, reloads)
+            // and falls back to static config when the control socket is
+            // unreachable — the same order `bitrouter route` uses. Best-effort
+            // throughout: an unreadable config just means no `route_preview`
+            // tool, never a failed `mcp serve`.
+            let routing: Option<
+                std::sync::Arc<dyn bitrouter_mcp::capabilities::routing::RoutingQuery>,
+            > = match source {
+                Some(source) => match bitrouter::paths::load_config(&source).await {
+                    Ok(cfg) => {
+                        let socket = resolve_client_socket_from(&source, None).await.ok();
+                        Some(std::sync::Arc::new(
+                            bitrouter::routing_preview::RoutingPreview::new(&cfg, socket),
+                        ))
                     }
-                    _ => None,
-                };
+                    Err(_) => None,
+                },
+                None => None,
+            };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -2601,6 +2349,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 cloud_token,
                 bind,
                 cost_footer,
+                routing,
             })
             .await
         }
@@ -5403,8 +5152,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
     match cmd {
         AcpCmd::Serve {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             direct,
             base_url,
@@ -5414,8 +5161,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -5433,8 +5179,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         }
         AcpCmd::Prompt {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             direct,
@@ -5446,8 +5190,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -5463,10 +5206,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 routing,
             };
             bitrouter::acp_cli::prompt(ctx, &text, no_wait, None, &mut stdout).await
-        }
-        AcpCmd::Sessions => {
-            let mut stdout = tokio::io::stdout();
-            bitrouter::acp_cli::sessions(&mut stdout).await
         }
     }
 }
@@ -6357,45 +6096,28 @@ mod tests {
     }
 
     #[test]
-    fn fleet_only_flags_are_noted_ignored_off_fleet() {
-        // On a non-fleet backend, `--allow-writes` / `--budget-usd` are
-        // politely ignored (a note is printed for each), never enforced.
-        assert!(non_fleet_flag_notes(false, None).is_empty());
-        assert_eq!(non_fleet_flag_notes(true, None), ["--allow-writes"]);
-        assert_eq!(non_fleet_flag_notes(false, Some(10.0)), ["--budget-usd"]);
-        assert_eq!(
-            non_fleet_flag_notes(true, Some(10.0)),
-            ["--allow-writes", "--budget-usd"]
-        );
-    }
-
-    #[test]
-    fn budget_usd_flag_parses_for_fleet_serve() {
+    fn mcp_serve_backends_are_local_cloud_and_skills() {
         use clap::Parser;
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "mcp",
-            "serve",
-            "--backend",
-            "fleet",
-            "--budget-usd",
-            "12.5",
-        ])
-        .expect("parse");
-        match cli.command {
-            Some(Command::Mcp {
-                action:
-                    McpAction::Serve {
-                        backend,
-                        budget_usd,
-                        ..
-                    },
-            }) => {
-                assert_eq!(backend, Some(McpBackend::Fleet));
-                assert_eq!(budget_usd, Some(12.5));
+        for (flag, expected) in [
+            ("local", McpBackend::Local),
+            ("cloud", McpBackend::Cloud),
+            ("skills", McpBackend::Skills),
+        ] {
+            let cli = Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", flag])
+                .expect("parse");
+            match cli.command {
+                Some(Command::Mcp {
+                    action: McpAction::Serve { backend, .. },
+                }) => assert_eq!(backend, Some(expected)),
+                _ => panic!("expected `mcp serve --backend {flag}` to parse"),
             }
-            _ => panic!("expected `mcp serve` to parse with --budget-usd"),
         }
+        // The orchestrator's fleet bridge is gone; its backend name no longer
+        // parses.
+        assert!(
+            Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", "fleet"]).is_err(),
+            "the fleet backend must no longer be accepted"
+        );
     }
 
     #[test]

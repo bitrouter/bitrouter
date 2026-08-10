@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-substrate"
-description = "Per-session ACP substrate: one session, one agent, turn queue + worktree"
+description = "Per-session ACP substrate: one session, one agent, turn queue"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
