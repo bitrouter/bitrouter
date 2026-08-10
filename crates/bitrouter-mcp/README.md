@@ -16,36 +16,25 @@ This crate makes BitRouter itself the server.
 
 ## Tools
 
-The handler assembles two **profiles** from one set of tool schemas. The
-public profile (`--backend local|cloud`) exposes only the completion tools and
-is HTTP-safe. The orchestrator profile (`--backend fleet`, stdio-only, injected
-by the TUI) is the *union*: the completion tools **plus** the fleet, cost,
-routing, skills, and human-bridge tools, injected app-side through the crate's
-capability ports (`Fleet`, `CostQuery`, `RoutingQuery`, `SkillsQuery`,
-`HumanBridge`) so the crate itself stays substrate-free.
+The handler assembles its tool set from one set of schemas. The completion
+tools are HTTP-safe and always present. Host-bound tools — routing
+introspection and skills — are injected app-side through the crate's
+capability ports (`RoutingQuery`, `SkillsQuery`) so the crate itself stays
+substrate-free, and they are wired on **stdio only**: they read the serving
+machine's own routing table and skill library, which has no meaning on a
+multi-tenant HTTP transport.
 
-| Tool | Profile | Description |
-|------|---------|-------------|
-| `complete` | both | Route a completion through BitRouter and return the full result |
-| `list_models` | both | List models routable through BitRouter |
-| `status` | both | Report BitRouter status (local: liveness/models/providers; cloud: credit balance) |
-| `spawn_subagent` | orchestrator | Spawn a worktree-isolated ACP subagent, send the task, block until the turn ends |
-| `prompt_subagent` | orchestrator | Send a follow-up prompt to a running subagent |
-| `subagent_status` | orchestrator | Fleet snapshot, or one subagent's status |
-| `subagent_diff` | orchestrator | The subagent's diff against its spawn base |
-| `apply_subagent` | orchestrator | Apply the subagent's diff onto the base tree, uncommitted (human-gated) |
-| `merge_subagent` | orchestrator | Merge the subagent's branch into the base repo (human-gated) |
-| `close_subagent` | orchestrator | Shut the subagent down (worktree retained) |
-| `fleet_cost` | orchestrator | BitRouter spend snapshot (today + all-time totals; plus `budget`/`remaining_usd` when `--budget-usd` is set) |
-| `route_preview` | orchestrator | Preview how a model/prompt would route (provider chain, policy decision, cost) |
-| `skills_search` | orchestrator | Search installed BitRouter skills by name/description |
-| `skills_get` | orchestrator | Fetch a skill's frontmatter + body to hand to a subagent |
-| `notify_human` | orchestrator | Send the supervising human a one-line TUI notice |
-| `request_attach` | orchestrator | Ask the human to attach to a subagent's pane |
-| `request_review` | orchestrator | Flag a subagent's work for the human's review queue |
+| Tool | Wired on | Description |
+|------|----------|-------------|
+| `complete` | all | Route a completion through BitRouter and return the full result |
+| `list_models` | all | List models routable through BitRouter |
+| `status` | all | Report BitRouter status (local: liveness/models/providers; cloud: credit balance) |
+| `route_preview` | stdio + local | Preview how a model/prompt would route (provider chain, policy decision, cost) |
+| `skills_search` | stdio + skills | Search installed BitRouter skills by name/description |
+| `skills_get` | stdio + skills | Fetch a skill's frontmatter + body |
 
-Only wired capabilities register their tools, so a public client never sees —
-or can call — the mutating fleet tools (or the routing/skills/human ones).
+Only wired capabilities register their tools, so an HTTP client never sees —
+or can call — the host-bound routing and skills tools.
 
 ## Transports & backends
 
@@ -55,6 +44,9 @@ One tool definition is served over two transports (built on
 - **stdio** → the local BYOK daemon at `http://127.0.0.1:4356` (BYOK).
 - **streamable HTTP** (mounted at `/mcp-control`) → BitRouter Cloud at
   `https://api.bitrouter.ai`.
+
+`--backend` selects `local`, `cloud`, or `skills` (defaults: stdio→local,
+http→cloud). The host-bound tools in the table above ride stdio only.
 
 ## Usage
 

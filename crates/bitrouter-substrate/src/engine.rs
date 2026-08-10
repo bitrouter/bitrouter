@@ -7,8 +7,7 @@
 //! - the SDK [`Pipeline`] (`PreRequest → Route → Execute`) whose executor is
 //!   a [`SessionExecutor`] bound to this connection and whose `ExecutionHook` is
 //!   a [`TelemetryHook`],
-//! - the [`TurnController`] that serialises prompts into ordered turns, and
-//! - an optional git worktree the agent runs inside.
+//! - the [`TurnController`] that serialises prompts into ordered turns.
 //!
 //! # Identity (D8)
 //!
@@ -28,7 +27,7 @@
 //! worker) only keep the struct alive, not the connection: their subsequent
 //! calls fail fast on the closed command channel. If the connection ended on
 //! its own earlier (agent crash), shutdown is a no-op for the connection and
-//! still settles the worktree.
+//! still settles the session's durable record.
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -57,7 +56,6 @@ use crate::telemetry::{RequestCompleted, TelemetryHook};
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
 use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
-use crate::worktree::{WorktreeManager, WorktreeSpec};
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
 /// before [`TurnController::try_submit`] reports backpressure. `prompt` uses the
@@ -72,21 +70,6 @@ const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 /// Options for [`Session::launch`].
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
-    /// Provision (or reuse) a git worktree for the session. `{record16}` in
-    /// its `name`/`branch` is replaced with the first 16 hex chars of the
-    /// session's record id.
-    pub worktree: Option<WorktreeSpec>,
-    /// Shell command run (`sh -c`, cwd = the worktree) after a worktree is
-    /// **newly created**, before the agent child spawns — the bootstrap hook
-    /// for untracked files a worktree doesn't carry (`.env`, `node_modules`).
-    /// It executes code: callers must treat it as a gated, human-visible
-    /// surface. A failing bootstrap fails the launch (and removes the
-    /// just-created worktree). Ignored when no worktree is provisioned or an
-    /// existing worktree is reused.
-    pub worktree_bootstrap: Option<String>,
-    /// Extra environment for the agent child (and the bootstrap hook),
-    /// overlaid on the transport's `env` — e.g. a fleet-allocated `PORT`.
-    pub env: Vec<(String, String)>,
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
     /// ambient credentials from crossing into an agent process while still
@@ -108,18 +91,11 @@ pub struct LaunchOptions {
 /// launch paths stay readable.
 struct BuildArgs {
     transport: AcpTransport,
+    /// The repository the session runs in: the upstream `session/new` cwd
+    /// (unless a manager relays its own) and the root of the record store.
     base_repo: PathBuf,
-    /// The session's record id, minted in `launch_inner` (before worktree
-    /// provisioning, so `{record16}` naming can derive from it).
+    /// The session's stable manager-facing record id, minted in `launch_inner`.
     record_id: String,
-    worktree_path: Option<PathBuf>,
-    /// Branch checked out in the worktree at provisioning, when known.
-    worktree_branch: Option<String>,
-    /// Base-repo `HEAD` a newly created worktree branch was cut from.
-    worktree_base_ref: Option<String>,
-    remove_worktree_on_shutdown: bool,
-    /// Extra environment overlaid on the transport's `env` for the child.
-    env: Vec<(String, String)>,
     /// Environment names stripped from the child before the explicit overlay.
     strip_inherited_env: Vec<String>,
     turn_timeout: Option<Duration>,
@@ -148,7 +124,7 @@ impl RoutingTable for PinnedTable {
     }
 }
 
-/// One live session: upstream connection + SDK pipeline + turn queue + worktree.
+/// One live session: upstream connection + SDK pipeline + turn queue.
 pub struct Session {
     /// Manager-facing identity + status.
     pub state: SessionState,
@@ -160,15 +136,9 @@ pub struct Session {
     /// Serialises prompts into ordered turns, each carrying the prompt's
     /// content blocks verbatim and yielding a [`PromptResponse`].
     turn: TurnController<Vec<ContentBlock>, PromptResponse>,
-    /// The worktree this session runs in, if one was provisioned.
-    worktree: Option<PathBuf>,
-    /// Remove the worktree at [`shutdown`](Self::shutdown). Only `true` when
-    /// the caller opted in **and** this session newly created the worktree —
-    /// worktrees are retained by default because removal (`git worktree remove
-    /// --force`) destroys the agent's uncommitted work.
-    remove_worktree_on_shutdown: bool,
-    /// Manages the worktree lifecycle (rooted at the base repo).
-    worktrees: WorktreeManager,
+    /// The repository the session runs in — the `session/new` cwd fallback
+    /// when no manager relays one of its own.
+    base_repo: PathBuf,
     /// Wire identity, set exactly once — at launch (immediate open) or when
     /// the manager's `session/new` arrives ([`Session::open`]).
     wire: Arc<OnceLock<UpstreamSessionIds>>,
@@ -189,12 +159,11 @@ pub struct Session {
 
 impl Session {
     /// Launch a session and **open it immediately**: resolve `agent_id` in
-    /// `catalog`, optionally provision a worktree, spawn the upstream
-    /// connection, run `initialize` + `session/new` (cwd = worktree or
-    /// `base_repo`, `mcpServers` from [`LaunchOptions::mcp_servers`]), build
-    /// the pipeline and turn queue, and record the session
-    /// identity. Used by the headless `prompt` path and library callers that
-    /// have no manager to relay from.
+    /// `catalog`, spawn the upstream connection, run `initialize` +
+    /// `session/new` (cwd = `base_repo`, `mcpServers` from
+    /// [`LaunchOptions::mcp_servers`]), build the pipeline and turn queue, and
+    /// record the session identity. Used by the headless `prompt` path and
+    /// library callers that have no manager to relay from.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
@@ -227,9 +196,6 @@ impl Session {
         open_now: bool,
     ) -> anyhow::Result<Self> {
         let LaunchOptions {
-            worktree,
-            worktree_bootstrap,
-            env,
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
@@ -242,137 +208,33 @@ impl Session {
 
         // ── Identity (D8/D10) ──────────────────────────────────────────────
         // `record_id` is a STABLE, distinct manager-facing id — minted here,
-        // NOT the upstream `acp_session_id`, and *before* the worktree so
-        // `{record16}` naming can derive from it. Keeping it separate from the
-        // wire id lets the manager-facing id survive an upstream reconnect
-        // (v2) while the upstream wire id can change.
+        // NOT the upstream `acp_session_id`. Keeping it separate from the wire
+        // id lets the manager-facing id survive an upstream reconnect (v2)
+        // while the upstream wire id can change.
         let record_id = uuid::Uuid::new_v4().to_string();
-        let record16: String = record_id.chars().filter(|c| *c != '-').take(16).collect();
 
-        // ── Worktree (optional) ────────────────────────────────────────────
-        let worktrees = WorktreeManager::new(base_repo.clone());
-        let provisioned = match &worktree {
-            Some(spec) => {
-                let name = spec.name.replace("{record16}", &record16);
-                let branch = spec
-                    .branch
-                    .as_ref()
-                    .map(|b| b.replace("{record16}", &record16));
-                Some(worktrees.create(&name, branch.as_deref()).await?)
-            }
-            None => None,
-        };
-        let worktree_path = provisioned.as_ref().map(|p| p.path.clone());
-        let worktree_branch = provisioned.as_ref().and_then(|p| p.branch.clone());
-        let worktree_base_ref = provisioned.as_ref().and_then(|p| p.base_ref.clone());
-        // Removal is honored only for a worktree this session newly created; a
-        // reused (pre-existing) worktree is never removed by the session.
-        let newly_created = provisioned.as_ref().is_some_and(|p| p.newly_created);
-        let remove_on_shutdown =
-            newly_created && worktree.as_ref().is_some_and(|s| s.remove_on_shutdown);
-
-        // Everything after a successful `create` runs here. If it fails we
-        // must remove a just-created worktree before propagating the error, or
-        // it leaks on disk. A reused worktree is left untouched.
-        let launched = async {
-            // ── Bootstrap hook (newly created worktrees only) ──────────────
-            // Runs before the agent child spawns so the tree is ready when the
-            // agent takes its first look. Callers gate this human-visibly —
-            // it executes shell.
-            if newly_created && let (Some(cmd), Some(path)) = (&worktree_bootstrap, &worktree_path)
-            {
-                Self::run_bootstrap_hook(cmd, path, &base_repo, &env).await?;
-            }
-            Self::build(
-                agent_id,
-                BuildArgs {
-                    transport,
-                    base_repo: base_repo.clone(),
-                    record_id,
-                    worktree_path: worktree_path.clone(),
-                    worktree_branch,
-                    worktree_base_ref,
-                    remove_worktree_on_shutdown: remove_on_shutdown,
-                    env,
-                    strip_inherited_env,
-                    turn_timeout,
-                    mcp_servers,
-                    open_now,
-                },
-            )
-            .await
-        }
-        .await;
-        match launched {
-            Ok(session) => Ok(session),
-            Err(original) => {
-                if newly_created && let Some(path) = &worktree_path {
-                    // Best-effort cleanup; a remove error must not mask the
-                    // original failure that triggered the cleanup.
-                    if let Err(remove_err) = worktrees.remove(path).await {
-                        tracing::warn!(
-                            error = %remove_err,
-                            path = %path.display(),
-                            "failed to remove worktree after launch error"
-                        );
-                    }
-                }
-                Err(original)
-            }
-        }
+        Self::build(
+            agent_id,
+            BuildArgs {
+                transport,
+                base_repo,
+                record_id,
+                strip_inherited_env,
+                turn_timeout,
+                mcp_servers,
+                open_now,
+            },
+        )
+        .await
     }
 
-    /// Run the worktree bootstrap hook: the shell command with cwd = the
-    /// worktree, the launch env overlay applied, and `BITROUTER_BASE_REPO`
-    /// pointing at the base repository (so hooks can copy untracked files —
-    /// `.env`, caches — from it). A non-zero exit fails the launch.
-    async fn run_bootstrap_hook(
-        cmd: &str,
-        worktree: &std::path::Path,
-        base_repo: &std::path::Path,
-        env: &[(String, String)],
-    ) -> anyhow::Result<()> {
-        #[cfg(unix)]
-        let (shell, flag) = ("sh", "-c");
-        #[cfg(windows)]
-        let (shell, flag) = ("cmd", "/C");
-        let mut command = tokio::process::Command::new(shell);
-        command
-            .arg(flag)
-            .arg(cmd)
-            .current_dir(worktree)
-            .env("BITROUTER_BASE_REPO", base_repo);
-        for (k, v) in env {
-            command.env(k, v);
-        }
-        let output = command
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("spawning worktree bootstrap hook: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "worktree bootstrap hook failed (status {}): {}",
-                output.status,
-                stderr.trim()
-            );
-        }
-        Ok(())
-    }
-
-    /// The body of [`launch`]/[`launch_deferred`] after the worktree has been
-    /// created (if any). Returns a fully wired `Session`, or an error; on
-    /// error the caller removes a newly created worktree.
+    /// The body of [`launch`]/[`launch_deferred`]: returns a fully wired
+    /// `Session`, or an error.
     async fn build(agent_id: &str, args: BuildArgs) -> anyhow::Result<Self> {
         let BuildArgs {
             transport,
             base_repo,
             record_id,
-            worktree_path,
-            worktree_branch,
-            worktree_base_ref,
-            remove_worktree_on_shutdown,
-            env: extra_env,
             strip_inherited_env,
             turn_timeout,
             mcp_servers,
@@ -384,21 +246,12 @@ impl Session {
         // `session/new` happens later — immediately (`open_now`) for the
         // headless/prompt path, or when the manager sends its own
         // `session/new` (whose cwd + mcpServers are relayed) for `serve`.
-        // Launch options overlay the transport env (e.g. a fleet `PORT`).
-        let env = if extra_env.is_empty() {
-            env.clone()
-        } else {
-            let mut merged = env.clone();
-            merged.extend(extra_env.iter().cloned());
-            merged
-        };
         let conn = Arc::new(
-            UpstreamConnection::spawn_with_stripped_env(command, args, &env, &strip_inherited_env)
+            UpstreamConnection::spawn_with_stripped_env(command, args, env, &strip_inherited_env)
                 .await?,
         );
 
-        // The record id was minted in `launch_inner` (before the worktree, so
-        // `{record16}` naming could derive from it). The down-facing
+        // The record id was minted in `launch_inner`. The down-facing
         // `SessionAgent` returns `record_id` for `session/new`; the upstream
         // `acp_session_id` stays internal.
         let mut state = SessionState::new(record_id, agent_id.to_string());
@@ -410,8 +263,7 @@ impl Session {
         // open fails with a clear error.
         let wire: Arc<OnceLock<UpstreamSessionIds>> = Arc::new(OnceLock::new());
         if open_now {
-            let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
-            let ids = conn.new_session(cwd, mcp_servers).await?;
+            let ids = conn.new_session(base_repo.clone(), mcp_servers).await?;
             state.set_acp_session_id(ids.acp_session_id.clone());
             if let Some(agent_sid) = &ids.agent_session_id {
                 state.set_agent_session_id(agent_sid.clone());
@@ -537,15 +389,12 @@ impl Session {
 
         // ── Durable session record ─────────────────────────────────────────
         // Best-effort: a record-write failure must not fail the launch, but it
-        // is surfaced because `bitrouter acp sessions` depends on records existing.
+        // is surfaced because managers depend on records existing.
         let record = SessionRecord {
             record_id: state.record_id.clone(),
             agent_id: state.agent_id.clone(),
             acp_session_id: state.acp_session_id.clone(),
             agent_session_id: state.agent_session_id.clone(),
-            worktree: worktree_path.clone(),
-            branch: worktree_branch,
-            base_ref: worktree_base_ref,
             pid: std::process::id(),
             started_at: now_unix(),
             status: RecordStatus::Running,
@@ -561,12 +410,7 @@ impl Session {
             conn,
             pipeline,
             turn,
-            worktree: worktree_path,
-            remove_worktree_on_shutdown,
-            // `WorktreeManager` is a thin `base_repo` wrapper; a fresh one for
-            // the session's own shutdown removal is equivalent to the one
-            // `launch` keeps for error-path cleanup.
-            worktrees: WorktreeManager::new(base_repo),
+            base_repo,
             wire,
             record: std::sync::Mutex::new(record),
             records,
@@ -577,9 +421,8 @@ impl Session {
 
     /// Open the upstream session (`session/new`) for a
     /// [`launch_deferred`](Self::launch_deferred) session, relaying the
-    /// **manager's** `cwd` and `mcpServers`. The session's worktree (a launch
-    /// argument, operator-chosen) wins over the manager's `cwd`; without
-    /// either, the base repo is used.
+    /// **manager's** `cwd` and `mcpServers`. Without a relayed `cwd` the base
+    /// repo is used.
     ///
     /// Idempotent: opening an already-open session (including one launched
     /// with the immediate-open [`launch`](Self::launch)) is a no-op — the
@@ -594,11 +437,7 @@ impl Session {
             tracing::debug!("session already open; ignoring session/new arguments");
             return Ok(());
         }
-        let cwd = self
-            .worktree
-            .clone()
-            .or(manager_cwd)
-            .unwrap_or_else(|| self.worktrees.base_repo().to_path_buf());
+        let cwd = manager_cwd.unwrap_or_else(|| self.base_repo.clone());
         let ids = self.conn.new_session(cwd, mcp_servers).await?;
         // A concurrent open may have won the race; first one in wins.
         if self.wire.set(ids.clone()).is_err() {
@@ -693,24 +532,13 @@ impl Session {
         self.conn.upstream_init()
     }
 
-    /// The worktree this session runs in, when one was provisioned. Fleet
-    /// managers use it for diff/review over the subagent's work.
-    pub fn worktree_path(&self) -> Option<&std::path::Path> {
-        self.worktree.as_deref()
-    }
-
     /// Tears the upstream connection down deterministically (killing the agent
-    /// child) and settles the worktree (if any): retained by default — it
-    /// holds the agent's work — and removed only when the session was launched
-    /// with `remove_on_shutdown` and created the worktree itself.
+    /// child) and settles the session's durable record.
     pub async fn shutdown(self) -> anyhow::Result<()> {
         let Session {
             conn,
             pipeline,
             turn,
-            worktree,
-            remove_worktree_on_shutdown,
-            worktrees,
             record,
             records,
             ..
@@ -722,21 +550,12 @@ impl Session {
 
         // Explicit teardown: the command loop exits, the connection drops, and
         // the agent child is killed; returns once the driver confirms. A
-        // failure must not skip worktree settlement, so it is logged instead of
+        // failure must not skip record settlement, so it is logged instead of
         // propagated.
         if let Err(e) = conn.shutdown().await {
             tracing::warn!(error = %e, "upstream teardown unconfirmed; child may not have terminated");
         }
         drop(conn);
-
-        if let Some(path) = worktree {
-            if remove_worktree_on_shutdown {
-                worktrees.remove(&path).await?;
-            } else {
-                // The worktree holds the agent's work; surface where it lives.
-                tracing::info!(path = %path.display(), "worktree retained");
-            }
-        }
 
         // Settle the durable record last so it reflects the final state.
         let mut record = match record.into_inner() {
@@ -761,7 +580,6 @@ mod tests {
     use futures::StreamExt;
 
     use super::{LaunchOptions, Session};
-    use crate::worktree::WorktreeSpec;
 
     /// Bash stub: ACP handshake + a streamed `session/update` (message chunk,
     /// then a `usage_update`) + prompt result. Mirrors the `up.rs` stub so we
@@ -779,55 +597,12 @@ mod tests {
         done
     "#;
 
-    /// Init a git repo with one commit so `git worktree add` succeeds.
-    fn init_repo() -> tempfile::TempDir {
-        let d = tempfile::tempdir().expect("tempdir");
-        for a in [
-            &["init", "-q"][..],
-            &["config", "user.email", "t@t"],
-            &["config", "user.name", "t"],
-        ] {
-            std::process::Command::new("git")
-                .current_dir(d.path())
-                .args(a)
-                .status()
-                .expect("git");
-        }
-        std::fs::write(d.path().join("f"), "x").expect("write");
-        std::process::Command::new("git")
-            .current_dir(d.path())
-            .args(["add", "."])
-            .status()
-            .expect("git");
-        std::process::Command::new("git")
-            .current_dir(d.path())
-            .args(["commit", "-qm", "init"])
-            .status()
-            .expect("git");
-        d
-    }
-
     fn stub_catalog() -> ConfigAcpRoutingTable {
         let cfg = AcpAgentConfig {
             name: "stub".to_string(),
             transport: AcpTransport::Stdio {
                 command: "bash".to_string(),
                 args: vec!["-c".to_string(), BASH_STUB.to_string()],
-                env: HashMap::new(),
-            },
-        };
-        ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog")
-    }
-
-    /// Catalog whose agent points at a non-existent binary, so
-    /// `UpstreamConnection::spawn` (and thus `launch`) fails. Used to exercise
-    /// the error-path worktree cleanup.
-    fn doomed_catalog() -> ConfigAcpRoutingTable {
-        let cfg = AcpAgentConfig {
-            name: "stub".to_string(),
-            transport: AcpTransport::Stdio {
-                command: "bitrouter-no-such-binary-xyzzy".to_string(),
-                args: vec![],
                 env: HashMap::new(),
             },
         };
@@ -878,295 +653,6 @@ mod tests {
         assert_eq!(session.state().agent_id, "stub");
 
         session.shutdown().await.expect("shutdown");
-    }
-
-    #[tokio::test]
-    async fn launch_in_worktree_then_shutdown_removes_it_when_opted_in() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "feat-1".to_string(),
-                    branch: None,
-                    remove_on_shutdown: true,
-                }),
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("launch");
-
-        // The worktree was created and the prompt round-trips through it.
-        let worktree_path = repo
-            .path()
-            .join(".bitrouter")
-            .join("worktrees")
-            .join("feat-1");
-        assert!(worktree_path.exists(), "worktree should exist after launch");
-
-        let resp = session.prompt("hi").await.expect("prompt");
-        assert_eq!(resp.stop_reason, StopReason::EndTurn);
-
-        session.shutdown().await.expect("shutdown");
-        assert!(
-            !worktree_path.exists(),
-            "worktree should be removed after opt-in shutdown"
-        );
-    }
-
-    #[tokio::test]
-    async fn record16_placeholder_names_worktree_and_branch() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "codex-{record16}".to_string(),
-                    branch: Some("bitrouter/codex-{record16}".to_string()),
-                    remove_on_shutdown: false,
-                }),
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("launch");
-
-        let record16: String = session
-            .state()
-            .record_id
-            .chars()
-            .filter(|c| *c != '-')
-            .take(16)
-            .collect();
-        let worktree_path = repo
-            .path()
-            .join(".bitrouter")
-            .join("worktrees")
-            .join(format!("codex-{record16}"));
-        assert!(
-            worktree_path.exists(),
-            "worktree dir derives from the session's record id"
-        );
-        let head = std::process::Command::new("git")
-            .current_dir(&worktree_path)
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .output()
-            .expect("git rev-parse");
-        assert_eq!(
-            String::from_utf8_lossy(&head.stdout).trim(),
-            format!("bitrouter/codex-{record16}"),
-            "branch derives from the session's record id"
-        );
-
-        session.shutdown().await.expect("shutdown");
-    }
-
-    #[tokio::test]
-    async fn bootstrap_hook_runs_in_new_worktree_before_agent() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "boot-1".to_string(),
-                    branch: None,
-                    remove_on_shutdown: false,
-                }),
-                // Prove cwd = the worktree, the base repo is exported, and the
-                // env overlay reaches the hook.
-                worktree_bootstrap: Some(
-                    "printf '%s %s' \"$BITROUTER_BASE_REPO\" \"$PORT\" > bootstrapped".to_string(),
-                ),
-                env: vec![("PORT".to_string(), "3101".to_string())],
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("launch");
-
-        let marker = repo
-            .path()
-            .join(".bitrouter")
-            .join("worktrees")
-            .join("boot-1")
-            .join("bootstrapped");
-        let content = std::fs::read_to_string(&marker).expect("bootstrap hook ran");
-        assert!(content.contains("3101"), "env overlay reaches the hook");
-        assert!(
-            content.contains(repo.path().to_str().expect("utf8 path")),
-            "BITROUTER_BASE_REPO points at the base repo"
-        );
-
-        session.shutdown().await.expect("shutdown");
-    }
-
-    #[tokio::test]
-    async fn failing_bootstrap_fails_launch_and_removes_new_worktree() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-
-        let result = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "boot-bad".to_string(),
-                    branch: None,
-                    remove_on_shutdown: false,
-                }),
-                worktree_bootstrap: Some("echo nope >&2; exit 7".to_string()),
-                ..LaunchOptions::default()
-            },
-        )
-        .await;
-
-        let err = format!("{:#}", result.err().expect("launch must fail"));
-        assert!(err.contains("bootstrap"), "actionable error: {err}");
-        assert!(err.contains("nope"), "hook stderr surfaced: {err}");
-        assert!(
-            !repo
-                .path()
-                .join(".bitrouter")
-                .join("worktrees")
-                .join("boot-bad")
-                .exists(),
-            "just-created worktree cleaned up after bootstrap failure"
-        );
-    }
-
-    #[tokio::test]
-    async fn reused_worktree_skips_the_bootstrap_hook() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-        let spec = || WorktreeSpec {
-            name: "boot-reuse".to_string(),
-            branch: None,
-            remove_on_shutdown: false,
-        };
-
-        // First launch creates the worktree (no hook configured).
-        let first = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(spec()),
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("first launch");
-        first.shutdown().await.expect("shutdown");
-
-        // Relaunch into the SAME worktree with a hook: it must not run —
-        // bootstrap is for newly created trees only.
-        let second = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(spec()),
-                worktree_bootstrap: Some("touch bootstrapped".to_string()),
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("second launch");
-        assert!(
-            !repo
-                .path()
-                .join(".bitrouter")
-                .join("worktrees")
-                .join("boot-reuse")
-                .join("bootstrapped")
-                .exists(),
-            "reused worktree must not re-run the bootstrap hook"
-        );
-        second.shutdown().await.expect("shutdown");
-    }
-
-    #[tokio::test]
-    async fn shutdown_retains_worktree_by_default() {
-        let repo = init_repo();
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "feat-keep".to_string(),
-                    branch: None,
-                    remove_on_shutdown: false,
-                }),
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("launch");
-
-        let worktree_path = repo
-            .path()
-            .join(".bitrouter")
-            .join("worktrees")
-            .join("feat-keep");
-
-        // The agent leaves uncommitted work behind; shutdown must not destroy it.
-        std::fs::write(worktree_path.join("wip"), "uncommitted").expect("write");
-
-        session.shutdown().await.expect("shutdown");
-        assert!(
-            worktree_path.join("wip").exists(),
-            "worktree (and uncommitted work) must survive default shutdown"
-        );
-    }
-
-    #[tokio::test]
-    async fn launch_failure_removes_worktree_no_leak() {
-        let repo = init_repo();
-        let catalog = doomed_catalog();
-
-        let worktree_path = repo
-            .path()
-            .join(".bitrouter")
-            .join("worktrees")
-            .join("doomed");
-
-        let result = Session::launch(
-            &catalog,
-            "stub",
-            repo.path().to_path_buf(),
-            LaunchOptions {
-                worktree: Some(WorktreeSpec {
-                    name: "doomed".to_string(),
-                    branch: None,
-                    remove_on_shutdown: false,
-                }),
-                ..LaunchOptions::default()
-            },
-        )
-        .await;
-
-        assert!(result.is_err(), "launch should fail on a bad binary");
-        assert!(
-            !worktree_path.exists(),
-            "a newly created worktree must be removed when launch fails"
-        );
     }
 
     /// Deferred launch: prompting before `open` fails with a clear error;
@@ -1410,7 +896,7 @@ mod tests {
             .expect("prompt");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
 
-        // No worktree → dropping the last Arc reaps the upstream child.
+        // Dropping the last Arc reaps the upstream child.
         drop(session);
     }
 

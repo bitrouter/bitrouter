@@ -10,4 +10,3 @@ pub mod telemetry;
 pub mod translate;
 pub mod turn;
 pub mod up;
-pub mod worktree;

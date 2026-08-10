@@ -13,7 +13,7 @@ least portable plugin component (Grok hooks are block-only, Antigravity has a
 different event catalog + output schema, and even `SessionStart` output only
 surfaces on some harnesses), so anchoring the plugin on a hook would fragment
 the exact thing BitRouter exists to unify. Ambient/live/per-turn cost belongs
-to BitRouter's own manager surface (`spawn` HUD, then the TUI/GUI cost-HUD),
+to BitRouter's own launch-side surface (the `spawn` HUD),
 which is harness-agnostic by construction. See [[agent-plugins-design]] §5.4.
 
 | Component | Claude Code | Codex |
@@ -65,7 +65,7 @@ Notes:
 
 - **Live / per-turn / ambient cost is not in the plugin** — no monitor, no
   session hook. That's intentional: hooks don't port across harnesses (§5.4),
-  so live cost is the manager surface's job (`spawn` HUD → TUI/GUI).
+  so live cost is the launcher's job (the `spawn` HUD).
 - v1 reports **spend**, not savings — the counterfactual "vs frontier list
   price" line lands together with the `bitrouter usage` pricing plumbing.
   Don't promise savings percentages yet.

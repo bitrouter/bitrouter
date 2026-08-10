@@ -56,7 +56,7 @@ fn stub_config() -> Config {
 ///
 /// The test temporarily changes the working directory to a temp dir so
 /// `Session::launch` (which calls `current_dir()` internally) finds a valid
-/// base path. No worktree is requested, so the git-repo check is skipped.
+/// base path.
 #[tokio::test]
 async fn prompt_ndjson() {
     let base = tempfile::tempdir().expect("tempdir");
@@ -75,7 +75,7 @@ async fn prompt_ndjson() {
         source: &source,
         config: stub_config(),
         agent_id: "stub",
-        options: bitrouter::acp_cli::launch_options(None, false, None),
+        options: bitrouter::acp_cli::launch_options(None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()
@@ -230,7 +230,7 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         source: &source,
         config: stub_config_with(script),
         agent_id: "stub",
-        options: bitrouter::acp_cli::launch_options(None, false, None),
+        options: bitrouter::acp_cli::launch_options(None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()
@@ -282,7 +282,7 @@ async fn result_schema_failure_reports_raw_and_never_blocks() {
 /// `apply_routing` for a catalog harness with an unreachable daemon must fail
 /// fast with `DaemonUnreachable` — before any session is launched. It may
 /// synthesize the catalog invocation into the config (so a later launch is
-/// *possible*), but it creates no worktree / record itself.
+/// *possible*), but it creates no session record itself.
 #[tokio::test]
 async fn routing_fails_fast_on_dead_daemon() {
     let base = tempfile::tempdir().expect("tempdir");
@@ -658,7 +658,7 @@ async fn prompt_headless_denies_permission_and_completes() {
         source: &source,
         config: cfg,
         agent_id: "perm-stub",
-        options: bitrouter::acp_cli::launch_options(None, false, None),
+        options: bitrouter::acp_cli::launch_options(None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()

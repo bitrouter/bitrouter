@@ -1,8 +1,7 @@
-//! The gateway MCP servers injected into TUI-launched harnesses.
+//! The gateway MCP servers injected into launched harnesses.
 //!
-//! Two of BitRouter's four gateways reach a launched harness as injected MCP
-//! servers (the other two — models and ACP — ride the routing overlay and
-//! the fleet bridge):
+//! Two of BitRouter's gateways reach a launched harness as injected MCP
+//! servers (the models gateway instead rides the routing overlay):
 //!
 //! - **`bitrouter_tools`** — the MCP gateway: the daemon's aggregate endpoint
 //!   (`mcp.aggregate.route`, default `POST /mcp`), which fans out to every
@@ -14,31 +13,23 @@
 //!   `skills_get` tools and SEP-2640's `skills/list` / `skills/get` methods
 //!   (plus `resources/*` over skill files) against the installed-skills root.
 //!
-//! Both harness roles get the same pair — the interactive orchestrator via
-//! config synthesis ([`crate::harness::Harness::orchestrator_overlay`]) and
-//! ACP subagents via `session/new` `mcpServers` descriptors ([`to_acp`]).
-//! One spec, two renderers, so the roles can't drift.
+//! [`gateway_servers`] is the one spec; [`to_acp`] renders it as the ACP
+//! `session/new` `mcpServers` descriptor for a headless sub-agent, while
+//! [`crate::harness::Harness::launch_overlay`] renders it into whatever config
+//! surface an interactive harness offers. Two renderers, one source, so the
+//! two paths can't drift.
 //!
 //! ## Do not retire the `bitrouter_skills` injection yet
 //!
 //! `docs/2026-08-03-skills-over-mcp-plan.md` originally scheduled this stdio
-//! injection for removal, on the grounds that its only consumer was the TUI
-//! orchestrator being dissolved by #749. That was wrong, and the step is
-//! withdrawn. Two things to know before reaching for it again:
+//! injection for removal. The step is withdrawn: there is **no HTTP path to
+//! the daemon's own installed skills**. The aggregate `/mcp` proxies
+//! configured `mcp_servers` upstreams; it does not serve origin content.
+//! Removing this injection removes skills from harnesses outright.
 //!
-//! - There are **two** consumers, not one. The TUI is one; the other is the
-//!   fleet MCP backend in `main.rs` (`--backend fleet`), which hands these
-//!   descriptors to spawned ACP subagents. That path is not the TUI and is not
-//!   dissolved by #749.
-//! - There is **no HTTP path to the daemon's own installed skills**. The
-//!   aggregate `/mcp` proxies configured `mcp_servers` upstreams; it does not
-//!   serve origin content. Removing this injection removes skills from
-//!   harnesses outright.
-//!
-//! The precondition for retiring it is not "#749 landed" — it is "the daemon
-//! serves its own skills over HTTP", which needs an in-process executor seam
-//! (`McpTarget::Direct` assumes a dialable transport, and a daemon serving
-//! itself has none).
+//! The precondition for retiring it is "the daemon serves its own skills over
+//! HTTP", which needs an in-process executor seam (`McpTarget::Direct` assumes
+//! a dialable transport, and a daemon serving itself has none).
 
 use agent_client_protocol::schema::v1 as acp;
 
