@@ -215,7 +215,7 @@ impl SpawnCheckReport {
 impl CliReport for SpawnCheckReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.line(&format!(
-            "spawn check for {} via {}",
+            "preflight for {} via {}",
             self.agent, self.base_url
         ))?;
         if let Some(model) = &self.model {
@@ -334,7 +334,7 @@ pub async fn run(
         // daemon itself borrows as providers — routing them through BitRouter
         // would loop back to the same backend on the same credential.
         eprintln!(
-            "{cyan}{bold}spawn:{reset} launching {bold}{agent_id}{reset} with its own \
+            "{cyan}{bold}launch:{reset} launching {bold}{agent_id}{reset} with its own \
              subscription auth — not routed through BitRouter",
             cyan = p.cyan,
             bold = p.bold,
@@ -342,7 +342,7 @@ pub async fn run(
         );
     } else {
         eprintln!(
-            "{cyan}{bold}spawn:{reset} launching {bold}{agent_id}{reset} via BitRouter ({})",
+            "{cyan}{bold}launch:{reset} launching {bold}{agent_id}{reset} via BitRouter ({})",
             base_url,
             cyan = p.cyan,
             bold = p.bold,
@@ -408,7 +408,7 @@ async fn print_exit_summary(
         return;
     }
     eprintln!(
-        "{cyan}{bold}spawn:{reset} session spend {bold}{}{reset} ({} requests) · today {}",
+        "{cyan}{bold}launch:{reset} session spend {bold}{}{reset} ({} requests) · today {}",
         crate::metering::fmt_usd(session.spend_micro_usd),
         session.requests,
         crate::metering::fmt_usd(today.spend_micro_usd),
@@ -1214,9 +1214,10 @@ impl InstallCommand {
     async fn run(&self) -> Result<()> {
         let p = Palette::for_stderr();
         eprintln!(
-            "{cyan}spawn:{reset} installing — {}",
+            "{cyan}{bold}info:{reset} installing — {}",
             self.human,
             cyan = p.cyan,
+            bold = p.bold,
             reset = p.reset,
         );
         let status = tokio::process::Command::new(self.program)
