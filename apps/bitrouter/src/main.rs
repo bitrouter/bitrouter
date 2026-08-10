@@ -5205,11 +5205,19 @@ async fn run_launch(
                  `bitrouter launch` without `--tui`."
             );
         }
-        if !cfg!(unix) {
+        // A `cfg!(unix)` *runtime* check would not do: `exec_hosted` only
+        // exists under the same gate, so the call has to disappear at compile
+        // time or Windows fails to build.
+        #[cfg(not(unix))]
+        {
+            let _ = (&source, &cfg, opts);
             anyhow::bail!("`--tui` is unix-only today. Run `bitrouter launch` without `--tui`.");
         }
-        let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
-        bitrouter::spawn::exec_hosted(prepared).await
+        #[cfg(unix)]
+        {
+            let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
+            bitrouter::spawn::exec_hosted(prepared).await
+        }
     } else {
         bitrouter::spawn::run(&source, &cfg, opts).await
     }

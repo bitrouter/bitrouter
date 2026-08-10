@@ -220,19 +220,25 @@ mod tests {
         )
         .expect("spawn pty child");
 
+        // Drain until every sender is gone, **not** until `Exited` arrives.
+        // The reaper and the reader are separate threads, so a fast-exiting
+        // child can deliver its status before its output — stopping at
+        // `Exited` observes an empty grid, which is exactly the race that
+        // broke this on Linux while passing on macOS.
         let mut code = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while code.is_none() && std::time::Instant::now() < deadline {
-            let Ok(Some(event)) =
-                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
-            else {
+        loop {
+            if std::time::Instant::now() >= deadline {
                 break;
-            };
-            match event {
-                HostEvent::Output(bytes) => {
+            }
+            match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(HostEvent::Output(bytes))) => {
                     pane.feed(&bytes);
                 }
-                HostEvent::Exited(status) => code = Some(status),
+                Ok(Some(HostEvent::Exited(status))) => code = Some(status),
+                // Channel closed: reader and reaper have both finished.
+                Ok(None) => break,
+                Err(_) => break,
             }
         }
 

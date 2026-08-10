@@ -22,7 +22,8 @@
 //!   of the PTY stream so the host loop can re-emit them verbatim to the
 //!   outer terminal (the tmux `allow-passthrough` pattern), capped so a
 //!   malicious child can't balloon memory.
-//! - **Resize recovery**: [`PtyPane::resize`] resizes the emulator and the
+//! - **Resize recovery**: [`PtyPane::resize`](super::pty::PtyPane::resize)
+//!   resizes the emulator and the
 //!   PTY (delivering `SIGWINCH`) whenever the pane rect changes.
 
 use alacritty_terminal::event::{Event, EventListener};

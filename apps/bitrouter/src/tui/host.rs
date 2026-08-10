@@ -49,6 +49,14 @@ use crate::metering::store::TimeWindow;
 /// two surfaces share a renderer, so they should not disagree on freshness.
 const TICK: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How long to keep reading after the child is reaped, waiting for the reader
+/// thread to reach EOF and deliver the final frame.
+///
+/// Normally EOF follows the child's exit within milliseconds. The bound exists
+/// for the case where a *descendant* still holds the pty open: then EOF never
+/// comes, and a session that waited for it would hang instead of exiting.
+const FINAL_DRAIN: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Everything the host needs that is not the child process itself.
 pub struct HostContext<'a> {
     /// Config source, for the metering read behind the status row.
@@ -136,6 +144,7 @@ async fn hosted_loop(
     let window = TimeWindow::Today;
     let mut snap = snapshot::poll(ctx.source, &ctx.socket, window).await;
     let mut exit_code: Option<i32> = None;
+    let mut drain_deadline: Option<tokio::time::Instant> = None;
 
     loop {
         draw(&mut terminal, &mut pane, &snap, ctx)?;
@@ -147,7 +156,7 @@ async fn hosted_loop(
             // The child owns Ctrl-C; these are the signals that would
             // otherwise leave a raw-mode shell behind, since a panic hook
             // never runs for them.
-            _ = super::shutdown_signal() => {
+            _ = super::watch::shutdown_signal() => {
                 pane.kill();
                 return Ok(exit_code.unwrap_or(130));
             }
@@ -162,17 +171,30 @@ async fn hosted_loop(
                     }
                 }
                 Some(HostEvent::Exited(code)) => {
+                    // Record the status but keep looping. The reaper and the
+                    // reader are separate threads, so `Exited` can arrive
+                    // *before* the reader has delivered the child's final
+                    // bytes — returning here loses the last frame, and on a
+                    // fast-exiting child it can lose the whole screen.
+                    //
+                    // `None` below is the real end: every sender dropped,
+                    // which means the reader reached EOF and finished too.
                     exit_code = Some(code.unwrap_or(0));
-                    // Drain whatever the child wrote just before exiting;
-                    // otherwise its last frame is lost.
-                    while let Ok(HostEvent::Output(bytes)) = rx.try_recv() {
-                        pane.feed(&bytes);
-                    }
+                    drain_deadline = Some(tokio::time::Instant::now() + FINAL_DRAIN);
+                }
+                None => {
                     draw(&mut terminal, &mut pane, &snap, ctx)?;
                     return Ok(exit_code.unwrap_or(0));
                 }
-                None => return Ok(exit_code.unwrap_or(0)),
             },
+            // Only armed once the child is gone: gives the reader a bounded
+            // chance to finish, then gives up rather than hanging.
+            _ = tokio::time::sleep_until(
+                drain_deadline.unwrap_or_else(|| tokio::time::Instant::now() + TICK),
+            ), if drain_deadline.is_some() => {
+                draw(&mut terminal, &mut pane, &snap, ctx)?;
+                return Ok(exit_code.unwrap_or(0));
+            }
             input = futures::StreamExt::next(&mut events) => match input {
                 Some(Ok(event)) => forward(&mut pane, event, cols, rows),
                 Some(Err(e)) => return Err(e.into()),

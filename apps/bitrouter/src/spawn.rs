@@ -132,7 +132,7 @@ fn harness_id(h: &crate::harness::Harness) -> &'static str {
 }
 
 /// What `bitrouter launch` injects into the child process. The env/args come
-/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`], so the
+/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::RoutingOverlay), so the
 /// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildLaunch {
