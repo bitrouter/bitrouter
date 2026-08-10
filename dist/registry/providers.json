@@ -27,6 +27,9 @@
             "responses",
             "anthropic"
           ],
+          "capabilities": [
+            "tools"
+          ],
           "id": "qwen/qwen3.8-max",
           "pricing": {
             "input_tokens": {
@@ -281,6 +284,9 @@
             "openai",
             "responses",
             "anthropic"
+          ],
+          "capabilities": [
+            "tools"
           ],
           "id": "qwen/qwen3.8-max",
           "pricing": {
@@ -1081,6 +1087,9 @@
         },
         {
           "api_protocol": "anthropic",
+          "capabilities": [
+            "tools"
+          ],
           "id": "anthropic/claude-haiku-4.5",
           "pricing": {
             "input_tokens": {
@@ -2272,6 +2281,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "tools"
+          ],
           "id": "anthropic/claude-haiku-4.5",
           "pricing": {
             "input_tokens": {
@@ -2978,6 +2990,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "tools"
+          ],
           "id": "qwen/qwen3.8-max",
           "pricing": {
             "input_tokens": {
@@ -6031,6 +6046,9 @@
             "responses",
             "anthropic"
           ],
+          "capabilities": [
+            "tools"
+          ],
           "id": "anthropic/claude-haiku-4.5",
           "pricing": {
             "input_tokens": {
@@ -6198,6 +6216,9 @@
             "openai",
             "responses",
             "anthropic"
+          ],
+          "capabilities": [
+            "tools"
           ],
           "id": "qwen/qwen3.8-max",
           "pricing": {
