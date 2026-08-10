@@ -49,6 +49,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use bitrouter_sdk::error::BitrouterError;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -104,8 +105,9 @@ pub struct AgentSpec {
 /// Resolve a `bitrouter launch --agent` value to its catalog harness. Accepts
 /// the interactive binary name (`claude`, `codex`, `opencode`, `pi`, `hermes`,
 /// `openclaw`, `grok`, `agy`) and the catalog id (`antigravity`, `claude-acp`,
-/// …). Errors list what is
-/// available.
+/// …). An unknown value is a caller mistake, so the error is a
+/// [`BitrouterError::BadRequest`] — the CLI's error envelope reports it as
+/// `kind: "bad_request"`, not `internal` — and lists what is available.
 pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
     crate::harness::by_interactive_binary(id)
         .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()))
@@ -115,10 +117,10 @@ pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness
                 .filter_map(|h| h.interactive_binary)
                 .collect();
             available.sort_unstable();
-            anyhow::anyhow!(
+            anyhow::Error::new(BitrouterError::bad_request(format!(
                 "'{id}' is not a launchable harness — available: {}",
                 available.join(", ")
-            )
+            )))
         })
 }
 
@@ -242,7 +244,7 @@ impl CliReport for SpawnCheckReport {
     }
 }
 
-/// Run `bitrouter spawn`. Resolves the base URL from `cfg`, locates the agent
+/// Run `bitrouter launch`. Resolves the base URL from `cfg`, locates the agent
 /// binary (offering to install it if missing and permitted), ensures the local
 /// daemon is up (auto-starting it when down), then execs the agent with the
 /// routing environment injected. On success this **does not return** — it exits
@@ -1434,8 +1436,8 @@ mod tests {
 
     #[test]
     fn resolve_launch_agent_accepts_every_interactive_catalog_harness() {
-        // `launch --agent` takes the same set `tui --agent` does: every
-        // catalog harness with an interactive binary, by binary name…
+        // `launch --agent` takes every catalog harness with an interactive
+        // binary, by binary name…
         for h in crate::harness::CATALOG {
             let Some(binary) = h.interactive_binary else {
                 continue;
@@ -1475,6 +1477,16 @@ mod tests {
             "claude", "codex", "opencode", "pi", "hermes", "openclaw", "grok", "agy",
         ] {
             assert!(msg.contains(id), "{msg} should list {id}");
+        }
+        // A typo is the caller's mistake, not a BitRouter fault: the error
+        // envelope must report `bad_request`, never `internal`.
+        for bad in ["gemini-cli", "nope"] {
+            let err = resolve_launch_agent(bad).expect_err("rejected");
+            assert_eq!(
+                crate::output::error::envelope_from_anyhow(&err).error.kind,
+                bitrouter_sdk::error::ErrorKind::BadRequest,
+                "{bad}"
+            );
         }
     }
 

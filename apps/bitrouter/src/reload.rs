@@ -154,7 +154,7 @@ impl DaemonReloader for AppReloader {
                     // fills its fields — so a sign-in survives a hot-reload.
                     crate::claude_code::enable_if_logged_in(&mut fresh);
                     // Re-merge the registry too, so a reload picks up newly-set
-                    // credentials (a `bitrouter reload --env` that exports a
+                    // credentials (a `bitrouter reload` run after exporting a
                     // provider key activates that provider's canonical models).
                     crate::assemble::merge_registry_into(&mut fresh).await;
                     // Then re-activate any provider that has an OAuth /

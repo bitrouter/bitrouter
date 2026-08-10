@@ -7,7 +7,8 @@
 //! provider metadata, while this built-in keeps the zero-config auth/transport
 //! defaults and the local cloud OAuth/API-key auth applier. [`entry_from_registry`]
 //! reuses the same mapper for a fetched registry provider when a consumer (e.g.
-//! `bitrouter login`) needs the auth/transport shape of one of those providers.
+//! `bitrouter providers login`) needs the auth/transport shape of one of those
+//! providers.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;

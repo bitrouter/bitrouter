@@ -6,7 +6,7 @@
     {
       "name": "bitrouter",
       "source": "./",
-      "description": "Cost-optimize your agentic loops: setup skill, ambient daemon status, live cost feed, and in-session model arbitrage via the BitRouter gateway."
+      "description": "Cost-optimize your agentic loops: the bitrouter setup skill plus the origin MCP server, for in-session model arbitrage with a spend footer on every routed call."
     }
   ]
 }

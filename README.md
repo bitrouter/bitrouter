@@ -210,18 +210,20 @@ Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your 
 
 ## Harness integrations
 
-Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. The following harnesses are tested and supported:
+Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For the eight harnesses below, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI with its traffic already pointed at the daemon, and never edits the harness's config files.
 
-| Harness        | Status | Notes                                                                                       |
-| -------------- | ------ | ------------------------------------------------------------------------------------------- |
-| Claude Code    | ✅     | [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway)                           |
-| OpenAI Codex   | ✅     | `bitrouter launch --agent codex` or [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
-| OpenCode       | ✅     | Via [models.dev](https://github.com/anomalyco/models.dev)                                  |
-| Hermes Agent   | ✅     | Native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
-| OpenClaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
-| Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
+| Harness | Launch with | How BitRouter routes it |
+| ------- | ----------- | ----------------------- |
+| Claude Code | `bitrouter launch -a claude` | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
+| OpenAI Codex | `bitrouter launch -a codex` | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
+| OpenCode | `bitrouter launch -a opencode` | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
+| Pi-Agent | `bitrouter launch -a pi` | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
+| Hermes Agent | `bitrouter launch -a hermes` | Synthesized `HERMES_HOME`; also a native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
+| OpenClaw | `bitrouter launch -a openclaw` | Synthesized profile dir; also a native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw) |
+| Grok CLI | `bitrouter launch -a grok` | Own-auth: launches on your SuperGrok session, which the daemon borrows separately as the `supergrok` provider |
+| Antigravity | `bitrouter launch -a agy` | Own-auth: launches on your Google session, which the daemon borrows separately as the `google-ai` provider |
 
-The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
 

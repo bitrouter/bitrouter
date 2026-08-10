@@ -165,7 +165,8 @@ pub enum AuthScheme {
 impl AuthScheme {
     /// The env var this scheme reads, if it reads exactly one. Returns `None`
     /// for OAuth / Native — those resolve credentials through their handler.
-    /// Used by `bitrouter doctor` to report missing env vars.
+    /// Drives [`crate::zero_config`]'s provider auto-enable and the provider →
+    /// credential-var listing in [`crate::zero_config_env_var_providers`].
     pub fn env_var(&self) -> Option<&str> {
         match self {
             AuthScheme::Bearer { env } | AuthScheme::Header { env, .. } => Some(env.as_str()),

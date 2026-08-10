@@ -893,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn by_interactive_binary_finds_the_orchestrator_harnesses() {
+    fn by_interactive_binary_finds_the_launchable_harnesses() {
         assert_eq!(by_interactive_binary("claude").unwrap().id, "claude-acp");
         assert_eq!(by_interactive_binary("codex").unwrap().id, "codex-acp");
         assert_eq!(by_interactive_binary("opencode").unwrap().id, "opencode");
@@ -916,7 +916,7 @@ mod tests {
                 h.routing_overlay("http://x:1", "t", None),
                 RoutingOverlay::default()
             );
-            // The orchestrator overlay sets no env (no redirection) and
+            // The launch overlay sets no env (no redirection) and
             // forwards --model as the harness's native flag.
             let o = h
                 .launch_overlay(

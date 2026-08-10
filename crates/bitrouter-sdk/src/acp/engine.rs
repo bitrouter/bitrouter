@@ -79,7 +79,8 @@ pub struct LaunchOptions {
     /// `TURN_CANCEL_GRACE` (3s) the turn errors.
     pub turn_timeout: Option<Duration>,
     /// MCP servers passed to the agent in `session/new` (`mcpServers`) — the
-    /// caller's tool surface for the session, e.g. the TUI's gateway servers.
+    /// caller's tool surface for the session, e.g. the gateway servers
+    /// `bitrouter launch` wires into the harness it starts.
     /// Only the immediate-open launch path consumes this; a deferred launch
     /// (`launch_deferred`) relays the **manager's** descriptors via
     /// [`Session::open`] instead.

@@ -223,7 +223,7 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter login openai-codex`"
+                     run `bitrouter providers login openai-codex`"
                 ),
             })?;
         let token = stored
