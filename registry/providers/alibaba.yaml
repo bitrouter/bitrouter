@@ -113,6 +113,23 @@ models:
         no_cache: 0.248
       output_tokens:
         text: 1.485
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.04
+      output_tokens:
+        text: 0.4
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.28
+        cache_write: 0
+      output_tokens:
+        text: 4.4
 status: active
 weight: 1
 submitted_at: 2026-05-25

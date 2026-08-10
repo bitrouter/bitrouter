@@ -50,6 +50,13 @@ models:
         cache_read: 0.375
       output_tokens:
         text: 5.25
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
+    pricing:
+      input_tokens:
+        no_cache: 2
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 submitted_at: 2026-05-12
