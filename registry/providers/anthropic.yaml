@@ -104,6 +104,7 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+  # Official tool-use docs: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
   - id: anthropic/claude-haiku-4.5
     provider_model_id: claude-haiku-4-5
     pricing:
@@ -113,6 +114,7 @@ models:
         cache_write: 1.25
       output_tokens:
         text: 5
+    capabilities: [tools]
   - id: anthropic/claude-opus-5
     provider_model_id: claude-opus-5
     pricing:
