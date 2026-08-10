@@ -1,6 +1,6 @@
 //! The per-repo `.bitrouter/` state directory — created **self-ignoring**.
 //!
-//! Session records, worktrees, and other runtime files live under
+//! Session records and other runtime files live under
 //! `<base_repo>/.bitrouter/`. None of it belongs in version control (records
 //! carry pids and absolute paths), so the directory is created with a
 //! `.gitignore` containing `*` — the same trick cargo uses for `target/` —

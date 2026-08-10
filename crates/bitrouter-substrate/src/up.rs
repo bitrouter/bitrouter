@@ -1228,7 +1228,7 @@ done
         );
     }
 
-    /// `kill -0` liveness probe (same technique as `acp sessions`).
+    /// `kill -0` liveness probe.
     #[cfg(unix)]
     fn pid_alive(pid: &str) -> bool {
         std::process::Command::new("kill")

@@ -389,7 +389,7 @@ it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with t
 Agents declared here are referenced by `--agent <id>` when launching a per-session substrate. Managers (GUI, AI agents, editors) spawn one process per session:
 
 ```bash
-bitrouter acp serve --agent claude [--worktree <name>] [--config PATH]
+bitrouter acp serve --agent claude [--config PATH]
 ```
 
 Each spawned process is one session, exposes vanilla ACP over stdio, and exits when the manager disconnects. For headless one-shot use, `bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See `references/sessions.md` for the full substrate model.
