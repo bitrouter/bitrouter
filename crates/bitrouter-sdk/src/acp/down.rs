@@ -1,6 +1,6 @@
 //! Downstream path — the down-facing ACP `Agent` endpoint.
 //!
-//! [`serve`] exposes one already-launched [`crate::engine::Session`] as a
+//! [`serve`] exposes one already-launched [`crate::acp::engine::Session`] as a
 //! **vanilla ACP Agent** over stdio. A manager (GUI / CLI / orchestrating agent)
 //! connects as an ACP `Client` and drives standard ACP; this endpoint terminates
 //! the agent role and delegates every method to the `Session`, which proxies the
@@ -40,7 +40,7 @@
 //!   and send it as a `session/update` notification — verbatim, no reverse
 //!   mapping.
 //! - **Permissions:** [`Session::permissions`] yields each
-//!   [`PendingPermission`](crate::up::PendingPermission);
+//!   [`PendingPermission`](crate::acp::up::PendingPermission);
 //!   we re-issue it to the manager as a `session/request_permission` request with
 //!   the same tool-call and options, await the manager's
 //!   `RequestPermissionResponse`, and resolve the pending item with the
@@ -53,7 +53,7 @@
 //!
 //! Request handlers receive a `ConnectionTo<Client>` per call, but the forwarding
 //! tasks must run for the connection's whole life. We get a long-lived handle the
-//! same way [`crate::up`] does for the client side: `connect_with` runs a
+//! same way [`crate::acp::up`] does for the client side: `connect_with` runs a
 //! `main_fn` closure that owns the `ConnectionTo<Client>`. The closure spawns the
 //! two forwarding tasks via [`ConnectionTo::spawn`], then awaits a disconnect
 //! signal.
@@ -81,7 +81,7 @@ use agent_client_protocol::{
 use futures::StreamExt;
 use futures::channel::oneshot;
 
-use crate::engine::Session;
+use crate::acp::engine::Session;
 
 /// Method names this endpoint answers explicitly. Everything else under the
 /// `fs/` and `terminal/` namespaces (and any unknown method) gets a JSON-RPC
@@ -439,7 +439,7 @@ mod tests {
     async fn launch_stub_session(stub: &str) -> (Arc<Session>, tempfile::TempDir) {
         use std::collections::HashMap;
 
-        use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+        use crate::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
 
         let cfg = AcpAgentConfig {
             name: "stub".to_string(),
@@ -457,7 +457,7 @@ mod tests {
                 &catalog,
                 "stub",
                 base.path().to_path_buf(),
-                crate::engine::LaunchOptions::default(),
+                crate::acp::engine::LaunchOptions::default(),
             )
             .await
             .expect("launch"),
@@ -751,7 +751,7 @@ mod tests {
             .run_until(async {
                 use std::collections::HashMap;
 
-                use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+                use crate::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
 
                 let cfg = AcpAgentConfig {
                     name: "stub".to_string(),
@@ -769,7 +769,7 @@ mod tests {
                         &catalog,
                         "stub",
                         base.path().to_path_buf(),
-                        crate::engine::LaunchOptions::default(),
+                        crate::acp::engine::LaunchOptions::default(),
                     )
                     .await
                     .expect("launch_deferred"),

@@ -1,7 +1,7 @@
-//! Pure mapping from ACP schema types to substrate-local event types.
+//! Pure mapping from ACP schema types to the gateway's own event types.
 //! No I/O — unit-tested without spawning a process.
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol_schema::v1::{
     ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
     SelectedPermissionOutcome, SessionUpdate, ToolCallContent, ToolCallStatus,
 };
@@ -10,62 +10,92 @@ use agent_client_protocol::schema::v1::{
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
+    /// Accepted by the agent, not started yet.
     Pending,
+    /// Currently executing.
     Running,
+    /// Finished successfully.
     Ok,
+    /// Finished with an error — also the mapping for any status this ACP
+    /// version does not know, so a future state is never read as not-started.
     Failed,
 }
 
 /// Which permission option the user selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionOutcome {
+    /// Allow this one request.
     AllowOnce,
+    /// Allow this and every later request of the same shape.
     AllowAlways,
+    /// Reject this request.
     Deny,
 }
 
 /// Cumulative session cost as reported by the upstream's `UsageUpdate`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct UsageCost {
+    /// Money spent so far this session, in [`Self::currency`].
     pub amount: f64,
+    /// ISO-4217 currency code the upstream reported (e.g. `"USD"`).
     pub currency: String,
 }
 
-/// Substrate-local event produced from one ACP `SessionUpdate`.
+/// A gateway-local event produced from one ACP `SessionUpdate`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionUpdateKind {
+    /// A chunk of the agent's streamed answer.
     MessageChunk {
+        /// The message this chunk belongs to, when the agent tags chunks.
         message_id: Option<String>,
+        /// The chunk's text (non-text content blocks render empty).
         text: String,
     },
+    /// A chunk of the agent's streamed reasoning.
     ThoughtChunk {
+        /// The message this chunk belongs to, when the agent tags chunks.
         message_id: Option<String>,
+        /// The chunk's text (non-text content blocks render empty).
         text: String,
     },
+    /// The agent started a tool call.
     ToolCall {
+        /// The ACP tool-call id.
         id: String,
+        /// Human-readable title of what the tool is doing.
         title: String,
+        /// Execution status at the time of the update.
         status: ToolStatus,
+        /// The call's first diff, rendered readable, when it carries one.
         diff: Option<String>,
     },
+    /// An update to an in-flight tool call; every field but the id is optional
+    /// because ACP sends only what changed.
     ToolCallUpdate {
+        /// The ACP tool-call id being updated.
         id: String,
+        /// New execution status, when it changed.
         status: Option<ToolStatus>,
+        /// New title, when it changed.
         title: Option<String>,
+        /// The call's first diff, rendered readable, when it carries one.
         diff: Option<String>,
     },
     /// Context-window occupancy (+ optional cumulative cost) from the
     /// upstream's `UsageUpdate`. ACP's stable usage signal reports tokens *in
     /// context* (`used`/`size`), not per-turn input/output deltas.
     Usage {
+        /// Tokens currently in context.
         used: u64,
+        /// Total context-window size in tokens.
         size: u64,
+        /// Cumulative session cost, when the upstream reports one.
         cost: Option<UsageCost>,
     },
 }
 
-/// Map one ACP `SessionUpdate` to a `SessionUpdateKind`. Variants the substrate
+/// Map one ACP `SessionUpdate` to a `SessionUpdateKind`. Variants the gateway
 /// does not act on (`Plan`, …) → `None`.
 pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
     match update {
@@ -101,7 +131,7 @@ pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
     }
 }
 
-/// Map an ACP `ToolCallStatus` to the substrate `ToolStatus`.
+/// Map an ACP `ToolCallStatus` to [`ToolStatus`].
 pub fn map_status(s: ToolCallStatus) -> ToolStatus {
     match s {
         ToolCallStatus::Pending => ToolStatus::Pending,
@@ -186,7 +216,7 @@ pub fn render_diff(content: &[ToolCallContent]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol_schema::v1::{
         ContentChunk, Diff, MessageId, PermissionOptionId, SelectedPermissionOutcome, TextContent,
         ToolCall, ToolCallId,
     };
@@ -231,7 +261,7 @@ mod tests {
 
     #[test]
     fn usage_update_maps_with_cost() {
-        use agent_client_protocol::schema::v1::{Cost, UsageUpdate};
+        use agent_client_protocol_schema::v1::{Cost, UsageUpdate};
         let got = translate(SessionUpdate::UsageUpdate(
             UsageUpdate::new(1500, 200_000).cost(Cost::new(0.25, "USD")),
         ));

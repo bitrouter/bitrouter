@@ -1,19 +1,19 @@
 //! Substrate executor — bridges the SDK's typed `acp::Pipeline` to a single
 //! upstream ACP connection.
 //!
-//! [`SessionExecutor`] implements [`bitrouter_sdk::acp::Executor`] over one
+//! [`SessionExecutor`] implements [`crate::acp::Executor`] over one
 //! [`UpstreamConnection`] (one session per process, no connection pool). Streaming
 //! updates and permission requests ride the callback plane exposed by `up.rs`,
 //! not the `AcpResponse` return value.
 
 use std::sync::Arc;
 
+use crate::acp::{AcpRequest, AcpRequestPayload, AcpResponse, AcpTarget, Executor};
+use crate::error::{BitrouterError, Result};
 use agent_client_protocol_schema::v1::{PromptResponse, StopReason};
 use async_trait::async_trait;
-use bitrouter_sdk::acp::{AcpRequest, AcpRequestPayload, AcpResponse, AcpTarget, Executor};
-use bitrouter_sdk::error::{BitrouterError, Result};
 
-use crate::up::UpstreamConnection;
+use crate::acp::up::UpstreamConnection;
 
 /// Drives a single upstream ACP connection for the `acp::Pipeline`.
 ///
@@ -80,17 +80,17 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use agent_client_protocol_schema::v1::{ContentBlock, SessionId, StopReason, TextContent};
-    use async_trait::async_trait;
-    use bitrouter_sdk::acp::{
+    use crate::acp::{
         AcpRequest, AcpRequestPayload, AcpTarget, AcpTransport, Executor, PipelineBuilder,
         RoutingTable,
     };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::error::{BitrouterError, Result};
+    use crate::caller::CallerContext;
+    use crate::error::{BitrouterError, Result};
+    use agent_client_protocol_schema::v1::{ContentBlock, SessionId, StopReason, TextContent};
+    use async_trait::async_trait;
 
     use super::SessionExecutor;
-    use crate::up::UpstreamConnection;
+    use crate::acp::up::UpstreamConnection;
 
     /// Minimal routing table that accepts a single well-known agent name.
     struct StaticTable;
