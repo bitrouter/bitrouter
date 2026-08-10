@@ -283,7 +283,7 @@ bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [-c <path>] <text>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
+Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter launch`
 
@@ -331,7 +331,7 @@ bitrouter spawn <agent> --check [routing flags]                              # p
 
 Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent or a GUI). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
 
-**Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch -a claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
+**Attempts to route the sub-agent's LLM traffic through the daemon by default when the headless adapter supports redirection** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch -a claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
 
 Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
 
@@ -714,7 +714,7 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command.
+`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
@@ -749,7 +749,7 @@ bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
 
 With explicit `GET`, fields are query parameters. Otherwise fields form a JSON body unless `--input` owns the body. Only one consumer may read stdin. Non-TTY response bytes and SSE are streamed unchanged; interactive JSON is pretty-printed. On HTTP 4xx/5xx, the response body remains on stdout, the diagnostic goes to stderr, and the process exits non-zero.
 
-Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. Initial documented endpoints are `/v1/models`, `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, and Google-style `:generateContent` / `:streamGenerateContent` routes under `/v1beta/models/*`.
+Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. Documented endpoints include `/v1/models`, `/v1/providers`, `/v1/stats/usage`, `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, Google-style `:generateContent` / `:streamGenerateContent` routes under `/v1beta/models/*`, namespace-scoped management routes under `/v1/namespaces/*`, and user-level routes under `/v1/account`, `/v1/billing/*`, and `/v1/byok/*`.
 
 This first release intentionally omits `gh api`'s GraphQL, pagination/slurp, `--jq`, Go templates, cache, hostname, preview, and placeholder expansion features. See the [Cloud API guide](/docs/guides/cloud-api) for copyable requests.
 
@@ -763,7 +763,7 @@ Prints the cloud identity and the bound namespace alongside the `/v1/*` base URL
 
 ### `bitrouter cloud namespace`
 
-Inspect the workspaces you own and the one this CLI session is baked to. Workspace creation and deletion are Console-only operations (control-plane scope).
+Inspect the workspaces you own and the one this CLI session is baked to. The typed CLI only inspects workspaces; creation and deletion require the Console or `bitrouter cloud api` with the appropriate control-plane scope.
 
 ```
 bitrouter cloud namespace list    [--json]
@@ -805,6 +805,8 @@ bitrouter cloud billing checkout --amount-cents <N> [--json]
 ```
 
 `checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter cloud login` to request it.
+
+Use `bitrouter cloud api /v1/billing/transactions` for the billing ledger, and `/v1/billing/checkout/sessions/<session-id>/status` for checkout status.
 
 ### `bitrouter cloud policy`
 

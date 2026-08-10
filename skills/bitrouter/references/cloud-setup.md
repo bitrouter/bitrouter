@@ -125,7 +125,7 @@ Cloud and BYOK coexist — providers with `${PROVIDER_API_KEY}` in the environme
 
 ### Manage the account from the terminal
 
-After sign-in, `bitrouter cloud …` covers the full `/v1/*` management API:
+After sign-in, typed `bitrouter cloud …` subcommands cover common management operations:
 
 ```bash
 bitrouter cloud whoami                 # cloud base URL + local subject/scope
@@ -137,7 +137,7 @@ bitrouter cloud policy list            # account-bound policies
 bitrouter cloud byok list              # BYOK provider keys
 ```
 
-Every leaf accepts `--json` for raw response output. See `references/cli.md` for the full subcommand index.
+Every typed leaf accepts `--json` for raw response output. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud `/v1/*` API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, namespace lifecycle, and other account endpoints. See `references/cli.md` for the full subcommand index.
 
 ### Call Cloud APIs directly
 

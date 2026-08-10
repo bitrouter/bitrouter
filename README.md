@@ -66,7 +66,7 @@ Today **cost** is the validated objective: on Terminal-Bench 2.1, `gpt-5.5` with
 | --- | --- | --- | --- |
 | `gpt-5.5` | **−32.8%**¹ | coming soon | coming soon |
 | `gpt-5.6` | coming soon | coming soon | coming soon |
-| `claude-opus-4.8` | coming soon | coming soon | coming soon |
+| `claude-opus-5` | coming soon | coming soon | coming soon |
 | `claude-sonnet-5` | coming soon | coming soon | coming soon |
 | `claude-fable-5` | coming soon | coming soon | coming soon |
 
@@ -155,7 +155,9 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 bitrouter start / stop / restart        # daemon lifecycle
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
-bitrouter cloud keys / usage / billing  # manage your cloud account
+bitrouter cloud keys list               # manage API keys
+bitrouter cloud usage                   # inspect spend and tokens
+bitrouter cloud billing balance         # check credits
 bitrouter cloud api /v1/models          # call Cloud APIs directly
 ```
 
@@ -190,7 +192,7 @@ BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localh
 
 ## Workflow templates
 
-Ready-made **policy specs** for common agentic workflows — a starting point that routes well out of the box, before you tune it for your own loop. **Coming soon** in [`templates/`](templates/).
+Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a conservative `@auto` / `@auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
 
 ## Models & providers
 
@@ -198,9 +200,9 @@ BitRouter routes to a *model*, not a provider. Each family below is served by ma
 
 | Lab      | Latest models                    |
 | -------- | -------------------------------- |
-| DeepSeek | DeepSeek V4 Pro / Flash          |
-| Alibaba  | Qwen3.7 Max / Plus               |
-| Moonshot | Kimi K2.7 Code / K2.6            |
+| DeepSeek | DeepSeek V4 Flash 0731 / V4 Pro  |
+| Alibaba  | Qwen3.8 Max / Qwen3.7 Max        |
+| Moonshot | Kimi K3 / K2.7 Code              |
 | Z.ai     | GLM-5.2 / 5.1                    |
 | MiniMax  | MiniMax M3 / M2.7                |
 | Xiaomi   | MiMo V2.5 Pro / V2.5             |
