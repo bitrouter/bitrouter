@@ -9,6 +9,10 @@
 //!
 //! See `docs/OBSERVABILITY_TUI_SPEC.md`.
 
+/// Input-path conformance tests. Test-only, and unix-only because the
+/// conformance child is a shell with a `stty`-controlled line discipline.
+#[cfg(all(test, unix))]
+mod conformance;
 #[cfg(unix)]
 pub mod host;
 pub mod lifecycle;

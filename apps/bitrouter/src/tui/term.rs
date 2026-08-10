@@ -1071,6 +1071,69 @@ mod fixture_replay {
         );
     }
 
+    /// Every `harness-*.vt` recording, replayed and sanity-checked.
+    ///
+    /// Directory-driven on purpose: dropping a new recording in
+    /// `fixtures/` covers it with no code change, which is what keeps the
+    /// refresh cost low enough that people actually re-record after a
+    /// harness release.
+    ///
+    /// The assertions are deliberately *loose*. Harness output legitimately
+    /// changes between releases, so pinning content would make this a
+    /// tripwire for upstream edits rather than for our regressions. What must
+    /// hold for any real terminal stream is that the emulator consumed it
+    /// completely: no escape byte survives into rendered cell text, nothing
+    /// vanishes entirely, and the grid stays within its own bounds.
+    #[test]
+    fn real_harness_recordings_render_without_leaking_control_bytes() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/fixtures");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("fixtures dir").flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !name.starts_with("harness-") || !name.ends_with(".vt") {
+                continue;
+            }
+            checked += 1;
+
+            let bytes = std::fs::read(&path).expect("read fixture");
+            let mut backend = AlacrittyBackend::new(100, 30);
+            for chunk in bytes.chunks(13) {
+                backend.feed(chunk);
+            }
+            let lines = backend.lines(false);
+
+            // An ESC or a C0 control in *rendered text* means the parser
+            // dropped out of a sequence and printed its bytes — the visible
+            // symptom of a garbled pane.
+            for (row, line) in lines.iter().enumerate() {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert!(
+                    !text
+                        .chars()
+                        .any(|c| c == '\u{1b}' || (c.is_control() && c != '\t')),
+                    "{name}: row {row} leaked a control byte into rendered text: {text:?}"
+                );
+            }
+            assert_eq!(lines.len(), 30, "{name}: grid must keep its row count");
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.spans.iter().any(|s| !s.content.trim().is_empty())),
+                "{name}: a real harness stream must render something"
+            );
+        }
+        assert!(
+            checked >= 8,
+            "expected a recording per catalog harness, found {checked} — \
+             see fixtures/README.md for how to record one"
+        );
+    }
+
     #[test]
     fn bracketed_paste_is_only_wrapped_when_the_app_asked() {
         let plain = AlacrittyBackend::new(40, 6);

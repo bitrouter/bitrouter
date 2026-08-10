@@ -1,6 +1,6 @@
 # Spec: the observability TUI — `bitrouter status --watch` and `launch --tui`
 
-Status: **implemented through PR 5; fidelity matrix outstanding** · Author: Claude (with Spikel) · Date: 2026-08-10
+Status: **implemented; matrix layers 1-2 automated, manual pass outstanding** · Author: Claude (with Spikel) · Date: 2026-08-10
 Issues: #782 (hosted bar) · #797 (live view) · #795 (attribution) · #796 (startup line)
 Supersedes the CLI framing of #782 (`bitrouter top`, `bitrouter tui` deprecation).
 
@@ -97,8 +97,9 @@ probe that works when the daemon is down.
 bitrouter launch -a <harness> [--tui] [--model <id>] … [-- <agent args>]
 ```
 
-- `--tui` is **opt-in** and stays opt-in until the fidelity matrix (§11) has run
-  clean across several harness releases.
+- `--tui` is **opt-in** and stays opt-in until it clears the gate in §12 —
+  which was redefined once the original "clean across several harness
+  releases" proved circular.
 - `--tui` **conflicts with `--check`** at the clap level. `--check` preflights
   and exits; there is no display to attach to. Do not silently ignore the flag.
 - `--tui` requires a tty on stdout; otherwise it errors, naming plain `launch`.
@@ -615,36 +616,28 @@ is a new feature on a new data source.
 
 ## 12. Acceptance gate: the fidelity matrix
 
-The real engineering risk is not the bar, it is hosting eight full-screen TUI
-apps inside a nested emulator. "Works for claude and codex" is what has actually
-been exercised.
+Specified in full — including the redefined gate — in
+[`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md). In short:
 
-Per harness: scrollback paging (main screen) / arrow forwarding (alt screen);
-mouse wheel, click, drag, motion reaching a mouse-reporting inner app; resize
-without corruption; bracketed paste including multi-line; OSC-52 copy reaching
-the outer terminal; colors under truecolor and `NO_COLOR`.
+- **Layer 1, input conformance** (`tui/conformance.rs`): hosts `cat -v` under
+  the real PTY so everything the wrapper *sends* is echoed back and asserted.
+  This is the half fixture replay cannot reach, and where the silent failures
+  live. Validated by mutation.
+- **Layer 2, recorded harness output** (`tui/fixtures/harness-*.vt`): real byte
+  streams from all eight, replayed with loose sanity assertions. Directory-
+  driven, so re-recording needs no code change.
+- **Layer 3, manual**: physical mouse drag and an OSC-52 clipboard round-trip.
 
-**This is not a one-time matrix.** Harness releases are frequent and outside our
-control, and an upstream rendering change can regress the wrapper without either
-project noticing. 8 × 6 manual interactive checks will not get re-run, and the
-flag dies quietly when they stop. So the matrix is split:
+**The gate was redefined.** "Opt-in until the full matrix runs clean across
+several harness releases" was circular — clearing it required standing
+machinery that only pays off if someone owns triaging it, and an ignored red
+job launders "unverified" into "we have CI for that." `--tui` now clears when
+layers 1–2 are green, layer 3 has been run once across the eight, and the flag
+has been opt-in for two release cycles with no unresolved rendering reports.
 
-| Tier | Covers | Cost |
-|---|---|---|
-| **Fixture replay** (automated) | colors, `NO_COLOR`, alt-screen enter/exit, layout, most rendering | record each harness's output once (`script`/`asciinema`) into `fixtures/`, replay the bytes through `AlacrittyBackend`, snapshot the grid |
-| **CI smoke** (automated, **6 of 8**) | "starts at all under a PTY" — the failure that matters most | run each harness's `--version` inside the wrapper |
-| **Manual** (~2 per harness) | real mouse drag into a mouse-reporting app; OSC-52 copy reaching the outer terminal | hands on keyboard |
-
-That turns a 48-check ritual into a test suite plus 16 manual checks — a burden
-someone will actually carry. Fixture replay also catches *our* regressions on
-every commit, and catches upstream changes the day someone re-records.
-
-**Stated cap, not a silent one:** the CI smoke tier covers **six** harnesses.
-`grok` and `agy` are proprietary subscription clients with no installer in
-`spawn.rs` (upstream install only) and credentials CI will not have, so they are
-manual-only — which means the two harnesses whose chrome we understand least
-have the weakest automated floor. If that proves to matter, the mitigation is a
-recorded fixture (tier 1 needs no credentials, only a captured byte stream).
+Scheduled live-harness smoke is the only automatic detector of *upstream*
+regressions and is deliberately deferred: the first harness-specific rendering
+report is the evidence that its recurring cost is justified.
 
 ## 13. Failure modes, signals, and platform
 

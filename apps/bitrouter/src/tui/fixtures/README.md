@@ -6,36 +6,55 @@ risk: harness releases are frequent and outside our control, so an upstream
 rendering change can regress the wrapper without either project noticing.
 
 A 48-check manual matrix (8 harnesses × 6 behaviours) does not get re-run. So
-the matrix is split into three tiers, and this directory is the first one.
+it is split into layers, and this directory is one of them.
 
-| Tier | Covers | Runs |
+| Layer | Covers | Runs |
 |---|---|---|
-| **Fixture replay** (here) | colors, `NO_COLOR`, alt-screen entry/exit, mouse-mode negotiation, bracketed paste, layout | every `cargo test` |
-| CI smoke | "starts at all under a PTY" — each harness's `--version` inside the wrapper | CI, 6 of 8 (grok and agy are proprietary and unavailable there) |
-| Manual | real mouse drag into a mouse-reporting app; OSC-52 copy reaching the outer terminal | by hand, per harness |
+| Input conformance (`../conformance.rs`) | keys, mouse, paste, interrupt, resize — everything the wrapper *sends* | every `cargo test` |
+| **Fixture replay** (here) | colors, `NO_COLOR`, alt-screen, mouse negotiation, real harness output | every `cargo test` |
+| Manual | physical mouse drag; OSC-52 copy into the host clipboard | once per harness, per `docs/TUI_FIDELITY_MATRIX.md` |
 
-## What is here now
+Scheduled live-harness smoke is deliberately not built; see the matrix doc for
+why, and for what that leaves uncovered.
 
-Synthetic fixtures covering the emulator behaviours the wrapper depends on.
-They are deliberately small and readable, and they pin our own regressions —
-if someone changes `term.rs` and alt-screen tracking breaks, these fail.
+## What is here
 
-## What is still needed: real harness recordings
+- **Synthetic** (`main_screen_colors`, `alt_screen_app`, `mouse_reporting`,
+  `bracketed_paste`) — small and readable, each pinning one emulator behaviour
+  the wrapper depends on.
+- **`harness-*.vt`** — real byte streams from all eight catalog harnesses.
 
-These synthetic fixtures **do not** prove any particular harness renders
-correctly. For that, record each harness once and drop the capture in here:
+## Recording a new one
 
 ```bash
-# macOS / BSD
-script -q /dev/null claude 2>&1 | tee claude_session.vt
-# GNU/Linux
-script -q -c claude claude_session.vt
+scripts/record-vt-fixture.sh <name> <command> [args...]
+
+scripts/record-vt-fixture.sh harness-codex-help codex --help
+scripts/record-vt-fixture.sh harness-codex-session codex     # interactive; quit when done
 ```
 
-Then add the file to `REAL_HARNESS_FIXTURES` in `../term.rs`'s replay test.
-Re-record after a harness release that changes its rendering; that re-recording
-is what converts an upstream regression from "a user reports it" into "CI
-fails".
+The script pins a 100x30 pty so replays are deterministic. **No code change is
+needed** — `term.rs`'s replay test discovers every `harness-*.vt` in this
+directory, which is what keeps re-recording cheap enough to actually happen
+after a harness release.
 
-Recordings are byte streams, not transcripts — scrub them before committing if
-a session contained anything private.
+## Before committing a recording
+
+These are raw byte streams, not transcripts. A real session capture contains
+whatever was on screen — prompts, paths, file contents, anything a tool
+printed. Read it first:
+
+```bash
+LC_ALL=C strings apps/bitrouter/src/tui/fixtures/<name>.vt | less
+```
+
+The committed `--help` captures were scanned for credentials, home paths, and
+usernames; their only matches are help text *documenting* flag names such as
+`ANTHROPIC_API_KEY`, not values.
+
+## What these prove, and what they do not
+
+They catch **our** regressions against real-world output. They cannot catch an
+**upstream** one: a fixture is frozen bytes, so it keeps passing while a new
+harness release breaks the live wrapper. Only re-recording, or running the
+harness, closes that gap — see `docs/TUI_FIDELITY_MATRIX.md`.
