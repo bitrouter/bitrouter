@@ -188,9 +188,15 @@ Add `--transport http` to target the multi-tenant cloud backend.
 
 BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localhost:4356`, so any SDK or client works unchanged. The full endpoint reference and OpenAPI spec live in [`bitrouter/bitrouter-docs`](https://github.com/bitrouter/bitrouter-docs) (rendered at [bitrouter.ai](https://bitrouter.ai)).
 
-## Workflow templates
+## Recipes
 
-Ready-made **policy specs** for common agentic workflows — a starting point that routes well out of the box, before you tune it for your own loop. **Coming soon** in [`templates/`](templates/).
+Measured publication records for reusable routing templates. Runtime artifacts
+remain under [`templates/`](templates/); each recipe links one exact template to
+comparative evidence, provenance, rejected attempts, and scope limitations. The
+catalog derives its copyable config, policy lock, providers, and models from the
+template, so the gallery cannot drift from what users deploy.
+
+Browse them at [bitrouter.ai/recipes](https://bitrouter.ai/recipes); the source lives in [`recipes/`](recipes/), and [`recipes/README.md`](recipes/README.md) is the contract for contributing one.
 
 ## Models & providers
 

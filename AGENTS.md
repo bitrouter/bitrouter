@@ -59,6 +59,14 @@ design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
    catalog changes.
 3. On each release, an agent in `bitrouter-docs` drafts a docs update from the
    changelog for human review — no docs action is needed in this repo.
+4. **The docs site generates the recipe gallery** from this repo's committed
+   `dist/recipes/index.json`. When you add or change anything under `recipes/`,
+   rebuild and commit the catalog (`cargo run -p dist-helper -- recipes build`);
+   `cargo run -p dist-helper -- check` fails if it is stale. Only
+   `status: published` recipes reach `dist/`, and a recipe cannot be published
+   without a measured `evaluation` block. A recipe references its deployable
+   artifact under `templates/`; never copy the config or policy lock into the
+   recipe directory. See `recipes/README.md`.
 
 ## Contributing
 
