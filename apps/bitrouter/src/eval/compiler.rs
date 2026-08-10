@@ -352,7 +352,9 @@ mod tests {
             policy: "auto".into(),
             request_key: "agent_trace/v1|review|normal".into(),
             selected_tier: "strong".into(),
+            selected_effort: None,
             baseline_tier: Some("strong".into()),
+            baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
         });
         subject
@@ -414,7 +416,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: "agent_trace/v1|edit|normal".into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],

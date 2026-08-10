@@ -4,13 +4,44 @@
   "description": "Chat Completions request body\n(<https://platform.openai.com/docs/api-reference/chat/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
   "type": "object",
   "properties": {
-    "frequency_penalty": {
-      "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-frequency_penalty>",
+    "model": {
+      "type": "string"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChatMessage"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChatTool"
+      }
+    },
+    "temperature": {
       "type": [
         "number",
         "null"
       ],
       "format": "double",
+      "default": null
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "max_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
       "default": null
     },
     "max_completion_tokens": {
@@ -19,48 +50,17 @@
         "null"
       ],
       "format": "uint32",
-      "default": null,
-      "minimum": 0
-    },
-    "max_tokens": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "default": null,
-      "minimum": 0
-    },
-    "messages": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ChatMessage"
-      }
-    },
-    "model": {
-      "type": "string"
-    },
-    "parallel_tool_calls": {
-      "description": "Whether the model may issue tool calls in parallel.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "default": null
-    },
-    "presence_penalty": {
-      "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-presence_penalty>",
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double",
+      "minimum": 0,
       "default": null
     },
     "reasoning_effort": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
@@ -89,6 +89,28 @@
       "description": "Stop sequences — a single string or an array of up to four. Promoted to\nthe canonical `stop` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>",
       "default": null
     },
+    "presence_penalty": {
+      "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-presence_penalty>",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "frequency_penalty": {
+      "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-frequency_penalty>",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "stream": {
+      "type": "boolean",
+      "default": false
+    },
     "store": {
       "description": "Whether OpenAI may retain the request and response.",
       "type": [
@@ -97,9 +119,13 @@
       ],
       "default": null
     },
-    "stream": {
-      "type": "boolean",
-      "default": false
+    "parallel_tool_calls": {
+      "description": "Whether the model may issue tool calls in parallel.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
     },
     "stream_options": {
       "description": "Streaming response controls.",
@@ -112,28 +138,6 @@
         }
       ],
       "default": null
-    },
-    "temperature": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double",
-      "default": null
-    },
-    "tools": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ChatTool"
-      }
-    },
-    "top_p": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double",
-      "default": null
     }
   },
   "required": [
@@ -141,57 +145,28 @@
     "messages"
   ],
   "$defs": {
-    "ChatFunctionCall": {
-      "description": "The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.",
-      "type": "object",
-      "properties": {
-        "arguments": {
-          "type": "string",
-          "default": ""
-        },
-        "name": {
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
-    "ChatJsonSchema": {
-      "description": "The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].",
-      "type": "object",
-      "properties": {
-        "description": {
-          "description": "Optional schema description — extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Schema name (OpenAI requires it).",
-          "type": "string"
-        },
-        "schema": {
-          "description": "The JSON Schema."
-        },
-        "strict": {
-          "description": "Strict-mode flag.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "schema"
-      ]
-    },
     "ChatMessage": {
       "description": "One element of [`ChatRequest`]'s `messages` array — a chat turn carrying\nrole + optional content + optional tool calls / tool-call reply id.",
       "type": "object",
       "properties": {
+        "role": {
+          "type": "string"
+        },
         "content": {
           "description": "`content` may be a plain string or an array of content parts, or absent\n(an assistant turn that is purely `tool_calls`).",
+          "default": null
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatToolCall"
+          }
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null
         },
         "reasoning_content": {
@@ -201,26 +176,118 @@
             "null"
           ],
           "default": null
-        },
-        "role": {
+        }
+      },
+      "required": [
+        "role"
+      ]
+    },
+    "ChatToolCall": {
+      "description": "One assistant tool-call entry on a [`ChatMessage`].",
+      "type": "object",
+      "properties": {
+        "id": {
           "type": "string"
         },
-        "tool_call_id": {
+        "function": {
+          "$ref": "#/$defs/ChatFunctionCall"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ChatFunctionCall": {
+      "description": "The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "default": ""
+        },
+        "arguments": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "ChatTool": {
+      "description": "One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/ChatToolFunction"
+        }
+      }
+    },
+    "ChatToolFunction": {
+      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters + optional `strict` flag.\n<https://platform.openai.com/docs/guides/function-calling#strict-mode>",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
           "type": [
             "string",
             "null"
           ],
           "default": null
         },
-        "tool_calls": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ChatToolCall"
-          }
+        "parameters": {
+          "default": null
+        },
+        "strict": {
+          "description": "OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across\nthe canonical boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
         }
       },
       "required": [
-        "role"
+        "name"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
       ]
     },
     "ChatResponseFormat": {
@@ -272,79 +339,56 @@
         }
       ]
     },
-    "ChatStreamOptions": {
-      "description": "Chat Completions streaming request options.\n\nThese options belong to the Chat Completions wire rather than the\nprotocol-neutral streaming response. Keeping them typed prevents a Chat\nclient's top-level object from leaking into Messages, Responses, or Gemini\nrequests while preserving same-protocol extensions through [`Self::extra`].",
+    "ChatJsonSchema": {
+      "description": "The `json_schema` payload of [`ChatResponseFormat::JsonSchema`].",
       "type": "object",
       "properties": {
-        "include_obfuscation": {
-          "description": "Ask OpenAI not to add obfuscation bytes to streaming deltas.",
+        "name": {
+          "description": "Schema name (OpenAI requires it).",
+          "type": "string"
+        },
+        "description": {
+          "description": "Optional schema description — extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strict": {
+          "description": "Strict-mode flag.",
           "type": [
             "boolean",
             "null"
           ]
         },
+        "schema": {
+          "description": "The JSON Schema."
+        }
+      },
+      "required": [
+        "name",
+        "schema"
+      ]
+    },
+    "ChatStreamOptions": {
+      "description": "Chat Completions streaming request options.\n\nThese options belong to the Chat Completions wire rather than the\nprotocol-neutral streaming response. Keeping them typed prevents a Chat\nclient's top-level object from leaking into Messages, Responses, or Gemini\nrequests while preserving same-protocol extensions through [`Self::extra`].",
+      "type": "object",
+      "properties": {
         "include_usage": {
           "description": "Ask the upstream to emit a final usage-only streaming chunk.",
           "type": [
             "boolean",
             "null"
           ]
-        }
-      }
-    },
-    "ChatTool": {
-      "description": "One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.",
-      "type": "object",
-      "properties": {
-        "function": {
-          "$ref": "#/$defs/ChatToolFunction"
-        }
-      }
-    },
-    "ChatToolCall": {
-      "description": "One assistant tool-call entry on a [`ChatMessage`].",
-      "type": "object",
-      "properties": {
-        "function": {
-          "$ref": "#/$defs/ChatFunctionCall"
         },
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ]
-    },
-    "ChatToolFunction": {
-      "description": "The `function` payload of a [`ChatTool`]: name + description + JSON-Schema\nparameters + optional `strict` flag.\n<https://platform.openai.com/docs/guides/function-calling#strict-mode>",
-      "type": "object",
-      "properties": {
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "name": {
-          "type": "string"
-        },
-        "parameters": {
-          "default": null
-        },
-        "strict": {
-          "description": "OpenAI strict-mode flag (V3 `strict`). Captured so it is not lost across\nthe canonical boundary.",
+        "include_obfuscation": {
+          "description": "Ask OpenAI not to add obfuscation bytes to streaming deltas.",
           "type": [
             "boolean",
             "null"
-          ],
-          "default": null
+          ]
         }
-      },
-      "required": [
-        "name"
-      ]
+      }
     }
   }
 }

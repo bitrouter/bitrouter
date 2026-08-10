@@ -106,7 +106,9 @@ pub async fn import_semantic_reward_feedback(
                 policy,
                 request_key,
                 selected_tier: selected_tier.to_string(),
+                selected_effort: candidate.selected_effort,
                 baseline_tier: Some(baseline_tier.to_string()),
+                baseline_effort: candidate.static_effort,
                 policy_digest,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
@@ -212,6 +214,13 @@ mod tests {
             model_transition: Some(
                 "openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code".into(),
             ),
+            static_effort: None,
+            selected_effort: None,
+            effort_transition: None,
+            target_transition: Some(
+                "openai-codex:gpt-5.5@default -> bitrouter:moonshotai/kimi-k2.7-code@default"
+                    .into(),
+            ),
             reason: "exploration_locked".into(),
         }
     }
@@ -227,6 +236,36 @@ mod tests {
         assert_eq!(summary.admitted_count, 1);
         assert_eq!(service.store().list_subjects().await?.len(), 1);
         assert!(AdequacyStore::new(db).load_all().await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn compatibility_reward_import_preserves_the_exact_effort_treatment() -> anyhow::Result<()>
+    {
+        let db = db::connect("sqlite::memory:").await?;
+        db::run_migrations(&db).await?;
+        let service = EvalService::new(EvalStore::new(db), Default::default());
+        let mut effort_candidate = candidate(1.0);
+        effort_candidate.static_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High);
+        effort_candidate.selected_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low);
+
+        import_semantic_reward_feedback(&service, &[effort_candidate]).await?;
+
+        let subjects = service.store().list_subjects().await?;
+        let decision = subjects
+            .first()
+            .and_then(|subject| subject.decisions.first())
+            .ok_or_else(|| anyhow::anyhow!("imported effort decision is missing"))?;
+        assert_eq!(
+            decision.baseline_effort,
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+        );
+        assert_eq!(
+            decision.selected_effort,
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+        );
         Ok(())
     }
 

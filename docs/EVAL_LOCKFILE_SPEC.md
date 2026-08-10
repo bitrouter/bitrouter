@@ -200,16 +200,19 @@ Adaptive therefore means "publication is authorized", not "mutable database
 state participates in the hot path". Automatic promotion may be added later,
 but must use the same compile, validate, and atomic publish boundary.
 
-## 7. Policy lock v2
+## 7. Policy lock v3
 
-`lockfileVersion: 2` keeps the route map compact and easy
-to diff. Certificates are stored separately so the selector does not need to
-parse raw evaluation records.
+`lockfileVersion: 3` adds compound `(model, effort)` tier targets while keeping
+the route map compact and easy to diff. Scalar model targets and complete v2
+locks remain readable. A compound target is intentionally v3-only so an older
+binary cannot mistake a new-format lock for a format it understands.
+Certificates are stored separately so the selector does not need to parse raw
+evaluation records.
 
 Illustrative shape:
 
 ```yaml
-lockfileVersion: 2
+lockfileVersion: 3
 artifact:
   parent_digest: "sha256:..."
   evidence_root: "sha256:..."
@@ -226,8 +229,8 @@ policies:
   auto:
     key_strategy: agent_trace
     tiers:
-      economy: "bitrouter:deepseek/deepseek-v4-pro"
-      strong: "openai-codex:gpt-5.6-sol"
+      economy: { model: "openai-codex:gpt-5.6-sol", effort: low }
+      strong: { model: "openai-codex:gpt-5.6-sol", effort: high }
     routes:
       "agent_trace/v1|edit|normal": economy
       "agent_trace/v1|recovery|guarded": strong
@@ -364,14 +367,14 @@ adaptive deployment. The migration sequence is:
 
 1. stop the old adaptive daemon;
 2. freeze the database and active lock inputs;
-3. compile and export a v2 candidate from the legacy state;
+3. compile and export a v3 candidate from the legacy state;
 4. inspect and validate route changes, especially pinned economy routes;
 5. atomically publish the candidate under adaptive mode;
 6. start the new lock-only runtime;
 7. archive the legacy database for audit.
 
 If an adaptive startup detects legacy learned state that has not been
-acknowledged by a matching `migration.legacy_adequacy_digest` in the active v2
+acknowledged by a matching `migration.legacy_adequacy_digest` in the active v2+
 lock, it fails closed with a migration command and makes no model request. The
 legacy adequacy tables are sealed after migration; new observations use the
 new evidence ledger rather than mutating those tables. Frozen v1 locks remain
@@ -526,7 +529,7 @@ rerun evaluation or recompile evidence.
 4. An active legacy pin compiles to an explicit strong route and wins over a
    positive lock for the same key.
 5. Reliability events never compile into semantic promotions or pins.
-6. Compiling the same frozen inputs twice produces byte-identical v2 lock bytes
+6. Compiling the same frozen inputs twice produces byte-identical v3 lock bytes
    and digest.
 7. Applying under frozen mode fails without changing active bytes.
 8. Applying under adaptive mode atomically changes active bytes and reloads the

@@ -614,6 +614,18 @@
           },
           "default": []
         },
+        "reasoning_effort": {
+          "description": "Positively verified qualitative effort levels for this exact route.\nAbsence means unknown, not unsupported.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffortConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "compatibility": {
           "description": "Provider/model request-shape quirks that do not change model semantics.",
           "$ref": "#/$defs/ModelCompatibility",
@@ -787,6 +799,74 @@
           "description": "Audio output (speech) — the request asks for an `audio` output modality.",
           "type": "string",
           "const": "audio_output"
+        }
+      ]
+    },
+    "ReasoningEffortConfig": {
+      "description": "Exact qualitative reasoning-effort support for one provider/model route.\n\nAbsence means unknown rather than unsupported. Policy-owned effort targets\nrequire this positive declaration; ordinary caller-authored parameters keep\ntheir existing pass-through behavior when support is unknown.",
+      "type": "object",
+      "properties": {
+        "levels": {
+          "description": "Effort values accepted by this exact provider/model route.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReasoningEffort"
+          }
+        },
+        "default": {
+          "description": "Provider default when the request omits an effort value.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "levels"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
         }
       ]
     },
@@ -1821,7 +1901,7 @@
           "description": "Tier name → the model id every request on that tier is routed to. The\nvalue is fed straight into the routing table, so it may be a bare\ncanonical id (resolved via the cascade/registry) or an explicit\n`provider:model` id (a Strategy-1 direct route). The section is inert\nwhile this map is empty.",
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/PolicyModelTarget"
           }
         },
         "fingerprints": {
@@ -1870,6 +1950,34 @@
       "type": "string",
       "enum": [
         "agent_trace"
+      ]
+    },
+    "PolicyModelTarget": {
+      "description": "A policy-owned routing target.\n\nThe scalar form keeps the historical model-only syntax. The structured\nform makes reasoning effort part of the target identity, so two tiers may\nintentionally route to the same model at different supported effort levels.",
+      "anyOf": [
+        {
+          "description": "Backward-compatible model-only target.",
+          "type": "string"
+        },
+        {
+          "description": "Explicit compound model and reasoning-effort target.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "description": "Canonical or provider-qualified model id.",
+              "type": "string"
+            },
+            "effort": {
+              "description": "Exact effort value owned by this policy target.",
+              "$ref": "#/$defs/ReasoningEffort"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "effort"
+          ]
+        }
       ]
     },
     "AdequacyConfig": {

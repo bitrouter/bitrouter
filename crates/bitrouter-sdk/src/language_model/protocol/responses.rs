@@ -32,9 +32,9 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ProviderMetadata, ResponseFormat, ResponseOutputCommitment, Role, RoutingTarget,
-    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
-    UsageOrigin, provider_namespace, set_provider_metadata,
+    Prompt, ProviderMetadata, ReasoningEffort, ResponseFormat, ResponseOutputCommitment, Role,
+    RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput,
+    Usage, UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
@@ -1568,12 +1568,15 @@ pub struct ResponsesTool {
     extra: HashMap<String, serde_json::Value>,
 }
 
-/// `reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other
-/// fields (`summary`, …) round-trip via no slot today (matching v0 behavior).
+/// `reasoning` knob on [`ResponsesRequest`]. `effort` is promoted to the
+/// canonical slot; sibling fields such as `summary` round-trip via `extra`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ResponsesReasoningConfig {
     #[serde(default)]
-    effort: Option<String>,
+    effort: Option<ReasoningEffort>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 fn parse_role(role: &str) -> Result<Role> {
@@ -2082,6 +2085,19 @@ impl InboundAdapter for ResponsesAdapter {
         // canonical slot; other formats and sibling keys (e.g. `verbosity`)
         // re-attach to `extra["text"]` to pass through on render.
         let mut extra = req.extra;
+        let reasoning_effort = req.reasoning.and_then(|reasoning| {
+            let ResponsesReasoningConfig {
+                effort,
+                extra: reasoning_extra,
+            } = reasoning;
+            if !reasoning_extra.is_empty() {
+                extra.insert(
+                    "reasoning".to_string(),
+                    serde_json::Value::Object(reasoning_extra.into_iter().collect()),
+                );
+            }
+            effort
+        });
         let response_format = match req.text {
             Some(ResponsesText {
                 format,
@@ -2140,7 +2156,8 @@ impl InboundAdapter for ResponsesAdapter {
                 top_p: req.top_p,
                 max_tokens: req.max_output_tokens,
                 chat_token_limit_field: None,
-                reasoning_effort: req.reasoning.and_then(|r| r.effort),
+                reasoning_effort,
+                reasoning_effort_source: Default::default(),
                 response_modalities: Vec::new(),
                 // The Responses API has no top-level top_k / seed / stop /
                 // presence_penalty / frequency_penalty — they are unsupported on
@@ -2253,8 +2270,16 @@ impl OutboundAdapter for ResponsesAdapter {
         if let Some(mt) = prompt.params.max_tokens {
             req.insert("max_output_tokens".into(), mt.into());
         }
-        if let Some(re) = &prompt.params.reasoning_effort {
-            req.insert("reasoning".into(), serde_json::json!({ "effort": re }));
+        let mut reasoning = prompt
+            .params
+            .extra_value_for_protocol(&ApiProtocol::Responses, "reasoning")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        if let Some(effort) = &prompt.params.reasoning_effort {
+            reasoning.insert("effort".into(), effort.as_str().into());
+        }
+        if !reasoning.is_empty() {
+            req.insert("reasoning".into(), serde_json::Value::Object(reasoning));
         }
         if let Some(store) = prompt.params.store {
             req.insert("store".into(), store.into());

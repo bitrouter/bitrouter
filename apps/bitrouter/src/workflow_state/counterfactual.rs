@@ -421,8 +421,8 @@ mod tests {
     fn policy() -> PolicyDefinition {
         PolicyDefinition {
             tiers: BTreeMap::from([
-                ("economy".to_string(), "vendor:economy".to_string()),
-                ("strong".to_string(), "vendor:strong".to_string()),
+                ("economy".to_string(), "vendor:economy".into()),
+                ("strong".to_string(), "vendor:strong".into()),
             ]),
             routes: BTreeMap::from([(
                 "agent_trace/v1|edit|normal".to_string(),

@@ -201,6 +201,9 @@ pub(crate) struct GuardedRouteInput {
     pub policy_name: String,
     pub request_key: String,
     pub baseline_tier: Option<String>,
+    pub baseline_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    pub tier_efforts:
+        std::collections::BTreeMap<String, bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub preset: Option<String>,
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
@@ -2208,6 +2211,12 @@ fn build_guarded_route_batch(
     if let Some(baseline_tier) = &input.baseline_tier {
         categorical.insert("route.baseline_tier".to_owned(), baseline_tier.clone());
     }
+    if let Some(baseline_effort) = input.baseline_effort {
+        categorical.insert(
+            "route.baseline_effort".to_owned(),
+            baseline_effort.to_string(),
+        );
+    }
     if let Some(preset) = &input.preset {
         categorical.insert("route.preset".to_owned(), preset.clone());
     }
@@ -2216,6 +2225,9 @@ fn build_guarded_route_batch(
     }
     if let Some(selected) = &evaluation.intent.selected_tier {
         categorical.insert("route.selected_tier".to_owned(), selected.clone());
+        if let Some(effort) = input.tier_efforts.get(selected) {
+            categorical.insert("route.selected_effort".to_owned(), effort.to_string());
+        }
     }
     for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
         let prefix = format!("route.clause_{index:02}");
@@ -5486,6 +5498,8 @@ mod tests {
             policy_name: "auto:cost".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
+            baseline_effort: None,
+            tier_efforts: Default::default(),
             preset: Some("auto:cost".into()),
             projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
                 .unwrap_or_else(|| unreachable!()),

@@ -22,7 +22,9 @@ pub struct SetupOptimizationRequest {
     pub policy: String,
     pub preset: String,
     pub strong: String,
+    pub strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub economy: String,
+    pub economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub normalized_price_overrides: Vec<String>,
     pub preference: OptimizationPreference,
     pub evaluator_agent: String,
@@ -37,11 +39,17 @@ pub struct SetupOptimizationOutcome {
     pub lock: OptimizationLock,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExistingTierRoute {
+    pub model: String,
+    pub effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+}
+
 /// Resolve the current strong/economy routes for a named policy, when one is active.
 pub async fn existing_tier_routes(
     source_config: &std::path::Path,
     policy: &str,
-) -> Result<(Option<String>, Option<String>)> {
+) -> Result<(Option<ExistingTierRoute>, Option<ExistingTierRoute>)> {
     let raw = tokio::fs::read_to_string(source_config)
         .await
         .with_context(|| format!("reading source config {}", source_config.display()))?;
@@ -54,14 +62,39 @@ pub async fn existing_tier_routes(
         return Ok((None, None));
     };
     Ok((
-        definition.tiers.get("strong").cloned(),
-        definition.tiers.get("economy").cloned(),
+        definition
+            .tiers
+            .get("strong")
+            .map(|target| ExistingTierRoute {
+                model: target.model().to_string(),
+                effort: target.effort(),
+            }),
+        definition
+            .tiers
+            .get("economy")
+            .map(|target| ExistingTierRoute {
+                model: target.model().to_string(),
+                effort: target.effort(),
+            }),
     ))
+}
+
+fn matches_target(
+    target: Option<&bitrouter_sdk::config::PolicyModelTarget>,
+    model: &str,
+    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> bool {
+    target.is_some_and(|target| target.model() == model && target.effort() == effort)
 }
 
 pub fn ensure_workflow_optimization_compatible(
     policy_lock: &crate::policy_lock::PolicyLock,
 ) -> Result<()> {
+    if !policy_lock.is_compiled() {
+        anyhow::bail!(
+            "workflow optimization requires a compiled v2+ policy lineage; compile and publish the legacy policy before setup"
+        );
+    }
     let guarded = policy_lock
         .policies
         .iter()
@@ -122,6 +155,14 @@ pub async fn setup_optimization(
             "source config '{}' does not exist; run `bitrouter init --yes --write-config` first",
             source_config.display()
         );
+    }
+    if request.strong == request.economy
+        && !matches!(
+            (request.strong_effort, request.economy_effort),
+            (Some(strong), Some(economy)) if strong != economy
+        )
+    {
+        anyhow::bail!("same-model optimization requires two explicit, distinct effort levels");
     }
     let route_providers = [&request.strong, &request.economy]
         .into_iter()
@@ -217,13 +258,21 @@ pub async fn setup_optimization(
         let source_parsed = bitrouter_sdk::config::parse(&source_raw)
             .context("parsing provider-complete source BitRouter config")?;
         validate_routable_model(&source_parsed, &request.strong).await?;
+        validate_routable_effort(&source_parsed, &request.strong, request.strong_effort).await?;
         validate_routable_model(&source_parsed, &request.economy).await?;
+        validate_routable_effort(&source_parsed, &request.economy, request.economy_effort).await?;
         let policy_exists = if policy_path.is_file() {
             let existing = crate::policy_lock::load(&policy_path).await?;
             if let Some(definition) = existing.document.policies.get(&request.policy) {
-                if definition.tiers.get("strong") != Some(&request.strong)
-                    || definition.tiers.get("economy") != Some(&request.economy)
-                {
+                if !matches_target(
+                    definition.tiers.get("strong"),
+                    &request.strong,
+                    request.strong_effort,
+                ) || !matches_target(
+                    definition.tiers.get("economy"),
+                    &request.economy,
+                    request.economy_effort,
+                ) {
                     anyhow::bail!(
                         "existing policy does not match the requested strong and economy routes"
                     );
@@ -241,7 +290,9 @@ pub async fn setup_optimization(
                 &request.policy,
                 &request.preset,
                 Some(&request.strong),
+                request.strong_effort,
                 &request.economy,
+                request.economy_effort,
             )
             .await?;
             rollback.record_source_policy_owned()?;
@@ -273,13 +324,19 @@ pub async fn setup_optimization(
             .policies
             .get(&request.policy)
             .ok_or_else(|| anyhow::anyhow!("active policy '{}' is missing", request.policy))?;
-        if definition.tiers.get("strong") != Some(&request.strong)
-            || definition.tiers.get("economy") != Some(&request.economy)
-            || source_parsed
-                .presets
-                .get(&request.preset)
-                .and_then(|item| item.policy.as_deref())
-                != Some(request.policy.as_str())
+        if !matches_target(
+            definition.tiers.get("strong"),
+            &request.strong,
+            request.strong_effort,
+        ) || !matches_target(
+            definition.tiers.get("economy"),
+            &request.economy,
+            request.economy_effort,
+        ) || source_parsed
+            .presets
+            .get(&request.preset)
+            .and_then(|item| item.policy.as_deref())
+            != Some(request.policy.as_str())
         {
             anyhow::bail!(
                 "existing policy/preset does not match the requested strong and economy routes"
@@ -304,7 +361,9 @@ pub async fn setup_optimization(
             policy: request.policy,
             preset: request.preset,
             strong: request.strong,
+            strong_effort: request.strong_effort,
             economy: request.economy,
+            economy_effort: request.economy_effort,
             normalized_price_overrides: request.normalized_price_overrides,
             preference: request.preference,
             evaluator: ResolvedEvaluator {
@@ -602,6 +661,36 @@ pub async fn validate_routable_model(
     Ok(())
 }
 
+pub async fn validate_routable_effort(
+    source: &bitrouter_sdk::config::Config,
+    route: &str,
+    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> Result<()> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+    let mut resolved = source.clone();
+    crate::merge_registry_into(&mut resolved).await;
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let chain = bitrouter_sdk::config::routing_table::resolve_route_chain(
+        &resolved,
+        route,
+        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+    )
+    .with_context(|| format!("resolving optimization tier route '{route}'"))?;
+    if !chain.iter().any(|target| {
+        target
+            .reasoning_effort
+            .as_ref()
+            .is_some_and(|support| support.levels.contains(&effort))
+    }) {
+        anyhow::bail!(
+            "optimization tier route '{route}' has no target with positive support for effort '{effort}'"
+        );
+    }
+    Ok(())
+}
+
 fn validate_direct_model(model: String) -> Result<String> {
     if model.starts_with("bitrouter:")
         || model.trim().is_empty()
@@ -715,8 +804,9 @@ mod tests {
     use super::{
         SetupRollback, claude_model_from_settings, codex_model_from_config,
         ensure_workflow_optimization_compatible, validate_cloud_catalog_model,
-        validate_routable_model,
+        validate_routable_effort, validate_routable_model,
     };
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
 
     #[test]
     fn setup_can_record_a_source_edit_before_the_policy_exists() -> anyhow::Result<()> {
@@ -781,6 +871,88 @@ inherit_defaults: false
 
         validate_routable_model(&source, "openai-codex:gpt-5.6-sol").await?;
         validate_routable_model(&source, "bitrouter:deepseek/deepseek-v4-flash-0731").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routable_effort_uses_exact_provider_model_support() -> anyhow::Result<()> {
+        let source = bitrouter_sdk::config::parse(
+            r#"
+inherit_defaults: false
+providers:
+  openai-codex:
+    api_base: https://chatgpt.example.test/backend-api/codex
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [none, low, medium, high, xhigh, max]
+          default: medium
+  anthropic:
+    api_base: https://api.anthropic.example.test/v1
+    models:
+      - id: anthropic/claude-opus-4.8
+        provider_model_id: claude-opus-4-8
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low, medium, high, xhigh, max]
+          default: high
+      - id: anthropic/claude-sonnet-4.5
+        provider_model_id: claude-sonnet-4-5
+        capabilities: [reasoning]
+  google:
+    api_base: https://generativelanguage.example.test/v1beta
+    models:
+      - id: google/gemini-3.5-flash
+        provider_model_id: gemini-3.5-flash
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [minimal, low, medium, high]
+          default: medium
+      - id: google/gemini-3.1-pro-preview
+        provider_model_id: gemini-3.1-pro-preview
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low, medium, high]
+          default: high
+  bitrouter:
+    api_base: https://api.bitrouter.example.test/v1
+    models:
+      - id: openai/gpt-5.5
+        provider_model_id: openai/gpt-5.5
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [none, low, medium, high, xhigh]
+          default: medium
+"#,
+        )?;
+        for (route, effort) in [
+            ("openai-codex:gpt-5.6-sol", ReasoningEffort::Max),
+            ("anthropic:claude-opus-4-8", ReasoningEffort::Xhigh),
+            ("google:gemini-3.5-flash", ReasoningEffort::Minimal),
+            ("bitrouter:openai/gpt-5.5", ReasoningEffort::Medium),
+        ] {
+            validate_routable_effort(&source, route, Some(effort)).await?;
+        }
+        assert!(
+            validate_routable_effort(
+                &source,
+                "anthropic:claude-sonnet-4-5",
+                Some(ReasoningEffort::High),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            validate_routable_effort(
+                &source,
+                "google:gemini-3.1-pro-preview",
+                Some(ReasoningEffort::Minimal),
+            )
+            .await
+            .is_err()
+        );
         Ok(())
     }
 

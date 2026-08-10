@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,8 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub ingress_request_id_sha256: Option<String>,
     pub input_model: String,
+    #[serde(default)]
+    pub input_effort: Option<ReasoningEffort>,
     pub key_strategy: String,
     pub request_key: String,
     /// Database key for adequacy state. Named policies namespace this while
@@ -43,6 +46,8 @@ pub struct PolicyDecisionRecord {
     /// Strong/default comparison tier used by evaluators.
     #[serde(default)]
     pub baseline_tier: Option<String>,
+    #[serde(default)]
+    pub baseline_effort: Option<ReasoningEffort>,
     pub legacy_fingerprint: String,
     #[serde(rename = "trace_state", alias = "workflow_state")]
     pub workflow_state: String,
@@ -53,13 +58,19 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub static_model: Option<String>,
     #[serde(default)]
+    pub static_effort: Option<ReasoningEffort>,
+    #[serde(default)]
     pub selected_tier: Option<String>,
     #[serde(default)]
     pub selected_model: Option<String>,
     #[serde(default)]
+    pub selected_effort: Option<ReasoningEffort>,
+    #[serde(default)]
     pub continuation_proposed_tier: Option<String>,
     #[serde(default)]
     pub continuation_proposed_model: Option<String>,
+    #[serde(default)]
+    pub continuation_proposed_effort: Option<ReasoningEffort>,
     #[serde(default)]
     pub continuation_adjustment: Option<String>,
     #[serde(default)]
@@ -117,13 +128,23 @@ pub struct PolicyDecisionSummary {
     pub by_selected_tier: BTreeMap<String, usize>,
     pub by_selected_model: BTreeMap<String, usize>,
     #[serde(default)]
+    pub by_selected_effort: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_selected_target: BTreeMap<String, usize>,
+    #[serde(default)]
     pub by_predicted_role: BTreeMap<String, usize>,
     #[serde(default)]
     pub by_predicted_action: BTreeMap<String, usize>,
     pub static_tier_replaced_count: usize,
     pub static_model_replaced_count: usize,
+    #[serde(default)]
+    pub static_effort_replaced_count: usize,
     pub by_tier_transition: BTreeMap<String, usize>,
     pub by_model_transition: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_effort_transition: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_target_transition: BTreeMap<String, usize>,
     pub replacement_by_reason: BTreeMap<String, usize>,
     pub by_reason: BTreeMap<String, usize>,
     #[serde(rename = "by_trace_state", alias = "by_workflow_state")]
@@ -265,6 +286,16 @@ impl PolicyDecisionSummary {
                     .by_selected_model
                     .entry(model.to_string())
                     .or_insert(0) += 1;
+                *summary
+                    .by_selected_target
+                    .entry(target_key(model, record.selected_effort))
+                    .or_insert(0) += 1;
+            }
+            if let Some(effort) = record.selected_effort {
+                *summary
+                    .by_selected_effort
+                    .entry(effort.to_string())
+                    .or_insert(0) += 1;
             }
             if let Some(role) = record.predicted_role.as_deref() {
                 *summary
@@ -289,6 +320,25 @@ impl PolicyDecisionSummary {
                 if static_model != selected_model {
                     summary.static_model_replaced_count += 1;
                 }
+                *summary
+                    .by_target_transition
+                    .entry(transition_key(
+                        &target_key(static_model, record.static_effort),
+                        &target_key(selected_model, record.selected_effort),
+                    ))
+                    .or_insert(0) += 1;
+            }
+            if record.static_effort.is_some() || record.selected_effort.is_some() {
+                *summary
+                    .by_effort_transition
+                    .entry(transition_key(
+                        effort_key(record.static_effort),
+                        effort_key(record.selected_effort),
+                    ))
+                    .or_insert(0) += 1;
+                if record.static_effort != record.selected_effort {
+                    summary.static_effort_replaced_count += 1;
+                }
             }
             *summary.by_reason.entry(record.reason.clone()).or_insert(0) += 1;
             *summary
@@ -310,6 +360,14 @@ impl PolicyDecisionSummary {
 
 fn transition_key(from: &str, to: &str) -> String {
     format!("{from} -> {to}")
+}
+
+fn effort_key(effort: Option<ReasoningEffort>) -> &'static str {
+    effort.map_or("inherit", ReasoningEffort::as_str)
+}
+
+fn target_key(model: &str, effort: Option<ReasoningEffort>) -> String {
+    format!("{model}@{}", effort_key(effort))
 }
 
 impl PolicyDecisionJsonlRecorder {
@@ -372,6 +430,7 @@ mod tests {
             request_id: Some("request-1".to_string()),
             ingress_request_id_sha256: None,
             input_model: "inbound".to_string(),
+            input_effort: None,
             key_strategy: "agent_trace".to_string(),
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
             ledger_key: Some("agent_trace/v1|tool_followup|normal".to_string()),
@@ -379,15 +438,19 @@ mod tests {
             policy_digest: None,
             preset_variant: None,
             baseline_tier: Some("capable".to_string()),
+            baseline_effort: None,
             legacy_fingerprint: "after_read_file".to_string(),
             workflow_state: "tool_followup".to_string(),
             workflow_identity: WorkflowIdentity::default(),
             static_tier: Some("capable".to_string()),
             static_model: Some("vendor/capable".to_string()),
+            static_effort: None,
             selected_tier: Some("cheap".to_string()),
             selected_model: Some("vendor/cheap".to_string()),
+            selected_effort: None,
             continuation_proposed_tier: None,
             continuation_proposed_model: None,
+            continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: None,
             predicted_action: None,
@@ -456,6 +519,27 @@ mod tests {
         assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
         assert_eq!(parsed.observed_route_projection, None);
         assert_eq!(parsed.ingress_request_id_sha256, None);
+        assert_eq!(parsed.input_effort, None);
+        assert_eq!(parsed.selected_effort, None);
+    }
+
+    #[test]
+    fn decision_record_serializes_compound_effort_treatment() -> anyhow::Result<()> {
+        let mut decision = record();
+        decision.input_effort = Some(ReasoningEffort::High);
+        decision.static_effort = Some(ReasoningEffort::Low);
+        decision.selected_effort = Some(ReasoningEffort::Medium);
+        decision.baseline_effort = Some(ReasoningEffort::High);
+        decision.continuation_proposed_effort = Some(ReasoningEffort::Low);
+
+        let value = serde_json::to_value(&decision)?;
+
+        assert_eq!(value["input_effort"], "high");
+        assert_eq!(value["static_effort"], "low");
+        assert_eq!(value["selected_effort"], "medium");
+        assert_eq!(value["baseline_effort"], "high");
+        assert_eq!(value["continuation_proposed_effort"], "low");
+        Ok(())
     }
 
     #[test]
@@ -510,6 +594,44 @@ mod tests {
 
         assert_eq!(parsed.by_predicted_role, BTreeMap::new());
         assert_eq!(parsed.by_predicted_action, BTreeMap::new());
+        assert_eq!(parsed.by_selected_effort, BTreeMap::new());
+        assert_eq!(parsed.by_selected_target, BTreeMap::new());
+    }
+
+    #[test]
+    fn summary_distinguishes_same_model_at_different_efforts() {
+        let mut low = record();
+        low.static_model = Some("vendor/model".into());
+        low.selected_model = Some("vendor/model".into());
+        low.static_effort = Some(ReasoningEffort::High);
+        low.selected_effort = Some(ReasoningEffort::Low);
+        let mut high = low.clone();
+        high.selected_effort = Some(ReasoningEffort::High);
+
+        let summary = PolicyDecisionSummary::from_records(&[low, high]);
+
+        assert_eq!(summary.by_selected_model.get("vendor/model"), Some(&2));
+        assert_eq!(summary.by_selected_target.get("vendor/model@low"), Some(&1));
+        assert_eq!(
+            summary.by_selected_target.get("vendor/model@high"),
+            Some(&1)
+        );
+        assert_eq!(summary.static_effort_replaced_count, 1);
+    }
+
+    #[test]
+    fn summary_does_not_treat_inherited_effort_as_a_router_replacement() {
+        let mut inherited = record();
+        inherited.input_effort = Some(ReasoningEffort::Low);
+        inherited.static_model = Some("vendor/model".into());
+        inherited.selected_model = Some("vendor/model".into());
+        inherited.static_effort = Some(ReasoningEffort::Low);
+        inherited.selected_effort = Some(ReasoningEffort::Low);
+
+        let summary = PolicyDecisionSummary::from_records(&[inherited]);
+
+        assert_eq!(summary.static_effort_replaced_count, 0);
+        assert_eq!(summary.by_selected_target.get("vendor/model@low"), Some(&1));
     }
 
     #[test]

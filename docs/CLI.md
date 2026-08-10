@@ -372,7 +372,8 @@ In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"ty
 ### `bitrouter policy`
 
 ```text
-bitrouter policy init NAME --preset PRESET --economy MODEL [--strong MODEL]
+bitrouter policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
+  [--strong MODEL] [--strong-effort LEVEL]
 bitrouter policy check|status|show [--config PATH]
 bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
 bitrouter policy diff ACTIVE CANDIDATE
@@ -393,7 +394,7 @@ policy:
 
 `frozen` is the safe default. Live routes use only the static lock while BitRouter continues to record observations and evaluator results; ledger rows cannot affect requests or replace the lock. Dry-run compilation and candidate export remain available. `adaptive` permits validated publication, but does not enable request-time learning.
 
-`policy publish` promotes the exact compiled v2 candidate after validating its
+`policy publish` promotes the exact compiled v3 candidate after validating its
 parent digest, certificates, and current config. A stale candidate or frozen
 process leaves the active bytes unchanged. `policy evolve --apply` remains the
 legacy migration shortcut; use `compile` + `publish` whenever an eval snapshot
@@ -406,7 +407,8 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 ```text
 bitrouter optimize setup [--workflow-command CMD] [--workflow-arg ARG ...] \
   [--workflow-input PATH ...] \
-  [--strong PROVIDER:MODEL] [--economy PROVIDER:MODEL] \
+  [--strong PROVIDER:MODEL] [--strong-effort LEVEL] \
+  [--economy PROVIDER:MODEL] [--economy-effort LEVEL] \
   [--normalized-price PROVIDER:MODEL=INPUT,CACHE_READ,CACHE_WRITE,OUTPUT] \
   [--preference PROFILE]
 bitrouter optimize resolve [--config bitrouter.optimize.yaml]
@@ -432,6 +434,17 @@ variables are pointed at a fresh private daemon using the configured preset.
 Baseline and candidate run in separate detached Git worktrees. Repeat
 `--workflow-input` for ignored dependencies or fixtures such as `node_modules`
 or `.venv` that the command requires.
+
+`LEVEL` is one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+`max`. A structured tier target owns its effort and overrides an effort sent by
+the caller; a legacy scalar target preserves caller effort. `policy init` and
+`optimize setup` validate structured targets against the exact provider/model
+route before writing files, and runtime dispatch retains only routes that
+positively declare that level. This makes a same-model ladder such as `high` →
+`low` a real routing experiment rather than a model alias. Because some
+providers invalidate prompt-cache prefixes when effort changes, optimization
+uses settled cache-aware cost and never assumes that a lower effort value is
+intrinsically cheaper.
 
 Every strong/economy model call goes through that private daemon. The tiers may
 use different native daemon providers—for example a Codex subscription strong
@@ -485,8 +498,12 @@ rollback previously made through `bitrouter policy rollback`.
 `bitrouter init --optimize` folds the same setup into onboarding. Headless
 automation supplies `--optimize-workflow-command`, repeated
 `--optimize-workflow-arg`/`--optimize-workflow-input`, and
-`--optimize-success`; model and preference flags remain optional. Optimization
-setup is currently Unix-only.
+`--optimize-success`; model, effort, and preference flags remain optional.
+Use `--optimize-strong-effort` with `--optimize-strong` and
+`--optimize-economy-effort` with `--optimize-economy` for compound targets. If
+strong and economy name the same model, both effort flags are required and
+must name distinct supported levels. Optimization setup is currently
+Unix-only.
 Setup also rejects an active progress guard before mutation because the exact
 two-tier experiment cannot preserve guard semantics yet.
 

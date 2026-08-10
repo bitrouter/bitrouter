@@ -33,6 +33,7 @@ use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::config;
+use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{
     ApiProtocol, NormalizedUsage, UsageOrigin, inbound_adapter_for,
 };
@@ -398,6 +399,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         request_id: Some(request_id.to_string()),
         ingress_request_id_sha256: None,
         input_model: "inbound".to_string(),
+        input_effort: None,
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
@@ -405,15 +407,19 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         policy_digest: None,
         preset_variant: None,
         baseline_tier: Some("strong".to_string()),
+        baseline_effort: None,
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
         workflow_identity: Default::default(),
         static_tier: Some("strong".to_string()),
         static_model: Some("vendor/strong".to_string()),
+        static_effort: None,
         selected_tier: Some("strong".to_string()),
         selected_model: Some("vendor/strong".to_string()),
+        selected_effort: None,
         continuation_proposed_tier: None,
         continuation_proposed_model: None,
+        continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
         predicted_action: None,
@@ -2151,6 +2157,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         request_id: Some("req-001".to_string()),
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
+        input_effort: None,
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
@@ -2158,15 +2165,19 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         policy_digest: None,
         preset_variant: None,
         baseline_tier: Some("capable".to_string()),
+        baseline_effort: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
+        static_effort: None,
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        selected_effort: None,
         continuation_proposed_tier: None,
         continuation_proposed_model: None,
+        continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
         predicted_action: None,
@@ -2442,6 +2453,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         request_id: Some("req-001".to_string()),
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
+        input_effort: None,
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
@@ -2449,15 +2461,19 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         policy_digest: None,
         preset_variant: None,
         baseline_tier: Some("capable".to_string()),
+        baseline_effort: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
+        static_effort: None,
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        selected_effort: None,
         continuation_proposed_tier: None,
         continuation_proposed_model: None,
+        continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
         predicted_action: None,
@@ -2522,7 +2538,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
 }
 
 #[test]
-fn run_artifact_attributes_successful_task_to_policy_transition() {
+fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Result<()> {
     let traces = vec![CapturedIngressTrace {
         id: "req-success-001".to_string(),
         captured_at: None,
@@ -2568,6 +2584,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         request_id: Some("req-success-001".to_string()),
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
+        input_effort: None,
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
@@ -2577,15 +2594,19 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         ),
         preset_variant: Some("coding".to_string()),
         baseline_tier: Some("capable".to_string()),
+        baseline_effort: None,
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
+        static_effort: None,
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        selected_effort: None,
         continuation_proposed_tier: None,
         continuation_proposed_model: None,
+        continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
         predicted_action: None,
@@ -2618,14 +2639,14 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         30,
     );
     usage.status = Some("completed".to_string());
+    let usage = vec![usage];
     let artifact = WorkflowRunArtifact::build_with_decisions(
         "successful-transition",
         &traces,
-        &[usage],
+        &usage,
         &outcomes,
         &decisions,
-    )
-    .unwrap();
+    )?;
 
     assert_eq!(artifact.semantic_policy_transition_candidates.len(), 1);
     let candidate = &artifact.semantic_policy_transition_candidates[0];
@@ -2648,6 +2669,35 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         candidate.tier_transition.as_deref(),
         Some("capable -> cheap")
     );
+
+    let mut effort_only = decisions.clone();
+    effort_only[0].selected_tier = effort_only[0].static_tier.clone();
+    effort_only[0].selected_model = effort_only[0].static_model.clone();
+    effort_only[0].static_effort = Some(ReasoningEffort::High);
+    effort_only[0].selected_effort = Some(ReasoningEffort::Low);
+    let effort_artifact = WorkflowRunArtifact::build_with_decisions(
+        "successful-effort-transition",
+        &traces,
+        &usage,
+        &outcomes,
+        &effort_only,
+    )?;
+    assert_eq!(
+        effort_artifact.semantic_policy_transition_candidates.len(),
+        1
+    );
+    let effort_candidate = &effort_artifact.semantic_policy_transition_candidates[0];
+    assert_eq!(effort_candidate.model_transition.as_deref(), None);
+    assert_eq!(effort_candidate.tier_transition.as_deref(), None);
+    assert_eq!(
+        effort_candidate.effort_transition.as_deref(),
+        Some("high -> low")
+    );
+    assert_eq!(
+        effort_candidate.target_transition.as_deref(),
+        Some("openai-codex:gpt-5.5@high -> openai-codex:gpt-5.5@low")
+    );
+    Ok(())
 }
 
 #[test]
