@@ -142,7 +142,7 @@ async fn hosted_loop(
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let window = TimeWindow::Today;
-    let mut snap = snapshot::poll(ctx.source, &ctx.socket, window).await;
+    let mut snap = snapshot::poll(ctx.source, &ctx.socket, window, ctx.launch_id.as_deref()).await;
     let mut exit_code: Option<i32> = None;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
 
@@ -151,7 +151,7 @@ async fn hosted_loop(
 
         tokio::select! {
             _ = ticker.tick() => {
-                snap = snapshot::poll(ctx.source, &ctx.socket, window).await;
+                snap = snapshot::poll(ctx.source, &ctx.socket, window, ctx.launch_id.as_deref()).await;
             }
             // The child owns Ctrl-C; these are the signals that would
             // otherwise leave a raw-mode shell behind, since a panic hook
@@ -258,12 +258,7 @@ fn draw(
     let no_color = std::env::var_os("NO_COLOR").is_some();
     let lines = pane.backend.lines(no_color);
     let scrolled = pane.backend.is_scrolled();
-    let bar = render::status_bar(
-        snap,
-        ctx.harness,
-        ctx.model.as_deref(),
-        ctx.launch_id.as_deref(),
-    );
+    let bar = render::status_bar(snap, ctx.harness, ctx.model.as_deref());
     terminal.draw(|frame| {
         let [body, status] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());

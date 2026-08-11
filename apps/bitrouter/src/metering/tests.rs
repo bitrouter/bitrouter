@@ -1308,7 +1308,9 @@ async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<(
         recorder.record(&mut ctx("k", n, n)).await?;
     }
 
-    let rows = store.recent_requests(TimeWindow::ThisMonth, 3).await?;
+    let rows = store
+        .recent_requests(TimeWindow::ThisMonth, 3, None)
+        .await?;
     assert_eq!(rows.len(), 3, "the limit bounds what the view ever loads");
 
     // Rows carry exactly the three fields `export_usage` drops — the reason
@@ -1329,7 +1331,9 @@ async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<(
     // Newest first: the descending order must be stable against the tie in
     // `created_at` that a fast test run produces, which the request_id tiebreak
     // provides.
-    let all = store.recent_requests(TimeWindow::ThisMonth, 100).await?;
+    let all = store
+        .recent_requests(TimeWindow::ThisMonth, 100, None)
+        .await?;
     assert_eq!(all.len(), 5);
     let mut sorted = all.clone();
     sorted.sort_by(|a, b| (&b.created_at, &b.request_id).cmp(&(&a.created_at, &a.request_id)));
@@ -1420,7 +1424,9 @@ async fn an_untagged_caller_is_still_recorded_just_not_attributed() -> Result<()
         store.get_spend("brk_direct", TimeWindow::ThisMonth).await?,
         70
     );
-    let rows = store.recent_requests(TimeWindow::ThisMonth, 10).await?;
+    let rows = store
+        .recent_requests(TimeWindow::ThisMonth, 10, None)
+        .await?;
     assert_eq!(rows.len(), 1, "the row exists");
     Ok(())
 }

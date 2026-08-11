@@ -85,10 +85,40 @@ run once under `NO_COLOR=1`.
 
 | Harness | Version tested | Mouse drag | OSC-52 copy | Notes |
 |---|---|---|---|---|
-| claude | | | | |
-| codex | | | | |
-| opencode | | | | |
-| pi | | | | no MCP mechanism: startup line must say `tools ✗ skills ✗` |
+| claude | 2.1.175 | | | render, keys, resize, live round-trip ✓ (tmux) |
+| codex | 0.144.0 | | | renders ✓ (tmux) |
+| opencode | | | | alt-screen renders ✓; attribution lands ✓ (tmux) |
+| pi | | | | renders ✓ (tmux). No MCP mechanism: startup line says `tools ✗ skills ✗` |
+
+**Partially pre-filled from a tmux pass.** A tmux session is a real pty with a
+real window size, so render fidelity, keystroke delivery, resize/SIGWINCH, and
+a live request round-trip are all checkable without a human. The two ⭐ columns
+are not: a physical mouse drag and a clipboard round-trip into the host OS need
+hands. Those stay blank until someone runs them.
+
+That pass found two defects — see §"What the tmux pass found" below.
+
+## What the tmux pass found
+
+Running the wrapper under tmux (terminal → tmux → bitrouter → harness) caught
+two things no unit test had:
+
+1. **The status bar implied a scope it did not have.** It keyed its
+   `(all callers)` hedge off whether a launch token had been *minted*, while
+   the numbers came from a daemon-wide query throughout. Minting is a request,
+   not a guarantee: Claude Code on a Max subscription ignores the credential
+   `launch` hands it, so the tag never came back — and the bar presented the
+   daemon's spend as the session's. The snapshot now scopes to the launch when
+   attribution actually landed and falls back, hedged, when it did not. Both
+   branches were then observed live: opencode attributed and unhedged, claude
+   unattributed and hedged.
+
+2. **The #796 startup line is invisible under `--tui`.** It prints before
+   handover, and entering the alternate screen hides the normal screen
+   immediately — so the one place capability is stated is on screen for
+   milliseconds, then gone until the session ends. Plain `launch` is
+   unaffected. Not yet fixed; the options are rendering it into the hosted
+   pane's first frame, or folding capability into the status row.
 
 ## The gate (redefined)
 

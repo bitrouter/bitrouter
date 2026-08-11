@@ -78,5 +78,5 @@ pub async fn oneshot_text(
     socket: &Path,
     window: TimeWindow,
 ) -> String {
-    render::oneshot(&snapshot::poll(source, socket, window).await)
+    render::oneshot(&snapshot::poll(source, socket, window, None).await)
 }

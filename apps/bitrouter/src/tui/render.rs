@@ -116,7 +116,6 @@ pub fn status_bar(
     snapshot: &Snapshot,
     harness: &crate::harness::Harness,
     model: Option<&str>,
-    launch_id: Option<&str>,
 ) -> String {
     let name = harness.interactive_binary.unwrap_or(harness.id);
 
@@ -163,10 +162,12 @@ pub fn status_bar(
         fmt_usd(snapshot.summary.spend_micro_usd),
         snapshot.summary.requests
     ));
-    // Say whose spend this is. Without a launch tag the figure is every
-    // caller's, and presenting that as the session's is the quiet lie #795
-    // exists to end.
-    if launch_id.is_none() {
+    // Say whose spend this is, based on what the snapshot actually scoped to
+    // — not on whether a launch token was minted. A harness with its own
+    // session identity can ignore the credential `launch` hands it, and a bar
+    // that trusted the mint would present daemon-wide figures as the
+    // session's: the quiet lie #795 exists to end, one layer up.
+    if snapshot.scope != crate::tui::snapshot::Scope::Launch {
         bar.push_str(" (all callers)");
     }
     bar.push(' ');
@@ -344,6 +345,7 @@ mod bar_tests {
                 spend_micro_usd: 42_000,
                 requests: 1,
             },
+            scope: crate::tui::snapshot::Scope::Launch,
             ..Default::default()
         }
     }
@@ -357,7 +359,7 @@ mod bar_tests {
         // grok's traffic never traverses the daemon, so no metering row will
         // ever exist for it. A blank cost field reads as broken; this reads as
         // true, which is the whole degradation rule.
-        let bar = status_bar(&busy(), harness("grok"), Some("grok-4.5"), Some("brl_x"));
+        let bar = status_bar(&busy(), harness("grok"), Some("grok-4.5"));
         assert!(bar.contains("own-auth · not routed · not metered"), "{bar}");
         assert!(
             !bar.contains('$'),
@@ -371,7 +373,6 @@ mod bar_tests {
             &busy(),
             harness("claude-acp"),
             Some("anthropic/claude-sonnet-4-5"),
-            Some("brl_x"),
         );
         assert!(bar.contains("claude"), "{bar}");
         assert!(bar.contains("anthropic/claude-sonnet-4-5"), "{bar}");
@@ -389,24 +390,42 @@ mod bar_tests {
     }
 
     #[test]
-    fn an_unattributed_launch_admits_the_number_is_not_only_its_own() {
-        // Without #795's tag the figure is daemon-wide. Presenting it as the
-        // session's is the quiet lie the attribution work exists to end.
-        let bar = status_bar(&busy(), harness("claude-acp"), None, None);
-        assert!(bar.contains("(all callers)"), "{bar}");
+    fn minting_a_token_does_not_by_itself_earn_the_unhedged_reading() {
+        // Found by running the wrapper under tmux: the bar keyed its hedge off
+        // whether a launch token had been *minted*, while the numbers were
+        // always daemon-wide. Claude Code on a Max subscription ignores the
+        // credential `launch` hands it, so the tag never came back — and the
+        // bar quietly presented the daemon's spend as the session's.
+        //
+        // The hedge now follows the scope the snapshot actually achieved.
+        let mut unattributed = busy();
+        unattributed.scope = crate::tui::snapshot::Scope::DaemonWide;
+        let bar = status_bar(&unattributed, harness("claude-acp"), None);
+        assert!(
+            bar.contains("(all callers)"),
+            "daemon-wide numbers must always be hedged, minted token or not: {bar}"
+        );
+
+        let mut attributed = busy();
+        attributed.scope = crate::tui::snapshot::Scope::Launch;
+        let bar = status_bar(&attributed, harness("claude-acp"), None);
+        assert!(
+            !bar.contains("(all callers)"),
+            "genuinely launch-scoped numbers must not be hedged: {bar}"
+        );
     }
 
     #[test]
     fn a_dead_daemon_and_an_idle_one_are_different_sentences() {
         let dead = Snapshot::default();
-        let bar = status_bar(&dead, harness("claude-acp"), None, Some("brl_x"));
+        let bar = status_bar(&dead, harness("claude-acp"), None);
         assert!(bar.contains("daemon unreachable"), "{bar}");
 
         let idle = Snapshot {
             daemon: Some(daemon()),
             ..Default::default()
         };
-        let bar = status_bar(&idle, harness("claude-acp"), None, Some("brl_x"));
+        let bar = status_bar(&idle, harness("claude-acp"), None);
         assert!(bar.contains("no requests yet"), "{bar}");
         assert!(!bar.contains("unreachable"), "{bar}");
     }

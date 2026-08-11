@@ -497,19 +497,28 @@ impl MeteringStore {
     }
 
     /// The newest `limit` settled requests within `window`, newest first —
-    /// the live view's request stream.
+    /// the live view's request stream. `launch_id` scopes it to one
+    /// `bitrouter launch` session; `None` is every caller.
     ///
     /// Descending with a `LIMIT` on purpose. [`Self::export_usage`] is an
     /// unbounded ascending scan, which is right for a one-shot export and
     /// wrong to run once a second against a day-long window: the view only
     /// ever renders one screen plus a scrollback margin, so the database
     /// should never hand it more than that.
-    pub async fn recent_requests(&self, window: TimeWindow, limit: u64) -> Result<Vec<RequestRow>> {
+    pub async fn recent_requests(
+        &self,
+        window: TimeWindow,
+        limit: u64,
+        launch_id: Option<&str>,
+    ) -> Result<Vec<RequestRow>> {
         let start = window_start(window).to_rfc3339();
         let mut query = requests::Entity::find()
             .filter(requests::Column::CreatedAt.gte(start))
             .order_by_desc(requests::Column::CreatedAt)
             .order_by_desc(requests::Column::RequestId);
+        if let Some(launch) = launch_id {
+            query = query.filter(requests::Column::LaunchId.eq(launch));
+        }
         if let TimeWindow::Custom { end, .. } = window {
             query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
         }

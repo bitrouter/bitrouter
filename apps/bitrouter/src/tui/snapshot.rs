@@ -39,6 +39,22 @@ pub struct DaemonState {
     pub models: usize,
 }
 
+/// Whose traffic the numbers describe.
+///
+/// Derived from whether attribution **actually landed**, not from whether a
+/// launch token was minted. A harness with its own session identity — Claude
+/// Code on a Max subscription, for one — can ignore the credential `launch`
+/// hands it, and then a bar that trusted the mint would report daemon-wide
+/// figures while implying they were the session's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Scope {
+    /// Every caller this daemon served.
+    #[default]
+    DaemonWide,
+    /// Exactly one `bitrouter launch` session.
+    Launch,
+}
+
 /// One poll of everything the view draws.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -50,6 +66,8 @@ pub struct Snapshot {
     pub summary: SpendSummary,
     /// Trailing-minute rate across every caller.
     pub rate: RateMetrics,
+    /// Whose traffic `rows` and `summary` describe.
+    pub scope: Scope,
 }
 
 impl Snapshot {
@@ -84,6 +102,7 @@ pub async fn poll(
     source: &crate::paths::ConfigSource,
     socket: &Path,
     window: TimeWindow,
+    launch_id: Option<&str>,
 ) -> Snapshot {
     let daemon = daemon_state(socket).await;
     let Some(store) = crate::metering::reader::open_readonly(source).await else {
@@ -92,14 +111,40 @@ pub async fn poll(
             ..Default::default()
         };
     };
+    let rate = store.get_total_rate().await.unwrap_or_default();
+
+    // Prefer launch scope, but only once it has something to show. Minting a
+    // token is a request, not a guarantee: the harness has to send it back,
+    // and some do not. Falling back — and *saying so* via `Scope` — keeps the
+    // bar honest either way, instead of showing an empty session forever or,
+    // worse, showing the daemon's numbers as if they were the session's.
+    if let Some(launch) = launch_id {
+        let summary = store
+            .spend_summary_for_launch(launch, window)
+            .await
+            .unwrap_or_default();
+        if summary.requests > 0 {
+            return Snapshot {
+                daemon,
+                rows: store
+                    .recent_requests(window, STREAM_ROWS, Some(launch))
+                    .await
+                    .unwrap_or_default(),
+                summary,
+                rate,
+                scope: Scope::Launch,
+            };
+        }
+    }
     Snapshot {
         daemon,
         rows: store
-            .recent_requests(window, STREAM_ROWS)
+            .recent_requests(window, STREAM_ROWS, None)
             .await
             .unwrap_or_default(),
         summary: store.spend_summary(window).await.unwrap_or_default(),
-        rate: store.get_total_rate().await.unwrap_or_default(),
+        rate,
+        scope: Scope::DaemonWide,
     }
 }
 

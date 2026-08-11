@@ -112,7 +112,7 @@ pub(super) async fn event_loop(
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let mut snap = snapshot::poll(source, socket, window).await;
+    let mut snap = snapshot::poll(source, socket, window, None).await;
     let mut cursor = Cursor::new();
     cursor.settle(&snap.rows);
     let mut echo = Echo::default();
@@ -123,7 +123,7 @@ pub(super) async fn event_loop(
 
         tokio::select! {
             _ = ticker.tick() => {
-                snap = snapshot::poll(source, socket, window).await;
+                snap = snapshot::poll(source, socket, window, None).await;
                 cursor.settle(&snap.rows);
             }
             // A signal here would bypass the panic hook, so the loop owns its
