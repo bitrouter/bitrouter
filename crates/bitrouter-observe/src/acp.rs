@@ -44,6 +44,8 @@ pub struct TurnRecord {
     /// Context-window occupancy (tokens in context / window size) as of the
     /// latest upstream usage report, when one was seen.
     pub context_used: Option<u64>,
+    /// Total context-window size the upstream model reported, when one was
+    /// seen. Pairs with [`TurnRecord::context_used`] to give an occupancy ratio.
     pub context_size: Option<u64>,
 }
 
