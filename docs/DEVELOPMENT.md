@@ -12,10 +12,9 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
-| `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
-The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
+The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
 
 ### External interfaces
 
@@ -32,7 +31,9 @@ The CLI is the **host** interface: it owns `main()` and mounts the other three a
 
 ### Dependency Logic
 
-The layering is strictly one-directional — every library crate points down at **`bitrouter-sdk`**, **`apps`** composes them all, and the SDK never depends back on anything above it:
+The layering is strictly one-directional — every library crate points down at **`bitrouter-sdk`**, **`apps`** composes them all, and the SDK never depends back on anything above it.
+
+Note what that does *not* say: it constrains the direction of dependencies, not how much lives in the SDK. A capability belongs in the SDK when it is an **interop surface** — the SDK's own domain model rendered into an open standard, which must be identical across deployments to mean anything — and it goes behind a default-off feature so consumers who skip it pay nothing. The `otel` feature is the case in point: which span is `chat`, what counts as a hop, when settlement closes, are BitRouter semantics, so OTLP export is SDK work. Deployment business logic (auth, policy, charging, metering, content policy) stays out, whether it would point down cleanly or not.
 
 1. **`bitrouter-sdk`** — the foundation. Knows nothing about which providers exist or how the binary is wired. It owns:
    - **Three independent pipelines**, one per wire family. They are deliberately *not* generic over a shared hook trait — each has its own hook set:
@@ -44,7 +45,7 @@ The layering is strictly one-directional — every library crate points down at 
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
-3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and keep their default builds lean. Guardrails never pulls the axum HTTP stack; observe pulls axum/tower-http (for the inbound `TraceLayer`) only under its opt-in `otel-*` features. The `feature-isolation` CI job enforces this.
+3. **`bitrouter-guardrails`** — depends on `bitrouter-sdk` only. A hook library: it implements the SDK's hook traits and keeps its default build lean, never pulling the axum HTTP stack. The `feature-isolation` CI job enforces this, and also enforces the SDK's own equivalent invariant: the OTel stack it carries under `otel-*` stays out of the default tree, and the two transports stay isolated from each other.
 4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### SDK feature flags
@@ -57,6 +58,11 @@ The SDK keeps its default dependency tree minimal — capabilities that pull wei
 | `config_file`  | serde-saphyr, `tokio::fs`             | YAML `bitrouter.yaml` loading                                 |
 | `mcp`          | rmcp                                  | The bundled `RmcpExecutor` for the `mcp` pipeline             |
 | `acp`          | `tokio` process / io-util             | `ConfigAcpRoutingTable` for the pure-routing `acp` pipeline    |
+| `otel`         | (selects `otel-http`)                 | OTLP export of the SDK's span / metric model — the entry point |
+| `otel-http`    | opentelemetry\*, tracing-opentelemetry, tracing-subscriber, opentelemetry-http, dashmap | The above over OTLP/HTTP + protobuf (reqwest + rustls) |
+| `otel-grpc`    | the same stack plus tonic             | The above over OTLP/gRPC (tonic + native trust roots)          |
+
+> **The `otel` features carry a public-dependency commitment.** `otel::subscriber::tracing_subscriber_layer` returns `impl tracing_subscriber::Layer<S>`, so enabling any `otel*` feature makes **tracing-subscriber 0.3** and **tracing-core 0.1** semver-committed public dependencies of the SDK: `tracing_subscriber::Layer`, `tracing_subscriber::registry::LookupSpan`, and `tracing_core::Subscriber` (reached via the `S: tracing::Subscriber` bound) all appear in the public API. A major bump in either crate is a breaking change for SDK consumers. No `opentelemetry*` type is public — see [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md).
 
 Without `mcp` / `acp`, the SDK still exposes those pipelines, hook traits, and transport enums — a consumer can plug in a custom `Executor` without pulling rmcp or the stdio bridge.
 
@@ -74,7 +80,7 @@ A streaming LLM request moves through the workspace like this:
    - **Execute** — the executor dials the first target; on failure the `FallbackPolicy` decides whether to try the next. The **outbound adapter** for the target's protocol renders the provider request and decodes the provider response (and its SSE stream).
    - **Settlement** — every `SettlementRecorder` runs (metering, etc.), success or failure.
 4. For streaming, the canonical `StreamPart` stream flows through the `StreamHook` stage and is re-encoded by the inbound adapter into the **client's** protocol — so a client written for the Responses protocol can transparently use a Messages upstream, and vice versa.
-5. `ObserveHook`s receive read-only lifecycle events throughout; `bitrouter-observe` turns them into OTLP traces and metrics.
+5. `ObserveHook`s receive read-only lifecycle events throughout; the SDK's `otel` feature turns them into OTLP traces and metrics.
 
 The `mcp` and `acp` pipelines are simpler: pure routing with no settlement.
 
@@ -111,7 +117,7 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 | `GET  /metrics`                     | OTLP-migration banner (see below)|
 | `GET  /health`                      | health check                    |
 
-`GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by `bitrouter-observe`, and the endpoint serves a short banner pointing at `plugins.bitrouter-observe.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The SDK's `MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
+`GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by the SDK's `otel` feature, and the endpoint serves a short banner pointing at `plugins.bitrouter-observe.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The SDK's `MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
 Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a Unix domain socket, not HTTP — see `apps/bitrouter/src/daemon.rs`.
 
@@ -148,7 +154,7 @@ Rare — no current registry provider needs this. The big clouds (Bedrock, Azure
 
 ### Add a hook (auth, policy, metering, guardrail, observability)
 
-Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `crates/` library (the guardrails / observe pattern); a lightweight one can live in the binary.
+Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs behind a default-off feature: in its own `crates/` library when it encodes deployment-specific business logic (the guardrails pattern), or in the SDK when it renders the SDK's own domain model into an interop standard (the `otel` pattern). A lightweight one can live in the binary.
 
 ### Embed the SDK in your own service
 
@@ -164,4 +170,4 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (default builds of the hook crates stay axum-free), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
+CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum and the OTel stack, and the two OTLP transports stay isolated), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).

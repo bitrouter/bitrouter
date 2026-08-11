@@ -102,16 +102,28 @@
 //! With the `server` feature on, `app.serve("0.0.0.0:4356")` wires the
 //! whole router and runs it until SIGTERM.
 //!
-//! ## What ships in adjacent crates
+//! ## What ships here, and what ships elsewhere
 //!
-//! One shared library plugin in this repo:
+//! The dividing line is **interop surfaces ship in the SDK behind default-off
+//! features; deployment business logic does not.**
+//!
+//! [`otel`] is on the SDK side of that line. OTLP export is this crate's own
+//! domain model rendered into an open standard — which span is `chat`, what
+//! counts as a hop, when settlement closes. That is BitRouter semantics, not
+//! vendor glue, and it has to be identical across every deployment or
+//! "interop surface" means nothing. Shipping it here is what makes that
+//! guarantee enforceable. It costs nothing to a consumer who does not want
+//! it: the feature is off by default and the whole OpenTelemetry stack drops
+//! out of the dependency tree with it.
+//!
+//! One shared library plugin still lives in its own crate:
 //!
 //! - `bitrouter-guardrails` — request / response content scanning (block +
-//!   redact).
+//!   redact). Content policy is a deployment's own call, not a wire standard.
 //!
-//! Anything else (auth, policy, charging, metering) is **deployment-specific
-//! business logic, not shared library code**. The OSS `apps/bitrouter`
-//! binary provides its own implementations under
+//! Everything else in that category (auth, policy, charging, metering) is
+//! **deployment-specific business logic, not shared library code**. The OSS
+//! `apps/bitrouter` binary provides its own implementations under
 //! `apps/bitrouter/src/{auth,policy,metering}/`. Closed-source deployments
 //! (e.g. a cloud product) write their own `PreRequestHook` /
 //! `SettlementRecorder` impls against the SDK's stable traits.
