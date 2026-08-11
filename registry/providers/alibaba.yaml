@@ -21,6 +21,7 @@ rate_limits:
       requests_per_minute: 60
 models:
   # Official pricing: https://www.qwencloud.com/models/qwen3.8-max
+  # Official function-calling docs: https://docs.qwencloud.com/developer-guides/text-generation/function-calling
   - id: qwen/qwen3.8-max
     provider_model_id: qwen3.8-max
     pricing:
@@ -30,6 +31,7 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 6
+    capabilities: [tools]
   - id: qwen/qwen3.7-max
     provider_model_id: qwen3.7-max
     pricing:
@@ -111,6 +113,23 @@ models:
         no_cache: 0.248
       output_tokens:
         text: 1.485
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.04
+      output_tokens:
+        text: 0.4
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.28
+        cache_write: 0
+      output_tokens:
+        text: 4.4
 status: active
 weight: 1
 submitted_at: 2026-05-25

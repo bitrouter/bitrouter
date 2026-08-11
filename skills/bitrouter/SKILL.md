@@ -51,29 +51,9 @@ Continue to §2 (Install). Skip the Cloud paths below.
 
 ### If Cloud — four entry points
 
-1. **Web playground (zero install, fastest demo).** Send the user to <https://bitrouter.ai> → sign up → top up credits via Stripe → use the in-browser playground. No code changes needed.
+Each is written up in full (dashboard URLs, credit model, key rotation) in `references/cloud-setup.md`, keyed A-D.
 
-2. **API key in their SDK (most common production path).** On <https://bitrouter.ai> → Dashboard → API Keys → mint a `brk_*` key. Then in their code:
-
-   ```python
-   from openai import OpenAI
-   client = OpenAI(
-       base_url="https://api.bitrouter.ai/v1",
-       api_key="brk_...",
-   )
-   client.chat.completions.create(
-       model="openai/gpt-4o",
-       messages=[{"role": "user", "content": "hi"}],
-   )
-   ```
-
-   No local daemon installed. Works with the Anthropic SDK too — drop `/v1` from the base URL.
-
-3. **Permissionless wallet (Solana / EVM, no account).** Sign an SOL_EDDSA JWT with the user's wallet, hit `api.bitrouter.ai` directly, x402/MPP handles payment. Crypto-native flow; point the user at <https://bitrouter.ai> docs for details — don't try to script the JWT signing yourself.
-
-4. **Headless CLI (`bitrouter cloud login`).** RFC 8628 device-flow OAuth, persists the credential to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (auto-refreshed). When the credentials file is present, the local daemon auto-adds the `bitrouter` provider in zero-config mode, so every entitled model is routable as `bitrouter:<model-id>` against `localhost:4356` — no manual `brk_*` paste or `bitrouter.yaml` changes. An explicit `BITROUTER_API_KEY` remains authoritative for inference and bypasses that stored OAuth session; unset it to use the login credential. `bitrouter cloud --help` then drives the /v1/* management surface (keys / usage / billing / policy / budget / preset / byok). See `references/cloud-setup.md` path D.
-
-See `references/cloud-setup.md` for deeper detail (dashboard URLs, credit model, key rotation, wallet flow, CLI sign-in).
+1. **Web playground** (A) — zero install. <https://bitrouter.ai> → sign up → top up credits → use the in-browser playground. 2. **`brk_*` API key in their SDK** (B) — the production path. Mint at Dashboard → API Keys, then point any OpenAI- or Anthropic-shaped SDK at `https://api.bitrouter.ai/v1` (drop `/v1` for the Anthropic SDK). No daemon. 3. **Permissionless wallet** (C) — Solana/EVM, no account; x402/MPP handles payment. Point the user at the docs; do not script the JWT signing yourself. 4. **Headless CLI** (D) — `bitrouter cloud login`, RFC 8628 device flow. The credential persists and auto-refreshes, and the local daemon then auto-adds a `bitrouter` provider in zero-config mode, so entitled models are routable as `bitrouter:<model-id>` against `localhost:4356` — no `brk_*` paste, no config edit. An explicit `BITROUTER_API_KEY` overrides that stored session for inference; unset it to use the login credential. `bitrouter cloud --help` drives the management surface (keys / usage / billing / policy / budget / preset / byok).
 
 ## 2. Install (Local only)
 
@@ -93,7 +73,7 @@ Verify: `bitrouter --version`. If `command not found`, see `references/diagnose.
 
 ## 3. Run (Local only)
 
-**Guided onboarding.** Bare `bitrouter` (no subcommand) is the front door: a network-free credential probe launches a scripted wizard (credentials → harness → launch/serve/exit) when nothing is configured, or prints a one-line status + `bitrouter launch` hint when it already is (never re-onboards, never auto-spawns). `bitrouter init` re-runs it; every prompt has a flag, so `bitrouter init --yes [flags]` runs headlessly, emits the JSON envelope, never blocks, and scaffolds the starter `bitrouter.yaml` (`--force` overwrites, `--reset` clears credentials first). `--yes` reports-and-skips anything needing interactive OAuth (bare `--cloud-login`, provider PKCE/device) in `providers_skipped_interactive`. The two commands below remain the fast path.
+**Guided onboarding.** Bare `bitrouter` is the front door: a network-free credential probe launches the wizard when nothing is configured, or prints a one-line status plus a `bitrouter launch` hint when it already is. It never re-onboards and never auto-spawns. `bitrouter init` re-runs it; `--yes` runs it headlessly and scaffolds the starter `bitrouter.yaml`. Every prompt has a flag equivalent — see `references/cli.md` → *Setup helpers*. The two commands below remain the fast path.
 
 **Zero-config (BYOK).** Export any of the supported env vars and start the daemon. It auto-enables every provider whose key is present.
 
@@ -124,66 +104,23 @@ bitrouter config validate -c ./bitrouter.yaml   # CI-safe: exits non-zero if inv
 bitrouter start --config ./bitrouter.yaml
 ```
 
-Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory.
+Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory. `config validate` runs the real parse path (structure, `derives`, the SSRF gate) and is CI-safe — unset `${VAR}`s become warnings, so no secrets are needed. A JSON Schema for editor autocomplete ships at `dist/schema/bitrouter.config.schema.json`; see `references/cli.md` → *Setup helpers*.
 
-`bitrouter config validate` runs the real parse path — deserialization, `derives` resolution, and the upstream-URL (SSRF) gate — and exits non-zero on an invalid config. It does *not* load a JSON Schema; structural checking is what the parser enforces. Unset `${VAR}` references are substituted with a placeholder and reported as warnings, so it is safe to run in CI without secrets present.
+### Durable history (Local)
 
-Separately, a JSON Schema for the config is committed at `dist/schema/bitrouter.config.schema.json` (regenerated with `cargo run -p dist-helper -- generate-schema`). Add a `# yaml-language-server: $schema=…` header to a YAML config to get IDE autocomplete + inline validation against it.
-
-### Durable trajectory progress control (Local)
-
-Trajectory history is opt-in and task-neutral: it derives progress evidence
-from normal routed requests without task-data injection.
-
-```yaml
-trajectory:
-  enabled: true
-  retention_days: 30
-  outbox_batch_size: 100
-```
-
-Defaults are disabled / 30 days / 100 rows; retention must be positive and the
-batch must be 1–1000. BitRouter fails closed when a signed lock contains
-`progress_guard` but trajectory is disabled. Every trajectory setting is
-restart-only; reload rejects changes to activation, retention, or batch size
-and preserves last-known-good state. The ledger stores structural facts, fixed
-categories, counters, and digests—not prompts, credentials, tool arguments,
-file bodies, or private provider metadata.
-
-Operators use `bitrouter trajectory [--config <PATH>] inspect <EPISODE_ID>`,
-`replay <EPISODE_ID>`, and `prune --before <RFC3339> [--dry-run]`. Omitting
-`--config` uses the standard resolution chain; relative SQLite URLs are anchored
-to the selected config's home, never the caller's working directory. Persisted
-request/native-parent IDs are installation-keyed and owner-bound, while external
-wire/upstream/metering IDs are unchanged. A pending outbox row or non-terminal
-request preserves its episode; a continuation whose parent was already removed
-starts a new incomplete episode. Read `references/cli.md` → *Durable trajectory
-operations* before pruning or recovery.
-
-Responses provider continuation is always active and independent of trajectory:
-
-```yaml
-continuation:
-  retention_days: 30
-  prune_batch_size: 1000
-```
-
-Retention must be positive and the bounded prune batch must be 1–10000. Both
-settings are restart-only. Provider response IDs are stored only as
-authenticated ciphertext under a lazily created installation-private key;
-public Responses IDs use BitRouter's reserved `brc_` namespace.
+Two opt-in, restart-only subsystems record routed-request history: `trajectory` (task-neutral progress evidence, off by default) and `continuation` (Responses IDs, always on). Neither hot-reloads. Config keys, validation ranges, the privacy boundary, and `bitrouter trajectory inspect|replay|prune` are in `references/cli.md` → *Durable trajectory operations*.
 
 **Subscription / OAuth providers.** Different — local login, not env vars:
 
 ```bash
-bitrouter providers login claude-code       # Claude Pro/Max via Claude Code session
-bitrouter providers login openai-codex      # ChatGPT/Codex subscription
-bitrouter providers login github-copilot    # browser device flow, token stored on disk
-bitrouter providers login supergrok         # SuperGrok via the Grok CLI session (~/.grok)
-bitrouter providers login google-ai         # Google AI (Antigravity) via the `agy` CLI keyring session
+bitrouter providers login claude-code    # Claude Pro/Max, via the Claude Code session
+bitrouter providers login openai-codex   # ChatGPT/Codex subscription
+bitrouter providers login github-copilot # browser device flow
+bitrouter providers login supergrok      # SuperGrok, via the Grok CLI session
+bitrouter providers login google-ai      # Google AI (Antigravity), via the `agy` keyring
 ```
 
-Seed a BYOK provider (any that accepts a pasted key — `openai`, `anthropic`, `google`, `openrouter`, `opencode-*`) non-interactively with `--api-key sk-…` or `--key-stdin` (`printf %s "$KEY" | bitrouter providers login anthropic --key-stdin`). Both skip the method menu, conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method.
+BYOK providers can also be seeded non-interactively with `--api-key` or `--key-stdin`. Per-provider auth methods, env vars, and protocol notes are in `references/providers.md`.
 
 ## 4. Connect your SDK
 
@@ -204,33 +141,16 @@ Resolve a model name without making a request: `bitrouter route openai/gpt-4o`.
 
 ## 5. Origin MCP server
 
-BitRouter exposes its own tools (`complete`, `list_models`, `status`) over MCP. This is the **origin** server — it wraps BitRouter's routing core — and is **distinct** from the MCP gateway at `/mcp` (which proxies upstream MCP servers declared in `bitrouter.yaml`).
+BitRouter exposes its own tools (`complete`, `list_models`, `status`) over MCP. This is the **origin** server — it wraps BitRouter's routing core — and is **distinct** from the MCP gateway at `/mcp`, which proxies the upstream MCP servers declared in `bitrouter.yaml`.
 
 ```bash
-# stdio (default): talks to the local daemon at 127.0.0.1:4356
-bitrouter mcp serve
-
-# streamable HTTP: cloud backend, multi-tenant — clients supply their own Bearer header
-# no --token on the server side; each MCP client sets "Authorization: Bearer brk_..." in its remote config
-bitrouter mcp serve --transport http
-
-# stdio: origin AgentSkills server — skills_search/skills_get tools plus the
-# SEP-2640 methods (skills/list, skills/get, resources/*) over installed skills
-bitrouter mcp serve --backend skills
-
-# scaffold a spec-valid skill directory (writes ./demo/SKILL.md)
-bitrouter skills init demo
-
-# print the Claude/Cursor mcpServers config block
-bitrouter mcp install --client claude
-
-# merge non-destructively into an existing config file
-bitrouter mcp install --client claude --config ~/Library/Application\ Support/Claude/claude_desktop_config.json
+bitrouter mcp serve                      # stdio → local daemon (the default)
+bitrouter mcp install --client claude    # print the mcpServers config block
 ```
 
-Transport↔backend defaults: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai` (multi-tenant: each client sends its own `Authorization: Bearer` header; no server-side `--token` needed). HTTP server binds at `127.0.0.1:4357` and mounts at `/mcp-control`. For stdio→cloud, pass `--token brk_...` or `BITROUTER_TOKEN` (single-tenant).
+Transport picks the backend: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai`, multi-tenant, each client sending its own `Authorization: Bearer`. `--backend skills` serves installed skills over stdio.
 
-See `references/mcp-server.md` for all flags, tool JSON shapes, and deferred roadmap items.
+See `references/mcp-server.md` for every flag, the tool JSON shapes, and the transport↔backend matrix. `bitrouter skills list|init` is in `references/cli.md` → *Setup helpers*.
 
 ## 6. References
 
