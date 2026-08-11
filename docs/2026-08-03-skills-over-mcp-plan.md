@@ -531,8 +531,9 @@ Decided against per spec §12 — these are closed decisions, not a backlog.
   that fixing it also requires re-keying `RmcpExecutor`'s connection pool, which
   today keys by server name alone.
 - **Signed or attested skills.**
-- **Deprecating `bitrouter skills add`** — **frozen, not removed** (D5). It
-  stays working and supported; stop adding surface to it.
+- **Package-manager surface for `bitrouter skills`** — **removed** (D5).
+  `skills list` and `skills init` remain; external skill installers populate
+  the filesystem.
 
 ## Acceptance
 

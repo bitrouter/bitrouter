@@ -431,16 +431,18 @@ enum Command {
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
-    /// Spawn an ACP-compatible harness as a headless *sub-agent*, routed
-    /// through the BitRouter daemon by default. Pick a mode: `-p "<text>"`
-    /// streams one prompt as NDJSON then exits; `--serve` speaks ACP over
-    /// stdio for a GUI/manager; `--check` preflights the route. Pass `--direct`
-    /// to bypass daemon routing. (For an interactive native TUI use
-    /// `bitrouter launch`.)
+    /// Spawn an ACP-compatible harness as a headless *sub-agent*. Routing is
+    /// attempted by default when the harness supports headless redirection;
+    /// config-synthesis-only catalog agents warn and run direct. Pick a mode:
+    /// `-p "<text>"` streams one prompt as NDJSON then exits; `--serve`
+    /// speaks ACP over stdio for a GUI/manager; `--check` preflights the route.
+    /// Pass `--direct` to bypass daemon routing. (For an interactive native TUI
+    /// use `bitrouter launch`.)
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `pi-acp`) or a configured `agents:` entry. A
-        /// catalog id needs no config entry.
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
+        /// configured `agents:` entry. A catalog id needs no config entry; run
+        /// `--check` to see whether it will route or run direct in headless mode.
         agent: Option<String>,
         /// Send one prompt, stream NDJSON to stdout, then exit.
         #[arg(short = 'p', long, value_name = "TEXT")]
@@ -452,7 +454,8 @@ enum Command {
         #[arg(long, conflicts_with_all = ["prompt", "serve"])]
         check: bool,
         /// Do NOT route through the daemon — let the harness use its own
-        /// provider auth. Routing is on by default.
+        /// provider auth. Routing is attempted by default when the harness
+        /// supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Pin the harness's model (via its model env var / `-c model=`).
@@ -497,14 +500,14 @@ enum Command {
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
-    /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
-    /// billing, policies, and BYOK. Start with `cloud login`.
+    /// Manage your BitRouter Cloud account — sign in/out, namespaces, keys,
+    /// usage, requests, billing, policies, budgets, presets, and BYOK. Start
+    /// with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
     },
-    /// Install and manage Claude Code skills from GitHub, a git URL, or a
-    /// BitRouter registry.
+    /// Inspect installed Agent Skills and scaffold a local `SKILL.md`.
     Skills {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,
@@ -1345,8 +1348,9 @@ enum AcpCmd {
     Serve {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
-        /// or an entry under `agents:` in the config. A catalog id needs
-        /// no config entry.
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// will route or run direct.
         #[arg(long)]
         agent: String,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
@@ -1354,7 +1358,8 @@ enum AcpCmd {
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
         /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is on by default.
+        /// the harness use its own provider auth. Routing is attempted by
+        /// default when the harness supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Override the gateway base URL (else derived from `server.listen`).
@@ -1380,8 +1385,9 @@ enum AcpCmd {
     Prompt {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
-        /// or an entry under `agents:` in the config. A catalog id needs
-        /// no config entry.
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// will route or run direct.
         #[arg(long)]
         agent: String,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
@@ -1393,7 +1399,8 @@ enum AcpCmd {
         #[arg(long)]
         no_wait: bool,
         /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is on by default.
+        /// the harness use its own provider auth. Routing is attempted by
+        /// default when the harness supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Override the gateway base URL (else derived from `server.listen`).
