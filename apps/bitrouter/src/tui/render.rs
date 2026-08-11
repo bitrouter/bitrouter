@@ -116,6 +116,7 @@ pub fn status_bar(
     snapshot: &Snapshot,
     harness: &crate::harness::Harness,
     model: Option<&str>,
+    capability: Option<&str>,
 ) -> String {
     let name = harness.interactive_binary.unwrap_or(harness.id);
 
@@ -133,6 +134,21 @@ pub fn status_bar(
 
     if snapshot.daemon.is_none() {
         bar.push_str(" · daemon unreachable ");
+        return bar;
+    }
+    // Under `--tui` the #796 startup line is on screen for milliseconds — it
+    // prints before handover and the alternate screen hides the normal screen
+    // straight after — so the row is the only surface that can carry routing
+    // and gateway reach where anyone will read it.
+    //
+    // The caller decides *when*, by passing `Some` only during an opening
+    // dwell. An earlier attempt gated this on `requests == 0`, which reads
+    // daemon-wide: on a machine that had served anything at all, a fresh
+    // session skipped straight to metrics and never showed capability. Whether
+    // some other caller is busy has nothing to do with whether this user has
+    // read what their harness got.
+    if let Some(capability) = capability {
+        bar.push_str(&format!(" · routed · {capability} "));
         return bar;
     }
     if snapshot.summary.requests == 0 {
@@ -359,7 +375,7 @@ mod bar_tests {
         // grok's traffic never traverses the daemon, so no metering row will
         // ever exist for it. A blank cost field reads as broken; this reads as
         // true, which is the whole degradation rule.
-        let bar = status_bar(&busy(), harness("grok"), Some("grok-4.5"));
+        let bar = status_bar(&busy(), harness("grok"), Some("grok-4.5"), None);
         assert!(bar.contains("own-auth · not routed · not metered"), "{bar}");
         assert!(
             !bar.contains('$'),
@@ -373,6 +389,7 @@ mod bar_tests {
             &busy(),
             harness("claude-acp"),
             Some("anthropic/claude-sonnet-4-5"),
+            None,
         );
         assert!(bar.contains("claude"), "{bar}");
         assert!(bar.contains("anthropic/claude-sonnet-4-5"), "{bar}");
@@ -400,7 +417,7 @@ mod bar_tests {
         // The hedge now follows the scope the snapshot actually achieved.
         let mut unattributed = busy();
         unattributed.scope = crate::tui::snapshot::Scope::DaemonWide;
-        let bar = status_bar(&unattributed, harness("claude-acp"), None);
+        let bar = status_bar(&unattributed, harness("claude-acp"), None, None);
         assert!(
             bar.contains("(all callers)"),
             "daemon-wide numbers must always be hedged, minted token or not: {bar}"
@@ -408,7 +425,7 @@ mod bar_tests {
 
         let mut attributed = busy();
         attributed.scope = crate::tui::snapshot::Scope::Launch;
-        let bar = status_bar(&attributed, harness("claude-acp"), None);
+        let bar = status_bar(&attributed, harness("claude-acp"), None, None);
         assert!(
             !bar.contains("(all callers)"),
             "genuinely launch-scoped numbers must not be hedged: {bar}"
@@ -416,16 +433,56 @@ mod bar_tests {
     }
 
     #[test]
+    fn the_idle_row_carries_capability_because_nothing_else_can() {
+        // Under `--tui` the #796 startup line is on screen for milliseconds:
+        // it prints before handover, and entering the alternate screen hides
+        // the normal screen straight after. The row is the only surface that
+        // outlives that, so the pre-traffic state states routing and gateway
+        // reach — and yields the space to metrics once they exist.
+        let idle = Snapshot {
+            daemon: Some(daemon()),
+            ..Default::default()
+        };
+        let bar = status_bar(&idle, harness("claude-acp"), None, Some("tools ✓ skills ✓"));
+        assert!(bar.contains("routed"), "{bar}");
+        assert!(bar.contains("tools ✓ skills ✓"), "{bar}");
+
+        // The dwell is the caller's clock, not a function of daemon state: a
+        // machine that had already served something used to skip capability
+        // entirely, which is unrelated to whether *this* user has read it.
+        let busy_during_dwell = status_bar(
+            &busy(),
+            harness("claude-acp"),
+            None,
+            Some("tools ✓ skills ✓"),
+        );
+        assert!(
+            busy_during_dwell.contains("tools ✓ skills ✓"),
+            "a busy daemon must not suppress this session's capability: {busy_during_dwell}"
+        );
+
+        // Once the dwell ends the metrics win the space back.
+        let after = status_bar(&busy(), harness("claude-acp"), None, None);
+        assert!(!after.contains("tools ✓"), "{after}");
+        assert!(after.contains("req"), "{after}");
+
+        // An own-auth harness says its own thing and never claims gateways.
+        let own = status_bar(&idle, harness("grok"), None, None);
+        assert!(own.contains("not routed · not metered"), "{own}");
+        assert!(!own.contains("tools"), "{own}");
+    }
+
+    #[test]
     fn a_dead_daemon_and_an_idle_one_are_different_sentences() {
         let dead = Snapshot::default();
-        let bar = status_bar(&dead, harness("claude-acp"), None);
+        let bar = status_bar(&dead, harness("claude-acp"), None, None);
         assert!(bar.contains("daemon unreachable"), "{bar}");
 
         let idle = Snapshot {
             daemon: Some(daemon()),
             ..Default::default()
         };
-        let bar = status_bar(&idle, harness("claude-acp"), None);
+        let bar = status_bar(&idle, harness("claude-acp"), None, None);
         assert!(bar.contains("no requests yet"), "{bar}");
         assert!(!bar.contains("unreachable"), "{bar}");
     }

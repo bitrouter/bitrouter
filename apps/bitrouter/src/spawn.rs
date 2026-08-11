@@ -337,6 +337,10 @@ pub struct Prepared<'a> {
     pub launch_id: Option<String>,
     /// The model pinned for this launch, named in the hosted status row.
     pub model: Option<String>,
+    /// What the gateways delivered, for the hosted row to state while there
+    /// are no metrics yet. `None` for own-auth harnesses, which say their own
+    /// thing.
+    pub capability: Option<String>,
     /// Stamped before the child exists, so the exit summary's window covers
     /// exactly the wrapped session. Nothing between here and the spawn spends.
     pub session_start: chrono::DateTime<chrono::Utc>,
@@ -451,6 +455,8 @@ pub async fn prepare<'a>(
         source,
         launch_id: is_launch_token(&token).then(|| token.clone()),
         model: opts.model.clone(),
+        capability: (!matches!(harness.routing, crate::harness::Routing::OwnAuth))
+            .then(|| capability_summary(harness, &gateways, &Palette::none())),
         // Timestamp the wrapped session so the exit summary can attribute
         // spend to exactly this run of the agent.
         session_start: chrono::Utc::now(),
@@ -487,22 +493,39 @@ fn startup_line(
         return format!("{head} · own-auth · not routed · not metered");
     }
 
-    let mut line = format!("{head} · routed via bitrouter ({base_url})");
+    format!(
+        "{head} · routed via bitrouter ({base_url}) · {}",
+        capability_summary(harness, gateways, p)
+    )
+}
+
+/// What the gateways actually delivered to this harness, as one phrase.
+///
+/// Shared by the startup line and the hosted status row (#796, #782). Under
+/// `--tui` the startup line is on screen for milliseconds — entering the
+/// alternate screen hides the normal screen right after it prints — so the
+/// hosted row has to carry the same fact, and carrying it from the same
+/// function is what stops the two from drifting into disagreeing.
+pub(crate) fn capability_summary(
+    harness: &crate::harness::Harness,
+    gateways: &[crate::harness::McpServer],
+    p: &Palette,
+) -> String {
     let named = |name: &str| gateways.iter().any(|s| s.name == name);
     if harness.injects_mcp() {
-        line.push_str(&format!(
-            " · tools {} skills {}",
+        format!(
+            "tools {} skills {}",
             mark(named(crate::gateways::TOOLS_SERVER), p),
             mark(named(crate::gateways::SKILLS_SERVER), p),
-        ));
+        )
     } else {
-        line.push_str(&format!(
-            " · tools {} skills {} ({agent_id} has no MCP mechanism)",
+        format!(
+            "tools {} skills {} ({} has no MCP mechanism)",
             mark(false, p),
             mark(false, p),
-        ));
+            harness_id(harness),
+        )
     }
-    line
 }
 
 /// `✓` / `✗`, colored when the stream takes color. A missing capability is
@@ -596,6 +619,7 @@ pub async fn exec_hosted(prepared: Prepared<'_>) -> Result<()> {
         session_start,
         launch_id,
         model,
+        capability,
         ..
     } = prepared;
 
@@ -612,6 +636,7 @@ pub async fn exec_hosted(prepared: Prepared<'_>) -> Result<()> {
         harness,
         launch_id: launch_id.clone(),
         model,
+        capability,
     };
     let code = crate::tui::host::run(
         &binary.display().to_string(),

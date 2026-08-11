@@ -113,12 +113,18 @@ two things no unit test had:
    branches were then observed live: opencode attributed and unhedged, claude
    unattributed and hedged.
 
-2. **The #796 startup line is invisible under `--tui`.** It prints before
+2. **The #796 startup line was invisible under `--tui`.** It prints before
    handover, and entering the alternate screen hides the normal screen
-   immediately — so the one place capability is stated is on screen for
-   milliseconds, then gone until the session ends. Plain `launch` is
-   unaffected. Not yet fixed; the options are rendering it into the hosted
-   pane's first frame, or folding capability into the status row.
+   immediately — so the one place capability is stated was on screen for
+   milliseconds. **Fixed:** the status row now states routing and gateway
+   reach for the first 10 seconds, then yields the space to metrics. Both
+   surfaces build that phrase from one function, so they cannot drift.
+
+   The first attempt gated it on `requests == 0`, which reads *daemon-wide* —
+   so on a machine that had served anything at all, a fresh session skipped
+   straight to metrics and never showed capability. Caught by re-testing on a
+   daemon that already had traffic. The dwell is now a clock, which depends on
+   neither daemon state nor whether attribution landed.
 
 ## The gate (redefined)
 

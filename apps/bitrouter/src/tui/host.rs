@@ -57,6 +57,14 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(1);
 /// comes, and a session that waited for it would hang instead of exiting.
 const FINAL_DRAIN: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long the status row states routing and gateway reach before handing the
+/// space to metrics.
+///
+/// Long enough to read a line while the harness is still drawing its own first
+/// frame; short enough that it is never what you are looking at when you want
+/// a number.
+const CAPABILITY_DWELL: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Everything the host needs that is not the child process itself.
 pub struct HostContext<'a> {
     /// Config source, for the metering read behind the status row.
@@ -70,6 +78,8 @@ pub struct HostContext<'a> {
     pub launch_id: Option<String>,
     /// The model pinned for this launch, if any.
     pub model: Option<String>,
+    /// What the gateways delivered — stated in the row until metrics exist.
+    pub capability: Option<String>,
 }
 
 /// Host `command args…` with the status row pinned to the bottom line.
@@ -145,9 +155,11 @@ async fn hosted_loop(
     let mut snap = snapshot::poll(ctx.source, &ctx.socket, window, ctx.launch_id.as_deref()).await;
     let mut exit_code: Option<i32> = None;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
+    let opened = tokio::time::Instant::now();
 
     loop {
-        draw(&mut terminal, &mut pane, &snap, ctx)?;
+        let dwelling = opened.elapsed() < CAPABILITY_DWELL;
+        draw(&mut terminal, &mut pane, &snap, ctx, dwelling)?;
 
         tokio::select! {
             _ = ticker.tick() => {
@@ -183,7 +195,7 @@ async fn hosted_loop(
                     drain_deadline = Some(tokio::time::Instant::now() + FINAL_DRAIN);
                 }
                 None => {
-                    draw(&mut terminal, &mut pane, &snap, ctx)?;
+                    draw(&mut terminal, &mut pane, &snap, ctx, false)?;
                     return Ok(exit_code.unwrap_or(0));
                 }
             },
@@ -192,7 +204,7 @@ async fn hosted_loop(
             _ = tokio::time::sleep_until(
                 drain_deadline.unwrap_or_else(|| tokio::time::Instant::now() + TICK),
             ), if drain_deadline.is_some() => {
-                draw(&mut terminal, &mut pane, &snap, ctx)?;
+                draw(&mut terminal, &mut pane, &snap, ctx, false)?;
                 return Ok(exit_code.unwrap_or(0));
             }
             input = futures::StreamExt::next(&mut events) => match input {
@@ -254,11 +266,17 @@ fn draw(
     pane: &mut PtyPane,
     snap: &Snapshot,
     ctx: &HostContext<'_>,
+    dwelling: bool,
 ) -> Result<()> {
     let no_color = std::env::var_os("NO_COLOR").is_some();
     let lines = pane.backend.lines(no_color);
     let scrolled = pane.backend.is_scrolled();
-    let bar = render::status_bar(snap, ctx.harness, ctx.model.as_deref());
+    let bar = render::status_bar(
+        snap,
+        ctx.harness,
+        ctx.model.as_deref(),
+        ctx.capability.as_deref().filter(|_| dwelling),
+    );
     terminal.draw(|frame| {
         let [body, status] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
