@@ -8,6 +8,7 @@
 //! gone are different facts, so they are different [`Mode`]s.
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::metering::store::{RateMetrics, RequestRow, SpendSummary, TimeWindow};
 
@@ -148,8 +149,24 @@ pub async fn poll(
     }
 }
 
+/// Bound on the control-socket probe.
+///
+/// `send_command` has no timeout of its own, and this runs inline in the
+/// render loop: a daemon that accepts the connection but never answers — busy,
+/// half-dead, paused under a debugger — would otherwise freeze the view and,
+/// in hosted mode, stop forwarding keystrokes to the child. The surface is
+/// least useful exactly when the daemon is misbehaving, so it must never wait
+/// on one.
+const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+
 async fn daemon_state(socket: &Path) -> Option<DaemonState> {
-    match crate::daemon::send_command(socket, &crate::daemon::DaemonCommand::Status).await {
+    let probe = crate::daemon::send_command(socket, &crate::daemon::DaemonCommand::Status);
+    let Ok(response) = tokio::time::timeout(DAEMON_PROBE_TIMEOUT, probe).await else {
+        // Unresponsive reads as absent: the header then says the daemon is not
+        // answering, which is true and more useful than a frozen frame.
+        return None;
+    };
+    match response {
         Ok(crate::daemon::DaemonResponse::Status {
             pid,
             listen,

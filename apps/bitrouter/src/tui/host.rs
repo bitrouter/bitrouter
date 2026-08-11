@@ -155,6 +155,7 @@ async fn hosted_loop(
     let mut snap = snapshot::poll(ctx.source, &ctx.socket, window, ctx.launch_id.as_deref()).await;
     let mut exit_code: Option<i32> = None;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
+    let mut signals = super::watch::ShutdownSignals::install()?;
     let opened = tokio::time::Instant::now();
 
     loop {
@@ -168,18 +169,27 @@ async fn hosted_loop(
             // The child owns Ctrl-C; these are the signals that would
             // otherwise leave a raw-mode shell behind, since a panic hook
             // never runs for them.
-            _ = super::watch::shutdown_signal() => {
+            _ = signals.recv() => {
                 pane.kill();
                 return Ok(exit_code.unwrap_or(130));
             }
             event = rx.recv() => match event {
                 Some(HostEvent::Output(bytes)) => {
-                    // OSC-52 is peeled out and re-emitted verbatim so the
-                    // outer terminal — not our grid — performs the copy.
-                    for sequence in pane.feed(&bytes) {
-                        let mut out = std::io::stdout();
-                        let _ = out.write_all(&sequence);
-                        let _ = out.flush();
+                    feed_output(&mut pane, &bytes);
+                    // Coalesce: a child streaming faster than we can render
+                    // (a large `cat`, a verbose build) would otherwise queue
+                    // one full redraw per read, falling further behind while
+                    // the unbounded channel grows. Drain what has already
+                    // arrived and draw the result once.
+                    while let Ok(event) = rx.try_recv() {
+                        match event {
+                            HostEvent::Output(more) => feed_output(&mut pane, &more),
+                            HostEvent::Exited(code) => {
+                                exit_code = Some(code.unwrap_or(0));
+                                drain_deadline =
+                                    Some(tokio::time::Instant::now() + FINAL_DRAIN);
+                            }
+                        }
                     }
                 }
                 Some(HostEvent::Exited(code)) => {
@@ -208,7 +218,7 @@ async fn hosted_loop(
                 return Ok(exit_code.unwrap_or(0));
             }
             input = futures::StreamExt::next(&mut events) => match input {
-                Some(Ok(event)) => forward(&mut pane, event, cols, rows),
+                Some(Ok(event)) => forward(&mut pane, event, rows),
                 Some(Err(e)) => return Err(e.into()),
                 None => return Ok(exit_code.unwrap_or(0)),
             },
@@ -216,9 +226,21 @@ async fn hosted_loop(
     }
 }
 
+/// Feed one chunk into the emulator, relaying any OSC-52 the child emitted.
+///
+/// The clipboard sequence is re-emitted verbatim to the outer terminal — that
+/// terminal, not our grid, is what actually owns the system clipboard.
+fn feed_output(pane: &mut PtyPane, bytes: &[u8]) {
+    for sequence in pane.feed(bytes) {
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&sequence);
+        let _ = out.flush();
+    }
+}
+
 /// Send one outer-terminal event to the child. Every key goes through
 /// unmodified; the host claims none of them.
-fn forward(pane: &mut PtyPane, event: Event, cols: u16, rows: u16) {
+fn forward(pane: &mut PtyPane, event: Event, rows: u16) {
     match event {
         Event::Key(key) => {
             if let Some(bytes) = pane.backend.encode_key(&key) {
@@ -235,6 +257,12 @@ fn forward(pane: &mut PtyPane, event: Event, cols: u16, rows: u16) {
             pane.resize(new_cols, pane_rows(new_rows));
         }
         Event::Mouse(mouse) => {
+            // The child's grid is one row shorter than the screen. A click on
+            // the status row would encode a row the child does not have, so
+            // the host swallows it — the row is ours, not the harness's.
+            if mouse.row >= pane_rows(rows) {
+                return;
+            }
             let wheel = matches!(
                 mouse.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -255,7 +283,6 @@ fn forward(pane: &mut PtyPane, event: Event, cols: u16, rows: u16) {
                 pane.backend
                     .scroll(matches!(mouse.kind, MouseEventKind::ScrollUp), false);
             }
-            let _ = (cols, rows);
         }
         _ => {}
     }

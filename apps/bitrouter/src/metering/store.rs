@@ -589,11 +589,17 @@ impl MeteringStore {
         window: TimeWindow,
     ) -> Result<SpendSummary> {
         let start = window_start(window).to_rfc3339();
-        let charges: Vec<i64> = requests::Entity::find()
+        let mut query = requests::Entity::find()
             .select_only()
             .column(requests::Column::EstimatedChargeMicroUsd)
             .filter(requests::Column::LaunchId.eq(launch_id))
-            .filter(requests::Column::CreatedAt.gte(start))
+            .filter(requests::Column::CreatedAt.gte(start));
+        // Every other windowed query honours `Custom`'s end; omitting it here
+        // would silently over-report for any caller that passes a real bound.
+        if let TimeWindow::Custom { end, .. } = window {
+            query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
+        }
+        let charges: Vec<i64> = query
             .into_tuple()
             .all(&self.db)
             .await

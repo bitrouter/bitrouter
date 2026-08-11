@@ -43,6 +43,21 @@ pub struct PtyPane {
     killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
     scanner: Osc52Scanner,
     size: (u16, u16),
+    /// Set by the reaper thread once `wait` returns.
+    reaped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for PtyPane {
+    /// A hosted child must not outlive its host.
+    ///
+    /// The loop kills explicitly on the signal path, but every other exit —
+    /// a draw error, an input-stream error, stdin EOF — used to drop the pane
+    /// with the child still running, leaving it alive until process teardown
+    /// closed the master. A harness that ignores SIGHUP would keep running,
+    /// possibly mid-request against a paid API.
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 impl PtyPane {
@@ -95,8 +110,11 @@ impl PtyPane {
         // captured at all, which `launch` promises to propagate.
         let killer = child.clone_killer();
         let exit_tx = tx.clone();
+        let reaped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reaped_flag = std::sync::Arc::clone(&reaped);
         std::thread::spawn(move || {
             let status = child.wait().ok().map(|status| status.exit_code() as i32);
+            reaped_flag.store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = exit_tx.send(HostEvent::Exited(status));
         });
 
@@ -132,6 +150,7 @@ impl PtyPane {
             killer,
             scanner: Osc52Scanner::default(),
             size: (cols, rows),
+            reaped,
         })
     }
 
@@ -171,8 +190,12 @@ impl PtyPane {
         });
     }
 
-    /// Kill the child (teardown).
+    /// Kill the child (teardown). No-op once the reaper has reported an exit —
+    /// signalling a reaped pid can reach an unrelated process after reuse.
     pub fn kill(&mut self) {
+        if self.reaped.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let _ = self.killer.kill();
     }
 }

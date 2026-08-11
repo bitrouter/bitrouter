@@ -325,8 +325,6 @@ pub struct Prepared<'a> {
     pub launch: ChildLaunch,
     /// Args forwarded verbatim, appended after [`ChildLaunch::args_prefix`].
     pub agent_args: Vec<String>,
-    /// The gateway base URL the harness was pointed at.
-    pub base_url: String,
     /// The catalog harness being launched.
     pub harness: &'static crate::harness::Harness,
     /// Config source, for the exit summary's metering read.
@@ -450,7 +448,6 @@ pub async fn prepare<'a>(
         binary,
         launch,
         agent_args: opts.agent_args,
-        base_url,
         harness,
         source,
         launch_id: is_launch_token(&token).then(|| token.clone()),

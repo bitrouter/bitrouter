@@ -117,6 +117,7 @@ pub(super) async fn event_loop(
     cursor.settle(&snap.rows);
     let mut echo = Echo::default();
     let mut help = false;
+    let mut signals = ShutdownSignals::install()?;
 
     loop {
         terminal.draw(|frame| draw(frame, &snap, &cursor, &echo, help))?;
@@ -129,7 +130,7 @@ pub(super) async fn event_loop(
             // A signal here would bypass the panic hook, so the loop owns its
             // own exit: SIGTERM/SIGINT end it the same way `q` does, and
             // `run_watch` restores the terminal on the way out.
-            _ = shutdown_signal() => return Ok(()),
+            _ = signals.recv() => return Ok(()),
             event = futures::StreamExt::next(&mut events) => {
                 match event {
                     Some(Ok(Event::Key(key))) => {
@@ -164,28 +165,48 @@ pub(super) async fn event_loop(
     }
 }
 
-/// Ctrl-C in raw mode arrives as a key event, but a `kill` or a closed
-/// terminal window does not — and a panic hook never runs for either. This is
-/// the branch that keeps those paths from leaving a raw-mode shell behind.
-pub(crate) async fn shutdown_signal() {
-    {
+/// Signals that must end the view rather than kill the process outright.
+///
+/// Raw mode turns Ctrl-C into a key event, but an *external* signal — `kill`,
+/// a supervisor stopping the daemon, a closed terminal window sending SIGHUP —
+/// bypasses both that and the panic hook. Without this the process dies with
+/// the terminal still in raw mode inside the alternate screen, which the
+/// module doc rightly calls worse than never drawing at all.
+///
+/// SIGINT is registered too: `kill -2` is a common supervisor default, and
+/// leaving it on the default disposition means the one signal users reach for
+/// most is the one that breaks their shell.
+pub(crate) struct ShutdownSignals {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+    hangup: tokio::signal::unix::Signal,
+}
+
+impl ShutdownSignals {
+    /// Register once, before the loop.
+    ///
+    /// Constructing these per iteration — the obvious `select!` spelling —
+    /// silently drops signals: a `Signal` only observes what arrives after it
+    /// exists, and the first registration has already replaced the default
+    /// disposition. A signal delivered while the loop was awaiting some other
+    /// branch (a one-second store poll, an `$EDITOR` that ran for minutes)
+    /// would then neither kill the process nor end the loop.
+    pub(crate) fn install() -> std::io::Result<Self> {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut term = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(_) => return std::future::pending().await,
-        };
-        let mut hup = match signal(SignalKind::hangup()) {
-            Ok(s) => s,
-            Err(_) => return std::future::pending().await,
-        };
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = hup.recv() => {}
-        }
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+            hangup: signal(SignalKind::hangup())?,
+        })
     }
-    #[cfg(not(unix))]
-    {
-        std::future::pending::<()>().await
+
+    /// Resolve when any of them fires.
+    pub(crate) async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+            _ = self.hangup.recv() => {}
+        }
     }
 }
 

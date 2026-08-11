@@ -192,6 +192,22 @@ impl TerminalBackend for AlacrittyBackend {
                 continue;
             }
             let cell = &indexed.cell;
+            // A wide glyph (CJK, emoji) occupies two grid columns: the glyph
+            // itself plus a `WIDE_CHAR_SPACER` holding a space. Emitting the
+            // spacer as its own span renders three display columns for a
+            // two-column glyph, shifting the rest of the line right — and the
+            // ASCII `--help` fixtures never catch it. The spacer is the
+            // glyph's second half, so the terminal draws it; we must not.
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
+            {
+                // Zero-width, not skipped: the matrix is pre-filled with
+                // spaces, so `continue` would leave a real space here and the
+                // glyph would still render three columns wide.
+                cells[row][col] = Span::raw("");
+                continue;
+            }
             let mut style = if no_color {
                 Style::default()
             } else {
@@ -221,7 +237,12 @@ impl TerminalBackend for AlacrittyBackend {
             {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            cells[row][col] = Span::styled(cell.c.to_string(), style);
+            // Combining marks live beside the base character rather than in
+            // their own cell; dropping them silently mangles accented and
+            // Indic text.
+            let mut text = String::from(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
+            cells[row][col] = Span::styled(text, style);
         }
         cells.into_iter().map(TuiLine::from).collect()
     }
@@ -1132,6 +1153,38 @@ mod fixture_replay {
             "expected a recording per launch-supported harness, found {checked} — \
              see fixtures/README.md for how to record one"
         );
+    }
+
+    #[test]
+    fn a_wide_glyph_occupies_two_columns_not_three() {
+        // A CJK glyph is stored as the character plus a WIDE_CHAR_SPACER. If
+        // the spacer is emitted as its own span the line renders one column
+        // too wide *per glyph*, shifting everything after it — box-drawing UIs
+        // tear and line tails fall off the pane. The `--help` fixtures are
+        // pure ASCII and cannot catch this.
+        let backend = replay("wide_chars.vt", 20, 4);
+        let first = &backend.lines(true)[0];
+        let text: String = first.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // The bug's signature is a stray space between the two glyphs — the
+        // spacer cell rendered as content.
+        assert!(
+            text.starts_with("ASCII|你好|end"),
+            "wide glyphs must be contiguous; rendered: {text:?}"
+        );
+        // Display width, not char count: a wide glyph is two columns and its
+        // spacer contributes none, so the row still measures `cols`.
+        let width: usize = text
+            .chars()
+            .map(|c| {
+                if ('\u{1100}'..='\u{9fff}').contains(&c) {
+                    2
+                } else {
+                    1
+                }
+            })
+            .sum();
+        assert_eq!(width, 20, "row must stay exactly cols wide: {text:?}");
     }
 
     #[test]
