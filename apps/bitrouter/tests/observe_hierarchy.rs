@@ -63,6 +63,12 @@ fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) 
         .init();
 }
 
+/// The instrumentation scope every exported bitrouter span must carry. This
+/// name is OTLP wire contract: backend dashboards and collector rules select
+/// on it, so it is asserted here rather than left to drift with the crate that
+/// happens to host the exporter.
+const EXPECTED_SCOPE_NAME: &str = "io.bitrouter.observe";
+
 /// Decode OTLP/HTTP+protobuf trace exports from the wiremock collector.
 /// The config below turns OTLP metric export off, so the collector only
 /// ever receives `ExportTraceServiceRequest` bodies — every captured
@@ -70,20 +76,31 @@ fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) 
 async fn collect_exported_trace_spans(
     collector: &MockServer,
 ) -> Vec<opentelemetry_proto::tonic::trace::v1::Span> {
+    collect_exported_trace_scopes(collector)
+        .await
+        .into_iter()
+        .flat_map(|scope_spans| scope_spans.spans)
+        .collect()
+}
+
+/// Same decode as [`collect_exported_trace_spans`], but keeps the
+/// `scope_spans` wrapper so the caller can assert on the instrumentation
+/// scope (`name` / `version`) the exporter stamped onto the batch.
+async fn collect_exported_trace_scopes(
+    collector: &MockServer,
+) -> Vec<opentelemetry_proto::tonic::trace::v1::ScopeSpans> {
     use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
     use prost::Message;
     let requests = collector.received_requests().await.unwrap_or_default();
-    let mut spans = Vec::new();
+    let mut scopes = Vec::new();
     for req in &requests {
         let parsed = ExportTraceServiceRequest::decode(req.body.as_slice())
             .expect("every collector body is a trace export (metric export is off)");
         for resource_spans in parsed.resource_spans {
-            for scope_spans in resource_spans.scope_spans {
-                spans.extend(scope_spans.spans);
-            }
+            scopes.extend(resource_spans.scope_spans);
         }
     }
-    spans
+    scopes
 }
 
 /// Poll until the collector has received a SERVER span, or the budget
@@ -253,6 +270,32 @@ plugins:
     // window, so a genuine failure is distinguishable from a slow runner.
     if !exported {
         let _ = server_span_exported(&otlp_collector).await;
+    }
+
+    // ── instrumentation scope is wire contract ──
+    // `scope.name` is what backends and collector rules select bitrouter's
+    // spans by; renaming it silently breaks every dashboard built on it. The
+    // version is stamped from the exporter crate's `CARGO_PKG_VERSION`, which
+    // is the workspace version this test crate also builds under.
+    let scopes = collect_exported_trace_scopes(&otlp_collector).await;
+    assert!(
+        !scopes.is_empty(),
+        "collector must have received at least one scope_spans batch"
+    );
+    for scope_spans in &scopes {
+        let scope = scope_spans
+            .scope
+            .as_ref()
+            .expect("every exported batch carries an instrumentation scope");
+        assert_eq!(
+            scope.name, EXPECTED_SCOPE_NAME,
+            "exported instrumentation scope name is OTLP wire contract"
+        );
+        assert_eq!(
+            scope.version,
+            env!("CARGO_PKG_VERSION"),
+            "instrumentation scope version must track the workspace crate version"
+        );
     }
 
     let spans = collect_exported_trace_spans(&otlp_collector).await;

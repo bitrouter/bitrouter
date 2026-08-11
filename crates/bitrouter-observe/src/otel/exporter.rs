@@ -200,6 +200,11 @@ impl OtelExporter {
         // conventions snapshot the exporter targets.
         //
         // Spec: https://opentelemetry.io/docs/specs/otel/glossary/#instrumentation-scope
+        //
+        // wire-visible: do not rename — this string lands on every exported
+        // span as `scope.name`, and backend dashboards plus collector routing
+        // rules select on it. Renaming it (e.g. to follow the crate this
+        // module happens to live in) silently breaks them.
         let scope = InstrumentationScope::builder("io.bitrouter.observe")
             .with_version(env!("CARGO_PKG_VERSION"))
             .with_schema_url(SCHEMA_URL)
@@ -1307,6 +1312,9 @@ mod hop_tests {
             .with_sampler(Sampler::AlwaysOn)
             .with_id_generator(RandomIdGenerator::default())
             .build();
+        // wire-visible: do not rename — deliberately mirrors the production
+        // scope name above so the two stay recognisably paired; the `.test`
+        // suffix keeps captured test spans distinguishable from real exports.
         let scope = InstrumentationScope::builder("io.bitrouter.observe.test").build();
         let tracer = provider.tracer_with_scope(scope);
 

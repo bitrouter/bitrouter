@@ -59,6 +59,10 @@ impl OtelMetrics {
             .with_resource(resource)
             .build();
 
+        // wire-visible: do not rename — the meter name is exported as the
+        // instrumentation scope on every metric point, so alerting rules and
+        // dashboards filter on it. It is independent of the crate that hosts
+        // this module.
         let meter: Meter = provider.meter("bitrouter");
 
         let request_counter = meter
