@@ -117,6 +117,19 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 `bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `eval` / `optimize` / `trajectory` / `providers` / `agents` / `launch` / `spawn` / `cloud` / `skills` / `mcp` / `workflow-state` / `update` / `acp`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. `launch` runs a harness as an interactive native TUI; `spawn` (and its `acp serve|prompt` aliases) runs one as a headless ACP sub-agent. See `apps/bitrouter/src/main.rs`.
 
+### Observability surfaces (`apps/bitrouter/src/tui/`)
+
+Two surfaces share one renderer and one data layer:
+
+- `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
+- `bitrouter launch --tui` — the same readout on a status row pinned under a harness hosted in a VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`).
+
+The emulator exists because harnesses differ on whether they take the alternate screen, and an alt-screen app clobbers a `DECSTBM`-reserved line — so guaranteeing the row means owning the screen. That cost is why `--tui` is opt-in: scrollback moves from the user's terminal to BitRouter.
+
+`spawn::prepare` builds the child once; `exec_inherited` and `exec_hosted` differ only in how it is run, which is what makes "identical env and args" structural rather than a test promise. Terminal-identity env may differ, bounded by `HOSTED_ENV_SET` / `HOSTED_ENV_MAY_ADD` / `HOSTED_ENV_UNSET`.
+
+Verification is layered — input conformance against `cat -v`, replay of recorded harness output, and a manual pass for what needs hands. See [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md), which also states what the automated layers structurally cannot catch.
+
 ## Where To Extend The System
 
 ### Add or update a provider
