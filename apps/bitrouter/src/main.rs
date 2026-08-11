@@ -185,6 +185,13 @@ enum Command {
     },
     /// Report a running daemon's status (pid, listen address, model count).
     /// Prints `running: no` when no daemon is reachable.
+    ///
+    /// With `--watch`, becomes a live view of what the router is doing: a
+    /// stream of settled requests (model, the provider that actually served,
+    /// tokens, cost, latency) with a spend rollup. Read-only apart from `r`
+    /// (reload) and `e` (open `bitrouter.yaml` in `$EDITOR`); press `?` for
+    /// keys. Redirected or piped, `--watch` prints one snapshot and exits, so
+    /// it stays scriptable.
     Status {
         /// Path to `bitrouter.yaml` (used to locate the control socket).
         #[arg(short, long)]
@@ -192,6 +199,9 @@ enum Command {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
+        /// Watch live instead of printing one status line.
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
@@ -379,10 +389,8 @@ enum Command {
     ///
     /// Harnesses that route by env/args (claude, codex) are launched without
     /// touching any config file. Those that can only be routed by config
-    /// (opencode, pi, hermes, openclaw) get one synthesized under
-    /// `.bitrouter/launch/` — your own agent config is still never modified.
-    /// The own-auth clients (grok, agy) are subscription sessions the daemon
-    /// borrows, so they launch unrouted.
+    /// (opencode, pi) get one synthesized under `.bitrouter/launch/` — your
+    /// own agent config is still never modified.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
@@ -390,9 +398,10 @@ enum Command {
     /// binary is offered for install via its official native installer; other
     /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch: `claude`, `codex`, `opencode`, `pi`,
-        /// `hermes`, `openclaw`, `grok`, or `agy` (the catalog id
-        /// `antigravity` also resolves to `agy`).
+        /// Which agent harness to launch: `claude`, `codex`, `opencode`, or
+        /// `pi` (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also
+        /// resolve). `hermes`, `openclaw`, `grok`, and `agy` are no longer
+        /// launch-supported — run them directly or via `bitrouter spawn`.
         #[arg(short, long, value_name = "ID")]
         agent: String,
         /// Pin the harness's model to a daemon-routable id (e.g. the explicit
@@ -426,6 +435,15 @@ enum Command {
         /// without launching the agent.
         #[arg(long)]
         check: bool,
+        /// Host the harness inside BitRouter's terminal, with a persistent
+        /// status row underneath showing model, provider, tokens, and spend.
+        ///
+        /// Opt-in, and not the recommended daily driver: hosting moves
+        /// scrollback from your terminal to BitRouter, so terminal search and
+        /// selection no longer see the agent's output. Drop the flag to go
+        /// back to launching the harness directly.
+        #[arg(long, conflicts_with = "check")]
+        tui: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -1546,8 +1564,15 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&reload(&socket).await?)?;
             Ok(())
         }
-        Command::Status { config, socket } => {
+        Command::Status {
+            config,
+            socket,
+            watch,
+        } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            if watch {
+                return watch_status(config.as_deref(), &socket).await;
+            }
             output.emit(&status(&socket).await?)?;
             Ok(())
         }
@@ -1665,6 +1690,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_install,
             no_start,
             check,
+            tui,
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
@@ -1676,7 +1702,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 no_start,
                 check,
             };
-            run_launch(config.as_deref(), opts, output).await
+            run_launch(config.as_deref(), opts, tui, output).await
         }
         Command::Spawn {
             agent,
@@ -1724,7 +1750,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     no_start,
                     check,
                 };
-                return run_launch(config.as_deref(), opts, output).await;
+                return run_launch(config.as_deref(), opts, false, output).await;
             }
 
             let Some(agent) = agent else {
@@ -3158,6 +3184,25 @@ async fn status(socket: &Path) -> Result<StatusReport> {
             .await;
     }
     Ok(report)
+}
+
+/// `bitrouter status --watch` — the live view.
+///
+/// A non-terminal stdout gets one plain-text snapshot instead of a refusal:
+/// piping this is how people will script against it, and the whole point of
+/// the flag is that it reports rather than gatekeeps.
+async fn watch_status(config: Option<&Path>, socket: &Path) -> Result<()> {
+    use std::io::IsTerminal;
+    let source = bitrouter::paths::resolve_config(config)?;
+    let window = bitrouter::metering::store::TimeWindow::Today;
+    if !std::io::stdout().is_terminal() {
+        print!(
+            "{}",
+            bitrouter::tui::oneshot_text(&source, socket, window).await
+        );
+        return Ok(());
+    }
+    bitrouter::tui::run_watch(&source, socket, window).await
 }
 
 async fn route(
@@ -5142,6 +5187,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
 async fn run_launch(
     config: Option<&std::path::Path>,
     opts: bitrouter::spawn::SpawnOptions,
+    tui: bool,
     output: &bitrouter::output::Output,
 ) -> Result<()> {
     let source = bitrouter::paths::resolve_config(config)?;
@@ -5153,6 +5199,30 @@ async fn run_launch(
             Ok(())
         } else {
             std::process::exit(report.exit_code());
+        }
+    } else if tui {
+        // Hosting needs a real screen to attach to, and every failure here
+        // names the escape hatch: the flag is the only thing between the user
+        // and a working launch.
+        use std::io::IsTerminal;
+        if !std::io::stdout().is_terminal() {
+            anyhow::bail!(
+                "`--tui` needs a terminal to draw in (stdout is redirected). Run \
+                 `bitrouter launch` without `--tui`."
+            );
+        }
+        // A `cfg!(unix)` *runtime* check would not do: `exec_hosted` only
+        // exists under the same gate, so the call has to disappear at compile
+        // time or Windows fails to build.
+        #[cfg(not(unix))]
+        {
+            let _ = (&source, &cfg, opts);
+            anyhow::bail!("`--tui` is unix-only today. Run `bitrouter launch` without `--tui`.");
+        }
+        #[cfg(unix)]
+        {
+            let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
+            bitrouter::spawn::exec_hosted(prepared).await
         }
     } else {
         bitrouter::spawn::run(&source, &cfg, opts).await

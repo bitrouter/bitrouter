@@ -187,6 +187,7 @@ impl SettlementRecorder for MeteringRecorder {
             request_id: ctx.request_id.clone(),
             user_id: ctx.caller.user_id().to_string(),
             api_key_id: ctx.caller.api_key_id().to_string(),
+            launch_id: ctx.caller.launch_id().map(str::to_string),
             model_id: ctx.model_id.clone(),
             provider_id: ctx.provider_id.clone(),
             prompt_tokens: ctx.prompt_tokens,

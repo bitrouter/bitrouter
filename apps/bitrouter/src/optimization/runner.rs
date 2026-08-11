@@ -1484,6 +1484,37 @@ mod tests {
         Ok(())
     }
 
+    /// Timeouts here are sized so the test measures the runner, not the
+    /// machine.
+    ///
+    /// A **success**-path deadline exists only to bound a hang, so it is set
+    /// far above any plausible scheduling delay: if a `printf` cannot finish
+    /// inside [`GENEROUS_TIMEOUT_SECS`], the host is broken and a red test is
+    /// the correct outcome. Sizing these to "about how long it should take"
+    /// is what makes a suite flaky under parallel load — the assertion then
+    /// reports CPU contention rather than a defect.
+    #[cfg(not(windows))]
+    const GENEROUS_TIMEOUT_SECS: u64 = 60;
+
+    /// The **timeout** path is the one place a short deadline is the subject
+    /// of the test, so it stays short — and the child instead sleeps far
+    /// longer than the runner should ever let it, so "we cut it short" is
+    /// unmistakable rather than a narrow tolerance.
+    #[cfg(not(windows))]
+    const TIMEOUT_UNDER_TEST_SECS: u64 = 1;
+
+    /// How long the timed-out child would sleep if nothing stopped it.
+    #[cfg(not(windows))]
+    const UNINTERRUPTED_CHILD_SECS: u64 = 120;
+
+    /// Upper bound on the timed-out run. Legitimate teardown after the
+    /// deadline is bounded by `terminate_workflow_tree` plus the 5s stream
+    /// drain in `run_workflow_command`, so ~7s is the honest worst case; this
+    /// sits well above that and *far* below [`UNINTERRUPTED_CHILD_SECS`], which
+    /// is what makes it a real assertion instead of a stopwatch.
+    #[cfg(not(windows))]
+    const TEARDOWN_CEILING_SECS: u64 = 30;
+
     #[cfg(not(windows))]
     #[tokio::test]
     async fn workflow_runner_uses_exact_argv_env_and_timeout_without_retry() -> anyhow::Result<()> {
@@ -1506,7 +1537,7 @@ mod tests {
             workflow: &WorkflowCommand {
                 command: success_command,
                 inputs: Vec::new(),
-                timeout_secs: 2,
+                timeout_secs: GENEROUS_TIMEOUT_SECS,
             },
             cwd: dir.path(),
             env: &BTreeMap::from([("BITROUTER_MODEL".into(), "@auto".into())]),
@@ -1518,20 +1549,20 @@ mod tests {
         assert_eq!(success.stdout, "@auto");
 
         #[cfg(unix)]
-        let timeout_command = vec!["/bin/sleep".into(), "5".into()];
+        let timeout_command = vec!["/bin/sleep".into(), UNINTERRUPTED_CHILD_SECS.to_string()];
         #[cfg(windows)]
         let timeout_command = vec![
             "powershell.exe".into(),
             "-NoProfile".into(),
             "-NonInteractive".into(),
             "-Command".into(),
-            "Start-Sleep -Seconds 5".into(),
+            format!("Start-Sleep -Seconds {UNINTERRUPTED_CHILD_SECS}"),
         ];
         let timeout = run_workflow_command(WorkflowRunRequest {
             workflow: &WorkflowCommand {
                 command: timeout_command,
                 inputs: Vec::new(),
-                timeout_secs: 1,
+                timeout_secs: TIMEOUT_UNDER_TEST_SECS,
             },
             cwd: dir.path(),
             env: &BTreeMap::new(),
@@ -1540,8 +1571,18 @@ mod tests {
         .await?;
         assert!(timeout.timed_out);
         assert_eq!(timeout.exit_code, None);
+        // The deadline cannot fire early, so this only rules out reporting a
+        // timeout without having waited for one.
         assert!(timeout.elapsed >= Duration::from_millis(900));
-        assert!(timeout.elapsed < Duration::from_secs(4));
+        // The property under test: the child was cut short rather than waited
+        // out. It would have slept for `UNINTERRUPTED_CHILD_SECS`.
+        assert!(
+            timeout.elapsed < Duration::from_secs(TEARDOWN_CEILING_SECS),
+            "timed-out run took {:?}, which is teardown gone wrong rather than a deadline",
+            timeout.elapsed
+        );
+        // The point of the test: a timeout must not be retried behind the
+        // caller's back.
         assert_eq!(timeout.launches, 1);
         assert_eq!(PathBuf::from(timeout.cwd), dir.path());
 
@@ -1561,7 +1602,7 @@ mod tests {
                         "run the eval".into(),
                     ],
                     inputs: Vec::new(),
-                    timeout_secs: 2,
+                    timeout_secs: GENEROUS_TIMEOUT_SECS,
                 },
                 cwd: dir.path(),
                 env: &routed_environment,
@@ -1583,7 +1624,7 @@ mod tests {
             workflow: &WorkflowCommand {
                 command: vec!["/bin/sh".into(), "-c".into(), "(sleep 0.05) &".into()],
                 inputs: Vec::new(),
-                timeout_secs: 2,
+                timeout_secs: GENEROUS_TIMEOUT_SECS,
             },
             cwd: dir.path(),
             env: &BTreeMap::new(),

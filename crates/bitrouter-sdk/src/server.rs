@@ -787,8 +787,20 @@ async fn handle(
     // `skip_auth` decides the starting caller: a synthesised local caller when
     // on, else a pre-auth anonymous placeholder for `AuthHook` to upgrade or
     // reject.
+    //
+    // On the `skip_auth` path only, a credential `bitrouter launch` minted
+    // tags the caller with its session, so per-launch spend is answerable on
+    // the zero-config install that cannot answer it any other way. This never
+    // grants anything — see `caller::launch_tag` — and a real key falls
+    // through it untouched into the `AuthHook` path below.
     let caller = if state.skip_auth {
-        CallerContext::local()
+        let authorization = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        match crate::caller::launch_tag(authorization) {
+            Some(launch_id) => CallerContext::local_launch(launch_id),
+            None => CallerContext::local(),
+        }
     } else {
         CallerContext::anonymous()
     };

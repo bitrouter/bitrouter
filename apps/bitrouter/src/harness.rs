@@ -398,6 +398,44 @@ impl Harness {
         }
     }
 
+    /// Whether `bitrouter launch` will host this harness.
+    ///
+    /// Separate from owning an [`interactive_binary`](Self::interactive_binary):
+    /// `hermes`, `openclaw`, `grok`, and `agy` still have one, and can still be
+    /// run directly or driven headlessly by `bitrouter spawn` — `launch` simply
+    /// no longer claims to support them.
+    ///
+    /// The reason is verification, not capability. `launch` promises routing,
+    /// gateway injection, and (under `--tui`) a hosted terminal, and each of
+    /// those promises has to be checked per harness against upstream releases
+    /// nobody here controls. Four is a surface we can actually keep honest;
+    /// eight was a claim we could not.
+    ///
+    /// `grok` and `agy` additionally remain **providers** — the daemon borrows
+    /// their subscription sessions to serve other requests — which is a
+    /// separate stack entirely and is untouched by this.
+    pub fn launch_supported(&self) -> bool {
+        matches!(self.id, "claude-acp" | "codex-acp" | "opencode" | "pi-acp")
+    }
+
+    /// Whether [`Self::launch_overlay`] can inject MCP servers (the
+    /// `bitrouter_tools` / `bitrouter_skills` gateways) into this harness.
+    ///
+    /// This is a *ceiling of the harness*, not of BitRouter: `pi` and
+    /// `openclaw` expose no MCP mechanism to inject into, and the own-auth
+    /// clients are not routed at all. `launch` states it before handover so a
+    /// user does not discover the gap when the tools simply aren't there.
+    ///
+    /// Kept in lockstep with `launch_overlay` by
+    /// `injects_mcp_matches_the_launch_overlay` — the predicate is declarative,
+    /// and the test proves it agrees with what the overlay actually does.
+    pub fn injects_mcp(&self) -> bool {
+        matches!(
+            self.id,
+            "claude-acp" | "codex-acp" | "opencode" | "hermes-acp"
+        )
+    }
+
     /// Interactive-launch overlay (`bitrouter launch`): the full routing
     /// overlay for *any* interactive harness — including the ones env/args
     /// cannot route, whose config files are synthesized under `state_dir`
@@ -1515,6 +1553,70 @@ mod tests {
             assert!(
                 with_gateways.args.len() >= bare.args.len(),
                 "{id}: injection only ever adds args"
+            );
+        }
+    }
+
+    /// Every file written under `dir`, as `relative path → contents`, with
+    /// `dir`'s own path scrubbed out so two runs in different tempdirs
+    /// compare equal.
+    fn synthesized(dir: &std::path::Path) -> Vec<(String, String)> {
+        fn walk(root: &std::path::Path, at: &std::path::Path, out: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(at) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(root, &path, out);
+                } else if let (Ok(rel), Ok(body)) =
+                    (path.strip_prefix(root), std::fs::read_to_string(&path))
+                {
+                    out.push((rel.display().to_string(), body));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        for (_, body) in &mut out {
+            *body = body.replace(&dir.display().to_string(), "<STATE_DIR>");
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn injects_mcp_matches_the_launch_overlay() {
+        // The startup line (#796) tells the user whether the gateways reached
+        // the harness. `injects_mcp` is the declarative answer; this proves it
+        // agrees with what `launch_overlay` actually does — including for the
+        // config-synthesis harnesses, whose injection lands inside a written
+        // file rather than in the overlay itself.
+        for h in CATALOG.iter().filter(|h| h.interactive_binary.is_some()) {
+            let bare_dir = tempfile::tempdir().expect("tempdir");
+            let with_dir = tempfile::tempdir().expect("tempdir");
+            let scrub = |args: Vec<String>, dir: &std::path::Path| -> Vec<String> {
+                args.into_iter()
+                    .map(|a| a.replace(&dir.display().to_string(), "<STATE_DIR>"))
+                    .collect()
+            };
+            let bare = h
+                .launch_overlay("http://x:1", "t", Some("m"), &[], &[], bare_dir.path())
+                .expect("bare overlay");
+            let with = h
+                .launch_overlay("http://x:1", "t", Some("m"), &[], &[mcp()], with_dir.path())
+                .expect("gateway overlay");
+
+            let differs = scrub(bare.args, bare_dir.path()) != scrub(with.args, with_dir.path())
+                || synthesized(bare_dir.path()) != synthesized(with_dir.path());
+
+            assert_eq!(
+                differs,
+                h.injects_mcp(),
+                "{}: injects_mcp() says {} but the overlay {} when gateways are supplied",
+                h.id,
+                h.injects_mcp(),
+                if differs { "changed" } else { "did not change" },
             );
         }
     }

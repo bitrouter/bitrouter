@@ -86,6 +86,8 @@ export OPENCODE_ZEN_API_KEY=...        # opencode-zen AND opencode-go (shared)
 
 bitrouter start          # detached daemon, logs to ~/.bitrouter/bitrouter.log
 bitrouter status         # green dot + pid / listen / model count
+bitrouter status --watch # live request stream + spend (pipe it for one snapshot)
+bitrouter launch -a claude --tui   # same launch, hosted with a persistent spend row
 bitrouter update         # self-update the binary (prereleases by default); --check to dry-run
 ```
 
@@ -167,8 +169,8 @@ Read these on demand — don't load them all upfront.
 | `references/harness-claude-code.md` | Wiring Claude Code at `localhost:4356` |
 | `references/harness-codex.md` | Wiring Codex CLI |
 | `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
-| `references/harness-hermes-agent.md` | Wiring Hermes Agent |
-| `references/harness-openclaw.md` | Wiring OpenClaw |
+| `references/harness-hermes-agent.md` | Wiring Hermes Agent (native plugin — not `bitrouter launch`) |
+| `references/harness-openclaw.md` | Wiring OpenClaw (native plugin — not `bitrouter launch`) |
 | `references/adaptive-routing.md` | Generic `@auto` routing, trace projections, policy locks, and compatibility |
 | `references/workflow-optimization.md` | Version-controlled agentic quality/cost optimization: onboarding, run/review/publish loop, evaluator defaults, and failure semantics |
 | `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
@@ -189,4 +191,5 @@ Read these on demand — don't load them all upfront.
 - **Trajectory settings do not hot-reload.** Changes to `enabled`, `retention_days`, or `outbox_batch_size` are rejected; restart the daemon. Any signed `progress_guard` requires trajectory to be enabled.
 - **`bitrouter providers add/remove/use/test/stats` do not exist.** Provider management is `bitrouter providers list`, `bitrouter providers login <provider>`, and `bitrouter providers logout <provider>`. Edit `bitrouter.yaml` and `bitrouter reload` for config changes.
 - **Model ids vs provider pins:** canonical model ids use slashes (`openai/gpt-4o`). An explicit provider pin uses a colon (`openrouter:openai/gpt-4o`, `claude-code:claude-sonnet-4-6`) and is still supported by the routing table.
+- **`bitrouter launch` supports four harnesses:** `claude`, `codex`, `opencode`, `pi`. `hermes`, `openclaw`, `grok`, and `agy` are refused with a message saying so — they remain catalog harnesses (run them directly, or headlessly via `bitrouter spawn <id>` where an ACP adapter exists), and grok/agy remain **providers** the daemon borrows sessions from. Do not suggest `launch -a hermes`.
 - **No `bitrouter doctor`.** Diagnostics are: `bitrouter status`, `bitrouter route <model>`, `bitrouter models`, `bitrouter providers list`, log file at `~/.bitrouter/bitrouter.log`.

@@ -288,6 +288,58 @@ pub struct SpendSummary {
     pub requests: u64,
 }
 
+/// One settled request as the live view renders it.
+///
+/// Deliberately **not** [`MeteringUsageRecord`]: that type is the stable
+/// export artifact consumed by `workflow-state bundle`, and it carries neither
+/// the timestamp, the latency, nor the estimated charge — the three fields
+/// every row of the live stream shows. Widening it would change an export
+/// contract to serve a display; this is a different read with a different
+/// shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestRow {
+    /// Request id — also the join key into the trajectory store.
+    pub request_id: String,
+    /// RFC3339 settle timestamp.
+    pub created_at: String,
+    /// Model the router resolved to.
+    pub model_id: String,
+    /// Provider that actually served the request.
+    pub provider_id: String,
+    /// Prompt tokens consumed.
+    pub prompt_tokens: i64,
+    /// Completion tokens produced.
+    pub completion_tokens: i64,
+    /// Cache-read prompt tokens.
+    pub cache_read_tokens: i64,
+    /// Cache-write prompt tokens.
+    pub cache_write_tokens: i64,
+    /// Estimated charge in micro-USD.
+    pub estimated_charge_micro_usd: i64,
+    /// End-to-end latency in milliseconds.
+    pub latency_ms: i64,
+    /// Error string when the request failed, else `None`.
+    pub error: Option<String>,
+}
+
+impl From<requests::Model> for RequestRow {
+    fn from(m: requests::Model) -> Self {
+        Self {
+            request_id: m.request_id,
+            created_at: m.created_at,
+            model_id: m.model_id,
+            provider_id: m.provider_id,
+            prompt_tokens: m.prompt_tokens,
+            completion_tokens: m.completion_tokens,
+            cache_read_tokens: m.cache_read_tokens,
+            cache_write_tokens: m.cache_write_tokens,
+            estimated_charge_micro_usd: m.estimated_charge_micro_usd,
+            latency_ms: m.latency_ms,
+            error: m.error,
+        }
+    }
+}
+
 /// sea-orm-backed metering store.
 #[derive(Clone)]
 pub struct MeteringStore {
@@ -444,6 +496,68 @@ impl MeteringStore {
         })
     }
 
+    /// The newest `limit` settled requests within `window`, newest first —
+    /// the live view's request stream. `launch_id` scopes it to one
+    /// `bitrouter launch` session; `None` is every caller.
+    ///
+    /// Descending with a `LIMIT` on purpose. [`Self::export_usage`] is an
+    /// unbounded ascending scan, which is right for a one-shot export and
+    /// wrong to run once a second against a day-long window: the view only
+    /// ever renders one screen plus a scrollback margin, so the database
+    /// should never hand it more than that.
+    pub async fn recent_requests(
+        &self,
+        window: TimeWindow,
+        limit: u64,
+        launch_id: Option<&str>,
+    ) -> Result<Vec<RequestRow>> {
+        let start = window_start(window).to_rfc3339();
+        let mut query = requests::Entity::find()
+            .filter(requests::Column::CreatedAt.gte(start))
+            .order_by_desc(requests::Column::CreatedAt)
+            .order_by_desc(requests::Column::RequestId);
+        if let Some(launch) = launch_id {
+            query = query.filter(requests::Column::LaunchId.eq(launch));
+        }
+        if let TimeWindow::Custom { end, .. } = window {
+            query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
+        }
+        let rows = query
+            .limit(limit)
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("recent_requests: {e}")))?;
+        Ok(rows.into_iter().map(RequestRow::from).collect())
+    }
+
+    /// Request / token rate over the trailing minute across **every** caller.
+    ///
+    /// [`Self::get_rate`] is scoped to one `api_key_id`, which cannot serve a
+    /// machine-wide readout: under the `skip_auth: true` default every request
+    /// is attributed to the synthetic `local` caller, but a daemon also serves
+    /// real `brk_` keys and pre-auth `anonymous` ones, and the live view means
+    /// "this daemon", not "this key".
+    pub async fn get_total_rate(&self) -> Result<RateMetrics> {
+        let start = window_start(TimeWindow::LastMinute).to_rfc3339();
+        let rows: Vec<(i64, i64)> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::PromptTokens)
+            .column(requests::Column::CompletionTokens)
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("get_total_rate: {e}")))?;
+        let tokens: u64 = rows
+            .iter()
+            .map(|(p, c)| (*p).max(0) as u64 + (*c).max(0) as u64)
+            .sum();
+        Ok(RateMetrics {
+            requests_per_minute: rows.len() as f64,
+            tokens_per_minute: tokens as f64,
+        })
+    }
+
     /// Export settled request rows in a JSONL-friendly shape compatible with
     /// `workflow-state bundle`'s cloud usage input.
     pub async fn export_usage(&self, window: TimeWindow) -> Result<Vec<MeteringUsageRecord>> {
@@ -461,6 +575,39 @@ impl MeteringStore {
             .map_err(|e| BitrouterError::internal(format!("export_usage: {e}")))?;
 
         Ok(rows.into_iter().map(MeteringUsageRecord::from).collect())
+    }
+
+    /// Spend + request count for exactly one `bitrouter launch` session.
+    ///
+    /// This is the query the time-window heuristic could never be: two agents
+    /// running side by side each see their own spend, on a default
+    /// `skip_auth: true` install, with nobody having turned auth on to find
+    /// out what their agent cost.
+    pub async fn spend_summary_for_launch(
+        &self,
+        launch_id: &str,
+        window: TimeWindow,
+    ) -> Result<SpendSummary> {
+        let start = window_start(window).to_rfc3339();
+        let mut query = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .filter(requests::Column::LaunchId.eq(launch_id))
+            .filter(requests::Column::CreatedAt.gte(start));
+        // Every other windowed query honours `Custom`'s end; omitting it here
+        // would silently over-report for any caller that passes a real bound.
+        if let TimeWindow::Custom { end, .. } = window {
+            query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
+        }
+        let charges: Vec<i64> = query
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("spend_summary_for_launch: {e}")))?;
+        Ok(SpendSummary {
+            requests: charges.len() as u64,
+            spend_micro_usd: charges.into_iter().map(|c| c.max(0) as u64).sum(),
+        })
     }
 
     /// Total spend + request count within `window`, across every caller.
@@ -900,6 +1047,7 @@ impl MeteringStore {
             request_id: Set(record.request_id),
             user_id: Set(record.user_id),
             api_key_id: Set(record.api_key_id),
+            launch_id: Set(record.launch_id),
             model_id: Set(record.model_id),
             provider_id: Set(record.provider_id),
             prompt_tokens: Set(record.prompt_tokens as i64),
