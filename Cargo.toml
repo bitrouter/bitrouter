@@ -34,7 +34,6 @@ bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", def
 bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.27" }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
 bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
-bitrouter-observe = { path = "crates/bitrouter-observe", version = "1.0.0-alpha.27", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.

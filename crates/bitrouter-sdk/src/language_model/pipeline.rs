@@ -1132,9 +1132,9 @@ impl Pipeline {
         settle.error = error;
 
         // Emit the canonical "request finished" line before recorders
-        // run. Two-line model (received + finished) matches v0's
-        // operator-facing log shape — see `bitrouter-observe`'s
-        // `ModelSpendObserver` in the v0 tree.
+        // run. The two-line model (received + finished) is inherited from
+        // v0's operator-facing log shape and kept for log-scraper
+        // compatibility.
         log_request_finished(&settle);
 
         for recorder in &self.settlement_recorders {

@@ -2517,10 +2517,10 @@ fn init_stderr_tracing_subscriber() {
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_observe::otel::OtelExporter::new`]
+/// so this MUST be called after [`bitrouter_sdk::otel::OtelExporter::new`]
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
-fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::OtelExporter>) {
+fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_sdk::otel::OtelExporter>) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -2530,7 +2530,9 @@ fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::Otel
         .with(tracing_subscriber::fmt::layer());
     match exporter {
         Some(exp) => registry
-            .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exp))
+            .with(bitrouter_sdk::otel::subscriber::tracing_subscriber_layer(
+                exp,
+            ))
             .init(),
         None => registry.init(),
     }
@@ -2670,7 +2672,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
         // trace-context propagation) so the inbound HTTP request becomes
         // the SERVER span parent of the bitrouter `chat` INTERNAL span.
-        let otel_wrapper = bitrouter_observe::otel::http_layer::router_wrapper();
+        let otel_wrapper = bitrouter_sdk::otel::http_layer::router_wrapper();
         let shutdown = async move {
             let _ = http_shutdown_rx.await;
         };
@@ -5068,7 +5070,7 @@ async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
 /// "feature off" from "daemon down."
 async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
-    use bitrouter_observe::OTEL_ENABLED;
+    use bitrouter_sdk::OTEL_ENABLED;
 
     let (snapshot, daemon_reachable) =
         match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {

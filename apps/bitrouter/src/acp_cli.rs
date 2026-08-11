@@ -842,10 +842,10 @@ async fn attach_observability(
     config: &Config,
     agent_id: &str,
     session: &bitrouter_sdk::acp::engine::Session,
-) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
+) -> Option<Arc<bitrouter_sdk::otel::OtelExporter>> {
     let exporter = crate::assemble::build_otel_exporter_standalone(config).await;
     let recorder = exporter.as_ref().map(|exporter| {
-        Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
+        Arc::new(bitrouter_sdk::otel::acp::AcpSpanRecorder::new(
             exporter,
             agent_id,
             session.state().record_id.clone(),
@@ -858,7 +858,7 @@ async fn attach_observability(
         tokio::spawn(async move {
             while let Some(record) = rx.recv().await {
                 if let Some(recorder) = &recorder {
-                    recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
+                    recorder.turn_completed(&bitrouter_sdk::otel::acp::TurnRecord {
                         stop_reason: record.stop_reason.clone(),
                         latency: std::time::Duration::from_millis(record.latency_ms),
                         context_used: record.context.map(|c| c.used),

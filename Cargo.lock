@@ -681,7 +681,6 @@ dependencies = [
  "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-mcp",
- "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
  "chrono",
@@ -779,35 +778,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-observe"
-version = "1.0.0-alpha.27"
-dependencies = [
- "async-trait",
- "axum",
- "bitrouter-sdk",
- "bytes",
- "criterion",
- "dashmap",
- "futures",
- "futures-core",
- "http",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bitrouter-providers"
 version = "1.0.0-alpha.27"
 dependencies = [
@@ -839,11 +809,19 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
+ "criterion",
+ "dashmap",
  "eventsource-stream",
  "futures",
  "futures-core",
  "http",
  "httpdate",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
  "pin-project-lite",
  "reqwest",
  "rmcp",
@@ -858,8 +836,12 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tonic",
  "tower",
+ "tower-http",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

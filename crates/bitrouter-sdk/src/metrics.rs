@@ -4,9 +4,9 @@
 //! trait — because the HTTP server needs to render Prometheus text without
 //! knowing where the counters come from. The accumulator side is
 //! deployment-specific, and the OSS binary no longer has one: it pushes
-//! metrics over OTLP via `bitrouter-observe` and mounts a stub renderer that
-//! serves a migration banner. A deployment that still wants a pull-based
-//! endpoint registers its own
+//! metrics over OTLP via the SDK's own `otel` feature and mounts a stub
+//! renderer that serves a migration banner. A deployment that still wants a
+//! pull-based endpoint registers its own
 //! [`ObserveHook`](crate::language_model::ObserveHook) and points this trait
 //! at it.
 //!

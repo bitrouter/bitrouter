@@ -34,9 +34,9 @@ use bitrouter_cloud_sdk::auth::credentials::{
 };
 use bitrouter_cloud_sdk::auth::metadata::AsMetadata;
 use bitrouter_cloud_sdk::provider::PROVIDER_ID;
-use bitrouter_observe::otel::TelemetryBearer;
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
+use bitrouter_sdk::otel::TelemetryBearer;
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
 /// has run `bitrouter cloud login` (i.e. the credentials file exists at the

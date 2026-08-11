@@ -40,6 +40,10 @@
 //!     `GET /metrics`, `POST /mcp/{server}`, and graceful shutdown.
 //!   - `config_file` — YAML config loading ([`config::load`],
 //!     [`config::ConfigRoutingTable`]).
+//!   - `otel` — OTLP export of the pipeline's spans and metrics
+//!     ([`otel::OtelExporter`], [`otel::OtelObserveHook`]), over OTLP/HTTP by
+//!     default or OTLP/gRPC under `otel-grpc`. No `opentelemetry*` type
+//!     appears in this crate's public API.
 //!
 //! [axum]: https://docs.rs/axum
 //!
@@ -100,10 +104,8 @@
 //!
 //! ## What ships in adjacent crates
 //!
-//! Two shared library plugins in this repo:
+//! One shared library plugin in this repo:
 //!
-//! - `bitrouter-observe` — OTLP traces and metrics, over a feature-gated
-//!   HTTP or gRPC transport.
 //! - `bitrouter-guardrails` — request / response content scanning (block +
 //!   redact).
 //!
@@ -116,6 +118,21 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+// The observability stack is transport-agnostic but cannot function without a
+// wire transport. `__otel-core` carries the stack; `otel-http` / `otel-grpc`
+// add a transport. Guard against `__otel-core` being enabled on its own (e.g.
+// a downstream typo or a stray `dep:` activation) with a clear message instead
+// of a wall of "cannot find function `span_exporter`" errors.
+#[cfg(all(
+    feature = "__otel-core",
+    not(any(feature = "otel-http", feature = "otel-grpc"))
+))]
+compile_error!(
+    "the OpenTelemetry stack needs a transport: enable `otel-http` for \
+     OTLP/HTTP, or `otel-grpc` for OTLP/gRPC"
+);
 
 // ===== shared library code (crate root) =====
 pub mod app;
@@ -127,10 +144,19 @@ pub mod plugin;
 pub mod url_validator;
 
 #[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod config;
 
 #[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod server;
+
+#[cfg(feature = "__otel-core")]
+#[cfg_attr(docsrs, doc(cfg(feature = "otel")))]
+pub mod otel;
+
+/// Whether the OpenTelemetry exporter is compiled in (under any transport).
+pub const OTEL_ENABLED: bool = cfg!(feature = "__otel-core");
 
 // ===== per-protocol modules =====
 pub mod acp;

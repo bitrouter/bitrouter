@@ -21,7 +21,7 @@
   - `bitrouter-providers` implements provider adapters against those traits.
   - `bitrouter-config` loads YAML + `.env`, applies `${VAR}` substitution, merges compile-time embedded built-in providers, resolves provider `derives`, and builds `ConfigRoutingTable`.
   - `bitrouter-api` exposes reusable Warp filters for provider-compatible HTTP surfaces plus admin/discovery/protocol routes.
-  - `bitrouter-accounts`, `bitrouter-mcp`, `bitrouter-a2a`, `bitrouter-skills`, `bitrouter-guardrails`, and `bitrouter-observe` add account storage, protocol gateways, skills, firewalling, and spend/metrics tracking.
+  - `bitrouter-accounts`, `bitrouter-mcp`, `bitrouter-a2a`, `bitrouter-skills`, and `bitrouter-guardrails` add account storage, protocol gateways, skills, and firewalling.
   - `bitrouter` is the binary that assembles everything.
 
 - The runtime path is:
