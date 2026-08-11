@@ -102,7 +102,8 @@
 //!
 //! Two shared library plugins in this repo:
 //!
-//! - `bitrouter-observe` — Prometheus exporter + OTLP/HTTP traces.
+//! - `bitrouter-observe` — OTLP traces and metrics, over a feature-gated
+//!   HTTP or gRPC transport.
 //! - `bitrouter-guardrails` — request / response content scanning (block +
 //!   redact).
 //!

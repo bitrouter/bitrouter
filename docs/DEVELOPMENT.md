@@ -74,7 +74,7 @@ A streaming LLM request moves through the workspace like this:
    - **Execute** — the executor dials the first target; on failure the `FallbackPolicy` decides whether to try the next. The **outbound adapter** for the target's protocol renders the provider request and decodes the provider response (and its SSE stream).
    - **Settlement** — every `SettlementRecorder` runs (metering, etc.), success or failure.
 4. For streaming, the canonical `StreamPart` stream flows through the `StreamHook` stage and is re-encoded by the inbound adapter into the **client's** protocol — so a client written for the Responses protocol can transparently use a Messages upstream, and vice versa.
-5. `ObserveHook`s receive read-only lifecycle events throughout (Prometheus, OTLP).
+5. `ObserveHook`s receive read-only lifecycle events throughout; `bitrouter-observe` turns them into OTLP traces and metrics.
 
 The `mcp` and `acp` pipelines are simpler: pure routing with no settlement.
 
@@ -108,8 +108,10 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 | `POST /v1beta/models/{model_action}`| Generate Content inbound         |
 | `GET  /v1/models`                   | model catalog listing            |
 | `POST /mcp/{server}`                | MCP gateway (JSON-RPC proxy)     |
-| `GET  /metrics`                     | Prometheus exposition            |
+| `GET  /metrics`                     | OTLP-migration banner (see below)|
 | `GET  /health`                      | health check                    |
+
+`GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by `bitrouter-observe`, and the endpoint serves a short banner pointing at `plugins.bitrouter-observe.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The SDK's `MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
 Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a Unix domain socket, not HTTP — see `apps/bitrouter/src/daemon.rs`.
 
