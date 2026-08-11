@@ -89,7 +89,7 @@ axum-test = "21"
 http.workspace = true
 serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
-# bodies the observe plugin pushes to the configured collector.
-# https://docs.rs/opentelemetry-proto/0.32/
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
-prost = "0.14"
+# bodies the observe plugin pushes to the configured collector. Pins live in
+# the root `[workspace.dependencies]` alongside the rest of the 0.32.x stack.
+opentelemetry-proto.workspace = true
+prost.workspace = true
