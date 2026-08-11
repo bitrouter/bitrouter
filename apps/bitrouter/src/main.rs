@@ -2450,33 +2450,119 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 
 // ===== tracing subscriber init =====
 
+/// The filter used when neither `RUST_LOG` nor `server.log_level` supplies a
+/// usable one.
+const DEFAULT_LOG_FILTER: &str = "info";
+
+/// Resolve the tracing filter. Precedence, highest first:
+///
+/// 1. **`RUST_LOG`** — the Rust convention, and the escape hatch an operator
+///    reaches for during an incident without editing (and reloading) config.
+/// 2. **`server.log_level`** from `bitrouter.yaml`. Only `serve` has a config
+///    loaded this early; every other command passes `None`, because its
+///    subscriber is installed before any config is read.
+/// 3. **`info`**.
+///
+/// Returns the filter plus an optional warning. Nothing can be logged before
+/// the subscriber this feeds is installed, so an unparseable filter string is
+/// handed back for the caller to emit *after* `init()` rather than silently
+/// swallowed — the same deferred-diagnostic shape `serve` already uses for
+/// OTel init errors.
+fn resolve_env_filter(
+    config_log_level: Option<&str>,
+) -> (tracing_subscriber::EnvFilter, Option<String>) {
+    // `EnvFilter::try_from_default_env` collapses "unset" and "set but
+    // invalid" into one `Err`, which is exactly the distinction that decides
+    // whether the config value gets a turn — so read the variable directly.
+    let rust_log = std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV).ok();
+    resolve_env_filter_from(rust_log.as_deref(), config_log_level)
+}
+
+/// The precedence logic behind [`resolve_env_filter`], with the environment
+/// passed in so it is testable without mutating process-global state.
+fn resolve_env_filter_from(
+    rust_log: Option<&str>,
+    config_log_level: Option<&str>,
+) -> (tracing_subscriber::EnvFilter, Option<String>) {
+    let non_blank = |s: &&str| !s.trim().is_empty();
+    let (source, raw) = match (
+        rust_log.filter(non_blank),
+        config_log_level.filter(non_blank),
+    ) {
+        (Some(raw), _) => (tracing_subscriber::EnvFilter::DEFAULT_ENV, raw),
+        (None, Some(level)) => ("server.log_level", level),
+        (None, None) => return (tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER), None),
+    };
+    match parse_log_filter(raw) {
+        Ok(filter) => (filter, None),
+        Err(reason) => (
+            tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
+            Some(format!(
+                "invalid {source} value {raw:?}: {reason} — falling back to `{DEFAULT_LOG_FILTER}`"
+            )),
+        ),
+    }
+}
+
+/// Parse one filter string, rejecting the failure mode `EnvFilter` itself
+/// won't.
+///
+/// `EnvFilter::try_new("dbug")` **succeeds**: with no directive syntax present
+/// it reads the word as a *target* named `dbug` at trace level. The resulting
+/// filter matches nothing, so a one-character typo in `log_level` silently
+/// mutes the daemon instead of erroring — the worst possible outcome for a
+/// logging setting. So a bare word (no `=`, no `,`) must parse as a level;
+/// anything carrying directive syntax is handed to `EnvFilter` as-is.
+fn parse_log_filter(raw: &str) -> std::result::Result<tracing_subscriber::EnvFilter, String> {
+    let raw = raw.trim();
+    if !raw.contains('=')
+        && !raw.contains(',')
+        && raw
+            .parse::<tracing_subscriber::filter::LevelFilter>()
+            .is_err()
+    {
+        return Err(
+            "expected a level (`trace`, `debug`, `info`, `warn`, `error`, `off`) or an \
+             `EnvFilter` directive list such as `info,bitrouter=debug`"
+                .to_string(),
+        );
+    }
+    tracing_subscriber::EnvFilter::try_new(raw).map_err(|e| e.to_string())
+}
+
 /// Install a basic fmt-only tracing subscriber. Used for every command
 /// except `serve` and the `acp` subcommands — see
 /// [`init_serve_tracing_subscriber`] and [`init_stderr_tracing_subscriber`].
+///
+/// Runs before any config is read, so `RUST_LOG` is the only input.
 fn init_basic_tracing_subscriber() {
+    let (env_filter, warning) = resolve_env_filter(None);
     tracing_subscriber::fmt()
         // Diagnostics MUST go to stderr so stdout stays a pure JSON result
         // surface (`tracing_subscriber::fmt()` otherwise defaults to stdout).
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        .with_env_filter(env_filter)
         .init();
+    if let Some(warning) = warning {
+        tracing::warn!("{warning}");
+    }
 }
 
 /// Install a tracing subscriber that writes to **stderr**. Used for the `acp`
 /// subcommands, which keep stdout exclusively for their machine-readable
 /// protocol stream (JSON-RPC for `acp serve`, NDJSON for `acp prompt`) —
 /// logging on stdout would corrupt the stream the caller parses.
+///
+/// Runs before any config is read, so `RUST_LOG` is the only input.
 fn init_stderr_tracing_subscriber() {
+    let (env_filter, warning) = resolve_env_filter(None);
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        .with_env_filter(env_filter)
         .init();
+    if let Some(warning) = warning {
+        tracing::warn!("{warning}");
+    }
 }
 
 /// Install the full tracing subscriber for the `serve` command: fmt plus
@@ -2487,11 +2573,18 @@ fn init_stderr_tracing_subscriber() {
 /// so this MUST be called after [`bitrouter_observe::otel::OtelExporter::new`]
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
-fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::OtelExporter>) {
+///
+/// This is the one path with a config in hand, so it is where
+/// `server.log_level` takes effect. Resolution happens once here — a later
+/// `bitrouter reload` re-reads the config but cannot re-install the
+/// subscriber, so a changed `log_level` needs a restart.
+fn init_serve_tracing_subscriber(
+    exporter: Option<&bitrouter_observe::otel::OtelExporter>,
+    config_log_level: &str,
+) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let (env_filter, warning) = resolve_env_filter(Some(config_log_level));
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer());
@@ -2500,6 +2593,9 @@ fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::Otel
             .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exp))
             .init(),
         None => registry.init(),
+    }
+    if let Some(warning) = warning {
+        tracing::warn!("{warning}");
     }
 }
 
@@ -2581,7 +2677,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
     // — the bridge captures its tracer at construction, so this can only
     // happen after the exporter exists.
-    init_serve_tracing_subscriber(assembled.otel_exporter.as_deref());
+    init_serve_tracing_subscriber(assembled.otel_exporter.as_deref(), &cfg.server.log_level);
     // Surface any deferred OTel-init failure now that the subscriber is up.
     if let Some(msg) = &assembled.otel_init_error {
         tracing::error!("{msg}");
@@ -5264,6 +5360,109 @@ fn process_is_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== tracing filter resolution =====
+
+    #[test]
+    fn config_log_level_is_used_when_rust_log_is_unset() {
+        let (filter, warning) = resolve_env_filter_from(None, Some("debug"));
+        assert_eq!(filter.to_string(), "debug");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn config_log_level_accepts_per_target_filter_syntax() {
+        let (filter, warning) = resolve_env_filter_from(None, Some("warn,bitrouter=trace"));
+        // `EnvFilter`'s `Display` does not preserve directive order.
+        let rendered = filter.to_string();
+        assert!(rendered.contains("warn"), "{rendered}");
+        assert!(rendered.contains("bitrouter=trace"), "{rendered}");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn rust_log_wins_over_config_log_level() {
+        let (filter, warning) = resolve_env_filter_from(Some("trace"), Some("error"));
+        assert_eq!(filter.to_string(), "trace");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn defaults_to_info_when_neither_source_is_set() {
+        let (filter, warning) = resolve_env_filter_from(None, None);
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn blank_sources_fall_through_rather_than_erroring() {
+        // An empty `RUST_LOG=` must not shadow a real config value, and a
+        // blank `log_level: ""` must not be treated as a filter.
+        let (filter, warning) = resolve_env_filter_from(Some("  "), Some("debug"));
+        assert_eq!(filter.to_string(), "debug");
+        assert!(warning.is_none());
+
+        let (filter, warning) = resolve_env_filter_from(None, Some(""));
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn invalid_config_log_level_warns_and_falls_back() {
+        let (filter, warning) = resolve_env_filter_from(None, Some("not-a-level"));
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        let warning = warning.expect("an unparseable log_level must be reported");
+        assert!(warning.contains("server.log_level"), "{warning}");
+        assert!(warning.contains("not-a-level"), "{warning}");
+    }
+
+    #[test]
+    fn typo_level_does_not_silently_mute_the_daemon() {
+        // Regression guard: `EnvFilter::try_new("dbug")` succeeds, reading the
+        // word as a *target* at trace level — a filter that matches nothing.
+        // Left unchecked, `log_level: dbug` would silence the daemon with no
+        // diagnostic at all.
+        assert_eq!(
+            tracing_subscriber::EnvFilter::try_new("dbug")
+                .expect("EnvFilter accepts a bare word as a target")
+                .to_string(),
+            "dbug=trace",
+        );
+
+        let (filter, warning) = resolve_env_filter_from(None, Some("dbug"));
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        assert!(warning.is_some(), "a typo'd level must warn, not mute");
+    }
+
+    #[test]
+    fn every_level_name_is_accepted() {
+        for level in ["trace", "debug", "info", "warn", "error", "off"] {
+            let (filter, warning) = resolve_env_filter_from(None, Some(level));
+            assert!(warning.is_none(), "{level} should be valid: {warning:?}");
+            assert_eq!(filter.to_string(), level);
+        }
+    }
+
+    #[test]
+    fn invalid_rust_log_warns_and_does_not_fall_back_to_config() {
+        // `RUST_LOG` is an explicit operator override; a typo in it should be
+        // reported rather than silently resolved from config behind the
+        // operator's back.
+        let (filter, warning) = resolve_env_filter_from(Some("not-a-level"), Some("debug"));
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        let warning = warning.expect("an unparseable RUST_LOG must be reported");
+        assert!(warning.contains("RUST_LOG"), "{warning}");
+    }
+
+    #[test]
+    fn server_config_default_log_level_is_a_valid_filter() {
+        // The default that ships in `ServerConfig` (and the JSON Schema) must
+        // survive the same parse path a user-supplied value takes.
+        let default_level = config::ServerConfig::default().log_level;
+        let (filter, warning) = resolve_env_filter_from(None, Some(&default_level));
+        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
+        assert!(warning.is_none());
+    }
 
     enum RestartCommandKind {
         Status,
