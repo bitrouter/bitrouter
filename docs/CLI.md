@@ -29,6 +29,22 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
+## Logging (`RUST_LOG`)
+
+Diagnostics are emitted with `tracing` and filtered by **`RUST_LOG`**, using standard [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. When `RUST_LOG` is unset the filter defaults to `info`; a malformed value falls back to `info` rather than failing to start.
+
+Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, `bitrouter_observe`, …), so `RUST_LOG=warn,bitrouter=debug` works as you would expect. Two targets are **pinned explicitly** and are *not* module paths:
+
+| Target | What it carries |
+| --- | --- |
+| `bitrouter::observe::http` | The INFO-level HTTP ingress span (`http_request`) that every OpenTelemetry SERVER span is built from, plus a DEBUG line when an inbound `traceparent` cannot be attached. |
+| `bitrouter::observe::cardinality` | WARN when the metric-dimension cardinality limiter recovers from a poisoned lock. |
+
+These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
+
+- **`RUST_LOG=bitrouter_observe=debug` no longer matches the ingress span.** Use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
+- **Do not filter the ingress span below `info` when OTLP tracing is enabled.** `bitrouter serve` bridges `tracing` spans into OpenTelemetry, so a filter that drops `bitrouter::observe::http` at INFO also drops the SERVER span — every `chat` span then exports as an orphan root instead of a child of its HTTP request, with no error reported. A blanket `RUST_LOG=warn` has this effect; `RUST_LOG=warn,bitrouter::observe::http=info` keeps traces intact while quieting everything else.
+
 ## Config resolution
 
 Local router subcommands that load a config accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
