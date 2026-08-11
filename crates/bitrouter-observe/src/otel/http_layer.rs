@@ -69,7 +69,15 @@ fn make_http_server_span<B>(request: &http::Request<B>) -> Span {
     // Span name follows the HTTP semconv: "{METHOD} {route}".
     let span_name = format!("{method} {route}");
 
+    // The `target:` is pinned deliberately. Without it `tracing` derives the
+    // target from `module_path!()`, so moving this file between crates or
+    // modules would silently rename it. The target is a load-bearing
+    // `RUST_LOG` selector: the `serve` subscriber is an operator-controlled
+    // `EnvFilter`, and a filter that drops this INFO span also drops the
+    // SERVER span the `chat` span parents on — orphaning every trace with no
+    // diagnostic anywhere. Keep it stable and independent of file location.
     let span = tracing::info_span!(
+        target: "bitrouter::observe::http",
         "http_request",
         otel.name = %span_name,
         otel.kind = "server",
@@ -83,7 +91,11 @@ fn make_http_server_span<B>(request: &http::Request<B>) -> Span {
         propagator.extract(&HeaderExtractor(request.headers()))
     });
     if let Err(error) = span.set_parent(parent) {
-        tracing::debug!(?error, "could not attach inbound trace context");
+        tracing::debug!(
+            target: "bitrouter::observe::http",
+            ?error,
+            "could not attach inbound trace context"
+        );
     }
     span
 }

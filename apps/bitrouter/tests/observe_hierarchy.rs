@@ -32,17 +32,30 @@ const ASYNC_WAIT_BUDGET_MS: u64 = 5_000;
 const POLL_INTERVAL_MS: u64 = 50;
 
 /// Install the same fmt + OTel bridge layers the real binary's `serve`
-/// command installs after the exporter is built. Keep this test's filter
-/// fixed at `info` so external `RUST_LOG` settings cannot suppress the
-/// INFO-level HTTP SERVER span being asserted below. One-shot per process —
-/// but this is a dedicated test binary, so it runs exactly once.
+/// command installs after the exporter is built. One-shot per process — but
+/// this is a dedicated test binary, so it runs exactly once.
+///
+/// The filter is fixed (never read from the environment) so external
+/// `RUST_LOG` settings cannot suppress the INFO-level HTTP SERVER span being
+/// asserted below. It is deliberately *not* a bare `info`: the two
+/// `<crate>=warn` directives silence every module-path target in the crates
+/// that could plausibly host `http_layer.rs` — `bitrouter_observe` today,
+/// `bitrouter_sdk` after the OTel modules move there. The ingress span
+/// survives only because it pins an explicit
+/// `target: "bitrouter::observe::http"` that no module path matches, so the
+/// end-to-end assertion below doubles as the regression test for that pin:
+/// drop the explicit target and the span is filtered out before the
+/// tracing-opentelemetry bridge can export it, and the SERVER-span assertion
+/// fails.
+///
+/// This mirrors a real operator setting — `RUST_LOG=info,bitrouter_sdk=warn`
+/// is plausible noise reduction, since the whole routing pipeline logs under
+/// that target — which must not silently orphan every `chat` span.
 fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    // Keep the assertion independent of the developer/CI shell's RUST_LOG.
-    // A warn-level filter would drop the HTTP ingress info span before the
-    // tracing-opentelemetry bridge can export it.
-    let env_filter = tracing_subscriber::EnvFilter::new("info");
+    let env_filter =
+        tracing_subscriber::EnvFilter::new("info,bitrouter_observe=warn,bitrouter_sdk=warn");
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
