@@ -65,28 +65,33 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # This is the only job in the workspace that *links* — clippy, doc, msrv
-    # and dist all stop at metadata — and linking is what makes it the one job
-    # that can exhaust a runner. Everything below exists for that reason.
+    # and dist all stop at metadata — and it is the one job that has been
+    # dying on ubuntu whenever it runs cold. What is actually known, after
+    # nine dead runs (each annotated "The hosted runner lost communication
+    # with the server"):
     #
-    # `test (ubuntu-latest)` had been failing at ~49 minutes with no failing
-    # test and no logs, because it is the one job with no cache to restore:
-    # `v0-rust-test-Linux-x64` is the single rust-cache key family with no
-    # entry in this repo, while `test-Darwin`, `test-Windows` and every other
-    # Linux job have one. So it alone builds cold every run, and a cold build
-    # here has never survived. That is a trap with no exit — a job that does
-    # not finish never saves a cache (rust-cache's `cache-on-failure` already
-    # defaults to true; it just never gets the chance), so the next run is
-    # cold too.
+    #   - Warm runs pass in 2-3 minutes on every OS. Only a *cold* ubuntu
+    #     build has ever died, and it has died every single time.
+    #   - The runner goes deaf UNDER 25 MINUTES into the cold build (an
+    #     in-step `timeout 25m` never fired on run 31616659931; a job-level
+    #     30m cancellation was never processed on run 31594067605). The
+    #     ~48-minute failure timestamps are GitHub's detection lag, not the
+    #     moment of death.
+    #   - Nothing inside the VM moved that death: +25 GB disk (31601397839),
+    #     +8 GB swap (31611661569), lld, and reduced debuginfo all left the
+    #     timeline byte-identical. Every run died with post steps skipped,
+    #     so nothing was ever cached and no logs were ever uploaded.
     #
-    # `timeout-minutes` alone does NOT break that trap, which is worth stating
-    # because it looks like it should. It *cancels* the job, and a cancelled
-    # job whose step does not exit within GitHub's grace period is force-
-    # killed with its post steps skipped — measured on run 31594067605, which
-    # cancelled at 30m, ran neither the `disk` step nor either post step, and
-    # left no cache and no logs behind. So it is kept only as an outer
-    # backstop, set above the in-step timeout below, which is the one that is
-    # supposed to fire.
-    timeout-minutes: 60
+    # Hence the shape of this job: never require any single cargo process to
+    # survive longer than 15 minutes, and bank progress with an explicit
+    # cache save after every bounded chunk — inside the job, before the
+    # wedge window, not in a post step that a dead runner will never run. A
+    # cold build then converges across attempts no matter what the killer
+    # turns out to be: each attempt restores the previous attempt's chunks
+    # and reaches strictly further. `timeout-minutes` stays only as an outer
+    # backstop; a cancelled job skips its post steps (measured, 31594067605),
+    # so nothing below relies on it.
+    timeout-minutes: 75
     env:
       # Headroom for the cold build. A cold `--workspace --all-features` test
       # build is ~9.1 GB of `target/` (measured on macOS/arm64);
@@ -101,20 +106,12 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v6
-      # Removes ~25 GB of preinstalled toolchains this workspace never builds
-      # against, then adds 8 GB of swap. Disk was the first suspect for a
-      # runner that dies mid-build with nothing written — run 31601397839
-      # ruled it out: the reclaim succeeded and the runner died at the same
-      # ~50 minute mark anyway. Worse, the in-step 45m `timeout(1)` never
-      # fired, so the machine was unresponsive *before* its own watchdog — a
-      # hang, not slowness. The remaining fit is memory: a cold
-      # `--all-features` build runs four parallel rustc jobs through a graph
-      # where `bitrouter-sdk` now carries the whole otel+tonic+axum stack and
-      # every downstream test binary links it, on 16 GB with only the stock
-      # 4 GB swapfile. Swap converts that death into slowness — slow enough
-      # and the timeout below finally gets to fire, which is itself evidence.
-      # Inline commands rather than a third-party action, so it stays
-      # auditable.
+      # Ruled-out-but-kept: +25 GB disk and +8 GB swap each failed to move
+      # the cold-build death by a second (runs 31601397839, 31611661569), so
+      # neither is the fix — but both are cheap, harmless headroom and
+      # removing them would re-add untested variables. lld likewise: not the
+      # fix, kept because it makes the bounded chunks below cover more build
+      # per 15 minutes.
       - name: reclaim disk, extend swap
         if: runner.os == 'Linux'
         run: |
@@ -129,51 +126,130 @@ jobs:
           sudo mkswap /swapfile-ci
           sudo swapon /swapfile-ci
           free -h
+          command -v ld.lld || sudo apt-get install -y --no-install-recommends lld
+      # rust-cache saves in a POST step, and nine dead runners have proven a
+      # post step is exactly where this job's cache save must not live. On
+      # Linux the explicit restore/save steps below replace it; macOS and
+      # Windows keep it, since their runners end cleanly.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: ${{ matrix.os != 'ubuntu-latest' }}
       - uses: taiki-e/install-action@nextest
-      # Bounded in-step rather than by `timeout-minutes`, because the two fail
-      # in different ways and only this one is useful. `timeout(1)` kills
-      # cargo and the *step* exits non-zero in the ordinary way, so the job
-      # ends cleanly: `disk` below runs, rust-cache's post step saves the
-      # partial `target/`, and GitHub uploads the logs. A job cancelled by
-      # `timeout-minutes` does none of that. This is what makes the failure
-      # path converge — a bounded cold build still seeds the cache that makes
-      # the retry warm — and what will produce the first readable log this
-      # failure has ever had.
-      - name: test
+      - name: restore build cache
+        id: restore
         if: runner.os == 'Linux'
-        # lld is the substantive change: the cold build's dangerous phase is
-        # its link tail — ~82 test binaries, four GNU-ld links in parallel,
-        # each now carrying the whole otel+tonic stack the SDK compiles in
-        # under --all-features. GNU ld takes gigabytes per link; lld takes a
-        # fraction at several times the speed, which attacks the one phase
-        # that plain swap demonstrably did not fix (run 31611661569: 8 GB of
-        # extra swap, death at the same ~48 minutes — consistent with
-        # systemd-oomd killing the runner's whole slice on swap pressure,
-        # which more swap only feeds).
-        #
-        # The 25m bound is the evidence-and-ratchet guarantee, not the plan.
-        # Every observed death struck 30-48 minutes into the cargo step, so
-        # 25m is inside the window where the machine is still demonstrably
-        # alive: the step gets killed cleanly, rust-cache's post step saves
-        # the compiled deps, the logs (and the resource curve) upload, and
-        # the next attempt resumes from the cache instead of from zero. A
-        # timed-out first attempt is a ratchet click, not a wasted run.
-        #
-        # RUSTFLAGS restates -D warnings because a step-level env overrides
-        # the job-level value setup-rust-toolchain sets.
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
+          restore-keys: |
+            seed-test-linux-${{ hashFiles('Cargo.lock') }}-
+            seed-test-linux-
+      # ── bounded build chunks ──
+      # Each chunk gives cargo at most 15 minutes — safely inside the <25m
+      # window the runner is known to survive — and exits 124 on the bound.
+      # An explicit save banks whatever that chunk compiled BEFORE the next
+      # chunk risks the machine. Exit codes other than 0/124 are real build
+      # errors and fail the job honestly. RUSTFLAGS restates -D warnings
+      # because a step-level env overrides the job-level value
+      # setup-rust-toolchain sets; it must be identical across every cargo
+      # invocation here or the chunks would rebuild instead of resuming.
+      - name: build (chunk 1)
+        id: b1
+        if: runner.os == 'Linux'
         env:
           RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
         run: |
-          command -v ld.lld || sudo apt-get install -y --no-install-recommends lld
           ( while true; do
               { date -u +%T; free -m | sed -n '2,3p'; df -h / | tail -1; } \
                 >> "$RUNNER_TEMP/resources.log"
               sleep 30
             done ) &
-          timeout --signal=INT --kill-after=60s 25m cargo nextest run --workspace --all-features
-      # macOS and Windows restore a cache and finish in 7 and 11 minutes. They
-      # have never been in the failing state, so they run unwrapped — and
+          rc=0
+          timeout --signal=INT --kill-after=60s 15m \
+            cargo build --workspace --all-features --tests || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
+      - name: bank chunk 1
+        if: runner.os == 'Linux' && steps.b1.outputs.rc == '124'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c1
+      - name: build (chunk 2)
+        id: b2
+        if: runner.os == 'Linux' && steps.b1.outputs.rc == '124'
+        env:
+          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+        run: |
+          rc=0
+          timeout --signal=INT --kill-after=60s 15m \
+            cargo build --workspace --all-features --tests || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
+      - name: bank chunk 2
+        if: runner.os == 'Linux' && steps.b2.outputs.rc == '124'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c2
+      - name: build (chunk 3)
+        id: b3
+        if: runner.os == 'Linux' && steps.b2.outputs.rc == '124'
+        env:
+          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+        run: |
+          rc=0
+          timeout --signal=INT --kill-after=60s 15m \
+            cargo build --workspace --all-features --tests || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
+      - name: bank chunk 3
+        if: runner.os == 'Linux' && steps.b3.outputs.rc == '124'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c3
+      # Tests only run against a completed build; the RUSTFLAGS match makes
+      # nextest reuse the chunks' artifacts instead of rebuilding.
+      - name: test
+        if: >-
+          runner.os == 'Linux' &&
+          (steps.b1.outputs.rc == '0' || steps.b2.outputs.rc == '0' || steps.b3.outputs.rc == '0')
+        env:
+          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+        run: timeout --signal=INT --kill-after=60s 15m cargo nextest run --workspace --all-features
+      # A checkpointed-but-unfinished cold build must fail the job — tests
+      # did not run — but it fails having banked up to 45 minutes of build,
+      # so re-running this job resumes instead of starting over.
+      - name: cold build checkpointed, not finished
+        if: runner.os == 'Linux' && steps.b3.outputs.rc == '124'
+        run: |
+          echo "::warning::cold build exceeded 3x15m chunks; progress is cached — re-run this job to continue"
+          exit 1
+      - name: save build cache
+        if: runner.os == 'Linux' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
+      # macOS and Windows restore a cache and finish in minutes. They have
+      # never been in the failing state, so they run unwrapped — and
       # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
       - name: test
         if: runner.os != 'Linux'
@@ -185,7 +261,8 @@ jobs:
         run: |
           df -h /
           free -h
-          tail -n 120 "$RUNNER_TEMP/resources.log" || true
+          sudo dmesg | tail -n 40 || true
+          tail -n 240 "$RUNNER_TEMP/resources.log" || true
 
   feature-isolation:
     name: feature-isolation
