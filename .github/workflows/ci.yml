@@ -222,6 +222,23 @@ jobs:
             ~/.cargo/git
             target
           key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c3
+      # Bank the COMPLETED build before any test runs. Run 31621627135 is
+      # why this sits here and not at the end of the job: the cold build
+      # finished in 4m01s (the build was never the killer), the machine then
+      # went deaf during the test phase, and the completed build was lost
+      # because the save was ordered after the tests. Tests must never be
+      # able to destroy a finished build again.
+      - name: save build cache
+        if: >-
+          runner.os == 'Linux' &&
+          (steps.b1.outputs.rc == '0' || steps.b2.outputs.rc == '0' || steps.b3.outputs.rc == '0')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
       # Tests only run against a completed build; the RUSTFLAGS match makes
       # nextest reuse the chunks' artifacts instead of rebuilding.
       - name: test
@@ -239,15 +256,6 @@ jobs:
         run: |
           echo "::warning::cold build exceeded 3x15m chunks; progress is cached — re-run this job to continue"
           exit 1
-      - name: save build cache
-        if: runner.os == 'Linux' && success()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
       # macOS and Windows restore a cache and finish in minutes. They have
       # never been in the failing state, so they run unwrapped — and
       # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
