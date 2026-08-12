@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run BitRouter Benchmarks"
+  short_description: "Run Harbor benchmarks through BitRouter"
+  default_prompt: "Use $run-bitrouter-benchmark to plan and run a Harbor benchmark through BitRouter."
