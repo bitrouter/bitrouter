@@ -170,4 +170,19 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum and the OTel stack, and the two OTLP transports stay isolated), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
+CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum and the OTel stack, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
+
+### The `sdk-public-api` job
+
+`bitrouter-sdk` exports OTLP without making the OpenTelemetry version part of its own semver contract, which only holds while no `opentelemetry*` or `tracing_opentelemetry` type appears in any public SDK signature. The job renders the SDK's entire public surface with [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api) — one fully-qualified line per public item — greps that rendering for forbidden types, and diffs it against the committed baseline at `crates/bitrouter-sdk/public-api.txt`. The baseline half is the broader guard: any change to the SDK's public API, OTel-related or not, shows up in review as a diff instead of slipping through. Full rationale in [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md).
+
+**If this job fails on your PR**, read which step failed. A forbidden-type or re-export failure is a real design problem — keep the OTel type out of the public signature (make it `pub(crate)`, or return `impl Trait`), do not regenerate around it. A baseline failure means your change moved the SDK's public API; if the printed diff is entirely intended, regenerate:
+
+```sh
+rustup toolchain install nightly-2026-05-05
+cargo install cargo-public-api --locked --version 0.52.0
+cargo +nightly-2026-05-05 public-api \
+  -p bitrouter-sdk --all-features --simplified > crates/bitrouter-sdk/public-api.txt
+```
+
+Both versions are pinned in `crates/bitrouter-sdk/public-api.pins`, which the CI job reads — take them from there rather than from this snippet if the two ever disagree. They are pinned because the baseline is a byte-for-byte diff: rustdoc's JSON format and `cargo public-api`'s rendering each change across releases, so regenerating on a different nightly or a newer tool rewrites the whole file. Run it on Linux or macOS; the SDK has `#[cfg(unix)]` items, so a Windows-generated baseline will not match.
