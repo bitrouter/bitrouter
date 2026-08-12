@@ -1,0 +1,43 @@
+# Submitted provider manifest. The public origin currently advertises Q27 only; Q35-A3B remains
+# qualification-backed but is intentionally omitted until it appears at this API base and passes
+# the full public probe battery.
+#
+# Pricing is the owner's 2026-08-12 canonical-market parity list for Qwen3.6 27B, refreshed from
+# OpenRouter's live shape=v7 effective-pricing feed immediately before submission. Cached prompt
+# tokens are metered separately but carry the same list rate; no cache discount is claimed.
+name: tiyuvta
+display_name: tiyuvta
+metadata:
+  headquarters: IL
+  # Current live Q27 inference country.
+  datacenters: [CA]
+  name: tiyuvta
+  privacy_policy_url: https://tiyuvta.ai/privacy/
+  slug: tiyuvta
+  terms_of_service_url: https://tiyuvta.ai/terms/
+kind: first_party
+api_base: https://api.tiyuvta.ai/v1
+doc_url: https://tiyuvta.ai/inference/
+api_protocol:
+  - "*": openai
+auth:
+  kind: bearer
+  env: TIYUVTA_API_KEY
+models:
+  - id: qwen/qwen3.6-27b
+    provider_model_id: qwen/qwen3.6-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.291
+        cache_read: 0.291
+      output_tokens:
+        text: 2.763
+    capabilities:
+      - tools
+      - structured_outputs
+status: active
+weight: 1
+submitted_at: 2026-08-12
+community: true
+access: api_key
+billing: usage_token

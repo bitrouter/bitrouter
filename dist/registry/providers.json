@@ -8898,6 +8898,59 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.tiyuvta.ai/v1",
+      "auth": {
+        "env": "TIYUVTA_API_KEY",
+        "kind": "bearer"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": true,
+      "display_name": "tiyuvta",
+      "doc_url": "https://tiyuvta.ai/inference/",
+      "id": "tiyuvta",
+      "kind": "first_party",
+      "metadata": {
+        "datacenters": [
+          "CA"
+        ],
+        "headquarters": "IL",
+        "name": "tiyuvta",
+        "privacy_policy_url": "https://tiyuvta.ai/privacy/",
+        "slug": "tiyuvta",
+        "terms_of_service_url": "https://tiyuvta.ai/terms/"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "tools",
+            "structured_outputs"
+          ],
+          "id": "qwen/qwen3.6-27b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.291,
+              "no_cache": 0.291
+            },
+            "output_tokens": {
+              "text": 2.763
+            }
+          },
+          "provider_model_id": "qwen/qwen3.6-27b"
+        }
+      ],
+      "name": "tiyuvta",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-08-12",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://aiplatform.googleapis.com/v1/publishers/google",
       "auth": {
         "env": "VERTEX_EXPRESS_API_KEY",

@@ -5673,6 +5673,24 @@
           },
           "provider": "siliconflow",
           "provider_model_id": "Qwen/Qwen3.6-27B"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "tools",
+            "structured_outputs"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.291,
+              "no_cache": 0.291
+            },
+            "output_tokens": {
+              "text": 2.763
+            }
+          },
+          "provider": "tiyuvta",
+          "provider_model_id": "qwen/qwen3.6-27b"
         }
       ],
       "release_date": "2026-04-22"
