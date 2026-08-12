@@ -41,8 +41,8 @@ harbor run --dataset ORG/DATASET@VERSION --agent AGENT --model ENTRY_MODEL
 # Local task or dataset
 harbor run --path /absolute/path --agent AGENT --model ENTRY_MODEL
 
-# Repository-backed input, when supported by the installed version
-harbor run --repo REPOSITORY --agent AGENT --model ENTRY_MODEL
+# Repository-backed dataset, when supported by the installed version
+harbor run --repo REPOSITORY --dataset DATASET --agent AGENT --model ENTRY_MODEL
 ```
 
 Add the confirmed attempt option only when needed. Add

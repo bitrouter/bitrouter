@@ -44,11 +44,13 @@ Inspect without external mutation:
 - AWS profile or assume-role name only if AWS deployment was selected.
 
 Use the official template from the same stable release/tag/commit as the
-selected BitRouter binary. Use `main`, a development branch, or another
-worktree only when the user selects its exact repository, ref, and path. If
-binary or endpoint provenance is unavailable, say `unverified`; never invent a
-template match. If the selected release has no compatible template, ask for an
-existing or custom config instead of silently using starter output.
+selected BitRouter binary. If AWS deployment has no preselected binary, propose
+the latest stable OSS release and its matching template as the default. Use
+`main`, a development branch, or another worktree only when the user selects
+its exact repository, ref, and path. If binary or endpoint provenance is
+unavailable, say `unverified`; never invent a template match. If the selected
+release has no compatible template, ask for an existing or custom config
+instead of silently using starter output.
 
 Classify the result:
 
@@ -72,9 +74,10 @@ Present one compact plan containing:
   concurrency or the effective Harbor default;
 - endpoint provenance and config classification/ref/path;
 - Harbor model string, BitRouter entry preset/model, every reachable downstream
-  provider/model/fallback, and credential source names (never values);
-- bounded agent-specific smoke payload, maximum requests, expected cost, and
-  retained artifacts;
+  provider/model/fallback, and credential source names (never values), plus any
+  broader inherited catalog or credential exposure as a separate disclosure;
+- bounded agent-specific smoke payload, maximum requests, expected cost, the
+  whole benchmark's provider-spend estimate or ceiling, and retained artifacts;
 - installs, service/config/secret-store changes, plus AWS account/principal,
   region, resources, and cost only when applicable;
 - output path and upload destination, visibility, and data sensitivity.
