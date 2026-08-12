@@ -8939,6 +8939,24 @@
             }
           },
           "provider_model_id": "qwen/qwen3.6-27b"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "tools",
+            "structured_outputs"
+          ],
+          "id": "qwen/qwen3.6-35b-a3b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.126,
+              "no_cache": 0.126
+            },
+            "output_tokens": {
+              "text": 1.087
+            }
+          },
+          "provider_model_id": "qwen/qwen3.6-35b-a3b"
         }
       ],
       "name": "tiyuvta",
