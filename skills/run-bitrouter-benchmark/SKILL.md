@@ -14,7 +14,8 @@ paid or mutating actions. Detected config and credentials are never permission.
 
 ## 1. Identify the run
 
-Ask for any missing choices together in one short message:
+Before discovery, ask for every missing choice together in one short message
+and stop. Do not infer an unspecified choice from local state:
 
 1. Harbor dataset with version, local path, repository, or job config.
 2. Agent: Codex, Claude Code, Terminus 2, or another installed Harbor agent.
@@ -26,7 +27,9 @@ Ask for any missing choices together in one short message:
 If the user chooses a new custom config, ask one follow-up for the entry
 preset/model, reachable provider/model targets, fallback, and credential source
 names. Do not ask AWS questions when no deployment is needed. Do not require a
-baseline when the user only wants one routed score.
+baseline when the user only wants one routed score. Treat `any` as permission
+for that named choice only; never default a different missing choice. Ask all
+remaining Stage 1 choices together.
 
 ## 2. Inspect before asking again
 
