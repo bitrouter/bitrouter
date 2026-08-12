@@ -66,44 +66,78 @@ jobs:
     runs-on: ${{ matrix.os }}
     # This is the only job in the workspace that *links* — clippy, doc, msrv
     # and dist all stop at metadata — and linking is what makes it the one job
-    # that can exhaust a runner. Both settings below exist for that reason.
+    # that can exhaust a runner. Everything below exists for that reason.
     #
-    # `timeout-minutes` is load-bearing, not hygiene. A runner that dies never
-    # runs its post steps, so `rust-cache` never saves (its `cache-on-failure`
-    # already defaults to true — it just never gets the chance) and GitHub
-    # never uploads the logs. That is a trap with no exit: no cache means the
-    # next run is cold too, dies the same way, and saves nothing again. It is
-    # not hypothetical — `v0-rust-test-Linux-x64` was the one rust-cache key
-    # family with no entry in this repo while `test-Darwin`, `test-Windows`
-    # and every other Linux job had one, and this job failed five times
-    # running at ~49 minutes with no logs to read. A job that *times out*
-    # ends cleanly instead: post steps run, the partial `target/` is cached,
-    # and the run is diagnosable. So even the failure path converges — a
-    # timed-out cold build seeds the cache that makes the retry warm.
-    timeout-minutes: 30
+    # `test (ubuntu-latest)` had been failing at ~49 minutes with no failing
+    # test and no logs, because it is the one job with no cache to restore:
+    # `v0-rust-test-Linux-x64` is the single rust-cache key family with no
+    # entry in this repo, while `test-Darwin`, `test-Windows` and every other
+    # Linux job have one. So it alone builds cold every run, and a cold build
+    # here has never survived. That is a trap with no exit — a job that does
+    # not finish never saves a cache (rust-cache's `cache-on-failure` already
+    # defaults to true; it just never gets the chance), so the next run is
+    # cold too.
+    #
+    # `timeout-minutes` alone does NOT break that trap, which is worth stating
+    # because it looks like it should. It *cancels* the job, and a cancelled
+    # job whose step does not exit within GitHub's grace period is force-
+    # killed with its post steps skipped — measured on run 31594067605, which
+    # cancelled at 30m, ran neither the `disk` step nor either post step, and
+    # left no cache and no logs behind. So it is kept only as an outer
+    # backstop, set above the in-step timeout below, which is the one that is
+    # supposed to fire.
+    timeout-minutes: 60
     env:
-      # Headroom, not the fix: shrink the cold build the timeout above has to
-      # accommodate. A cold `--workspace --all-features` test build is ~9.1 GB
-      # of `target/` (measured on macOS/arm64); `line-tables-only` takes that
-      # to ~7.2 GB with all 2496 tests still enumerating identically, and
-      # keeps `file:line` in test backtraces — the part anyone reads.
+      # Headroom for the cold build. A cold `--workspace --all-features` test
+      # build is ~9.1 GB of `target/` (measured on macOS/arm64);
+      # `line-tables-only` takes that to ~7.2 GB with all 2496 tests still
+      # enumerating identically, and keeps `file:line` in test backtraces —
+      # the part anyone reads.
       #
       # Expect a larger saving on Linux than that macOS figure suggests, since
       # Linux embeds DWARF in each of the ~25 test binaries while macOS leaves
-      # it in the `.o` files and Windows in separate `.pdb`s. That asymmetry is
-      # the likeliest reason ubuntu is the platform that runs out of room on a
-      # tree macOS and Windows build fine — likeliest, not established: every
-      # occurrence so far died without logs. The `df` step below is what will
-      # settle it.
+      # it in the `.o` files and Windows in separate `.pdb`s.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v6
+      # Removes ~25 GB of preinstalled toolchains this workspace never builds
+      # against. Disk exhaustion is the leading explanation for a runner that
+      # dies mid-link with nothing written, and it is the one candidate that
+      # can be removed outright rather than measured — which matters when
+      # every occurrence so far has destroyed its own evidence. Inline `rm`
+      # rather than a third-party action, so it stays auditable.
+      - name: reclaim disk
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+                      /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          df -h /
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --all-features
-      # Runs on the failure path too: if this job ever dies on capacity again,
-      # this is the number that says so instead of leaving it to inference.
+      # Bounded in-step rather than by `timeout-minutes`, because the two fail
+      # in different ways and only this one is useful. `timeout(1)` kills
+      # cargo and the *step* exits non-zero in the ordinary way, so the job
+      # ends cleanly: `disk` below runs, rust-cache's post step saves the
+      # partial `target/`, and GitHub uploads the logs. A job cancelled by
+      # `timeout-minutes` does none of that. This is what makes the failure
+      # path converge — a bounded cold build still seeds the cache that makes
+      # the retry warm — and what will produce the first readable log this
+      # failure has ever had.
+      - name: test
+        if: runner.os == 'Linux'
+        run: timeout --signal=INT --kill-after=60s 45m cargo nextest run --workspace --all-features
+      # macOS and Windows restore a cache and finish in 7 and 11 minutes. They
+      # have never been in the failing state, so they run unwrapped — and
+      # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
+      - name: test
+        if: runner.os != 'Linux'
+        run: cargo nextest run --workspace --all-features
+      # Runs on the failure path: if this job dies on capacity again, this is
+      # the number that says so instead of leaving it to inference.
       - name: disk
         if: always() && runner.os == 'Linux'
         run: df -h /
