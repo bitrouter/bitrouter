@@ -64,6 +64,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # `issues: write` exists for the live-stream diagnostic in the Linux test
+    # step: the runner dies too abruptly to upload logs, so the step streams
+    # its own output into a PR comment while the machine is still alive.
+    permissions:
+      contents: read
+      issues: write
     # This is the only job in the workspace that *links* — clippy, doc, msrv
     # and dist all stop at metadata — and it is the one job that has been
     # dying on ubuntu whenever it runs cold. What is actually known, after
@@ -241,13 +247,46 @@ jobs:
           key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
       # Tests only run against a completed build; the RUSTFLAGS match makes
       # nextest reuse the chunks' artifacts instead of rebuilding.
+      #
+      # The machine dies DURING THE TEST PHASE (established by run
+      # 31621627135: cold build done in 4m01s, wedge afterwards), and it dies
+      # too abruptly for logs, artifacts, or post steps — so the step streams
+      # its own output somewhere the death cannot reach: a PR comment,
+      # PATCHed in place every 20s while the machine is alive. When the
+      # runner goes deaf, the last update names the tests that were running.
+      # Push-triggered runs (no PR number) skip the stream. This diagnostic
+      # comes out once the wedging test is found and fixed.
       - name: test
         if: >-
           runner.os == 'Linux' &&
           (steps.b1.outputs.rc == '0' || steps.b2.outputs.rc == '0' || steps.b3.outputs.rc == '0')
         env:
           RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
-        run: timeout --signal=INT --kill-after=60s 15m cargo nextest run --workspace --all-features
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          NO_COLOR: "1"
+          CARGO_TERM_COLOR: never
+        run: |
+          LOG="$RUNNER_TEMP/nextest.log"
+          : > "$LOG"
+          if [ -n "$PR_NUMBER" ]; then
+            HDR="🔬 live \`test (ubuntu-latest)\` stream — run ${{ github.run_id }} attempt ${{ github.run_attempt }} — auto-updated in place"
+            CID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" -f body="$HDR" --jq .id || true)
+            if [ -n "$CID" ]; then
+              ( while true; do
+                  { printf '%s — %s UTC\n\n```\n' "$HDR" "$(date -u +%T)"
+                    tail -c 55000 "$LOG"
+                    printf '\n```\n'
+                  } > "$RUNNER_TEMP/body.txt"
+                  gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" \
+                    -F body=@"$RUNNER_TEMP/body.txt" >/dev/null 2>&1 || true
+                  sleep 20
+                done ) &
+            fi
+          fi
+          set -o pipefail
+          timeout --signal=INT --kill-after=60s 15m \
+            cargo nextest run --workspace --all-features 2>&1 | tee "$LOG"
       # A checkpointed-but-unfinished cold build must fail the job — tests
       # did not run — but it fails having banked up to 45 minutes of build,
       # so re-running this job resumes instead of starting over.
