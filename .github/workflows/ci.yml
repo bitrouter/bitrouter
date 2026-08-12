@@ -142,17 +142,36 @@ jobs:
       # failure has ever had.
       - name: test
         if: runner.os == 'Linux'
-        # The sampler writes to a file, not stdout, because it is only
-        # readable in outcomes where the job ends cleanly — and in those
-        # outcomes the `resources` step below prints it. If the runner dies
-        # anyway, the file dies with it, same as everything else.
+        # lld is the substantive change: the cold build's dangerous phase is
+        # its link tail — ~82 test binaries, four GNU-ld links in parallel,
+        # each now carrying the whole otel+tonic stack the SDK compiles in
+        # under --all-features. GNU ld takes gigabytes per link; lld takes a
+        # fraction at several times the speed, which attacks the one phase
+        # that plain swap demonstrably did not fix (run 31611661569: 8 GB of
+        # extra swap, death at the same ~48 minutes — consistent with
+        # systemd-oomd killing the runner's whole slice on swap pressure,
+        # which more swap only feeds).
+        #
+        # The 25m bound is the evidence-and-ratchet guarantee, not the plan.
+        # Every observed death struck 30-48 minutes into the cargo step, so
+        # 25m is inside the window where the machine is still demonstrably
+        # alive: the step gets killed cleanly, rust-cache's post step saves
+        # the compiled deps, the logs (and the resource curve) upload, and
+        # the next attempt resumes from the cache instead of from zero. A
+        # timed-out first attempt is a ratchet click, not a wasted run.
+        #
+        # RUSTFLAGS restates -D warnings because a step-level env overrides
+        # the job-level value setup-rust-toolchain sets.
+        env:
+          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
         run: |
+          command -v ld.lld || sudo apt-get install -y --no-install-recommends lld
           ( while true; do
               { date -u +%T; free -m | sed -n '2,3p'; df -h / | tail -1; } \
                 >> "$RUNNER_TEMP/resources.log"
               sleep 30
             done ) &
-          timeout --signal=INT --kill-after=60s 45m cargo nextest run --workspace --all-features
+          timeout --signal=INT --kill-after=60s 25m cargo nextest run --workspace --all-features
       # macOS and Windows restore a cache and finish in 7 and 11 minutes. They
       # have never been in the failing state, so they run unwrapped — and
       # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
