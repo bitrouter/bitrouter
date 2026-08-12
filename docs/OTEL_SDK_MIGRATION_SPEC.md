@@ -157,10 +157,9 @@ constraint below covers `opentelemetry*` only.
 `tower-http` is deliberately *not* on this list: `TraceLayer` never leaves
 `router_wrapper`'s closure body, so it stays a private dependency.
 
-Every claim in this section is checked, not asserted. The committed baseline at
-`crates/bitrouter-sdk/public-api.txt` renders that one function as exactly one
-line, and it is the only line in the SDK's whole public surface that mentions
-`tracing` at all:
+Every claim in this section is checked, not asserted. The rendered listing the
+`sdk-public-api` job builds contains exactly one line mentioning `tracing` in
+the SDK's whole public surface, and this is it:
 
 ```
 pub fn bitrouter_sdk::otel::subscriber::tracing_subscriber_layer<S>(&bitrouter_sdk::otel::OtelExporter) -> impl tracing_subscriber::layer::Layer<S> where S: tracing_core::subscriber::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>
@@ -210,11 +209,20 @@ four things about that one artifact:
 3. **Re-export gate.** No verbatim `pub use opentelemetry…` /
    `pub use tracing_opentelemetry…` in `crates/bitrouter-sdk/src/`. See the
    known gap below for why gate 2 cannot see this on its own.
-4. **Baseline gate.** The rendering must match the committed
-   `crates/bitrouter-sdk/public-api.txt` byte for byte. A grep-only guard sees
-   a forbidden type but never *unintended public API growth*, which is how a
-   public foreign type gets added in the first place; the baseline turns every
-   public-surface change into a reviewable diff.
+4. **Public-dependency gate.** The set of foreign crates the listing reaches
+   must match the committed `crates/bitrouter-sdk/public-api-deps.txt`. A
+   grep-only guard sees a forbidden type but never *unintended public API
+   growth*, which is how a public foreign type gets added in the first place —
+   `tracing_core` entered this crate's public surface through a generic bound
+   and no `opentelemetry` grep would ever have flagged it.
+
+   It tracks the crate *set* rather than the full item listing deliberately.
+   The listing is ~8,500 lines, ~22% of them auto-derived marker impls
+   (`Sync`, `Unpin`, `RefUnwindSafe`, …), so one new public struct writes six
+   lines of pure noise into review and a genuine signal drowns in it. The set
+   moves on exactly the semver-relevant event — the SDK gained or lost a
+   public dependency, making an upstream breaking release a BitRouter breaking
+   release — and stays silent for ordinary API work.
 
 `--simplified` (omit blanket impls) is load-bearing, not cosmetic.
 `opentelemetry` ships `impl<T> FutureExt for T`, which rustdoc attaches to
@@ -224,12 +232,12 @@ this crate never authored, and gate 2 would be permanently red. The flag drops
 them structurally, so no allow-list exists for a genuine leak to hide behind.
 
 Two things are pinned, in `crates/bitrouter-sdk/public-api.pins` — the nightly
-toolchain and the `cargo public-api` version. The baseline is a byte-for-byte
-diff, and rustdoc's JSON format and `cargo public-api`'s rendering each change
-across releases, so an unpinned either would rewrite the whole file on an
-unrelated upgrade and bury the real signal. The pins file sits beside the
-baseline, carries the regeneration command, and is the single source of truth:
-the workflow reads both values out of it rather than repeating them.
+toolchain and the `cargo public-api` version. rustdoc's JSON format and
+`cargo public-api`'s rendering each change across releases, and the manifest is
+derived from that rendering, so an unpinned either could shift which paths the
+extraction sees. The pins file sits beside the manifest, carries the
+regeneration command, and is the single source of truth: the workflow reads
+both values out of it rather than repeating them.
 
 ### Known gap in gate 2
 

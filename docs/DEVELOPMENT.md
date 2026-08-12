@@ -174,15 +174,18 @@ CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-is
 
 ### The `sdk-public-api` job
 
-`bitrouter-sdk` exports OTLP without making the OpenTelemetry version part of its own semver contract, which only holds while no `opentelemetry*` or `tracing_opentelemetry` type appears in any public SDK signature. The job renders the SDK's entire public surface with [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api) — one fully-qualified line per public item — greps that rendering for forbidden types, and diffs it against the committed baseline at `crates/bitrouter-sdk/public-api.txt`. The baseline half is the broader guard: any change to the SDK's public API, OTel-related or not, shows up in review as a diff instead of slipping through. Full rationale in [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md).
+`bitrouter-sdk` exports OTLP without making the OpenTelemetry version part of its own semver contract, which only holds while no `opentelemetry*` or `tracing_opentelemetry` type appears in any public SDK signature. The job renders the SDK's entire public surface with [`cargo public-api`](https://github.com/cargo-public-api/cargo-public-api) — one fully-qualified line per public item — greps that rendering for forbidden types, then reduces it to the set of foreign crates the public API reaches and diffs that against `crates/bitrouter-sdk/public-api-deps.txt`. That second half is the broader guard: a grep can only find a type you already know to look for, whereas the manifest catches the SDK quietly gaining a *new* public dependency — which is how `tracing_core` got there, through a generic bound. Full rationale in [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md).
 
-**If this job fails on your PR**, read which step failed. A forbidden-type or re-export failure is a real design problem — keep the OTel type out of the public signature (make it `pub(crate)`, or return `impl Trait`), do not regenerate around it. A baseline failure means your change moved the SDK's public API; if the printed diff is entirely intended, regenerate:
+**If this job fails on your PR**, read which step failed. A forbidden-type or re-export failure is a real design problem — keep the OTel type out of the public signature (make it `pub(crate)`, or return `impl Trait`), do not regenerate around it. A public-dependency failure means your change added or removed a crate from the SDK's public API; a `+` line means an upstream breaking release in that crate now becomes a BitRouter breaking release, so confirm that is intended before regenerating:
 
 ```sh
 rustup toolchain install nightly-2026-05-05
 cargo install cargo-public-api --locked --version 0.52.0
 cargo +nightly-2026-05-05 public-api \
-  -p bitrouter-sdk --all-features --simplified > crates/bitrouter-sdk/public-api.txt
+  -p bitrouter-sdk --all-features --simplified \
+  | grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' \
+  | cut -d: -f1 | sort -u \
+  | grep -vxE 'bitrouter_sdk|core|std|alloc'
 ```
 
-Both versions are pinned in `crates/bitrouter-sdk/public-api.pins`, which the CI job reads — take them from there rather than from this snippet if the two ever disagree. They are pinned because the baseline is a byte-for-byte diff: rustdoc's JSON format and `cargo public-api`'s rendering each change across releases, so regenerating on a different nightly or a newer tool rewrites the whole file. Run it on Linux or macOS; the SDK has `#[cfg(unix)]` items, so a Windows-generated baseline will not match.
+Append the output under the comment header in `public-api-deps.txt` — the header is stripped before comparison, so keep it out of the generated part. Both versions are pinned in `crates/bitrouter-sdk/public-api.pins`, which the CI job reads; take them from there rather than from this snippet if the two ever disagree. They are pinned because the manifest is derived from `cargo public-api`'s rendering, and both rustdoc's JSON format and that rendering change across releases. Run it on Linux or macOS; the SDK has `#[cfg(unix)]` items, so a Windows-generated listing will not match.

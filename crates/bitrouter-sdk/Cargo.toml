@@ -7,10 +7,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-# CI artifacts for the `sdk-public-api` job, not crate content. The baseline is
-# ~1 MB of rendered public-API lines; consumers who download the crate have no
-# use for it.
-exclude = ["public-api.txt", "public-api.pins"]
+# CI artifacts for the `sdk-public-api` job, not crate content: consumers who
+# download the crate have no use for the public-dependency manifest or its
+# toolchain pins.
+exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [dependencies]
 async-trait.workspace = true

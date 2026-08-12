@@ -187,10 +187,11 @@ jobs:
     # below would be permanently red. The flag drops them structurally — no
     # allow-list, so a real `opentelemetry` leak still cannot hide behind one.
     #
-    # The same listing doubles as a committed baseline. A guard that only
-    # greps cannot see *unintended* public API growth, which is how a public
-    # foreign type gets added in the first place; the baseline makes every
-    # public-surface change show up in review as a diff.
+    # The same listing feeds a committed manifest of the foreign crates the
+    # public API reaches. A guard that only greps cannot see *unintended*
+    # public API growth, which is how a public foreign type gets added in the
+    # first place; the manifest makes that specific change show up in review
+    # as a one-line diff.
     #
     # Linux-only on purpose: the SDK has `#[cfg(unix)]` items, so a Windows
     # runner would produce a different (correct, but non-matching) listing.
@@ -281,11 +282,31 @@ jobs:
             printf '%s\n' "$hits"
             exit 1
           fi
-      - name: the committed public API baseline is up to date
+      # Gates 1-3 above answer "is an OTel type public?". This one answers the
+      # broader question a grep structurally cannot: "did the SDK gain a public
+      # dependency nobody noticed?" That is not hypothetical — `tracing_core`
+      # became public surface here via a generic bound, and no `opentelemetry`
+      # grep would ever have seen it.
+      #
+      # We track the foreign-crate *set*, not the full item listing. The full
+      # listing is ~8.5k lines of which ~22% is auto-derived marker impls
+      # (`Sync`/`Unpin`/`RefUnwindSafe`/…), so adding one public struct writes
+      # six lines of noise into review and the real signal drowns. The set
+      # changes on exactly the semver-relevant event and is silent otherwise.
+      - name: the SDK's public dependency surface is unchanged
         shell: bash
         run: |
-          if ! diff -u crates/bitrouter-sdk/public-api.txt "$RUNNER_TEMP/public-api.txt"; then
-            echo "::error::bitrouter-sdk's public API changed. Review the diff above; if every line is intended, regenerate the baseline with: cargo +${{ steps.pin.outputs.toolchain }} public-api -p bitrouter-sdk --all-features --simplified > crates/bitrouter-sdk/public-api.txt"
+          # Path roots only: the regex is greedy from the word boundary, so
+          # `bitrouter_sdk::otel::OtelExporter` yields `bitrouter_sdk`, not
+          # `otel`. Generic params (`S`, `T`) start uppercase and never match.
+          grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$RUNNER_TEMP/public-api.txt" \
+            | cut -d: -f1 | sort -u \
+            | grep -vxE 'bitrouter_sdk|core|std|alloc' > "$RUNNER_TEMP/public-api-deps.txt"
+          if ! diff -u \
+            <(grep -v '^#' crates/bitrouter-sdk/public-api-deps.txt) \
+            "$RUNNER_TEMP/public-api-deps.txt"
+          then
+            echo "::error::bitrouter-sdk's public dependency surface changed. A '+' line means an upstream breaking release in that crate now becomes a BitRouter breaking release — confirm that is intended, then update crates/bitrouter-sdk/public-api-deps.txt (regeneration command in crates/bitrouter-sdk/public-api.pins)."
             exit 1
           fi
 
