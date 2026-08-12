@@ -17,6 +17,11 @@ The replacement must support any benchmark that the installed Harbor version
 can run, while keeping the human interaction short and preserving explicit
 authorization for provider, model, credential, and AWS changes.
 
+It must also be host-portable: no author-machine path, port, profile, region,
+package manager, environment launcher, container runtime, service layout, or
+repository checkout is an implicit default. These are discovered on the current
+user's system or asked for only when discovery cannot resolve them safely.
+
 ## Goals
 
 - Run benchmarks through the installed Harbor CLI, including Harbor's native

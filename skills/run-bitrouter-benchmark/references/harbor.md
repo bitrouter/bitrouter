@@ -12,7 +12,9 @@ Official references:
 
 ## Discover the installed contract
 
-Run read-only discovery first:
+First resolve how this user's Harbor is launched: a PATH command, absolute
+executable, environment launcher, or container command. Then use that resolved
+launcher for read-only discovery; `harbor` below is only a placeholder:
 
 ```bash
 harbor --version
@@ -20,9 +22,12 @@ harbor run --help
 harbor datasets list
 ```
 
-If the installed command is missing or broken, include the proposed pinned
-install/repair in the resolved plan. Do not install or upgrade silently. Record
-the effective Harbor version and agent version with the job.
+If the bare command is absent, check the user-selected environment or container
+before calling Harbor uninstalled. If the resolved launcher is missing or
+broken, derive a pinned install/repair from the current host and user preference
+and include it in the resolved plan. Do not assume a package manager, virtual
+environment, path, or container runtime; do not install or upgrade silently.
+Record the effective Harbor version, launcher, and agent version with the job.
 
 Inspect the dataset/repository documentation and task metadata before forming a
 command. A benchmark-owned `job.yaml` or equivalent official config wins over
@@ -39,7 +44,7 @@ Use the forms exposed by the installed `harbor run --help`:
 harbor run --dataset ORG/DATASET@VERSION --agent AGENT --model ENTRY_MODEL
 
 # Local task or dataset
-harbor run --path /absolute/path --agent AGENT --model ENTRY_MODEL
+harbor run --path <LOCAL_TASK_OR_DATASET_PATH> --agent AGENT --model ENTRY_MODEL
 
 # Repository-backed dataset, when supported by the installed version
 harbor run --repo REPOSITORY --dataset DATASET --agent AGENT --model ENTRY_MODEL
@@ -71,7 +76,7 @@ Before the scored job:
 4. launch exactly the resolved Harbor job.
 
 Preserve all completed and failed trials. For a compatible incomplete job, use
-the installed `harbor job resume -p JOB_DIR` interface. Do not delete failures,
+the installed `harbor job resume -p <JOB_DIR>` interface. Do not delete failures,
 invent case slots, or write a custom controller, scheduler, retry ledger, or
 resume mechanism.
 

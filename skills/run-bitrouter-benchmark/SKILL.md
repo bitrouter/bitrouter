@@ -11,6 +11,9 @@ Let Harbor own tasks, trials, environments, concurrency, scoring, artifacts,
 and resume. BitRouter is the model endpoint. Ask only for choices that cannot be
 discovered, then obtain one explicit confirmation of the resolved run before
 paid or mutating actions. Detected config and credentials are never permission.
+Treat every path, command, port, profile, region, service, package manager, and
+repository layout as specific to the current user's environment; discover or
+ask for it instead of inheriting assumptions from the skill author's machine.
 
 ## 1. Identify the run
 
@@ -35,13 +38,24 @@ remaining Stage 1 choices together.
 
 Inspect without external mutation:
 
-- installed `harbor --version`, `harbor run --help`, agents, environments, and
-  the selected dataset or benchmark-owned job config;
+- how Harbor is launched (PATH command, absolute executable, environment
+  launcher, or container), then its version, run help, agents, environments,
+  and the selected dataset or benchmark-owned job config;
+- how BitRouter is accessed and managed: endpoint, executable or service /
+  container identity, config path or mount, and source/release provenance;
 - current benchmark run and submission rules;
 - BitRouter endpoint provenance and health metadata where available;
 - selected config source and every provider/model/fallback reachable from its
   entry route, plus broader exposure from inherited defaults or credentials;
 - AWS profile or assume-role name only if AWS deployment was selected.
+
+Use read-only host discovery first. A command absent from `PATH` is unresolved,
+not proof that the software is uninstalled. After discovery, batch all access
+methods or paths that remain genuinely unresolved into one conditional prompt.
+If installation or repair is needed and no preference was supplied, propose a
+pinned method appropriate to the confirmed host/runtime in the Stage 2 plan;
+do not add a separate preference round. Never assume this repository is checked
+out.
 
 Use the official template from the same stable release/tag/commit as the
 selected BitRouter binary. If AWS deployment has no preselected binary, propose
