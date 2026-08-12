@@ -1,0 +1,25 @@
+# Pins for `public-api.txt`, the committed public-API baseline next to this
+# file. The `sdk-public-api` CI job reads both values out of here, so this is
+# the single source of truth — the workflow does not repeat them.
+#
+# Both pins matter, and for the same reason: the baseline is a byte-for-byte
+# diff, so anything that changes the *rendering* rewrites the whole file and
+# buries the real signal.
+#
+#   toolchain  — rustdoc's JSON format changes shape across nightlies.
+#   tool       — `cargo public-api`'s own rendering changes across releases.
+#
+# Regenerate the baseline with exactly these:
+#
+#   rustup toolchain install nightly-2026-05-05
+#   cargo install cargo-public-api --locked --version 0.52.0
+#   cargo +nightly-2026-05-05 public-api -p bitrouter-sdk --all-features --simplified \
+#     > crates/bitrouter-sdk/public-api.txt
+#
+# Run it on Linux or macOS. `bitrouter-sdk` has `#[cfg(unix)]` items, so a
+# Windows-generated baseline will not match; the CI job runs on Linux.
+#
+# Moving either pin is a deliberate act: regenerate, and expect a large diff
+# that is rendering churn rather than an API change.
+toolchain=nightly-2026-05-05
+tool=cargo-public-api@0.52.0

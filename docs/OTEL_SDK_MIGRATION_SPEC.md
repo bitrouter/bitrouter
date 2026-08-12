@@ -1,6 +1,7 @@
 # OTel SDK migration spec
 
-Status: **PR 1 landed.** Tracking issue #808.
+Status: **PR 1 landed; the public-API guard landed on top of it.** Tracking
+issue #808.
 
 Moves the OTLP exporter out of `crates/bitrouter-observe` into
 `crates/bitrouter-sdk` behind an `otel` feature, and deletes the observe
@@ -156,6 +157,29 @@ constraint below covers `opentelemetry*` only.
 `tower-http` is deliberately *not* on this list: `TraceLayer` never leaves
 `router_wrapper`'s closure body, so it stays a private dependency.
 
+Every claim in this section is checked, not asserted. The committed baseline at
+`crates/bitrouter-sdk/public-api.txt` renders that one function as exactly one
+line, and it is the only line in the SDK's whole public surface that mentions
+`tracing` at all:
+
+```
+pub fn bitrouter_sdk::otel::subscriber::tracing_subscriber_layer<S>(&bitrouter_sdk::otel::OtelExporter) -> impl tracing_subscriber::layer::Layer<S> where S: tracing_core::subscriber::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>
+```
+
+Three foreign types, two crates, no `tower_http` anywhere in the baseline —
+the table is complete. The baseline spells the *defining* paths
+(`tracing_subscriber::layer::Layer`, `tracing_core::subscriber::Subscriber`)
+where the table spells the re-export paths callers write; they are the same
+items.
+
+Under `--all-features` the SDK's public surface reaches fifteen foreign crates
+in total — `serde_core`, `schemars`, `serde_json`, `reqwest`,
+`agent_client_protocol_schema`, `futures_core`, `anyhow`, `http`, `axum`,
+`axum_core`, `tokio`, `rmcp`, `pin_project_lite`, `tracing_subscriber`,
+`tracing_core`. Only the last two are in scope for this document; the rest
+predate the OTel move and are listed here so the next reader does not mistake
+the two-crate claim above for a claim about the whole crate.
+
 ## Hard constraint
 
 **No `opentelemetry*` or `tracing_opentelemetry` type may appear in any public
@@ -166,9 +190,62 @@ This is what lets the SDK export OTLP without making the OpenTelemetry version
 part of its own semver contract. `tracer_clone` being `pub(crate)` is the
 load-bearing piece; see the `acp.rs` constraint above.
 
-Enforcement is by inspection today. The machine-checkable gate (a
-public-API-surface diff) needs a nightly toolchain and is deliberately a
-separate future PR.
+### How it is enforced
+
+The `sdk-public-api` CI job. It renders the SDK's whole public surface with
+`cargo public-api -p bitrouter-sdk --all-features --simplified` — one
+fully-qualified line per public item, with rustdoc's own name resolution
+already applied, which is why fields, variant payloads, generic bounds,
+associated types and aliases all collapse into a single grep. It then asserts
+four things about that one artifact:
+
+1. **The listing is real.** Two sentinels (`pub mod bitrouter_sdk::otel`, the
+   `tracing_subscriber_layer` line) must be present. Every other gate is a
+   negative assertion, and an empty or feature-less listing would satisfy them
+   all vacuously.
+2. **Hard gate.** No case-insensitive `opentelemetry` match anywhere in the
+   listing. `tracing_opentelemetry` contains `opentelemetry`, so one pattern
+   covers both crates, and folding case also catches type names like
+   `OpenTelemetryLayer`.
+3. **Re-export gate.** No verbatim `pub use opentelemetry…` /
+   `pub use tracing_opentelemetry…` in `crates/bitrouter-sdk/src/`. See the
+   known gap below for why gate 2 cannot see this on its own.
+4. **Baseline gate.** The rendering must match the committed
+   `crates/bitrouter-sdk/public-api.txt` byte for byte. A grep-only guard sees
+   a forbidden type but never *unintended public API growth*, which is how a
+   public foreign type gets added in the first place; the baseline turns every
+   public-surface change into a reviewable diff.
+
+`--simplified` (omit blanket impls) is load-bearing, not cosmetic.
+`opentelemetry` ships `impl<T> FutureExt for T`, which rustdoc attaches to
+every documented type — without the flag the listing carries 353 lines of
+`impl<T> opentelemetry::context::future_ext::FutureExt for <an SDK type>` that
+this crate never authored, and gate 2 would be permanently red. The flag drops
+them structurally, so no allow-list exists for a genuine leak to hide behind.
+
+Two things are pinned, in `crates/bitrouter-sdk/public-api.pins` — the nightly
+toolchain and the `cargo public-api` version. The baseline is a byte-for-byte
+diff, and rustdoc's JSON format and `cargo public-api`'s rendering each change
+across releases, so an unpinned either would rewrite the whole file on an
+unrelated upgrade and bury the real signal. The pins file sits beside the
+baseline, carries the regeneration command, and is the single source of truth:
+the workflow reads both values out of it rather than repeating them.
+
+### Known gap in gate 2
+
+`cargo public-api` renders a bare re-export under its **local** path. Adding
+`pub use opentelemetry_sdk::trace::SdkTracer;` to `otel/mod.rs` prints
+
+```
+pub use bitrouter_sdk::otel::SdkTracer
+```
+
+— the origin crate appears nowhere in the line, so gate 2 passes. A re-export
+whose *type name* carries "OpenTelemetry" (say `OpenTelemetrySpanExt`) does
+trip it; a neutrally-named one does not. Gate 3 closes the verbatim case at
+the source level. A re-export laundered through a local alias is out of reach
+of any lexical check, and is left to gate 4: the added line still fails the
+baseline diff, and a human has to consciously accept it to regenerate.
 
 ## Frozen: the `bitrouter-observe` config namespace
 
