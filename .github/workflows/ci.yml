@@ -102,12 +102,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # Removes ~25 GB of preinstalled toolchains this workspace never builds
-      # against. Disk exhaustion is the leading explanation for a runner that
-      # dies mid-link with nothing written, and it is the one candidate that
-      # can be removed outright rather than measured — which matters when
-      # every occurrence so far has destroyed its own evidence. Inline `rm`
-      # rather than a third-party action, so it stays auditable.
-      - name: reclaim disk
+      # against, then adds 8 GB of swap. Disk was the first suspect for a
+      # runner that dies mid-build with nothing written — run 31601397839
+      # ruled it out: the reclaim succeeded and the runner died at the same
+      # ~50 minute mark anyway. Worse, the in-step 45m `timeout(1)` never
+      # fired, so the machine was unresponsive *before* its own watchdog — a
+      # hang, not slowness. The remaining fit is memory: a cold
+      # `--all-features` build runs four parallel rustc jobs through a graph
+      # where `bitrouter-sdk` now carries the whole otel+tonic+axum stack and
+      # every downstream test binary links it, on 16 GB with only the stock
+      # 4 GB swapfile. Swap converts that death into slowness — slow enough
+      # and the timeout below finally gets to fire, which is itself evidence.
+      # Inline commands rather than a third-party action, so it stays
+      # auditable.
+      - name: reclaim disk, extend swap
         if: runner.os == 'Linux'
         run: |
           df -h /
@@ -116,6 +124,11 @@ jobs:
                       /opt/hostedtoolcache/CodeQL || true
           sudo docker image prune --all --force || true
           df -h /
+          sudo fallocate -l 8G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci
+          sudo swapon /swapfile-ci
+          free -h
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
       # Bounded in-step rather than by `timeout-minutes`, because the two fail
@@ -129,18 +142,31 @@ jobs:
       # failure has ever had.
       - name: test
         if: runner.os == 'Linux'
-        run: timeout --signal=INT --kill-after=60s 45m cargo nextest run --workspace --all-features
+        # The sampler writes to a file, not stdout, because it is only
+        # readable in outcomes where the job ends cleanly — and in those
+        # outcomes the `resources` step below prints it. If the runner dies
+        # anyway, the file dies with it, same as everything else.
+        run: |
+          ( while true; do
+              { date -u +%T; free -m | sed -n '2,3p'; df -h / | tail -1; } \
+                >> "$RUNNER_TEMP/resources.log"
+              sleep 30
+            done ) &
+          timeout --signal=INT --kill-after=60s 45m cargo nextest run --workspace --all-features
       # macOS and Windows restore a cache and finish in 7 and 11 minutes. They
       # have never been in the failing state, so they run unwrapped — and
       # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
       - name: test
         if: runner.os != 'Linux'
         run: cargo nextest run --workspace --all-features
-      # Runs on the failure path: if this job dies on capacity again, this is
-      # the number that says so instead of leaving it to inference.
-      - name: disk
+      # Runs on the failure path: if this job dies on capacity again, these
+      # are the numbers that say so instead of leaving it to inference.
+      - name: resources
         if: always() && runner.os == 'Linux'
-        run: df -h /
+        run: |
+          df -h /
+          free -h
+          tail -n 120 "$RUNNER_TEMP/resources.log" || true
 
   feature-isolation:
     name: feature-isolation
