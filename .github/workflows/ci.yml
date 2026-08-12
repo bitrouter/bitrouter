@@ -64,11 +64,40 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # A cache-warm run of this job takes ~2-3 minutes; a cold one has to build
+    # the whole `--all-features` graph, which is tens of GB of target tree. Cap
+    # the job so an exhausted runner fails readably instead of dying at ~49
+    # minutes with no uploaded logs at all (bitrouter/bitrouter#809, #811).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+      # ubuntu runners preinstall ~25 GB of toolchains this workspace never
+      # uses, leaving roughly 14 GB free. A cold `--workspace --all-features`
+      # target tree does not fit in that. When the disk fills, the runner is
+      # killed mid-step — which surfaces as a ~49 minute hang with no logs
+      # rather than an error, because logs are only uploaded when a job ends
+      # cleanly. The `df` lines on either side are deliberate: they are the
+      # evidence that says whether disk was ever the constraint.
+      - name: reclaim runner disk
+        if: runner.os == 'Linux'
+        run: |
+          echo "::group::disk before reclaim"
+          df -h /
+          echo "::endgroup::"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force > /dev/null 2>&1 || true
+          echo "::group::disk after reclaim"
+          df -h /
+          echo "::endgroup::"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --all-features
+      # `always()` so this still reports when the build itself failed — a
+      # near-zero figure here is the confirmation that disk was the cause.
+      - name: disk after build
+        if: always() && runner.os == 'Linux'
+        run: df -h /
 
   feature-isolation:
     name: feature-isolation
