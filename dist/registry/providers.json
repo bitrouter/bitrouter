@@ -8931,11 +8931,11 @@
           "id": "qwen/qwen3.6-27b",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.291,
-              "no_cache": 0.291
+              "cache_read": 0.07,
+              "no_cache": 0.28
             },
             "output_tokens": {
-              "text": 2.763
+              "text": 2.69
             }
           },
           "provider_model_id": "qwen/qwen3.6-27b"
@@ -8949,11 +8949,11 @@
           "id": "qwen/qwen3.6-35b-a3b",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.126,
-              "no_cache": 0.126
+              "cache_read": 0.03,
+              "no_cache": 0.12
             },
             "output_tokens": {
-              "text": 1.087
+              "text": 1.03
             }
           },
           "provider_model_id": "qwen/qwen3.6-35b-a3b"
