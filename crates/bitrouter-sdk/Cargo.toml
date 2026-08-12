@@ -7,6 +7,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# CI artifacts for the `sdk-public-api` job, not crate content. The baseline is
+# ~1 MB of rendered public-API lines; consumers who download the crate have no
+# use for it.
+exclude = ["public-api.txt", "public-api.pins"]
 
 [dependencies]
 async-trait.workspace = true
@@ -58,10 +62,43 @@ anyhow = { workspace = true, optional = true }
 # <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { workspace = true, optional = true }
 
+# ===== `otel` features =====
+# OpenTelemetry stack for OTLP export (traces + metrics). Every version pin,
+# feature set, and rationale lives in the root `[workspace.dependencies]` —
+# the 0.32.x line has to move as one piece, so it is declared in one place.
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+# The `otel-http` / `otel-grpc` features below layer the wire transport onto
+# this bare `trace` + `metrics` base.
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+# Custom OTLP/HTTP client that injects a freshly-resolved bearer per export
+# (`otel::auth_client`). Only compiled under `otel-http`. `reqwest` itself is
+# already a non-optional SDK dependency.
+opentelemetry-http = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+# OTLP/gRPC transport (tonic). Only compiled under `otel-grpc`.
+tonic = { workspace = true, optional = true }
+
+# NOT the workspace pin: that carries `env-filter`, which drags matchers /
+# regex-automata / regex-syntax in. `otel::subscriber` needs only LookupSpan.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
+# NOT the workspace pin: that carries `features = ["trace"]`, which the weak
+# `tower-http?/trace` on `server` exists to gate. Already in the SDK's tree via
+# reqwest, so this activation costs zero new crates.
+tower-http = { version = "0.6", default-features = false, optional = true }
+
 [features]
 default = []
-# axum HTTP server + SSE handlers + admin endpoints
-server = ["dep:axum", "dep:tower", "tokio/signal"]
+# axum HTTP server + SSE handlers + admin endpoints. The weak
+# `tower-http?/trace` activates tower-http's `trace` feature *only if*
+# `dep:tower-http` was already activated (by `__otel-core`) — it never pulls
+# tower-http in on its own. That feature intersection is what lets
+# `otel::http_layer` (the axum router wrapper) be gated on
+# `all(__otel-core, server)` while `otel::subscriber` stays axum-free.
+server = ["dep:axum", "dep:tower", "tokio/signal", "tower-http?/trace"]
 # yaml config loading (serde-saphyr + tokio::fs)
 config_file = ["dep:serde-saphyr", "tokio/fs"]
 # rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
@@ -86,6 +123,48 @@ acp = [
     "tokio-util/compat",
 ]
 
+# OTLP export of the SDK's own span/metric model: the public entry point.
+# Always builds — it selects the default transport.
+otel = ["otel-http"]
+
+# OTLP/HTTP + protobuf transport over reqwest with rustls. Maps to upstream
+# `opentelemetry-otlp/{http-proto,reqwest-client,reqwest-rustls}`. The
+# `dep:opentelemetry-http` / `dep:bytes` entries pull in the custom
+# `AuthRefreshClient` (`otel::auth_client`) that injects a live bearer per
+# export — HTTP-only, since the cloud/default telemetry path is OTLP/HTTP.
+otel-http = [
+    "__otel-core",
+    "opentelemetry-otlp/http-proto",
+    "opentelemetry-otlp/reqwest-client",
+    "opentelemetry-otlp/reqwest-rustls",
+    "dep:opentelemetry-http",
+    "dep:bytes",
+]
+
+# OTLP/gRPC transport over tonic with rustls (native trust roots). Maps to
+# upstream `opentelemetry-otlp/{grpc-tonic,tls-roots}`. May be enabled
+# alongside `otel-http` (e.g. under `--all-features`); when both are present,
+# HTTP takes runtime precedence (see `otel::transport`).
+otel-grpc = [
+    "__otel-core",
+    "dep:tonic",
+    "opentelemetry-otlp/grpc-tonic",
+    "opentelemetry-otlp/tls-roots",
+]
+
+# Private carrier: the transport-agnostic stack. Never enable directly — it is
+# a compile error without a transport (see lib.rs).
+__otel-core = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+    "dep:dashmap",
+    "dep:tower-http",
+]
+
 [target.'cfg(unix)'.dependencies]
 # `acp` feature — safe `killpg(2)` for reaping an agent child's whole process
 # group when the ACP SDK's own child guard is not enough. `rustix` rather than
@@ -103,3 +182,18 @@ tokio = { workspace = true, features = [
 ] }
 # `acp` runtime tests launch stub agents in throwaway working directories.
 tempfile.workspace = true
+criterion = { version = "0.8", features = ["async_tokio"] }
+
+# Run with `--features otel-http,config_file`, not `otel-http` alone:
+# `cargo bench` also builds the lib-test target, which has a pre-existing
+# unguarded `use crate::config::PromptOverrides;` in a `#[cfg(test)]` block in
+# `language_model/context.rs` and fails to compile without `config_file`.
+# `required-features` cannot express this — it gates the bench target only.
+[[bench]]
+name = "observe_overhead"
+harness = false
+required-features = ["otel-http"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

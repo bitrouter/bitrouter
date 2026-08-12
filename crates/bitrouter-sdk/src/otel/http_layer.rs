@@ -8,7 +8,9 @@
 //! - [`tracing_opentelemetry`] is the `tracing` ↔ OpenTelemetry bridge that
 //!   maps `otel.*` sentinel fields on the `tracing::Span` into a real OTel
 //!   span. The bridge layer itself is installed by the host (binary) via
-//!   [`tracing_subscriber_layer`].
+//!   [`crate::otel::subscriber::tracing_subscriber_layer`], which lives in
+//!   its own module so consumers that want only the bridge do not compile
+//!   the axum front-end this module needs.
 //! - In the `make_span_with` callback we extract any inbound
 //!   `traceparent` / `tracestate` and call
 //!   [`tracing_opentelemetry::OpenTelemetrySpanExt::set_parent`] so the
@@ -29,8 +31,6 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::otel::exporter::OtelExporter;
-
 /// Inbound header extractor for W3C trace context. Identical in shape to
 /// the equivalent in `exporter.rs`; kept local so this module compiles
 /// without exporting trace-extraction internals.
@@ -49,7 +49,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 /// Build a router wrapper that layers a `tower-http` `TraceLayer` plus
 /// inbound W3C trace-context propagation onto the host's axum [`Router`].
 /// Pass the returned closure to
-/// [`bitrouter_sdk::server::RouterOptions::with_router_wrapper`].
+/// [`crate::server::RouterOptions::with_router_wrapper`].
 pub fn router_wrapper() -> impl Fn(Router) -> Router + Send + Sync + 'static {
     move |router: Router| {
         router.layer(
@@ -106,28 +106,4 @@ fn record_http_response_status<B>(response: &http::Response<B>, _latency: Durati
         "http.response.status_code",
         i64::from(response.status().as_u16()),
     );
-}
-
-/// Build a `tracing_subscriber::Layer` that bridges `tracing` spans into
-/// the OTel tracer behind `exporter`. Install on the global tracing
-/// subscriber alongside any `fmt` / file layers.
-///
-/// `tracing_opentelemetry::OpenTelemetryLayer` captures its tracer at
-/// construction, and `tracing-opentelemetry` only implements
-/// `PreSampledTracer` for [`opentelemetry_sdk::trace::Tracer`] /
-/// [`opentelemetry::trace::noop::NoopTracer`] (not for the
-/// `BoxedTracer` you would get from `global::tracer`) — so this helper
-/// takes the exporter directly and hands the bridge its concrete SDK
-/// tracer. The host binary calls this after building the exporter.
-///
-/// Returning the concrete `OpenTelemetryLayer` type (rather than
-/// `impl Layer`) keeps the registry chain types nameable on the binary
-/// side. The generic `S` is the subscriber the layer is composed onto.
-pub fn tracing_subscriber_layer<S>(
-    exporter: &OtelExporter,
-) -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>
-where
-    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    tracing_opentelemetry::layer().with_tracer(exporter.tracer_clone())
 }

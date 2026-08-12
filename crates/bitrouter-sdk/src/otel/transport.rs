@@ -15,7 +15,7 @@
 //! compile only `otel-grpc` (`--no-default-features --features otel-grpc`).
 //! `with_endpoint`/header forwarding behave identically across the two, so a
 //! deterministic winner keeps behaviour predictable. The `otel` module only
-//! compiles when `otel-base` is on, and `lib.rs` guarantees at least one
+//! compiles when `__otel-core` is on, and `lib.rs` guarantees at least one
 //! transport accompanies it, so exactly one `imp` below is ever active.
 //!
 //! Both builders forward [`OtelConfig::endpoint`] and [`OtelConfig::headers`].

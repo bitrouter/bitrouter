@@ -9,8 +9,8 @@
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
 //! - `bitrouter_guardrails::*` (shared plugin: pre-request block +
 //!   stream-stage redact)
-//! - `bitrouter_observe::OtelObserveHook` (shared plugin: per-request OTLP
-//!   trace + metric export)
+//! - `bitrouter_sdk::otel::OtelObserveHook` (SDK `otel` feature: per-request
+//!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
 //!
 //! These tests are the canonical "did anyone break the assembly?" gate —

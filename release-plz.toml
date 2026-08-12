@@ -15,7 +15,6 @@ changelog_include = [           # Include commits from the SDK and built-in hook
     "bitrouter-sdk",
     "bitrouter-cloud-sdk",
     "bitrouter-guardrails",
-    "bitrouter-observe",
 ]
 git_tag_name = "v{{ version }}"     # Customize the git tag name (e.g. v1.0.0 instead of bitrouter-v1.0.0)
 git_release_name = "v{{ version }}" # Match the tag name for the GitHub release title

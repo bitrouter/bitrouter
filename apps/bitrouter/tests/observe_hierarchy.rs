@@ -39,8 +39,11 @@ const POLL_INTERVAL_MS: u64 = 50;
 /// `RUST_LOG` settings cannot suppress the INFO-level HTTP SERVER span being
 /// asserted below. It is deliberately *not* a bare `info`: the two
 /// `<crate>=warn` directives silence every module-path target in the crates
-/// that could plausibly host `http_layer.rs` — `bitrouter_observe` today,
-/// `bitrouter_sdk` after the OTel modules move there. The ingress span
+/// that could plausibly host `http_layer.rs` — `bitrouter_sdk`, which hosts
+/// it now, and `bitrouter_observe`, which hosted it before the OTel modules
+/// moved. The `bitrouter_observe` directive is inert now that the crate is
+/// gone; it is kept because it costs nothing and the filter is the guard,
+/// not a description of the current layout. The ingress span
 /// survives only because it pins an explicit
 /// `target: "bitrouter::observe::http"` that no module path matches, so the
 /// end-to-end assertion below doubles as the regression test for that pin:
@@ -51,7 +54,7 @@ const POLL_INTERVAL_MS: u64 = 50;
 /// This mirrors a real operator setting — `RUST_LOG=info,bitrouter_sdk=warn`
 /// is plausible noise reduction, since the whole routing pipeline logs under
 /// that target — which must not silently orphan every `chat` span.
-fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) {
+fn install_tracing_subscriber(exporter: &bitrouter_sdk::otel::OtelExporter) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     let env_filter =
@@ -59,7 +62,9 @@ fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exporter))
+        .with(bitrouter_sdk::otel::subscriber::tracing_subscriber_layer(
+            exporter,
+        ))
         .init();
 }
 
@@ -240,7 +245,7 @@ plugins:
         prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
     let options = RouterOptions::default()
-        .with_router_wrapper(bitrouter_observe::otel::http_layer::router_wrapper());
+        .with_router_wrapper(bitrouter_sdk::otel::http_layer::router_wrapper());
     let router = build_router_with_options(state, options);
     let server = TestServer::new(router);
 

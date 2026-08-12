@@ -6,12 +6,12 @@
 //! `SpanAttributes` from its [`SettlementRecorder`]; the exporter stamps every
 //! entry onto the request's root `chat` span. Keeping it a plain
 //! `serde_json::Map` means no backend concept (billing, tenancy, …) leaks into
-//! the SDK or this plugin: every future attribute rides for free, named by the
-//! emitter (e.g. PostHog's `$ai_total_cost_usd`).
+//! the SDK: every future attribute rides for free, named by the emitter (e.g.
+//! PostHog's `$ai_total_cost_usd`).
 //!
-//! [`SettlementRecorder`]: bitrouter_sdk::language_model::SettlementRecorder
+//! [`SettlementRecorder`]: crate::language_model::SettlementRecorder
 
-use bitrouter_sdk::PipelineEvent;
+use crate::PipelineEvent;
 use serde::Serialize;
 use serde_json::{Map, Value};
 

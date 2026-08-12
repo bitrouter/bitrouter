@@ -73,25 +73,221 @@ jobs:
   feature-isolation:
     name: feature-isolation
     runs-on: ubuntu-latest
-    # Verifies the SDK builds without its `server` feature, and that the
-    # default builds of the hook crates stay lean — guardrails never carries
-    # the axum HTTP stack, and observe only pulls it in under its opt-in
-    # `otel-*` features.
+    # The SDK's default dependency tree is a shipped promise: a consumer that
+    # wants pure routing must not pay for the axum HTTP server or the whole
+    # OpenTelemetry stack. Every capability that pulls weight sits behind a
+    # default-off feature, and each feature must build on its own.
+    #
+    # `cargo tree` is the tool here, and it mishandles a bad name in *two*
+    # different ways depending on which flag carries it. Both make a typo (or a
+    # crate rename) pass silently, so both need a guard:
+    #
+    #   1. `-i <pkg>` — exits 101 both when the package is absent from the
+    #      selected tree AND when the name matches no package at all, with a
+    #      byte-identical message. Guard: every negative assertion below is
+    #      preceded by a positive one proving the name resolves somewhere.
+    #
+    #   2. `-p <crate>` — the sharper one. An unknown package spec is silently
+    #      ignored and `cargo tree` falls back to the **whole workspace**
+    #      default tree: `cargo tree -p bitrouter-guardrailz -e normal -i axum`
+    #      exits **0**, prints a full workspace-wide inverted tree, and writes
+    #      nothing to stderr. Because it both succeeds and produces output,
+    #      exit status alone cannot catch it — the `-i` guard above is no help
+    #      here. In the crate loop below, a typo'd or renamed crate therefore
+    #      stops asserting anything about that crate and silently asserts about
+    #      the workspace instead. Today both `axum` and `opentelemetry` are in
+    #      the workspace default tree (apps/bitrouter enables `otel-http`
+    #      unconditionally), so the failure is a *misleading* one: the job
+    #      blames a crate that does not exist for a dependency it never had.
+    #      Drop either from the workspace default tree and the same typo flips
+    #      to the opposite failure — a negative assertion that passes forever
+    #      without checking anything. Guard: assert workspace membership via
+    #      `cargo metadata` before using a name in `-p`.
+    #
+    # Literal `-p bitrouter-sdk` uses are covered already: the `cargo check -p`
+    # steps above exit 101 on an unknown package spec (unlike `cargo tree`).
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
-      - run: cargo check -p bitrouter-observe
-      - name: assert axum not in default hook-crate dep trees
+      - run: cargo check -p bitrouter-sdk --no-default-features --features otel-http
+      - run: cargo check -p bitrouter-sdk --no-default-features --features otel-grpc
+      - run: cargo check -p bitrouter-sdk --no-default-features --features otel,server
+      - name: SDK default tree stays lean
         run: |
-          for crate in bitrouter-guardrails bitrouter-observe; do
-            if cargo tree -p "$crate" -i axum 2>/dev/null | grep -q '^axum'; then
-              echo "::error::$crate must not depend on axum by default"
+          for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
+                     tracing-opentelemetry tracing-subscriber tonic dashmap axum; do
+            if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
+            fi
+            if cargo tree -p bitrouter-sdk --no-default-features -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg is in bitrouter-sdk's default tree"; exit 1
+            fi
+          done
+      - name: transports stay isolated
+        run: |
+          for pkg in tonic axum; do
+            if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
+            fi
+            if cargo tree -p bitrouter-sdk --no-default-features --features otel-http -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg leaked into the otel-http tree"; exit 1
+            fi
+          done
+      - name: consumers stay lean
+        run: |
+          for pkg in axum opentelemetry; do
+            if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
+            fi
+          done
+          for crate in bitrouter-guardrails bitrouter-cloud-sdk bitrouter-providers dist-helper; do
+            # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
+            # comment), so prove membership before trusting anything below.
+            if ! cargo metadata --no-deps --format-version 1 \
+                 | jq -e --arg c "$crate" '.packages[] | select(.name == $c)' >/dev/null; then
+              echo "::error::unknown workspace crate: $crate"; exit 1
+            fi
+            for pkg in axum opentelemetry; do
+              if cargo tree -p "$crate" -e normal -i "$pkg" >/dev/null 2>&1; then
+                echo "::error::$crate must not depend on $pkg by default"; exit 1
+              fi
+            done
+          done
+      - name: "the OTel core without a transport is a compile error"
+        run: |
+          if out=$(cargo check -p bitrouter-sdk --features __otel-core --message-format=short 2>&1); then
+            echo "::error::expected the transport-less build to fail"; printf '%s\n' "$out"; exit 1
+          fi
+          printf '%s\n' "$out" | grep -qF 'the OpenTelemetry stack needs a transport' || {
+            echo "::error::failed, but not with the transport compile_error"; printf '%s\n' "$out"; exit 1; }
+
+  sdk-public-api:
+    name: sdk-public-api
+    runs-on: ubuntu-latest
+    # The SDK exports OTLP without making the OpenTelemetry version part of its
+    # own semver contract. That only holds while the hard constraint holds:
+    #
+    #   No `opentelemetry*` or `tracing_opentelemetry` type may appear in any
+    #   public `bitrouter-sdk` signature.
+    #
+    # "Signature" is broader than function returns — public struct fields, enum
+    # variant payloads, trait method signatures, generic bounds, associated
+    # types, type aliases, and re-exports all count. `cargo public-api` prints
+    # one fully-qualified line per public item with rustdoc's own resolution
+    # already applied, so all of those collapse into the same grep.
+    #
+    # `--simplified` omits blanket impls. That is load-bearing, not cosmetic:
+    # `opentelemetry` has `impl<T> FutureExt for T`, which rustdoc attaches to
+    # every documented type in the crate. Without the flag the listing carries
+    # hundreds of `impl<T> opentelemetry::context::future_ext::FutureExt for
+    # <every SDK type>` lines that this crate never authored, and the gate
+    # below would be permanently red. The flag drops them structurally — no
+    # allow-list, so a real `opentelemetry` leak still cannot hide behind one.
+    #
+    # The same listing doubles as a committed baseline. A guard that only
+    # greps cannot see *unintended* public API growth, which is how a public
+    # foreign type gets added in the first place; the baseline makes every
+    # public-surface change show up in review as a diff.
+    #
+    # Linux-only on purpose: the SDK has `#[cfg(unix)]` items, so a Windows
+    # runner would produce a different (correct, but non-matching) listing.
+    # This is not folded into `feature-isolation` — that job is stable-only,
+    # and rustdoc JSON needs nightly.
+    steps:
+      - uses: actions/checkout@v6
+      - name: read the pins
+        id: pin
+        shell: bash
+        run: |
+          # Single source of truth: the pins live beside the baseline they
+          # describe, so a human regenerating locally uses the same versions
+          # this job runs on. Both are load-bearing — rustdoc's JSON format and
+          # `cargo public-api`'s rendering each change across releases, and
+          # either would rewrite the whole baseline.
+          pins=crates/bitrouter-sdk/public-api.pins
+          for key in toolchain tool; do
+            value="$(sed -n "s/^$key=//p" "$pins" | tr -d '[:space:]')"
+            if [[ -z "$value" ]]; then
+              echo "::error::$pins has no '$key=' line"; exit 1
+            fi
+            echo "$key=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # This step exists only to build the helper binary below; the nightly
+          # step is the one whose cache is worth keeping.
+          cache: false
+      # Built on stable. It shells out to `cargo rustdoc` itself and picks the
+      # toolchain up from the `+<pin>` on the invocation further down.
+      - name: install the pinned cargo-public-api
+        run: cargo install --locked "${{ steps.pin.outputs.tool }}"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ steps.pin.outputs.toolchain }}
+      - name: render the SDK's public API
+        shell: bash
+        run: |
+          cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
+            -p bitrouter-sdk --all-features --simplified > "$RUNNER_TEMP/public-api.txt"
+      - name: the listing is real
+        shell: bash
+        run: |
+          # The gates below are negative assertions over this one file, and an
+          # empty or otel-less listing would satisfy every one of them
+          # vacuously — exactly the silent pass this job exists to prevent.
+          # Prove the surface under test is in the listing before trusting
+          # anything the listing does not say.
+          for sentinel in \
+            'pub mod bitrouter_sdk::otel' \
+            'pub fn bitrouter_sdk::otel::subscriber::tracing_subscriber_layer'; do
+            if ! grep -qF "$sentinel" "$RUNNER_TEMP/public-api.txt"; then
+              echo "::error::'$sentinel' is missing — did --all-features stop enabling otel?"
               exit 1
             fi
           done
+      - name: no opentelemetry type in the SDK's public API
+        shell: bash
+        run: |
+          # Case-insensitive so it catches both the module paths
+          # (`opentelemetry_sdk::…`, `tracing_opentelemetry::…`) and the type
+          # names (`OpenTelemetryLayer`). `tracing_opentelemetry` contains
+          # `opentelemetry`, so one pattern covers both crates.
+          if hits="$(grep -niE 'opentelemetry' "$RUNNER_TEMP/public-api.txt")"; then
+            echo "::error::opentelemetry types leaked into bitrouter-sdk's public API — see docs/OTEL_SDK_MIGRATION_SPEC.md 'Hard constraint'"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+      - name: no re-export of an OTel type out of the SDK
+        shell: bash
+        run: |
+          # The one thing the listing grep above cannot see. `cargo public-api`
+          # renders a bare re-export under its *local* path — re-exporting
+          # `opentelemetry_sdk::trace::SdkTracer` from `otel` prints
+          # `pub use bitrouter_sdk::otel::SdkTracer`, with the origin crate
+          # nowhere in the line. Types whose *name* carries "OpenTelemetry"
+          # (e.g. `OpenTelemetrySpanExt`) do trip the grep; neutrally-named
+          # ones do not. The baseline gate still catches the added line, but it
+          # would not say why the line matters — so pin it at the source.
+          #
+          # Verbatim `pub use` only: `pub(crate) use` is not public API, and a
+          # re-export laundered through a local alias is out of reach of any
+          # lexical check. That residual is the baseline gate's job.
+          if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]+(::)?(opentelemetry|tracing_opentelemetry)' crates/bitrouter-sdk/src/)"; then
+            echo "::error::bitrouter-sdk re-exports an OpenTelemetry type — see docs/OTEL_SDK_MIGRATION_SPEC.md 'Hard constraint'"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+      - name: the committed public API baseline is up to date
+        shell: bash
+        run: |
+          if ! diff -u crates/bitrouter-sdk/public-api.txt "$RUNNER_TEMP/public-api.txt"; then
+            echo "::error::bitrouter-sdk's public API changed. Review the diff above; if every line is intended, regenerate the baseline with: cargo +${{ steps.pin.outputs.toolchain }} public-api -p bitrouter-sdk --all-features --simplified > crates/bitrouter-sdk/public-api.txt"
+            exit 1
+          fi
 
   dist:
     name: dist

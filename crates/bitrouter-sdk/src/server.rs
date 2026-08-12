@@ -65,8 +65,9 @@ impl App {
     }
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
-    /// after the SDK has mounted every route — used by `bitrouter-observe`
-    /// to install a `tower-http` `TraceLayer` at HTTP ingress.
+    /// after the SDK has mounted every route — used by
+    /// `crate::otel::http_layer` (under the `otel` feature) to install a
+    /// `tower-http` `TraceLayer` at HTTP ingress.
     pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,

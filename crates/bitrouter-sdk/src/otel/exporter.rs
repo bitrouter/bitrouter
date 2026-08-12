@@ -55,8 +55,8 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
-use bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id;
-use bitrouter_sdk::language_model::{
+use crate::language_model::protocol::responses::encode_gateway_continuation_id;
+use crate::language_model::{
     ApiProtocol, Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
     RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
 };
@@ -239,9 +239,10 @@ impl OtelExporter {
     }
 
     /// Clone the underlying OTel SDK tracer. Used by
-    /// [`crate::otel::http_layer::tracing_subscriber_layer`] to build the
-    /// `tracing` ↔ OTel bridge. Crate-scoped so the tracer type does not
-    /// leak across the plugin boundary.
+    /// [`crate::otel::subscriber::tracing_subscriber_layer`] to build the
+    /// `tracing` ↔ OTel bridge, and by [`crate::otel::acp::AcpSpanRecorder`],
+    /// which stores it. Crate-scoped so the OTel tracer type never reaches
+    /// this crate's public API.
     pub(crate) fn tracer_clone(&self) -> SdkTracer {
         self.tracer.clone()
     }
@@ -354,9 +355,12 @@ fn sampler_kind_str(s: SamplerKind) -> &'static str {
 /// builder's `observe_hook(impl ObserveHook + 'static)` would move the
 /// exporter in, making it unreachable from anywhere else.
 ///
-/// Orphan rules forbid `impl ObserveHook for Arc<OtelExporter>` directly
-/// (both types are foreign to this crate); the newtype is the standard
-/// workaround.
+/// The newtype is kept even though `ObserveHook` and `OtelExporter` are now
+/// both local to this crate, so `impl ObserveHook for Arc<OtelExporter>`
+/// would compile. It stays because it is the shipped public API and because
+/// a blanket impl on `Arc<OtelExporter>` would silently make *every* shared
+/// exporter handle a hook, which is not the intent: registration should be
+/// an explicit act at one call site.
 pub struct OtelObserveHook(Arc<OtelExporter>);
 
 impl OtelObserveHook {
@@ -1186,8 +1190,8 @@ fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &Execu
     }
 }
 
-fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
-    use bitrouter_sdk::language_model::FinishReason::*;
+fn finish_reason_to_str(reason: &crate::language_model::FinishReason) -> String {
+    use crate::language_model::FinishReason::*;
     match reason {
         Stop => "stop".to_string(),
         Length => "length".to_string(),
@@ -1198,7 +1202,7 @@ fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) ->
     }
 }
 
-fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
+fn error_type(err: &crate::error::BitrouterError) -> String {
     // BitrouterError variants are unit-ish; the Debug name is the class.
     // We strip the payload so the attribute stays low-cardinality.
     let dbg = format!("{err:?}");
@@ -1224,11 +1228,11 @@ mod hop_tests {
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::error::BitrouterError;
-    use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
-    use bitrouter_sdk::language_model::protocol::{OutboundAdapter, SseEvent};
-    use bitrouter_sdk::language_model::{
+    use crate::caller::CallerContext;
+    use crate::error::BitrouterError;
+    use crate::language_model::protocol::responses::ResponsesAdapter;
+    use crate::language_model::protocol::{OutboundAdapter, SseEvent};
+    use crate::language_model::{
         ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
         HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
         PreRequestHook, Prompt, Role, SettlementContext, SettlementRecorder, StaticRoutingTable,
@@ -1239,10 +1243,7 @@ mod hop_tests {
 
     #[async_trait]
     impl PreRequestHook for RejectingPreRequestHook {
-        async fn check(
-            &self,
-            _ctx: &mut PipelineContext,
-        ) -> bitrouter_sdk::error::Result<HookDecision> {
+        async fn check(&self, _ctx: &mut PipelineContext) -> crate::error::Result<HookDecision> {
             Ok(HookDecision::Deny(DenyReason::Unauthorized(
                 "rejected".into(),
             )))
@@ -1256,7 +1257,7 @@ mod hop_tests {
 
     #[async_trait]
     impl SettlementRecorder for BlockingSettlementRecorder {
-        async fn record(&self, _ctx: &mut SettlementContext) -> bitrouter_sdk::error::Result<()> {
+        async fn record(&self, _ctx: &mut SettlementContext) -> crate::error::Result<()> {
             self.entered.notify_one();
             self.release.notified().await;
             Ok(())

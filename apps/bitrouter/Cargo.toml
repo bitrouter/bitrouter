@@ -17,11 +17,10 @@ name = "bitrouter"
 path = "src/main.rs"
 
 [dependencies]
-bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
+bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp", "otel-http"] }
 bitrouter-cloud-sdk.workspace = true
 bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-guardrails.workspace = true
-bitrouter-observe = { workspace = true, features = ["otel-http"] }
 bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.27" }
 chrono.workspace = true
 sha2.workspace = true
