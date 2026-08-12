@@ -1,0 +1,12 @@
+# A test that hangs takes the whole job with it. That is worse than it sounds:
+# GitHub only uploads a job's logs when the job ends cleanly, so a hung run
+# produces a ~49 minute failure with no logs, no failing test name, and nothing
+# to read — which is exactly the shape `test (ubuntu-latest)` has been failing
+# in on this repo while macOS and Windows pass the identical tree.
+#
+# Report anything over a minute as SLOW, and kill it after five. The whole
+# suite finishes in ~2 minutes when it is healthy and the slowest deliberate
+# wait in it is a 5 second polling budget, so five minutes is far outside any
+# legitimate test while still ending the job cleanly enough to get logs.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
