@@ -393,7 +393,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): render messages and tool calls`
 
-- [ ] **4.7 Permission modal**
+- [x] **4.7 Permission modal**
   - Depends on: 4.6
   - Do: render `session/request_permission` and return the chosen option.
   - Done when: a `TestBackend` test drives a permission request to a decision.

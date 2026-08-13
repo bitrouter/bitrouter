@@ -714,6 +714,18 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // The **raw** ACP stream, not the translated one: the renderer is a
     // protocol client, and translating first would lose exactly the fidelity
     // it exists to draw.
+    // Permission requests block the turn until a person answers, so they are
+    // drawn in the live area rather than committed to scrollback.
+    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut pending = session.permissions();
+    let permissions = tokio::spawn(async move {
+        while let Some(request) = pending.next().await {
+            if permission_tx.send(request).is_err() {
+                break;
+            }
+        }
+    });
+
     let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut updates = session.raw_updates();
     let pump = tokio::spawn(async move {
@@ -751,6 +763,10 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     Some(line) => view.commit(&[line]).context("committing an update")?,
                     None => continue,
                 },
+                request = permission_rx.recv() => match request {
+                    Some(request) => answer_permission(&mut view, request).await?,
+                    None => continue,
+                },
                 result = &mut turn => break result,
             }
         };
@@ -770,6 +786,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     }
 
     pump.abort();
+    permissions.abort();
     // Give the live rows back before anything else prints.
     view.finish().context("closing the inline viewport")?;
     session
@@ -779,6 +796,76 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     if let Some(exporter) = exporter {
         exporter.shutdown();
     }
+    Ok(())
+}
+
+/// Draw a permission request and block on the user's answer.
+///
+/// Reads keys directly rather than through the line-based stdin loop: a
+/// permission answer is one keystroke, and requiring enter would make the
+/// fast path — deny — slower than the dangerous one.
+///
+/// Every path that is not an explicit choice resolves to deny or cancel.
+/// A prompt that resolved ambiguity as consent would be worse than no prompt.
+async fn answer_permission(
+    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    request: bitrouter_sdk::acp::up::PendingPermission,
+) -> Result<()> {
+    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
+    use crossterm::event::{Event, EventStream, KeyCode};
+    use futures::StreamExt as _;
+
+    let prompt = bitrouter_tui::permission::Prompt::new(
+        request.tool_call.fields.title.clone(),
+        request.tool_call.tool_call_id.0.to_string(),
+        request.options.clone(),
+    );
+    view.draw(&prompt.render())
+        .context("drawing the permission prompt")?;
+
+    let deny = || match prompt.deny() {
+        Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
+        // The agent offered no way to say no; cancelling is the honest answer
+        // and is never mistaken for consent.
+        None => RequestPermissionOutcome::Cancelled,
+    };
+
+    // Raw mode only for as long as the question is up: a session that left the
+    // terminal in raw mode after a panic would be the lifecycle bug this
+    // design exists to avoid.
+    let raw = crossterm::terminal::enable_raw_mode().is_ok();
+    let mut keys = EventStream::new();
+    let outcome = loop {
+        match keys.next().await {
+            Some(Ok(Event::Key(key))) => match key.code {
+                KeyCode::Char(c) => {
+                    if let Some(id) = prompt.choose(c) {
+                        break RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                            id,
+                        ));
+                    }
+                }
+                KeyCode::Esc => break deny(),
+                _ => {}
+            },
+            // The terminal went away mid-question. Deny — an unanswerable
+            // prompt must not become an allow.
+            Some(Err(_)) | None => break deny(),
+            _ => {}
+        }
+    };
+    if raw {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+
+    let chosen = matches!(outcome, RequestPermissionOutcome::Selected(_));
+    request.resolve(outcome);
+    view.commit(&[ratatui::text::Line::from(if chosen {
+        "  permission answered"
+    } else {
+        "  permission denied"
+    })])
+    .context("recording the permission decision")?;
     Ok(())
 }
 

@@ -31,6 +31,7 @@
 //! why [`Capabilities`] exists: the renderer asks what this session can
 //! actually honor, and draws only that.
 
+pub mod permission;
 pub mod transcript;
 pub mod viewport;
 
