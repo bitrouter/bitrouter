@@ -734,9 +734,31 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session, None).await;
 
-    match routed.via {
+    match &routed.via {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
         None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
+    }
+
+    // The picker exists only when this session can actually be rerouted, which
+    // needs both a daemon and an attributable launch (task 4.2). Probing that
+    // here rather than assuming it is what keeps a dead control off the screen.
+    let providers = SessionProviders::new(
+        &config,
+        routed
+            .via
+            .as_ref()
+            .and(routed.launch_id.as_ref())
+            .map(|id| RouteControl {
+                socket: crate::daemon::resolve_socket_path(
+                    source.home().join("bitrouter.yaml").as_path(),
+                    &config.server.control_socket,
+                ),
+                launch_id: id.clone(),
+            }),
+    );
+    let routable = providers.can_reroute();
+    if routable {
+        eprintln!("chat: type /route to change provider mid-session.");
     }
     eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
 
@@ -795,6 +817,19 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
+            continue;
+        }
+        // A line of exactly `/route` opens the picker. Only offered when the
+        // session can honour it — see `can_reroute`.
+        if line.trim() == "/route" {
+            if routable {
+                pick_provider(&mut view, &providers).await?;
+            } else {
+                view.commit(&[ratatui::text::Line::from(
+                    "this session cannot be rerouted (running direct, or its credential is \
+                     its own and cannot be attributed)",
+                )])?;
+            }
             continue;
         }
         view.commit(&[ratatui::text::Line::from(format!("> {line}"))])
@@ -865,6 +900,79 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     shutdown.context("shutting down chat session")?;
     if let Some(exporter) = exporter {
         exporter.shutdown();
+    }
+    Ok(())
+}
+
+/// Draw the provider picker and, on a selection, actually change the route.
+///
+/// The order matters: `providers/set` is issued first and the list is re-read
+/// afterwards, so what the user ends up seeing is the route the daemon is
+/// serving rather than the one they asked for. A `set` that fails leaves the
+/// old route marked, and says why.
+async fn pick_provider(
+    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    providers: &SessionProviders,
+) -> Result<()> {
+    use bitrouter_sdk::acp::down::ProviderSurface;
+    use crossterm::event::{Event, EventStream, KeyCode};
+    use futures::StreamExt as _;
+
+    let listed = providers.list().await;
+    let Some(picker) = bitrouter_tui::picker::Picker::open(true, &listed) else {
+        view.commit(&[ratatui::text::Line::from(
+            "no routable providers to choose between",
+        )])?;
+        return Ok(());
+    };
+    view.draw(&picker.render()).context("drawing the picker")?;
+
+    let raw = crossterm::terminal::enable_raw_mode().is_ok();
+    let mut keys = EventStream::new();
+    let chosen = loop {
+        match keys.next().await {
+            Some(Ok(Event::Key(key))) => match key.code {
+                KeyCode::Char(c) => {
+                    if let Some(id) = picker.choose(c) {
+                        break Some(id);
+                    }
+                }
+                KeyCode::Esc => break None,
+                _ => {}
+            },
+            Some(Err(_)) | None => break None,
+            _ => {}
+        }
+    };
+    if raw {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+
+    let Some(id) = chosen else {
+        view.commit(&[ratatui::text::Line::from("route unchanged")])?;
+        return Ok(());
+    };
+
+    // Attempt it, then report what is actually in force — never what was asked
+    // for. `providers/set` can legitimately refuse.
+    let request = agent_client_protocol::schema::v1::SetProviderRequest::new(
+        agent_client_protocol::schema::v1::ProviderId::new(id.clone()),
+        LlmProtocol::Other(String::new()),
+        String::new(),
+    );
+    match providers.set(request).await {
+        Ok(()) => {
+            let confirmed = providers.list().await;
+            let in_force = confirmed
+                .iter()
+                .find(|p| p.current.is_some())
+                .map(|p| p.provider_id.0.to_string())
+                .unwrap_or_else(|| "unchanged".to_string());
+            view.commit(&[ratatui::text::Line::from(format!("route: {in_force}"))])?;
+        }
+        Err(e) => {
+            view.commit(&[ratatui::text::Line::from(format!("route unchanged: {e}"))])?;
+        }
     }
     Ok(())
 }
@@ -1383,6 +1491,14 @@ impl SessionProviders {
             selected: std::sync::RwLock::new(None),
             control,
         }
+    }
+
+    /// Whether this session's traffic can actually be moved.
+    ///
+    /// Gates the picker: a chooser that cannot change anything is worse than
+    /// no chooser, because absence is legible and a dead control is a lie.
+    pub(crate) fn can_reroute(&self) -> bool {
+        self.control.is_some()
     }
 
     /// Drop this session's override, so it cannot outlive the session that

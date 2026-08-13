@@ -419,7 +419,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): surface the session log on abnormal exit`
 
-- [ ] **4.10 Provider/model picker**
+- [x] **4.10 Provider/model picker**
   - Depends on: 3.3, 4.2, 4.6
   - Do: render `providers/list` and issue `providers/set` on selection. Blocked
     on 4.2 by design — without it the control does not do what it appears to.

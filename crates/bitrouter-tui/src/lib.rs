@@ -34,6 +34,7 @@
 pub mod cost;
 pub mod log_tail;
 pub mod permission;
+pub mod picker;
 pub mod transcript;
 pub mod viewport;
 
