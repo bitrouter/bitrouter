@@ -2008,30 +2008,6 @@
           "provider_model_id": "deepseek/deepseek-v4-pro"
         },
         {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.003625,
-              "no_cache": 0.435
-            },
-            "output_tokens": {
-              "text": 0.87
-            }
-          },
-          "provider": "deepseek",
-          "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -2256,6 +2232,49 @@
         }
       ],
       "release_date": "2026-04-24"
+    },
+    {
+      "description": "Generally available DeepSeek V4 Pro release for advanced reasoning, coding, and agentic workloads.",
+      "family": "deepseek-thinking",
+      "id": "deepseek/deepseek-v4-pro-0813",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "name": "DeepSeek: DeepSeek V4 Pro 0813",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "deepseek",
+          "provider_model_id": "deepseek-v4-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-08-13"
     },
     {
       "family": "gemini-flash-lite",
@@ -2556,6 +2575,52 @@
         }
       ],
       "release_date": "2026-05-19"
+    },
+    {
+      "description": "Efficient multimodal Gemini model for coding, agentic planning, and high-throughput workloads.",
+      "family": "gemini-flash",
+      "id": "google/gemini-3.6-flash",
+      "input_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "knowledge_cutoff": "2026-03",
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "name": "Google: Gemini 3.6 Flash",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-07-21"
     },
     {
       "description": "Google Gemma 4 31B — open-weight instruction-tuned vision-language model.",
@@ -7121,6 +7186,49 @@
         }
       ],
       "release_date": "2026-07-08"
+    },
+    {
+      "description": "xAI flagship for coding, reasoning, knowledge work, and agentic tool use.",
+      "family": "grok",
+      "id": "x-ai/grok-4.6",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-02",
+      "max_input_tokens": 500000,
+      "name": "xAI: Grok 4.6",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "xai",
+          "provider_model_id": "grok-4.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-08-12"
     },
     {
       "family": "grok",
