@@ -232,7 +232,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
   - Commit: `feat(acp): emit router-measured cost on the wire`
 
-- [ ] **3.3 Implement `providers/list` and `providers/set`**
+- [x] **3.3 Implement `providers/list` and `providers/set`**
   - Depends on: 2.1
   - Files: `crates/bitrouter-sdk/src/acp/down.rs`, `apps/bitrouter/Cargo.toml`
   - Do: depend on `agent-client-protocol-schema` with `unstable_llm_providers`

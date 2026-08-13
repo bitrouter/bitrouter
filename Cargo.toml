@@ -42,7 +42,11 @@ rustix = { version = "1", default-features = false }
 
 # ACP SDK crates
 agent-client-protocol = "1.2"
-agent-client-protocol-schema = "1.4"
+# `unstable_llm_providers` gives the `providers/*` schema types. The runtime
+# crate (1.2) does not forward that feature, so the two methods are dispatched
+# as raw JSON-RPC over these types — see ACP_TUI_SPEC §10. NOT
+# `unstable_protocol_v2`: v2 inverts the turn lifecycle this engine implements.
+agent-client-protocol-schema = { version = "1.4", features = ["unstable_llm_providers"] }
 
 # shared third-party
 anyhow = "1"

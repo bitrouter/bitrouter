@@ -43,7 +43,10 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use agent_client_protocol::schema::v1::{Cost, SessionUpdate, UsageUpdate};
+use agent_client_protocol::schema::v1::{
+    Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SessionUpdate,
+    SetProviderRequest, UsageUpdate,
+};
 use bitrouter_sdk::acp::engine::LaunchOptions;
 use bitrouter_sdk::acp::telemetry::RequestCompleted;
 use bitrouter_sdk::acp::translate::SessionUpdateKind;
@@ -567,17 +570,16 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     .await
     .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
-    // Router-measured cost onto the down-facing wire (§7). Wired before
-    // serving so the first settled turn already has somewhere to report to.
-    let measured = spawn_cost_measurer(source, &session);
+    // The router-owned surfaces: measured cost (§7) and the routing catalog
+    // (§6). Both are built before serving so the first turn and the manager's
+    // first `providers/list` already have somewhere to go.
+    let extensions = bitrouter_sdk::acp::down::ServeExtensions {
+        injected_updates: spawn_cost_measurer(source, &session),
+        providers: Some(Arc::new(SessionProviders::from_config(&config))),
+    };
     let session = Arc::new(session);
 
-    let served = match measured {
-        Some(rx) => {
-            bitrouter_sdk::acp::down::serve_with_injected_updates(Arc::clone(&session), rx).await
-        }
-        None => bitrouter_sdk::acp::down::serve(Arc::clone(&session)).await,
-    };
+    let served = bitrouter_sdk::acp::down::serve_with(Arc::clone(&session), extensions).await;
 
     // No manager left: shut the session down deliberately so the agent child
     // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
@@ -929,6 +931,138 @@ async fn attach_observability(
     exporter
 }
 
+// ── providers/* — BitRouter's routing surface, in ACP's nouns (spec §6) ──────
+
+/// Backs `providers/list` and `providers/set` for one live session.
+///
+/// **No credential ever crosses this wire.** `ProviderCurrentConfig` is
+/// specified as *non-secret* routing config, and this type is constructed from
+/// `api_base` / `api_protocol` only — `ProviderConfig::api_key` is never read
+/// here. Credential management stays on `bitrouter providers login`.
+///
+/// # Scope of `providers/set` today
+///
+/// The selection is **session-scoped and held in this process**: it is what
+/// `providers/list` reports as the effective route, and it is what a manager
+/// renders. It does not yet rewrite the model on traffic already in flight
+/// from the agent child to the daemon.
+///
+/// That last step is deliberately not faked here. The substrate is a separate
+/// process from the daemon and the agent child talks to the daemon directly,
+/// so the rewrite has to happen daemon-side, in the policy table (spec §6.1,
+/// probe 4). The table is now hot-swappable — that was the point of rebuilding
+/// it on reload — but reaching it from here needs a route-mutation command on
+/// the daemon control socket, which does not exist yet. Reporting a route this
+/// process cannot yet enforce is the honest half; claiming the traffic moved
+/// would not be.
+pub(crate) struct SessionProviders {
+    /// Non-secret catalog snapshot, taken once at session launch.
+    catalog: Vec<CatalogEntry>,
+    /// The provider this session's route currently points at. `None` until a
+    /// `providers/set` names one, at which point `providers/list` reports it.
+    selected: std::sync::RwLock<Option<String>>,
+}
+
+/// One routable provider, reduced to what a UI may see.
+struct CatalogEntry {
+    id: String,
+    api_base: String,
+    protocol: String,
+}
+
+impl SessionProviders {
+    /// Snapshot the active providers from `config`, dropping every secret.
+    pub(crate) fn from_config(config: &Config) -> Self {
+        let mut catalog: Vec<CatalogEntry> = config
+            .providers
+            .iter()
+            .filter(|(_, provider)| provider.active)
+            .map(|(id, provider)| CatalogEntry {
+                id: id.clone(),
+                api_base: provider.api_base.clone(),
+                protocol: provider
+                    .api_protocol
+                    .resolve("*")
+                    .and_then(|list| list.preferred().map(|p| p.as_str().to_string()))
+                    .unwrap_or_else(|| "openai".to_string()),
+            })
+            .collect();
+        // Stable order so a rendered list does not reshuffle between calls.
+        catalog.sort_by(|a, b| a.id.cmp(&b.id));
+        Self {
+            catalog,
+            selected: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// The route in force, or `None` while the session is on its configured
+    /// default. A poisoned lock reads as "no override" rather than panicking.
+    fn effective(&self) -> Option<String> {
+        match self.selected.read() {
+            Ok(selected) => selected.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+/// Map a BitRouter protocol name onto ACP's `LlmProtocol`. Anything outside
+/// ACP's closed set is reported as `Other` rather than forced onto a protocol
+/// that means something different.
+fn llm_protocol(name: &str) -> LlmProtocol {
+    match name {
+        "anthropic" | "messages" => LlmProtocol::Anthropic,
+        "chat_completions" | "responses" | "openai" => LlmProtocol::OpenAi,
+        other => LlmProtocol::Other(other.to_string()),
+    }
+}
+
+#[async_trait::async_trait]
+impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
+    async fn list(&self) -> Vec<ProviderInfo> {
+        let effective = self.effective();
+        self.catalog
+            .iter()
+            .map(|entry| {
+                let protocol = llm_protocol(&entry.protocol);
+                // `current` marks the route in force. Before any
+                // `providers/set` no provider is singled out: the effective
+                // route is the config's cascade, and naming one would claim a
+                // decision the router has not made.
+                //
+                // It carries `api_type` and `base_url` and nothing else — the
+                // provider's `api_key` is never read on this path.
+                let current = (effective.as_deref() == Some(entry.id.as_str()))
+                    .then(|| ProviderCurrentConfig::new(protocol.clone(), entry.api_base.clone()));
+                ProviderInfo::new(
+                    ProviderId::new(entry.id.clone()),
+                    vec![protocol],
+                    // Nothing in a BitRouter catalog is undisablable — the
+                    // point of the router is that any provider can be routed
+                    // around.
+                    false,
+                    current,
+                )
+            })
+            .collect()
+    }
+
+    async fn set(&self, request: SetProviderRequest) -> std::result::Result<(), String> {
+        let requested = request.provider_id.0.to_string();
+        if !self.catalog.iter().any(|entry| entry.id == requested) {
+            return Err(format!(
+                "unknown provider '{requested}' — `providers/list` reports what is routable"
+            ));
+        }
+        match self.selected.write() {
+            Ok(mut selected) => {
+                *selected = Some(requested);
+                Ok(())
+            }
+            Err(_) => Err("provider selection lock was poisoned".to_string()),
+        }
+    }
+}
+
 /// Drain this session's settled turns and put a router-measured `UsageUpdate`
 /// on the down-facing wire for each one.
 ///
@@ -1138,6 +1272,140 @@ mod cost_tests {
                 .is_none(),
             "spend from before the session must not be attributed to it"
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use bitrouter_sdk::acp::down::ProviderSurface;
+
+    /// A config whose providers carry unmistakable secrets, so a leak in any
+    /// serialized field is impossible to miss.
+    fn config_with_secrets() -> anyhow::Result<Config> {
+        Ok(bitrouter_sdk::config::parse(
+            r#"inherit_defaults: false
+providers:
+  alpha:
+    api_base: https://alpha.example.com/v1
+    api_key: sk-SECRET-ALPHA-DO-NOT-LEAK
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - { id: m1 }
+  beta:
+    api_base: https://beta.example.com/v1
+    api_key: sk-SECRET-BETA-DO-NOT-LEAK
+    api_protocol:
+      - "*": anthropic
+    models:
+      - { id: m1 }
+  dormant:
+    active: false
+    api_base: https://dormant.example.com/v1
+    api_key: sk-SECRET-DORMANT-DO-NOT-LEAK
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - { id: m1 }
+"#,
+        )?)
+    }
+
+    #[tokio::test]
+    async fn providers_list_reports_the_routable_catalog() -> anyhow::Result<()> {
+        let providers = SessionProviders::from_config(&config_with_secrets()?);
+        let listed = providers.list().await;
+
+        let ids: Vec<String> = listed.iter().map(|p| p.provider_id.0.to_string()).collect();
+        // Active providers only, in a stable order — an inactive provider is
+        // not routable, so offering it would be offering a dead route.
+        assert_eq!(ids, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // Protocols are mapped into ACP's vocabulary, not passed through raw.
+        assert_eq!(listed[0].supported, vec![LlmProtocol::OpenAi]);
+        assert_eq!(listed[1].supported, vec![LlmProtocol::Anthropic]);
+        // Nothing in a router's catalog is undisablable.
+        assert!(listed.iter().all(|p| !p.required));
+        // No `providers/set` yet: no provider claims to be the effective route.
+        assert!(listed.iter().all(|p| p.current.is_none()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn providers_set_changes_the_effective_route() -> anyhow::Result<()> {
+        let providers = SessionProviders::from_config(&config_with_secrets()?);
+        providers
+            .set(SetProviderRequest::new(
+                ProviderId::new("beta"),
+                LlmProtocol::Anthropic,
+                "https://beta.example.com/v1",
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let listed = providers.list().await;
+        let current: Vec<String> = listed
+            .iter()
+            .filter(|p| p.current.is_some())
+            .map(|p| p.provider_id.0.to_string())
+            .collect();
+        assert_eq!(current, vec!["beta".to_string()], "the route now in force");
+
+        // An unroutable target is refused rather than silently accepted —
+        // reporting success for a route that does not exist would be worse
+        // than the error.
+        let rejected = providers
+            .set(SetProviderRequest::new(
+                ProviderId::new("nonexistent"),
+                LlmProtocol::OpenAi,
+                "https://nope.example.com/v1",
+            ))
+            .await;
+        assert!(rejected.is_err(), "unknown provider must be refused");
+        // …and the refusal must not disturb the route already in force.
+        let listed = providers.list().await;
+        assert!(
+            listed
+                .iter()
+                .any(|p| p.current.is_some() && &*p.provider_id.0 == "beta")
+        );
+        Ok(())
+    }
+
+    /// The hard rule from spec §6: `ProviderCurrentConfig` is non-secret
+    /// routing config. This asserts against the **serialized JSON** — the
+    /// bytes that actually reach the manager — rather than against fields,
+    /// so a secret smuggled through `_meta` would fail too.
+    #[tokio::test]
+    async fn no_credential_appears_in_any_providers_response() -> anyhow::Result<()> {
+        let providers = SessionProviders::from_config(&config_with_secrets()?);
+        providers
+            .set(SetProviderRequest::new(
+                ProviderId::new("alpha"),
+                LlmProtocol::OpenAi,
+                "https://alpha.example.com/v1",
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let wire = serde_json::to_string(&providers.list().await)?;
+        for secret in [
+            "sk-SECRET-ALPHA-DO-NOT-LEAK",
+            "sk-SECRET-BETA-DO-NOT-LEAK",
+            "sk-SECRET-DORMANT-DO-NOT-LEAK",
+        ] {
+            assert!(
+                !wire.contains(secret),
+                "a credential reached the providers wire: {wire}"
+            );
+        }
+        // Not just the exact strings — no `api_key`-shaped field at all.
+        assert!(!wire.contains("api_key"), "{wire}");
+        assert!(!wire.contains("sk-"), "{wire}");
+        // The non-secret routing facts a UI needs are still there.
+        assert!(wire.contains("https://alpha.example.com/v1"), "{wire}");
         Ok(())
     }
 }
