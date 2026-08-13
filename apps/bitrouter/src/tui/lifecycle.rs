@@ -16,43 +16,17 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
-/// What the terminal must report while a surface is up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Input {
-    /// Keys only — enough for a view that navigates a list.
-    Keys,
-    /// Keys, mouse, and bracketed paste.
-    ///
-    /// Required whenever a **child** owns the screen: without mouse capture a
-    /// mouse-reporting harness never sees a click, and without bracketed paste
-    /// a multi-line paste arrives as a burst of keystrokes the harness will
-    /// interpret as a burst of submits. Both are fidelity-matrix items, and
-    /// both fail silently rather than loudly.
-    Full,
-}
-
-/// Put the terminal into the state a surface draws against: raw mode,
-/// alternate screen, the requested input reporting, and the user's window
-/// title saved so [`restore`] can put it back.
+/// Put the terminal into the state the view draws against: raw mode,
+/// alternate screen, key reporting, and the user's window title saved so
+/// [`restore`] can put it back.
 ///
 /// Any failure here returns `Err` **after** undoing whatever already
 /// succeeded — the panic hook is installed by the caller only once this
 /// returns `Ok`, so a half-entered terminal must clean up after itself.
-pub fn enter(input: Input) -> Result<()> {
+pub fn enter() -> Result<()> {
     enable_raw_mode()?;
     let mut out = std::io::stdout();
     if let Err(e) = execute!(out, EnterAlternateScreen) {
-        let _ = disable_raw_mode();
-        return Err(e.into());
-    }
-    if input == Input::Full
-        && let Err(e) = execute!(
-            out,
-            crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste
-        )
-    {
-        let _ = execute!(out, LeaveAlternateScreen);
         let _ = disable_raw_mode();
         return Err(e.into());
     }
@@ -70,14 +44,6 @@ pub fn enter(input: Input) -> Result<()> {
 pub fn restore() {
     let _ = disable_raw_mode();
     let mut out = std::io::stdout();
-    // Disabled unconditionally: `restore` runs from panic hooks and signal
-    // branches that cannot know which `Input` mode was entered, and disabling
-    // a reporting mode that was never on is harmless.
-    let _ = execute!(
-        out,
-        crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableMouseCapture
-    );
     let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
     // XTWINOPS pop: put the user's window title back.
     let _ = write!(out, "\x1b[23;0t");
@@ -104,7 +70,7 @@ pub fn install_panic_restore() {
 ///
 /// The caller must not draw until this returns, and must force a full redraw
 /// afterwards — the child owned the screen and the view's idea of it is stale.
-pub async fn suspend<F, Fut>(input: Input, run: F) -> Result<()>
+pub async fn suspend<F, Fut>(run: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
@@ -113,6 +79,6 @@ where
     let result = run().await;
     // Re-enter even when the child failed: the alternative is returning to a
     // caller that is about to draw into a cooked terminal.
-    let reentered = enter(input);
+    let reentered = enter();
     result.and(reentered)
 }

@@ -100,7 +100,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo build -p bitrouter 2>&1 | tail -5`
   - Commit: `feat(launch)!: remove --tui hosted mode`
 
-- [ ] **1.2 Delete the emulator and PTY host**
+- [x] **1.2 Delete the emulator and PTY host**
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/tui/{host,pty,term,lifecycle,conformance}.rs`,
     `apps/bitrouter/src/tui/fixtures/`, `scripts/record-vt-fixture.sh`
