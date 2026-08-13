@@ -703,16 +703,25 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     }
     eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
 
+    // The renderer owns the terminal from here. It is handed lines, never
+    // the session — `bitrouter-tui` cannot depend on this crate, and that is
+    // what keeps the daemon-wide half of this process out of the view.
+    let mut view = bitrouter_tui::viewport::Inline::new(ratatui::backend::CrosstermBackend::new(
+        std::io::stdout(),
+    ))
+    .context("opening the inline viewport")?;
+
+    let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut updates = session.updates();
-    let render = tokio::spawn(async move {
+    let pump = tokio::spawn(async move {
         while let Some(update) = updates.next().await {
-            match update {
-                SessionUpdateKind::MessageChunk { text, .. } => {
-                    print!("{text}");
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                }
-                SessionUpdateKind::ToolCall { title, .. } => println!("\n[tool] {title}"),
-                _ => {}
+            let line = match update {
+                SessionUpdateKind::MessageChunk { text, .. } => text,
+                SessionUpdateKind::ToolCall { title, .. } => format!("· {title}"),
+                _ => continue,
+            };
+            if rendered_tx.send(line).is_err() {
+                break;
             }
         }
     });
@@ -722,13 +731,42 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        match session.prompt(&line).await {
-            Ok(response) => println!("\n[{:?}]", response.stop_reason),
-            Err(e) => eprintln!("\nchat: turn failed: {e}"),
+        view.commit(&[ratatui::text::Line::from(format!("> {line}"))])
+            .context("committing the prompt")?;
+        view.draw(&ratatui::text::Line::from("working…"))
+            .context("drawing the live row")?;
+
+        let turn = session.prompt(&line);
+        tokio::pin!(turn);
+        let outcome = loop {
+            tokio::select! {
+                update = rendered_rx.recv() => match update {
+                    Some(text) => view
+                        .commit(&[ratatui::text::Line::from(text)])
+                        .context("committing an update")?,
+                    None => continue,
+                },
+                result = &mut turn => break result,
+            }
+        };
+        // Drain whatever the agent emitted between its last update and the
+        // turn resolving, so nothing is lost to the race.
+        while let Ok(text) = rendered_rx.try_recv() {
+            view.commit(&[ratatui::text::Line::from(text)])
+                .context("committing a trailing update")?;
+        }
+        match outcome {
+            Ok(response) => view.commit(&[ratatui::text::Line::from(format!(
+                "[{:?}]",
+                response.stop_reason
+            ))])?,
+            Err(e) => view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?,
         }
     }
 
-    render.abort();
+    pump.abort();
+    // Give the live rows back before anything else prints.
+    view.finish().context("closing the inline viewport")?;
     session
         .shutdown()
         .await

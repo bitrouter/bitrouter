@@ -622,6 +622,7 @@ dependencies = [
  "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
+ "bitrouter-tui",
  "chrono",
  "clap",
  "crossterm",

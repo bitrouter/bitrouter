@@ -373,7 +373,7 @@ depends on the TUI existing.
   - Verify: `cargo run -p bitrouter -- chat --help 2>&1 | head -25`
   - Commit: `feat(cli): add the chat verb for ACP sessions`
 
-- [ ] **4.5 Inline viewport over the session's own updates**
+- [x] **4.5 Inline viewport over the session's own updates**
   - Depends on: 4.3, 4.4
   - Files: `crates/bitrouter-tui/src/`
   - Do: `ratatui::Viewport::Inline` — no alternate screen, no lifecycle restore,

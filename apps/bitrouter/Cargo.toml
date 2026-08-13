@@ -57,6 +57,7 @@ semver = "1"
 # The live view (`bitrouter status --watch`). Not behind a cargo feature: a
 # flag on a documented command that sometimes isn't compiled in costs more
 # confusion than the build time it saves (OBSERVABILITY_TUI_SPEC §6).
+bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.27" }
 ratatui.workspace = true
 crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
