@@ -347,7 +347,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter providers 2>&1 | tail -20`
   - Commit: `feat(daemon): launch-scoped route override`
 
-- [ ] **4.3 The `bitrouter-tui` crate**
+- [x] **4.3 The `bitrouter-tui` crate**
   - Depends on: —
   - Files: `crates/bitrouter-tui/Cargo.toml`, `crates/bitrouter-tui/src/lib.rs`
   - Do: a new workspace member (`members = ["crates/*"]` picks it up). It

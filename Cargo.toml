@@ -42,6 +42,14 @@ rustix = { version = "1", default-features = false }
 
 # ACP SDK crates
 agent-client-protocol = "1.2"
+# Shared by `bitrouter status --watch` (in the app) and `bitrouter-tui` (the
+# ACP session renderer), so the version lives here rather than in either.
+ratatui = { version = "0.29", features = [
+    # Paragraph::line_count — wrap-aware tail-follow needs the rendered
+    # height, not the logical line count.
+    "unstable-rendered-line-info",
+] }
+crossterm = { version = "0.28", features = ["event-stream"] }
 # `unstable_llm_providers` gives the `providers/*` schema types. The runtime
 # crate (1.2) does not forward that feature, so the two methods are dispatched
 # as raw JSON-RPC over these types — see ACP_TUI_SPEC §10. NOT

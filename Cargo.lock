@@ -800,6 +800,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-tui"
+version = "1.0.0-alpha.27"
+dependencies = [
+ "agent-client-protocol-schema",
+ "crossterm",
+ "ratatui",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
