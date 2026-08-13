@@ -57,16 +57,21 @@ use crate::paths::ConfigSource;
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
 /// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
-#[derive(Debug, Clone, Default)]
+#[derive(clap::Args, Debug, Clone, Default)]
 pub struct RoutingOptions {
-    /// Skip daemon routing entirely — the harness talks to its own provider.
+    /// Do NOT route this session's LLM traffic through the daemon — let the
+    /// harness use its own provider auth. Routing is attempted by default
+    /// when the harness supports headless redirection.
+    #[arg(long)]
     pub direct: bool,
-    /// Explicit gateway base URL. When `None` it is derived from the daemon's
-    /// `server.listen`.
+    /// Override the gateway base URL (else derived from `server.listen`).
+    #[arg(long)]
     pub base_url: Option<String>,
     /// Pin the harness's model (via its model env var / `-c model=`).
+    #[arg(long)]
     pub model: Option<String>,
     /// Never auto-start a local daemon when none is running — fail fast.
+    #[arg(long)]
     pub no_start: bool,
 }
 
@@ -656,6 +661,82 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         exporter.shutdown();
     }
     served.map_err(|e| anyhow::anyhow!("acp serve: {e}"))
+}
+
+// ── chat ──────────────────────────────────────────────────────────────────────
+
+/// Run one ACP session interactively in the caller's terminal.
+///
+/// The interactive counterpart to [`serve`]: same launch, same routing, same
+/// per-session log — but the session is rendered for a person instead of
+/// exposed to a manager over stdio.
+///
+/// This owns argument handling, routing, and session lifetime; the rendering
+/// belongs to `bitrouter-tui`, which cannot depend on this crate and so is
+/// handed only what ACP carries.
+pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
+    use tokio::io::AsyncBufReadExt;
+
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
+    // Fail fast, before any agent process exists — a person waiting at a
+    // prompt should learn the route is dead now, not mid-turn.
+    let routed = apply_routing(source, &mut config, agent_id, &routing)
+        .await
+        .map_err(anyhow::Error::new)?;
+
+    let catalog = catalog_from_config(&config)?;
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let exporter = attach_observability(&config, agent_id, &session, None).await;
+
+    match routed.via {
+        Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
+        None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
+    }
+    eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
+
+    let mut updates = session.updates();
+    let render = tokio::spawn(async move {
+        while let Some(update) = updates.next().await {
+            match update {
+                SessionUpdateKind::MessageChunk { text, .. } => {
+                    print!("{text}");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
+                SessionUpdateKind::ToolCall { title, .. } => println!("\n[tool] {title}"),
+                _ => {}
+            }
+        }
+    });
+
+    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match session.prompt(&line).await {
+            Ok(response) => println!("\n[{:?}]", response.stop_reason),
+            Err(e) => eprintln!("\nchat: turn failed: {e}"),
+        }
+    }
+
+    render.abort();
+    session
+        .shutdown()
+        .await
+        .context("shutting down chat session")?;
+    if let Some(exporter) = exporter {
+        exporter.shutdown();
+    }
+    Ok(())
 }
 
 // ── prompt ────────────────────────────────────────────────────────────────────

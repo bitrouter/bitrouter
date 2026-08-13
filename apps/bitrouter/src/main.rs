@@ -565,6 +565,32 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
+    /// Chat with an ACP agent in your terminal, routed through BitRouter.
+    ///
+    /// The interactive counterpart to `acp serve`: instead of exposing the
+    /// session to a manager over stdio, this renders it for you — messages,
+    /// tool calls, permission prompts, and what the turn cost.
+    ///
+    /// Output lands in your terminal's real scrollback, so search, selection,
+    /// and copy keep working. `Ctrl-C` leaves a readable transcript behind.
+    Chat {
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry.
+        agent: String,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1366,20 +1392,8 @@ enum AcpCmd {
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
-        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is attempted by
-        /// default when the harness supports headless redirection.
-        #[arg(long)]
-        direct: bool,
-        /// Override the gateway base URL (else derived from `server.listen`).
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Pin the harness's model (via its model env var / `-c model=`).
-        #[arg(long)]
-        model: Option<String>,
-        /// Never auto-start a local daemon when none is running — fail fast.
-        #[arg(long)]
-        no_start: bool,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1407,20 +1421,8 @@ enum AcpCmd {
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
         no_wait: bool,
-        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is attempted by
-        /// default when the harness supports headless redirection.
-        #[arg(long)]
-        direct: bool,
-        /// Override the gateway base URL (else derived from `server.listen`).
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Pin the harness's model (via its model env var / `-c model=`).
-        #[arg(long)]
-        model: Option<String>,
-        /// Never auto-start a local daemon when none is running — fail fast.
-        #[arg(long)]
-        no_start: bool,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1514,7 +1516,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    let is_acp = matches!(&cli.command, Some(Command::Acp { .. }));
+    // `chat` shares this rule with the `acp` verbs: its stdout is the
+    // session transcript, so log lines must not interleave with it.
+    let is_acp = matches!(
+        &cli.command,
+        Some(Command::Acp { .. } | Command::Chat { .. })
+    );
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
@@ -1817,6 +1824,24 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
+        Command::Chat {
+            agent,
+            turn_timeout,
+            routing,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options,
+                routing,
+            };
+            bitrouter::acp_cli::chat(ctx).await
+        }
         Command::Update {
             check,
             tag,
@@ -5280,21 +5305,12 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         AcpCmd::Serve {
             agent,
             turn_timeout,
-            direct,
-            base_url,
-            model,
-            no_start,
+            routing,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let routing = bitrouter::acp_cli::RoutingOptions {
-                direct,
-                base_url,
-                model,
-                no_start,
-            };
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,
                 config: cfg,
@@ -5308,22 +5324,13 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             agent,
             turn_timeout,
             no_wait,
-            direct,
-            base_url,
-            model,
-            no_start,
+            routing,
             config,
             text,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let routing = bitrouter::acp_cli::RoutingOptions {
-                direct,
-                base_url,
-                model,
-                no_start,
-            };
             let mut stdout = tokio::io::stdout();
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,

@@ -360,7 +360,7 @@ depends on the TUI existing.
   - Verify: `cargo tree -p bitrouter-tui --depth 1 && cargo build -p bitrouter-tui 2>&1 | tail -5`
   - Commit: `feat(tui): add the bitrouter-tui crate`
 
-- [ ] **4.4 The verb**
+- [x] **4.4 The verb**
   - Depends on: 2.3, 4.3
   - Files: `apps/bitrouter/src/main.rs`, `apps/bitrouter/src/acp_cli.rs`,
     `apps/bitrouter/Cargo.toml`
