@@ -180,7 +180,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run -p bitrouter reload 2>&1 | tail -20`
   - Commit: `fix(daemon): rebuild the policy table on reload`
 
-- [ ] **2.2 Capture both stderr streams to a session log**
+- [x] **2.2 Capture both stderr streams to a session log**
   - Depends on: —
   - Files: `crates/bitrouter-sdk/src/acp/up.rs`, `apps/bitrouter/src/main.rs`
   - Do: change the agent child from `Stdio::inherit()` to a captured pipe; add a

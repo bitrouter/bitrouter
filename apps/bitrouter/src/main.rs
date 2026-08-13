@@ -1510,8 +1510,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
-        // Any `acp` subcommand: init with stderr so stdout stays pristine.
-        init_stderr_tracing_subscriber();
+        // Any `acp` subcommand: stderr so stdout stays pristine, plus a
+        // per-session file so the substrate's log and the agent child's
+        // captured stderr can be read back interleaved.
+        if let Some(path) = init_session_log_tracing_subscriber() {
+            tracing::debug!(log = %path.display(), "session log");
+        }
     } else {
         init_basic_tracing_subscriber();
     }
@@ -2500,6 +2504,67 @@ fn init_stderr_tracing_subscriber() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+}
+
+/// Where this process's session log lives: `~/.bitrouter/logs/`, one file per
+/// session, named for the wall-clock start and the pid.
+///
+/// The pid is what makes it unique — two sessions started in the same second
+/// must not share a file, and at this point in startup there is no session id
+/// to name it after (the log has to exist before the agent that would produce
+/// one is spawned).
+fn session_log_path() -> anyhow::Result<PathBuf> {
+    let dir = bitrouter::paths::runtime_home()?.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S");
+    Ok(dir.join(format!("session-{stamp}-{}.log", std::process::id())))
+}
+
+/// Install a tracing subscriber that writes to **stderr and a session log
+/// file**. Used for the `acp` subcommands.
+///
+/// The fourth initializer, alongside [`init_basic_tracing_subscriber`],
+/// [`init_stderr_tracing_subscriber`], and [`init_serve_tracing_subscriber`].
+/// It exists because an ACP session has *two* diagnostic streams — the
+/// substrate's own and the agent child's, which `spawn_agent_process` now
+/// captures and re-emits through `tracing` — and reading them means reading
+/// them interleaved, in one place, after the fact. stderr is kept as well as
+/// the file: dropping it would silently change what an operator running the
+/// command in a terminal sees.
+///
+/// Returns the log's path so the caller can name it in a failure. A file that
+/// cannot be opened is **not** fatal — the session still runs, logging to
+/// stderr alone — because losing the transcript is not a reason to refuse to
+/// start.
+fn init_session_log_tracing_subscriber() -> Option<PathBuf> {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    let env_filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    let opened = session_log_path().and_then(|path| {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        Ok((path, file))
+    });
+    match opened {
+        Ok((path, file)) => {
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(std::io::stderr.and(std::sync::Arc::new(file)))
+                .with_env_filter(env_filter())
+                .init();
+            Some(path)
+        }
+        Err(e) => {
+            init_stderr_tracing_subscriber();
+            tracing::warn!("no session log ({e}); logging to stderr only");
+            None
+        }
+    }
 }
 
 /// Install the full tracing subscriber for the `serve` command: fmt plus
