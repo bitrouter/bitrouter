@@ -569,12 +569,23 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     )
     .await
     .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter = attach_observability(&config, agent_id, &session).await;
     // The router-owned surfaces: measured cost (§7) and the routing catalog
-    // (§6). Both are built before serving so the first turn and the manager's
+    // (§6). Both are wired before serving so the first turn and the manager's
     // first `providers/list` already have somewhere to go.
+    let (cost_tx, cost_rx) = tokio::sync::mpsc::unbounded_channel();
+    let exporter = attach_observability(
+        &config,
+        agent_id,
+        &session,
+        Some(CostSink {
+            source: source.clone(),
+            session_start: chrono::Utc::now(),
+            updates: cost_tx,
+        }),
+    )
+    .await;
     let extensions = bitrouter_sdk::acp::down::ServeExtensions {
-        injected_updates: spawn_cost_measurer(source, &session),
+        injected_updates: Some(cost_rx),
         providers: Some(Arc::new(SessionProviders::from_config(&config))),
     };
     let session = Arc::new(session);
@@ -653,7 +664,9 @@ where
     let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter = attach_observability(&config, agent_id, &session).await;
+    // No cost sink: `prompt` has no manager on a down-facing wire — its
+    // output is the NDJSON stream, which carries its own terminal `result`.
+    let exporter = attach_observability(&config, agent_id, &session, None).await;
 
     // First line: correlate this session with the cost/metering the
     // orchestrator later queries. `via` is null when running direct.
@@ -866,6 +879,7 @@ async fn attach_observability(
     config: &Config,
     agent_id: &str,
     session: &bitrouter_sdk::acp::engine::Session,
+    cost: Option<CostSink>,
 ) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
     let exporter = crate::assemble::build_otel_exporter_standalone(config).await;
     let recorder = exporter.as_ref().map(|exporter| {
@@ -876,10 +890,19 @@ async fn attach_observability(
         ))
     });
 
-    // Telemetry drain: stderr log per turn (always) + invoke_agent span.
+    // Telemetry drain: stderr log per turn (always), the invoke_agent span,
+    // and the router-measured `UsageUpdate` (§7).
+    //
+    // One drain, three consumers, because `Session::telemetry()` hands out the
+    // receiver exactly once — a second caller gets `None` and silently does
+    // nothing. Everything that needs per-turn records has to hang off this
+    // loop.
     if let Some(mut rx) = session.telemetry() {
         let recorder = recorder.clone();
         tokio::spawn(async move {
+            // Opened lazily: the metering database may not exist until the
+            // first routed request has settled.
+            let mut store = None;
             while let Some(record) = rx.recv().await {
                 if let Some(recorder) = &recorder {
                     recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
@@ -888,6 +911,17 @@ async fn attach_observability(
                         context_used: record.context.map(|c| c.used),
                         context_size: record.context.map(|c| c.size),
                     });
+                }
+                if let Some(cost) = &cost {
+                    if store.is_none() {
+                        store = crate::metering::reader::open_readonly(&cost.source).await;
+                    }
+                    if let Some(store) = &store
+                        && let Some(update) =
+                            measured_usage_update(store, cost.session_start, &record).await
+                    {
+                        let _ = cost.updates.send(update);
+                    }
                 }
                 drain_telemetry_record(record);
             }
@@ -1063,42 +1097,15 @@ impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
     }
 }
 
-/// Drain this session's settled turns and put a router-measured `UsageUpdate`
-/// on the down-facing wire for each one.
+/// Everything the telemetry drain needs to put measured cost on the wire.
 ///
-/// Returns the receiver `down::serve_with_injected_updates` forwards, or `None`
-/// when this session cannot report cost — no telemetry channel, or no metering
-/// database to read. `None` means the manager simply sees no synthesized usage,
-/// which is the honest outcome; it is never a reason to fail the session.
-///
-/// The window starts now, so the reported figure is *this session's* spend
-/// rather than the daemon's — the distinction the previous status bar got
-/// wrong.
-fn spawn_cost_measurer(
-    source: &ConfigSource,
-    session: &bitrouter_sdk::acp::engine::Session,
-) -> Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>> {
-    let mut turns = session.telemetry()?;
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let source = source.clone();
-    let session_start = chrono::Utc::now();
-    tokio::spawn(async move {
-        // Opened once, lazily: the database may not exist until the first
-        // routed request has settled.
-        let mut store = None;
-        while let Some(record) = turns.recv().await {
-            if store.is_none() {
-                store = crate::metering::reader::open_readonly(&source).await;
-            }
-            let Some(store) = &store else { continue };
-            if let Some(update) = measured_usage_update(store, session_start, &record).await
-                && tx.send(update).is_err()
-            {
-                break;
-            }
-        }
-    });
-    Some(rx)
+/// The window starts at session launch, so the reported figure is *this
+/// session's* spend rather than the daemon's — the distinction the previous
+/// status bar got wrong.
+struct CostSink {
+    source: ConfigSource,
+    session_start: chrono::DateTime<chrono::Utc>,
+    updates: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
 }
 
 /// Router-measured session spend, synthesized as an ACP `UsageUpdate` on every

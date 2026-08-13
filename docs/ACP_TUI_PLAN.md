@@ -247,7 +247,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
   - Commit: `feat(acp): expose routing via providers/list and providers/set`
 
-- [ ] **3.4 Protocol conformance tests**
+- [x] **3.4 Protocol conformance tests**
   - Depends on: 3.1, 3.2, 3.3
   - Files: `apps/bitrouter/tests/acp.rs`
   - Do: extend the existing raw JSON-RPC driver (§13.1) — `providers/list`

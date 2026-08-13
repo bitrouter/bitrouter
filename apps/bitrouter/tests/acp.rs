@@ -686,3 +686,381 @@ async fn prompt_headless_denies_permission_and_completes() {
         "turn must complete:\n{output}"
     );
 }
+
+// ── Test 3: providers/*, usage cost, and the forwarded update variants ───────
+
+/// A stub that emits, during one prompt turn, every stable v1 `session/update`
+/// the gateway used to swallow — then ends the turn.
+const CONFORMANCE_CONFIG_YAML: &str = r#"
+database:
+  url: "sqlite://DB_PATH?mode=rwc"
+providers:
+  alpha:
+    api_base: https://alpha.example.com/v1
+    api_key: sk-CONFORMANCE-ALPHA-SECRET
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - { id: m1 }
+  beta:
+    api_base: https://beta.example.com/v1
+    api_key: sk-CONFORMANCE-BETA-SECRET
+    api_protocol:
+      - "*": anthropic
+    models:
+      - { id: m1 }
+agents:
+  stub:
+    name: stub
+    transport:
+      type: stdio
+      command: bash
+      args:
+        - "-c"
+        - |
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                  printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"plan","entries":[{"content":"step one","priority":"high","status":"pending"}]}}}\n';
+                  printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"create_plan","description":"draft a plan"}]}}}\n';
+                  printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"current_mode_update","currentModeId":"plan"}}}\n';
+                  printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"config_option_update","configOptions":[]}}}\n';
+                  printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"session_info_update","title":"conformance"}}}\n';
+                  printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+"#;
+
+/// Settle one request into the metering database the substrate reads, so a
+/// prompt turn has measured spend to report.
+///
+/// Called twice: once before launch to create the file and run migrations,
+/// and once *during* the session. Only the second lands inside the session's
+/// spend window — the substrate deliberately scopes cost to the session, so
+/// spend that predates it must not be attributed to it.
+async fn settle_request(db_path: &std::path::Path, request_id: &str, charge_micro_usd: i64) {
+    use bitrouter::metering::db::{ReconciliationStatus, RequestMetric};
+    use bitrouter::metering::pricing::{
+        ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
+    };
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let db = bitrouter::db::connect(&url)
+        .await
+        .expect("open metering db");
+    bitrouter::db::run_migrations(&db).await.expect("migrate");
+    let store = bitrouter::metering::store::MeteringStore::new(db);
+    store
+        .record_request(RequestMetric {
+            request_id: request_id.to_string(),
+            user_id: "u1".into(),
+            api_key_id: "k1".into(),
+            launch_id: None,
+            model_id: "m1".into(),
+            provider_id: "alpha".into(),
+            prompt_tokens: 1_000,
+            completion_tokens: 200,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            uncached_input_tokens: 1_000,
+            output_tokens: 200,
+            usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+            raw_usage: None,
+            charge_status: ChargeStatus::Computed,
+            charge_evidence: ChargeEvidence {
+                status: ChargeStatus::Computed,
+                charge_micro_usd: Some(charge_micro_usd),
+                normalized_usage: Default::default(),
+                effective_rates: EffectivePricingRates::default(),
+                pricing_source: PricingSource::Configured,
+                pricing_version: "sha256:conformance".to_string(),
+                unknown_reason: None,
+            },
+            reconciliation_status: ReconciliationStatus::NotApplicable,
+            estimated_charge_micro_usd: charge_micro_usd,
+            latency_ms: 1_200,
+            generation_time_ms: 900,
+            streamed: false,
+            error: None,
+        })
+        .await
+        .expect("seed settled request");
+}
+
+/// Drive the four Phase-3 protocol guarantees over the real ACP wire, against
+/// a subprocess `bitrouter acp serve` — the same raw JSON-RPC driver the
+/// existing E2E uses, extended:
+///
+/// 1. `providers/list` returns the routing catalog.
+/// 2. `providers/set` changes the effective route.
+/// 3. `UsageUpdate` carries a non-null `cost` after a settled turn.
+/// 4. The five previously-dropped `session/update` variants survive round-trip.
+///
+/// Plus the standing rule: no credential value appears in any `providers/*`
+/// response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn providers_usage_and_forwarded_updates_conform() {
+    use std::time::Duration;
+    use tokio::io::BufReader;
+
+    const RPC_TIMEOUT: Duration = Duration::from_secs(20);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("metering.db");
+    // Before launch: creates the file and runs migrations. This request
+    // predates the session, so it must NOT show up in its cost.
+    settle_request(&db_path, "before-session", 999_000).await;
+
+    let config_path = dir.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config_path,
+        CONFORMANCE_CONFIG_YAML.replace("DB_PATH", &db_path.display().to_string()),
+    )
+    .expect("write config");
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let binary = workspace_root
+        .join("target")
+        .join(profile)
+        .join("bitrouter");
+    if !binary.exists() {
+        eprintln!(
+            "providers_usage_and_forwarded_updates_conform: binary not found at {}; skipping",
+            binary.display()
+        );
+        return;
+    }
+
+    let stderr_path = dir.path().join("serve.stderr");
+    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
+    let mut child = tokio::process::Command::new(&binary)
+        .args([
+            "acp",
+            "serve",
+            "--agent",
+            "stub",
+            "--direct",
+            "--config",
+            config_path.to_str().expect("config path utf8"),
+        ])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(stderr_file)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn bitrouter acp serve");
+
+    let mut stdin = child.stdin.take().expect("child stdin");
+    let stdout = child.stdout.take().expect("child stdout");
+    let mut reader = BufReader::new(stdout);
+
+    let (init, _) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize",
+                           "params":{"protocolVersion":1}}),
+        "1",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(init.get("result").is_some(), "initialize failed: {init}");
+
+    let (new_resp, _) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new",
+                           "params":{"cwd":"/","mcpServers":[]}}),
+        "2",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(
+        new_resp["result"]["sessionId"].is_string(),
+        "session/new failed: {new_resp}"
+    );
+
+    // ── Assertion 1: providers/list returns the catalog ───────────────────
+    let (listed, _) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"3","method":"providers/list","params":{}}),
+        "3",
+        RPC_TIMEOUT,
+    )
+    .await;
+    let providers = listed["result"]["providers"]
+        .as_array()
+        .unwrap_or_else(|| panic!("providers/list must return a catalog; got {listed}"));
+    let ids: Vec<&str> = providers
+        .iter()
+        .filter_map(|p| p["providerId"].as_str())
+        .collect();
+    assert_eq!(ids, vec!["alpha", "beta"], "the routable catalog: {listed}");
+    assert!(
+        providers.iter().all(|p| p["current"].is_null()),
+        "no route is in force before providers/set: {listed}"
+    );
+
+    // No credential may appear in a providers/* response — asserted against
+    // the serialized bytes, so `_meta` smuggling would fail too.
+    let listed_wire = serde_json::to_string(&listed).expect("serialize");
+    for secret in ["sk-CONFORMANCE-ALPHA-SECRET", "sk-CONFORMANCE-BETA-SECRET"] {
+        assert!(
+            !listed_wire.contains(secret),
+            "a credential reached the providers wire: {listed_wire}"
+        );
+    }
+
+    // ── Assertion 2: providers/set changes the effective route ────────────
+    let (set_resp, _) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"4","method":"providers/set",
+                           "params":{"providerId":"beta","apiType":"anthropic",
+                                     "baseUrl":"https://beta.example.com/v1","headers":{}}}),
+        "4",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(
+        set_resp.get("result").is_some(),
+        "providers/set must succeed: {set_resp}"
+    );
+
+    let (relisted, _) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"5","method":"providers/list","params":{}}),
+        "5",
+        RPC_TIMEOUT,
+    )
+    .await;
+    let in_force: Vec<&str> = relisted["result"]["providers"]
+        .as_array()
+        .expect("catalog")
+        .iter()
+        .filter(|p| !p["current"].is_null())
+        .filter_map(|p| p["providerId"].as_str())
+        .collect();
+    assert_eq!(
+        in_force,
+        vec!["beta"],
+        "providers/set must change the effective route: {relisted}"
+    );
+    let relisted_wire = serde_json::to_string(&relisted).expect("serialize");
+    for secret in ["sk-CONFORMANCE-ALPHA-SECRET", "sk-CONFORMANCE-BETA-SECRET"] {
+        assert!(
+            !relisted_wire.contains(secret),
+            "a credential reached the providers wire: {relisted_wire}"
+        );
+    }
+
+    // ── Assertion 4: drive a turn, collect its notifications ──────────────
+    let (prompt_resp, notifications) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"6","method":"session/prompt",
+                           "params":{"sessionId":new_resp["result"]["sessionId"],
+                                     "prompt":[{"type":"text","text":"go"}]}}),
+        "6",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(
+        prompt_resp.get("result").is_some(),
+        "session/prompt failed: {prompt_resp}"
+    );
+
+    let kinds: Vec<&str> = notifications
+        .iter()
+        .filter(|n| n["method"] == "session/update")
+        .filter_map(|n| n["params"]["update"]["sessionUpdate"].as_str())
+        .collect();
+
+    // Assertion 4: the five variants the gateway used to swallow.
+    for expected in [
+        "plan",
+        "available_commands_update",
+        "current_mode_update",
+        "config_option_update",
+        "session_info_update",
+    ] {
+        assert!(
+            kinds.contains(&expected),
+            "'{expected}' must survive the round-trip; saw {kinds:?}"
+        );
+    }
+
+    // ── Assertion 3: a settled turn carries router-measured, non-null cost ─
+    // Settle a request *inside* the session window, then drive a second turn:
+    // the substrate reports this session's spend, so only this request counts.
+    settle_request(&db_path, "during-session", 750_000).await;
+    let (second_resp, second_notifications) = bounded_round_trip(
+        &mut stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"7","method":"session/prompt",
+                           "params":{"sessionId":new_resp["result"]["sessionId"],
+                                     "prompt":[{"type":"text","text":"again"}]}}),
+        "7",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(
+        second_resp.get("result").is_some(),
+        "second session/prompt failed: {second_resp}"
+    );
+
+    // The synthesized update races the prompt response, so accept it either
+    // among this turn's notifications or on the next read.
+    let mut usage_cost = second_notifications
+        .iter()
+        .filter(|n| n["method"] == "session/update")
+        .find(|n| n["params"]["update"]["sessionUpdate"] == "usage_update")
+        .map(|n| n["params"]["update"]["cost"].clone())
+        .filter(|c| !c.is_null());
+    if usage_cost.is_none() {
+        use tokio::io::AsyncBufReadExt;
+        let deadline = tokio::time::Instant::now() + RPC_TIMEOUT;
+        while usage_cost.is_none() && tokio::time::Instant::now() < deadline {
+            let mut buf = String::new();
+            let read =
+                tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut buf)).await;
+            let Ok(Ok(n)) = read else { break };
+            if n == 0 {
+                break;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(buf.trim()) else {
+                continue;
+            };
+            if v["method"] == "session/update"
+                && v["params"]["update"]["sessionUpdate"] == "usage_update"
+                && !v["params"]["update"]["cost"].is_null()
+            {
+                usage_cost = Some(v["params"]["update"]["cost"].clone());
+            }
+        }
+    }
+    let cost = usage_cost.unwrap_or_else(|| {
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        panic!("no UsageUpdate with a non-null cost reached the manager\nstderr:\n{stderr}")
+    });
+    assert_eq!(
+        cost["amount"].as_f64(),
+        Some(0.75),
+        "the router-measured charge for THIS session, in USD — the $0.999 \
+         settled before launch must not be counted: {cost}"
+    );
+    assert_eq!(cost["currency"].as_str(), Some("USD"), "{cost}");
+
+    let _ = child.kill().await;
+}
