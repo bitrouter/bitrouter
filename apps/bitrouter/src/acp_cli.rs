@@ -711,17 +711,24 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     ))
     .context("opening the inline viewport")?;
 
+    // The **raw** ACP stream, not the translated one: the renderer is a
+    // protocol client, and translating first would lose exactly the fidelity
+    // it exists to draw.
     let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut updates = session.updates();
+    let mut updates = session.raw_updates();
     let pump = tokio::spawn(async move {
+        let mut transcript = bitrouter_tui::transcript::Transcript::default();
         while let Some(update) = updates.next().await {
-            let line = match update {
-                SessionUpdateKind::MessageChunk { text, .. } => text,
-                SessionUpdateKind::ToolCall { title, .. } => format!("· {title}"),
-                _ => continue,
-            };
+            for line in transcript.apply(update) {
+                if rendered_tx.send(line).is_err() {
+                    return;
+                }
+            }
+        }
+        // Whatever was still streaming when the agent went away.
+        for line in transcript.flush() {
             if rendered_tx.send(line).is_err() {
-                break;
+                return;
             }
         }
     });
@@ -741,9 +748,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         let outcome = loop {
             tokio::select! {
                 update = rendered_rx.recv() => match update {
-                    Some(text) => view
-                        .commit(&[ratatui::text::Line::from(text)])
-                        .context("committing an update")?,
+                    Some(line) => view.commit(&[line]).context("committing an update")?,
                     None => continue,
                 },
                 result = &mut turn => break result,
@@ -751,8 +756,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         };
         // Drain whatever the agent emitted between its last update and the
         // turn resolving, so nothing is lost to the race.
-        while let Ok(text) = rendered_rx.try_recv() {
-            view.commit(&[ratatui::text::Line::from(text)])
+        while let Ok(line) = rendered_rx.try_recv() {
+            view.commit(&[line])
                 .context("committing a trailing update")?;
         }
         match outcome {

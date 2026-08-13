@@ -31,6 +31,7 @@
 //! why [`Capabilities`] exists: the renderer asks what this session can
 //! actually honor, and draws only that.
 
+pub mod transcript;
 pub mod viewport;
 
 use agent_client_protocol_schema::v1::AgentCapabilities;

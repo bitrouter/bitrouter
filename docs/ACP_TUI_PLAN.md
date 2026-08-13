@@ -384,7 +384,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): inline viewport for ACP sessions`
 
-- [ ] **4.6 Message log and tool-call cards**
+- [x] **4.6 Message log and tool-call cards**
   - Depends on: 3.1, 4.5
   - Do: render `MessageChunk`, `ThoughtChunk`, `ToolCall`, `ToolCallUpdate` —
     streaming chunks, status, diffs. Plans and available commands (3.1) render
