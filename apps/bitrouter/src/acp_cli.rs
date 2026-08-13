@@ -665,6 +665,43 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 // ── chat ──────────────────────────────────────────────────────────────────────
 
+/// This process's session log, once the subscriber has opened one.
+///
+/// A global because the path is decided during subscriber init — before any
+/// command is dispatched, and the only moment it exists. A session that ends
+/// badly needs it much later, and threading it through every launch path to
+/// serve the failure case would cost more than it is worth.
+static SESSION_LOG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Record where this process's session log lives. Called once at startup.
+pub fn remember_session_log(path: std::path::PathBuf) {
+    let _ = SESSION_LOG.set(path);
+}
+
+/// Show the end of the session log and name the file.
+///
+/// Called only when something went wrong: a permanent pane would cost rows on
+/// every session to serve the rare one that fails. An unreadable log is
+/// reported as unreadable rather than skipped — "there is no log" is the kind
+/// of thing a user needs told, not hidden.
+fn commit_log_tail(
+    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> Result<()> {
+    let Some(path) = SESSION_LOG.get() else {
+        return Ok(());
+    };
+    let log = match std::fs::read_to_string(path) {
+        Ok(log) => log,
+        Err(e) => format!("(could not read the session log: {e})"),
+    };
+    view.commit(&bitrouter_tui::log_tail::render(
+        path,
+        &log,
+        bitrouter_tui::log_tail::TAIL_LINES,
+    ))
+    .context("committing the session log tail")
+}
+
 /// Run one ACP session interactively in the caller's terminal.
 ///
 /// The interactive counterpart to [`serve`]: same launch, same routing, same
@@ -804,7 +841,12 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 "[{:?}]",
                 response.stop_reason
             ))])?,
-            Err(e) => view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?,
+            Err(e) => {
+                view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?;
+                // A failed turn is the abnormal exit this exists for: the log
+                // holds both the substrate's side and the agent child's.
+                commit_log_tail(&mut view)?;
+            }
         }
         // The settled turn's cost, kept where the transcript will preserve it.
         view.commit(&[cost_line]).context("committing the cost")?;
@@ -812,12 +854,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 
     pump.abort();
     permissions.abort();
+    // A session whose agent could not be shut down cleanly ended abnormally
+    // too, and the log is where the reason is.
+    let shutdown = session.shutdown().await;
+    if shutdown.is_err() {
+        commit_log_tail(&mut view)?;
+    }
     // Give the live rows back before anything else prints.
     view.finish().context("closing the inline viewport")?;
-    session
-        .shutdown()
-        .await
-        .context("shutting down chat session")?;
+    shutdown.context("shutting down chat session")?;
     if let Some(exporter) = exporter {
         exporter.shutdown();
     }

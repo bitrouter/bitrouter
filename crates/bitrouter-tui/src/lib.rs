@@ -32,6 +32,7 @@
 //! actually honor, and draws only that.
 
 pub mod cost;
+pub mod log_tail;
 pub mod permission;
 pub mod transcript;
 pub mod viewport;

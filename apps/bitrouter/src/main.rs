@@ -1530,6 +1530,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         // captured stderr can be read back interleaved.
         if let Some(path) = init_session_log_tracing_subscriber() {
             tracing::debug!(log = %path.display(), "session log");
+            // Remembered so a session that dies badly can show the end of it
+            // and say where the rest is. Set once, at init, because that is
+            // the only place the path exists.
+            bitrouter::acp_cli::remember_session_log(path);
         }
     } else {
         init_basic_tracing_subscriber();

@@ -410,7 +410,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): session cost line with honest scope`
 
-- [ ] **4.9 Log tail on abnormal exit**
+- [x] **4.9 Log tail on abnormal exit**
   - Depends on: 2.2, 4.5
   - Do: on abnormal exit, print the last N lines of the session log inline and
     name its path (§8.2). No permanent pane. The crate cannot read the app's
