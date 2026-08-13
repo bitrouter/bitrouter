@@ -2709,6 +2709,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
         bitrouter::paths::ConfigSource::Default { .. } => bitrouter::reload::ReloadSource::Default,
     };
+    // Cloned before the reloader takes it: the control socket needs the same
+    // handle to install `providers/set` route overrides into the live
+    // transform.
+    let policy_router_for_control = assembled.policy_table_router.clone();
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(
         bitrouter::reload::AppReloader::new(
             policy_store.clone(),
@@ -2770,6 +2774,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         listen,
         reloader.clone(),
         observe_provider,
+        policy_router_for_control,
     );
 
     // SIGHUP triggers a config reload — reload should be available via either

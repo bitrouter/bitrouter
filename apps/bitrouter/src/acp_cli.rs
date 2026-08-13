@@ -610,13 +610,36 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         }),
     )
     .await;
+    let providers = Arc::new(SessionProviders::new(
+        &config,
+        // Both halves are required, and their absence is the difference
+        // between a picker that works and one that lies: a daemon to install
+        // the override in, and a launch id to scope it by.
+        routed
+            .via
+            .as_ref()
+            .and(routed.launch_id.as_ref())
+            .map(|id| RouteControl {
+                socket: crate::daemon::resolve_socket_path(
+                    source.home().join("bitrouter.yaml").as_path(),
+                    &config.server.control_socket,
+                ),
+                launch_id: id.clone(),
+            }),
+    ));
     let extensions = bitrouter_sdk::acp::down::ServeExtensions {
         injected_updates: Some(cost_rx),
-        providers: Some(Arc::new(SessionProviders::from_config(&config))),
+        providers: Some(
+            Arc::clone(&providers) as Arc<dyn bitrouter_sdk::acp::down::ProviderSurface>
+        ),
     };
     let session = Arc::new(session);
 
     let served = bitrouter_sdk::acp::down::serve_with(Arc::clone(&session), extensions).await;
+
+    // The override belongs to this session; drop it before anything else so a
+    // later launch cannot inherit a route it never asked for.
+    providers.release().await;
 
     // No manager left: shut the session down deliberately so the agent child
     // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
@@ -1030,6 +1053,18 @@ pub(crate) struct SessionProviders {
     /// The provider this session's route currently points at. `None` until a
     /// `providers/set` names one, at which point `providers/list` reports it.
     selected: std::sync::RwLock<Option<String>>,
+    /// Where to install the override so it moves real traffic. `None` for a
+    /// `--direct` session or one whose credential cannot be attributed — and
+    /// in that case `set` **refuses** rather than reporting a switch it did
+    /// not perform.
+    control: Option<RouteControl>,
+}
+
+/// The daemon endpoint a route override is installed through, and the launch
+/// id that scopes it to this session.
+pub(crate) struct RouteControl {
+    socket: std::path::PathBuf,
+    launch_id: String,
 }
 
 /// One routable provider, reduced to what a UI may see.
@@ -1041,7 +1076,11 @@ struct CatalogEntry {
 
 impl SessionProviders {
     /// Snapshot the active providers from `config`, dropping every secret.
-    pub(crate) fn from_config(config: &Config) -> Self {
+    ///
+    /// `control` is `Some` only when this session's traffic can actually be
+    /// moved: that needs both a daemon to install the override in and a launch
+    /// id to scope it by.
+    pub(crate) fn new(config: &Config, control: Option<RouteControl>) -> Self {
         let mut catalog: Vec<CatalogEntry> = config
             .providers
             .iter()
@@ -1061,6 +1100,28 @@ impl SessionProviders {
         Self {
             catalog,
             selected: std::sync::RwLock::new(None),
+            control,
+        }
+    }
+
+    /// Drop this session's override, so it cannot outlive the session that
+    /// asked for it. Best-effort: the daemon may already be gone at teardown,
+    /// and that is not a failure worth surfacing to the manager.
+    pub(crate) async fn release(&self) {
+        let Some(control) = &self.control else { return };
+        if self.effective().is_none() {
+            return;
+        }
+        if let Err(e) = crate::daemon::send_command(
+            &control.socket,
+            &crate::daemon::DaemonCommand::SetRoute {
+                launch_id: control.launch_id.clone(),
+                provider_id: None,
+            },
+        )
+        .await
+        {
+            tracing::debug!(error = %e, "could not clear the session route override");
         }
     }
 
@@ -1121,6 +1182,28 @@ impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
             return Err(format!(
                 "unknown provider '{requested}' — `providers/list` reports what is routable"
             ));
+        }
+        // Move the traffic FIRST, and record the selection only if it moved.
+        // A `providers/list` reporting a route the daemon is not serving would
+        // be a lie the manager renders as a fact.
+        let Some(control) = &self.control else {
+            return Err(
+                "this session's traffic cannot be rerouted: it runs direct, or its credential \
+                 is the caller's own and so cannot be attributed to a launch"
+                    .to_string(),
+            );
+        };
+        let response = crate::daemon::send_command(
+            &control.socket,
+            &crate::daemon::DaemonCommand::SetRoute {
+                launch_id: control.launch_id.clone(),
+                provider_id: Some(requested.clone()),
+            },
+        )
+        .await
+        .map_err(|e| format!("reaching the daemon to install the route: {e}"))?;
+        if let crate::daemon::DaemonResponse::Error { message } = response {
+            return Err(format!("daemon refused the route change: {message}"));
         }
         match self.selected.write() {
             Ok(mut selected) => {
@@ -1516,7 +1599,7 @@ providers:
 
     #[tokio::test]
     async fn providers_list_reports_the_routable_catalog() -> anyhow::Result<()> {
-        let providers = SessionProviders::from_config(&config_with_secrets()?);
+        let providers = SessionProviders::new(&config_with_secrets()?, None);
         let listed = providers.list().await;
 
         let ids: Vec<String> = listed.iter().map(|p| p.provider_id.0.to_string()).collect();
@@ -1534,27 +1617,30 @@ providers:
         Ok(())
     }
 
+    /// A session with no way to move its traffic must **refuse** rather than
+    /// report a switch it cannot perform. The reroute itself is a daemon-side
+    /// fact, proven by `set_route_reroutes_only_the_named_launch`.
     #[tokio::test]
-    async fn providers_set_changes_the_effective_route() -> anyhow::Result<()> {
-        let providers = SessionProviders::from_config(&config_with_secrets()?);
-        providers
+    async fn providers_set_refuses_when_it_cannot_reroute() -> anyhow::Result<()> {
+        let providers = SessionProviders::new(&config_with_secrets()?, None);
+        let refused = providers
             .set(SetProviderRequest::new(
                 ProviderId::new("beta"),
                 LlmProtocol::Anthropic,
                 "https://beta.example.com/v1",
             ))
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .await;
+        assert!(
+            refused.is_err(),
+            "a session that cannot reroute must not claim it did"
+        );
+        // And it must not then report a route it never installed.
+        assert!(
+            providers.list().await.iter().all(|p| p.current.is_none()),
+            "a refused set leaves no route in force"
+        );
 
-        let listed = providers.list().await;
-        let current: Vec<String> = listed
-            .iter()
-            .filter(|p| p.current.is_some())
-            .map(|p| p.provider_id.0.to_string())
-            .collect();
-        assert_eq!(current, vec!["beta".to_string()], "the route now in force");
-
-        // An unroutable target is refused rather than silently accepted —
+        // An unroutable target is refused before the daemon is ever asked —
         // reporting success for a route that does not exist would be worse
         // than the error.
         let rejected = providers
@@ -1565,13 +1651,6 @@ providers:
             ))
             .await;
         assert!(rejected.is_err(), "unknown provider must be refused");
-        // …and the refusal must not disturb the route already in force.
-        let listed = providers.list().await;
-        assert!(
-            listed
-                .iter()
-                .any(|p| p.current.is_some() && &*p.provider_id.0 == "beta")
-        );
         Ok(())
     }
 
@@ -1581,16 +1660,7 @@ providers:
     /// so a secret smuggled through `_meta` would fail too.
     #[tokio::test]
     async fn no_credential_appears_in_any_providers_response() -> anyhow::Result<()> {
-        let providers = SessionProviders::from_config(&config_with_secrets()?);
-        providers
-            .set(SetProviderRequest::new(
-                ProviderId::new("alpha"),
-                LlmProtocol::OpenAi,
-                "https://alpha.example.com/v1",
-            ))
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
+        let providers = SessionProviders::new(&config_with_secrets()?, None);
         let wire = serde_json::to_string(&providers.list().await)?;
         for secret in [
             "sk-SECRET-ALPHA-DO-NOT-LEAK",
@@ -1605,8 +1675,9 @@ providers:
         // Not just the exact strings — no `api_key`-shaped field at all.
         assert!(!wire.contains("api_key"), "{wire}");
         assert!(!wire.contains("sk-"), "{wire}");
-        // The non-secret routing facts a UI needs are still there.
-        assert!(wire.contains("https://alpha.example.com/v1"), "{wire}");
+        // The provider ids a UI needs are still there.
+        assert!(wire.contains("alpha"), "{wire}");
+        assert!(wire.contains("beta"), "{wire}");
         Ok(())
     }
 }

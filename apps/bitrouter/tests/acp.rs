@@ -994,8 +994,13 @@ async fn conformance_providers_list_returns_the_catalog() {
     let _ = fixture.child.kill().await;
 }
 
-/// Assertion 2 — `providers/set` changes the effective route, and refuses a
-/// provider that is not routable rather than accepting a dead one.
+/// Assertion 2 — `providers/set` never claims a switch it did not perform.
+///
+/// This fixture runs `--direct`, so the session has no daemon to install a
+/// route override in and genuinely *cannot* reroute. The wire-level guarantee
+/// is therefore that it says so: an error, and no route reported as in force
+/// afterwards. That a routable session really does move is a daemon-side fact,
+/// pinned by `set_route_reroutes_only_the_named_launch` in tests/daemon.rs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conformance_providers_set_changes_the_effective_route() {
     let Some(mut fixture) = ServeFixture::launch().await else {
@@ -1010,29 +1015,24 @@ async fn conformance_providers_set_changes_the_effective_route() {
         )
         .await;
     assert!(
-        set_resp.get("result").is_some(),
-        "providers/set must succeed: {set_resp}"
+        set_resp.get("error").is_some(),
+        "a session that cannot reroute must refuse, not report success: {set_resp}"
     );
 
     let (relisted, _) = fixture
         .call("4", "providers/list", serde_json::json!({}))
         .await;
-    let in_force: Vec<&str> = relisted["result"]["providers"]
-        .as_array()
-        .expect("catalog")
-        .iter()
-        .filter(|p| !p["current"].is_null())
-        .filter_map(|p| p["providerId"].as_str())
-        .collect();
-    assert_eq!(
-        in_force,
-        vec!["beta"],
-        "providers/set must change the effective route: {relisted}"
+    assert!(
+        relisted["result"]["providers"]
+            .as_array()
+            .expect("catalog")
+            .iter()
+            .all(|p| p["current"].is_null()),
+        "a refused set must leave no route reported as in force: {relisted}"
     );
     ServeFixture::assert_no_credentials(&relisted);
 
-    // An unroutable target is refused. Reporting success for a route that
-    // does not exist would be worse than the error.
+    // An unroutable target is refused too, and before the daemon is asked.
     let (rejected, _) = fixture
         .call(
             "5",

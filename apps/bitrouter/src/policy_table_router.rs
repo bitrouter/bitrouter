@@ -146,7 +146,7 @@ impl PolicyTable {
     /// transform is baked into the built `App` and cannot be unregistered, so
     /// "no policy table" has to be expressible as a table: every lookup misses,
     /// so `route_prompt` leaves the caller's model alone.
-    pub(crate) fn inert() -> Arc<Self> {
+    pub fn inert() -> Arc<Self> {
         Arc::new(Self {
             tiers: HashMap::new(),
             fingerprints: HashMap::new(),
@@ -244,6 +244,14 @@ pub struct PolicyTableRouter {
     /// on the per-request hot path from [`PromptTransform::apply`], which is
     /// synchronous, and writes happen once per reload.
     table: std::sync::RwLock<Arc<PolicyTable>>,
+    /// Launch id → provider id, for sessions that asked to be rerouted
+    /// (`providers/set`, ACP_TUI_SPEC §6).
+    ///
+    /// Keyed by launch id so an override can only ever move the traffic of
+    /// the session that asked for it. A caller with no launch tag — anyone
+    /// authenticating with a real credential — is never matched, so no
+    /// override can reach them.
+    route_overrides: std::sync::RwLock<HashMap<String, String>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
@@ -268,6 +276,7 @@ impl PolicyTableRouter {
     pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
         PolicyTable::from_config(config).map(|table| Self {
             table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -305,10 +314,51 @@ impl PolicyTableRouter {
         }
     }
 
+    /// Point one session's traffic at `provider_id` until it is cleared.
+    ///
+    /// Returns whether the override was installed; a poisoned lock is reported
+    /// rather than silently dropping the request, because a caller that thinks
+    /// it switched provider and did not is exactly the failure this whole
+    /// surface exists to avoid.
+    pub fn set_route_override(&self, launch_id: &str, provider_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.insert(launch_id.to_string(), provider_id.to_string());
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Drop a session's override. Called when the session ends, so an override
+    /// cannot outlive the thing that asked for it and catch a later launch
+    /// that happens to reuse the id.
+    pub fn clear_route_override(&self, launch_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.remove(launch_id);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The provider this request's session has been redirected to, if any.
+    fn route_override_for(&self, headers: &HeaderMap) -> Option<String> {
+        let launch_id = bitrouter_sdk::caller::launch_tag(
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        )?;
+        match self.route_overrides.read() {
+            Ok(overrides) => overrides.get(&launch_id).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(&launch_id).cloned(),
+        }
+    }
+
     /// Build a router over an immutable policy table.
     pub fn new(table: Arc<PolicyTable>) -> Self {
         Self {
             table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -511,6 +561,22 @@ impl PolicyTableRouter {
     }
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
+        // A live `providers/set` outranks the configured table: it is this
+        // session's operator saying where its traffic goes, now. It does not
+        // outrank a model the caller pinned itself — the same exemption the
+        // table honours, and the only case where the caller wins.
+        if !is_explicitly_routed(&prompt.model)
+            && let Some(provider) = self.route_override_for(headers)
+        {
+            // Keep the model, change the provider: ACP's `providers/set`
+            // names a provider, not a model.
+            let rerouted = format!("{provider}:{}", prompt.model);
+            if prompt.model != rerouted {
+                prompt.model = rerouted;
+                return true;
+            }
+            return false;
+        }
         let input_model = prompt.model.clone();
         let decision = self.decision_for(prompt, headers);
         let selected = self.record_decision(input_model, decision, headers, None);
@@ -739,6 +805,64 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A `providers/set` override must move **only** the traffic of the launch
+    /// that asked for it. Keyed by launch tag, so a caller with a real
+    /// credential — which carries no tag — can never be caught by one.
+    #[test]
+    fn a_route_override_moves_only_its_own_launch() {
+        let router = PolicyTableRouter::new(PolicyTable::inert());
+        assert!(router.set_route_override("brl_mine", "beta"));
+
+        let headers_for = |auth: &str| {
+            let mut h = HeaderMap::new();
+            if let Ok(value) = auth.parse() {
+                h.insert("authorization", value);
+            }
+            h
+        };
+        let routed_model = |auth: &str| {
+            let mut prompt = prompt_with_model("m1");
+            router.route_prompt(&mut prompt, &headers_for(auth));
+            prompt.model
+        };
+
+        // The session that asked is rerouted, keeping its model.
+        assert_eq!(routed_model("Bearer brl_mine"), "beta:m1");
+        // Another launch is untouched.
+        assert_eq!(routed_model("Bearer brl_theirs"), "m1");
+        // A real credential carries no launch tag and cannot be matched.
+        assert_eq!(routed_model("Bearer sk-a-real-key"), "m1");
+        // Neither can an unauthenticated caller.
+        assert_eq!(routed_model(""), "m1");
+
+        // A model the caller pinned itself still wins — the same exemption the
+        // policy table honours.
+        let mut pinned = prompt_with_model("openai:gpt-5");
+        router.route_prompt(&mut pinned, &headers_for("Bearer brl_mine"));
+        assert_eq!(pinned.model, "openai:gpt-5");
+
+        // Clearing restores the configured route.
+        assert!(router.clear_route_override("brl_mine"));
+        assert_eq!(routed_model("Bearer brl_mine"), "m1");
+    }
+
+    fn prompt_with_model(model: &str) -> Prompt {
+        Prompt {
+            model: model.to_string(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![bitrouter_sdk::language_model::types::Message::text(
+                Role::User,
+                "hi",
+            )],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
     use super::*;
     use crate::trajectory::canonical::CorrelationKey;
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;

@@ -330,7 +330,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
   - Commit: `fix(acp): scope reported cost to the session`
 
-- [ ] **4.2 `providers/set` must actually reroute**
+- [x] **4.2 `providers/set` must actually reroute**
   - Depends on: 2.1
   - Files: `apps/bitrouter/src/daemon.rs`, `apps/bitrouter/src/reload.rs`,
     `apps/bitrouter/src/acp_cli.rs`

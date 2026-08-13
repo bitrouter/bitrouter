@@ -75,6 +75,21 @@ pub enum DaemonCommand {
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
     /// CLI pretty-prints for `bitrouter observe status`.
     ObserveStatus,
+    /// Point one launch's traffic at a provider, or clear that redirection.
+    ///
+    /// Backs ACP `providers/set` (ACP_TUI_SPEC §6): the substrate is a
+    /// separate process from the daemon and the agent child talks to the
+    /// daemon directly, so a mid-session switch has to be installed *here*.
+    /// Scoped to a launch id, so it can only ever move the traffic of the
+    /// session that asked — never another caller's.
+    SetRoute {
+        /// The launch whose traffic moves. Attribution, not authorization:
+        /// see [`bitrouter_sdk::caller::launch_tag`].
+        launch_id: String,
+        /// Provider to route to, or `None` to drop the override.
+        #[serde(default)]
+        provider_id: Option<String>,
+    },
 }
 
 /// One resolved hop of a route chain.
@@ -341,9 +356,18 @@ pub async fn run_control_socket(
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
+    policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
 ) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
-    let result = accept_loop(&mut listener, &app, &listen, &reloader, &observe).await;
+    let result = accept_loop(
+        &mut listener,
+        &app,
+        &listen,
+        &reloader,
+        &observe,
+        policy_router.as_ref(),
+    )
+    .await;
     listener.cleanup().await;
     result
 }
@@ -354,12 +378,13 @@ async fn accept_loop(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
+    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe).await? {
+        if handle_connection(stream, app, listen, reloader, observe, policy_router).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -377,6 +402,7 @@ async fn handle_connection<S>(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
+    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -401,7 +427,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe).await;
+    let response = dispatch(command, app, listen, reloader, observe, policy_router).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -412,6 +438,7 @@ async fn dispatch(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
+    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -445,6 +472,30 @@ async fn dispatch(
                 pid: std::process::id(),
                 listen: listen.to_string(),
                 models,
+            }
+        }
+        DaemonCommand::SetRoute {
+            launch_id,
+            provider_id,
+        } => {
+            let Some(router) = policy_router else {
+                return DaemonResponse::Error {
+                    message: "no policy_table: section is configured, so this daemon has no \
+                              transform to install a route override into"
+                        .to_string(),
+                };
+            };
+            let installed = match &provider_id {
+                Some(provider) => router.set_route_override(&launch_id, provider),
+                None => router.clear_route_override(&launch_id),
+            };
+            if installed {
+                tracing::info!(launch_id, ?provider_id, "route override updated");
+                DaemonResponse::Ok
+            } else {
+                DaemonResponse::Error {
+                    message: "route override lock was poisoned; the route is unchanged".to_string(),
+                }
             }
         }
         DaemonCommand::Route { model } => {
