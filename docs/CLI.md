@@ -299,7 +299,7 @@ Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over 
 ### `bitrouter launch`
 
 ```
-bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] [--tui] -- <agent args…>
+bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
 Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
@@ -311,19 +311,7 @@ launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skil
 launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
 ```
 
-#### `--tui` (opt-in)
-
-Hosts the harness **inside BitRouter's terminal**, with a persistent status row underneath showing the harness, pinned model, the provider that actually served, tokens, cache, and spend for this launch.
-
-An emulator is required rather than chosen: some harnesses render inline on the main screen and others take the alternate screen, and an alt-screen app owns the whole display — so a reserved status line cannot survive one. To guarantee the row for every harness, BitRouter owns the screen and composites.
-
-**The cost is scrollback.** Hosted, history belongs to BitRouter rather than your terminal: terminal search and selection no longer see the agent's output, and copy routes through an OSC-52 relay. That is daily friction, so plain `launch` stays the default and the recommended daily driver. Drop the flag to go back to launching the harness directly — every error raised from inside the wrapper says so.
-
-The child's environment and arguments are identical to plain `launch` apart from terminal identity (`TERM`, `COLORTERM`, and clearing inherited `TERM_PROGRAM`/`KITTY_*`/`WEZTERM_*`/`ITERM_*`/`ALACRITTY_*`, which would otherwise lie about the terminal the harness is talking to). Routing is byte-identical by construction — both modes build the child from one function.
-
-`--tui` conflicts with `--check` (which preflights and exits, so there is no display to attach to), requires a terminal, and is unix-only today. Without a per-launch credential (i.e. when you supply your own `BITROUTER_API_KEY`), the row's spend is daemon-wide and says `(all callers)`.
-
-`-a/--agent` takes a launch-supported harness: **`claude`, `codex`, `opencode`, `pi`** (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
+`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
 
 | Harness | How it reaches BitRouter |
 | --- | --- |
@@ -331,17 +319,18 @@ The child's environment and arguments are identical to plain `launch` apart from
 | `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
 | `opencode` | synthesized `OPENCODE_CONFIG` JSON declaring a `bitrouter` openai-compatible provider |
 | `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bitrouter --model …` |
+| `hermes` | synthesized `HERMES_HOME` with a `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) |
+| `openclaw` | synthesized `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) |
+| `grok`, `agy` | **not routed** — own-auth subscription clients (see below) |
 
 
 The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
 
-**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` (its synthesized config file). `pi` exposes no injectable MCP surface and launches without the gateways.
+**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
 
 `--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
 
-**`hermes`, `openclaw`, `grok`, and `agy` are no longer launch-supported.** They remain catalog harnesses — run them directly, or drive them headlessly with `bitrouter spawn <id>` — and `launch` refuses them with a message saying so rather than one implying a typo. `grok` and `agy` also remain **providers**: subscription clients whose sessions the daemon borrows to serve other requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
-
-The reason is verification, not capability. Every promise `launch` makes — routing, gateway injection, and under `--tui` a hosted terminal — has to be re-checked per harness against upstream releases nobody here controls. Four is a surface that can be kept honest; see [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md).
+**`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
 

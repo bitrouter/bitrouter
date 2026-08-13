@@ -146,7 +146,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `rg -n 'TUI_FIDELITY_MATRIX|eight catalog harnesses' docs/ ; echo "exit=$?"`
   - Commit: `docs: retire the launch --tui fidelity matrix`
 
-- [ ] **1.6 Lockstep the CLI surface docs**
+- [x] **1.6 Lockstep the CLI surface docs**
   - Depends on: 1.1, 1.4
   - Files: `skills/bitrouter/SKILL.md`,
     `skills/bitrouter/references/cli.md`, `docs/CLI.md`
