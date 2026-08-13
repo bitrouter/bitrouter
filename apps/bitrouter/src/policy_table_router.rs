@@ -140,6 +140,22 @@ impl PolicyTable {
         }))
     }
 
+    /// A spec that routes nothing.
+    ///
+    /// What a reload installs when the fresh config defines no tiers. The
+    /// transform is baked into the built `App` and cannot be unregistered, so
+    /// "no policy table" has to be expressible as a table: every lookup misses,
+    /// so `route_prompt` leaves the caller's model alone.
+    pub(crate) fn inert() -> Arc<Self> {
+        Arc::new(Self {
+            tiers: HashMap::new(),
+            fingerprints: HashMap::new(),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+        })
+    }
+
     /// Resolve a v2 workflow key, then its exact v1 compatibility projection,
     /// then the default. The returned key is the key that actually selected
     /// the tier, except that defaults deliberately retain the v2 learning key.
@@ -219,7 +235,15 @@ impl PolicyTable {
 /// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
 /// (`None` when no tiers are defined) or [`PolicyTableRouter::new`].
 pub struct PolicyTableRouter {
-    table: Arc<PolicyTable>,
+    /// Swappable so `bitrouter reload` can install a fresh spec into the
+    /// *live* transform. The router itself is baked into the built `App` and
+    /// cannot be re-registered, so the reloadable unit has to be the table
+    /// inside it rather than the router around it.
+    ///
+    /// A plain `RwLock` rather than a channel or an async lock: reads happen
+    /// on the per-request hot path from [`PromptTransform::apply`], which is
+    /// synchronous, and writes happen once per reload.
+    table: std::sync::RwLock<Arc<PolicyTable>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
@@ -243,7 +267,7 @@ impl PolicyTableRouter {
     /// transform. No adequacy ledger is attached.
     pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
         PolicyTable::from_config(config).map(|table| Self {
-            table,
+            table: std::sync::RwLock::new(table),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -252,10 +276,39 @@ impl PolicyTableRouter {
         })
     }
 
+    /// The spec in force right now. Clones the `Arc` rather than handing out a
+    /// borrow so a concurrent [`Self::replace_table`] cannot invalidate a
+    /// decision already in progress: a request that started under the old
+    /// table finishes under it.
+    ///
+    /// A poisoned lock yields the value anyway. The alternative is a panic on
+    /// the request path over a writer that panicked while swapping a
+    /// declarative table — the stale spec is strictly the better failure.
+    fn table(&self) -> Arc<PolicyTable> {
+        match self.table.read() {
+            Ok(table) => Arc::clone(&table),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Install a freshly built spec into this live router (`bitrouter reload`).
+    ///
+    /// Returns whether the swap happened; a poisoned lock is reported rather
+    /// than silently dropping the operator's new table.
+    pub(crate) fn replace_table(&self, table: Arc<PolicyTable>) -> bool {
+        match self.table.write() {
+            Ok(mut current) => {
+                *current = table;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Build a router over an immutable policy table.
     pub fn new(table: Arc<PolicyTable>) -> Self {
         Self {
-            table,
+            table: std::sync::RwLock::new(table),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -346,12 +399,14 @@ impl PolicyTableRouter {
             .or_else(|| decision.static_tier.clone())
     }
 
-    pub(crate) fn tool_use_tier(&self) -> Option<&str> {
-        self.table.tool_use_tier.as_deref()
+    /// Returns an owned value rather than a borrow: the table it reads is
+    /// swappable, so nothing inside it can outlive the call.
+    pub(crate) fn tool_use_tier(&self) -> Option<String> {
+        self.table().tool_use_tier.clone()
     }
 
     pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.table.tool_safe_tiers.iter().cloned().collect()
+        self.table().tool_safe_tiers.iter().cloned().collect()
     }
 
     fn ledger_key(&self, request_key: &str) -> String {
@@ -422,20 +477,22 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some((raw_static_tier, matched_request_key)) = self
-            .table
-            .tier_for_workflow(&primary_request_key, online.compatibility_routing_key_v1())
+        // One snapshot for the whole decision: a reload landing mid-decision
+        // must not let the tier and the model it maps to come from different
+        // tables.
+        let table = self.table();
+        let Some((raw_static_tier, matched_request_key)) =
+            table.tier_for_workflow(&primary_request_key, online.compatibility_routing_key_v1())
         else {
             return decision;
         };
         decision.request_key = matched_request_key.to_string();
         decision.static_tier = Some(raw_static_tier.to_string());
-        decision.static_model = self
-            .table
+        decision.static_model = table
             .model_of_tier(raw_static_tier)
             .map(ToString::to_string);
         let (selected_tier, static_clamped) = if apply_tool_floor {
-            self.table.guardrail_with_status(raw_static_tier, prompt)
+            table.guardrail_with_status(raw_static_tier, prompt)
         } else {
             (raw_static_tier, false)
         };
@@ -446,10 +503,7 @@ impl PolicyTableRouter {
         };
 
         decision.selected_tier = Some(selected_tier.to_string());
-        decision.selected_model = self
-            .table
-            .model_of_tier(selected_tier)
-            .map(ToString::to_string);
+        decision.selected_model = table.model_of_tier(selected_tier).map(ToString::to_string);
         if decision.selected_model.is_none() {
             decision.reason = PolicyDecisionReason::NoMatch;
         }
@@ -497,8 +551,9 @@ impl PolicyTableRouter {
         tool_floor_applied: bool,
     ) {
         decision.selected_tier = selected_tier.map(ToOwned::to_owned);
+        let table = self.table();
         decision.selected_model = selected_tier
-            .and_then(|tier| self.table.model_of_tier(tier))
+            .and_then(|tier| table.model_of_tier(tier))
             .map(ToOwned::to_owned);
         decision.reason = match (guard_applied, tool_floor_applied) {
             (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,

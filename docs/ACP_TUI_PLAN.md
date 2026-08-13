@@ -167,7 +167,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
 
 ### Phase 2 — Prerequisites
 
-- [ ] **2.1 `reload` must rebuild the policy table**
+- [x] **2.1 `reload` must rebuild the policy table**
   - Depends on: —
   - Files: `apps/bitrouter/src/reload.rs`, `apps/bitrouter/src/daemon.rs`,
     `apps/bitrouter/src/policy_table_router.rs`

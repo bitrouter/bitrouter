@@ -2643,7 +2643,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             assembled.upstream_executor,
             reload_source,
         )
-        .with_policy_runtime(assembled.policy_runtime),
+        .with_policy_runtime(assembled.policy_runtime)
+        .with_policy_table_router(assembled.policy_table_router),
     );
 
     daemon::write_pid_file(&pid_path).await?;
