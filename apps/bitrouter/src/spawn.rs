@@ -1781,16 +1781,14 @@ mod tests {
         let err = resolve_launch_agent("nope").expect_err("unknown id");
         let msg = err.to_string();
         assert!(msg.contains("is not a launchable harness"), "{msg}");
-        // The message lists the fix — only what `launch` actually supports,
-        // so it never advertises a harness that would then be refused.
-        for id in ["claude", "codex", "opencode", "pi"] {
+        // The message lists the fix — every harness `launch` actually
+        // supports, which is now every catalog entry with an interactive
+        // binary. It never advertises one that would then be refused, and
+        // never omits one that would have worked.
+        for id in [
+            "claude", "codex", "opencode", "pi", "hermes", "openclaw", "grok", "agy",
+        ] {
             assert!(msg.contains(id), "{msg} should list {id}");
-        }
-        for dropped in ["hermes", "openclaw", "grok", "agy"] {
-            assert!(
-                !msg.contains(dropped),
-                "{msg} must not offer {dropped}, which launch would reject"
-            );
         }
         // A typo is the caller's mistake, not a BitRouter fault: the error
         // envelope must report `bad_request`, never `internal`.
