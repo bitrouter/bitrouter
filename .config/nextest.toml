@@ -1,0 +1,18 @@
+# A hung test must fail by name, not by killing the runner.
+#
+# On PR #816 a test wedged on `ubuntu-latest`; the job ran 49 minutes until the
+# hosted runner lost communication, and the log blob was never uploaded — so
+# the failure named no test and left nothing to read. These bounds convert that
+# into an ordinary, diagnosable failure.
+#
+# `period` is generous because the suite legitimately spawns daemons and agent
+# subprocesses; `terminate-after` is what turns a hang into a verdict.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# CI has no tty and no operator: fail rather than retry into another 49-minute
+# stall, and keep the leaf output so a failure is readable without a re-run.
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 3 }
+failure-output = "immediate-final"
+fail-fast = false
