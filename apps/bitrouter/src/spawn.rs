@@ -108,35 +108,9 @@ pub struct AgentSpec {
 /// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
 /// envelope reports it as `kind: "bad_request"`, not `internal` — and lists
 /// what is available.
-///
-/// A harness that exists in the catalog but is no longer launch-supported gets
-/// a *different* message from an unknown one. "Not a launchable harness —
-/// available: …" would read as "you typo'd" to someone whose working command
-/// stopped working, and send them looking for a spelling mistake that isn't
-/// there.
 pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
     let known = crate::harness::by_interactive_binary(id)
         .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()));
-    if let Some(harness) = known
-        && !harness.launch_supported()
-    {
-        let name = harness.interactive_binary.unwrap_or(harness.id);
-        // Only offer `spawn` to a harness that actually has a headless ACP
-        // adapter. grok and agy have none, and sending someone to a command
-        // that will reject them next is worse than the original refusal.
-        let alternative = if harness.acp_command.is_some() {
-            format!(
-                " — run it directly, or drive it headlessly with `bitrouter spawn {}`",
-                harness.id
-            )
-        } else {
-            " — run it directly (it has no headless adapter either)".to_string()
-        };
-        return Err(anyhow::Error::new(BitrouterError::bad_request(format!(
-            "'{name}' is no longer supported by `bitrouter launch`{alternative}. Supported: {}",
-            launchable().join(", ")
-        ))));
-    }
     known.ok_or_else(|| {
         anyhow::Error::new(BitrouterError::bad_request(format!(
             "'{id}' is not a launchable harness — available: {}",
@@ -1790,52 +1764,12 @@ mod tests {
         }
         // The full expected surface, spelled out so a catalog change is a
         // deliberate CLI change.
-        assert_eq!(launchable(), vec!["claude", "codex", "opencode", "pi"]);
-    }
-
-    #[test]
-    fn a_dropped_harness_is_told_it_was_dropped_not_that_it_is_a_typo() {
-        // These still exist in the catalog, still have an interactive binary,
-        // and still work as ACP agents — `launch` just no longer claims them.
-        // Someone whose working command stopped working must not be sent
-        // hunting for a spelling mistake.
-        for name in ["hermes", "openclaw", "grok", "agy"] {
-            let error = resolve_launch_agent(name)
-                .expect_err(&format!("{name} must be rejected by launch"))
-                .to_string();
-            assert!(error.contains("no longer supported"), "{name}: {error}");
-            // Only harnesses that actually have a headless adapter are sent
-            // to `spawn`; grok and agy have none, and pointing them at a
-            // command that would reject them next is worse than the refusal.
-            let harness = crate::harness::by_interactive_binary(name).expect("catalog");
-            if harness.acp_command.is_some() {
-                assert!(
-                    error.contains(&format!("bitrouter spawn {}", harness.id)),
-                    "{name}: must name the surface that still drives it: {error}"
-                );
-            } else {
-                assert!(
-                    !error.contains("bitrouter spawn"),
-                    "{name} has no ACP adapter; the message must not offer one: {error}"
-                );
-                assert!(error.contains("run it directly"), "{name}: {error}");
-            }
-            assert!(
-                !error.contains("is not a launchable harness"),
-                "{name}: that is the unknown-id message: {error}"
-            );
-            // Still resolvable as a catalog entry — this is a launch policy,
-            // not a deletion.
-            assert!(
-                crate::harness::by_interactive_binary(name).is_some(),
-                "{name}"
-            );
-        }
-        // The catalog id spelling is rejected the same way.
-        let error = resolve_launch_agent("antigravity")
-            .expect_err("catalog id must be rejected too")
-            .to_string();
-        assert!(error.contains("no longer supported"), "{error}");
+        assert_eq!(
+            launchable(),
+            vec![
+                "agy", "claude", "codex", "grok", "hermes", "openclaw", "opencode", "pi"
+            ]
+        );
     }
 
     #[test]

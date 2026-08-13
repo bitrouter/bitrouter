@@ -121,7 +121,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo build -p bitrouter 2>&1 | tail -5`
   - Commit: `chore(deps): drop the terminal-emulator stack`
 
-- [ ] **1.4 Restore full-catalog `launch` support**
+- [x] **1.4 Restore full-catalog `launch` support**
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/harness.rs`
   - Do: make `launch_supported()` true for every catalog entry with an
