@@ -400,7 +400,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): permission prompt`
 
-- [ ] **4.8 Cost line, honest about scope**
+- [x] **4.8 Cost line, honest about scope**
   - Depends on: 4.1, 4.5
   - Do: render session cost from `UsageUpdate.cost`, labelled with the scope
     4.1 puts on the wire. Three states, all distinct: attributed session spend;

@@ -17,4 +17,5 @@ rust-version.workspace = true
 [dependencies]
 agent-client-protocol-schema.workspace = true
 ratatui.workspace = true
+serde_json.workspace = true
 crossterm.workspace = true

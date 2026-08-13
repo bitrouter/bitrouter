@@ -807,6 +807,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "crossterm",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

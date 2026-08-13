@@ -727,10 +727,20 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     });
 
     let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (cost_tx, mut cost_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut updates = session.raw_updates();
     let pump = tokio::spawn(async move {
         let mut transcript = bitrouter_tui::transcript::Transcript::default();
         while let Some(update) = updates.next().await {
+            // Cost is a live figure, not a transcript entry: it belongs in the
+            // status row where it can be replaced, not in scrollback where
+            // each revision would pile up as another line.
+            if let SessionUpdate::UsageUpdate(usage) = &update
+                && let Some(cost) = bitrouter_tui::cost::Cost::from_usage(usage)
+                && cost_tx.send(cost).is_err()
+            {
+                return;
+            }
             for line in transcript.apply(update) {
                 if rendered_tx.send(line).is_err() {
                     return;
@@ -752,8 +762,10 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         }
         view.commit(&[ratatui::text::Line::from(format!("> {line}"))])
             .context("committing the prompt")?;
-        view.draw(&ratatui::text::Line::from("working…"))
-            .context("drawing the live row")?;
+        // No cost has been reported for this turn yet, and saying so is the
+        // honest starting state — not a zero.
+        let mut cost_line = bitrouter_tui::cost::unreported();
+        view.draw(&cost_line).context("drawing the live row")?;
 
         let turn = session.prompt(&line);
         tokio::pin!(turn);
@@ -764,7 +776,18 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     None => continue,
                 },
                 request = permission_rx.recv() => match request {
-                    Some(request) => answer_permission(&mut view, request).await?,
+                    Some(request) => {
+                        answer_permission(&mut view, request).await?;
+                        // The prompt took the live row; put the cost back.
+                        view.draw(&cost_line).context("redrawing the live row")?;
+                    }
+                    None => continue,
+                },
+                reported = cost_rx.recv() => match reported {
+                    Some(cost) => {
+                        cost_line = cost.render();
+                        view.draw(&cost_line).context("drawing the cost")?;
+                    }
                     None => continue,
                 },
                 result = &mut turn => break result,
@@ -783,6 +806,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             ))])?,
             Err(e) => view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?,
         }
+        // The settled turn's cost, kept where the transcript will preserve it.
+        view.commit(&[cost_line]).context("committing the cost")?;
     }
 
     pump.abort();
@@ -1486,7 +1511,7 @@ async fn measured_usage_update(
     // this.
     let mut meta = serde_json::Map::new();
     meta.insert(
-        COST_SCOPE_META_KEY.to_string(),
+        bitrouter_tui::cost::COST_SCOPE_META_KEY.to_string(),
         serde_json::Value::String(scope.as_wire().to_string()),
     );
     Some(SessionUpdate::UsageUpdate(
@@ -1498,13 +1523,6 @@ async fn measured_usage_update(
         .meta(meta),
     ))
 }
-
-/// `_meta` key naming whose spend a `UsageUpdate.cost` describes:
-/// `"session"` or `"daemon_wide"` ([`crate::tui::snapshot::Scope::as_wire`]).
-///
-/// Namespaced because `_meta` is a shared extension space and ACP tells
-/// implementations to assume nothing about keys they do not own.
-pub const COST_SCOPE_META_KEY: &str = "bitrouter/costScope";
 
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
@@ -1609,7 +1627,7 @@ mod cost_tests {
         let scope = usage
             .meta
             .as_ref()
-            .and_then(|m| m.get(COST_SCOPE_META_KEY))
+            .and_then(|m| m.get(bitrouter_tui::cost::COST_SCOPE_META_KEY))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("a cost must carry its scope"))?
             .to_string();
