@@ -166,7 +166,10 @@ pub struct ChildLaunch {
 /// would break `skip_auth: false` outright. Those launches fall back to the
 /// unattributed window summary, and [`print_exit_summary`] says so rather than
 /// implying a precision it does not have.
-fn resolve_launch_token(parent_auth: Option<String>, bitrouter_key: Option<String>) -> String {
+pub(crate) fn resolve_launch_token(
+    parent_auth: Option<String>,
+    bitrouter_key: Option<String>,
+) -> String {
     parent_auth
         .or(bitrouter_key)
         .unwrap_or_else(mint_launch_token)
@@ -183,7 +186,7 @@ fn mint_launch_token() -> String {
 
 /// Whether a resolved credential is one we minted — i.e. whether this launch's
 /// requests will carry its own attribution, or fall back to the window.
-fn is_launch_token(token: &str) -> bool {
+pub(crate) fn is_launch_token(token: &str) -> bool {
     bitrouter_sdk::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
 }
 

@@ -334,10 +334,15 @@ async fn routing_direct_skips_daemon_and_reports_no_via() {
         model: None,
         no_start: true,
     };
-    let via = bitrouter::acp_cli::apply_routing(&source, &mut cfg, "claude-acp", &opts)
+    let routed = bitrouter::acp_cli::apply_routing(&source, &mut cfg, "claude-acp", &opts)
         .await
         .expect("direct routing never fails");
-    assert!(via.is_none(), "direct → no via");
+    assert!(routed.via.is_none(), "direct → no via");
+    assert!(
+        routed.launch_id.is_none(),
+        "a direct session sends nothing through the daemon, so there is \
+         nothing to attribute"
+    );
     // The claude-acp invocation is available even though routing was skipped.
     assert!(cfg.agents.contains_key("claude-acp"));
 }

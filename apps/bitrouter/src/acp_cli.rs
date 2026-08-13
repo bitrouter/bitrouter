@@ -166,6 +166,23 @@ impl RoutingError {
     }
 }
 
+/// What routing decided for one session.
+#[derive(Debug, Clone, Default)]
+pub struct Routed {
+    /// The base URL the session's LLM traffic goes through, or `None` when it
+    /// runs direct.
+    pub via: Option<String>,
+    /// The per-session attribution token, when this session's traffic can be
+    /// told apart from every other caller's.
+    ///
+    /// `None` when the caller supplied their own credential: that is real
+    /// authentication, and rewriting it to attach attribution would break
+    /// `skip_auth: false` — the same rule `spawn.rs` follows. A session
+    /// without one must report its spend as daemon-wide rather than implying
+    /// a precision it does not have.
+    pub launch_id: Option<String>,
+}
+
 /// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
 /// inserting the bundled-catalog invocation when the id is catalog-known but
 /// unconfigured (so `bitrouter spawn claude-acp` works with no YAML edit).
@@ -180,7 +197,7 @@ pub async fn apply_routing(
     config: &mut Config,
     agent_id: &str,
     opts: &RoutingOptions,
-) -> std::result::Result<Option<String>, RoutingError> {
+) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
@@ -211,7 +228,7 @@ pub async fn apply_routing(
 
     if opts.direct {
         warn_model_dropped("running --direct");
-        return Ok(None);
+        return Ok(Routed::default());
     }
 
     // Match the (now-present-if-known) invocation back to a catalog harness.
@@ -222,7 +239,7 @@ pub async fn apply_routing(
         }
         // Unknown agent — let the caller's `Session::launch` surface the
         // configured-agents not-found error.
-        None => return Ok(None),
+        None => return Ok(Routed::default()),
     };
     let Some(harness) = harness else {
         eprintln!(
@@ -230,7 +247,7 @@ pub async fn apply_routing(
              launching direct — set its `env` to route manually"
         );
         warn_model_dropped("the agent is not catalog-matched");
-        return Ok(None);
+        return Ok(Routed::default());
     };
     if !harness.env_args_routable() {
         eprintln!(
@@ -239,7 +256,7 @@ pub async fn apply_routing(
             harness.id
         );
         warn_model_dropped("the harness routes only in the interactive facet");
-        return Ok(None);
+        return Ok(Routed::default());
     }
 
     // Base URL, auth mode, and whether the target is a remote we can't vouch for.
@@ -276,13 +293,18 @@ pub async fn apply_routing(
     } else {
         None
     };
-    let auth = match crate::harness::resolve_gateway_auth(
-        explicit_key.or(stored_cloud_key),
-        require_key,
-    ) {
-        Some(a) => a,
-        None => return Err(RoutingError::AuthRequired { via: base_url }),
-    };
+    // Mirrors `spawn.rs`: a user-supplied credential wins and is never
+    // tagged, but a session that would otherwise send the placeholder gets a
+    // freshly minted per-launch token instead. That is what makes this
+    // session's spend separable from every other caller's — without it the
+    // metering store has nothing to group by and cost can only be reported
+    // daemon-wide.
+    let supplied = explicit_key.or(stored_cloud_key);
+    if supplied.is_none() && require_key {
+        return Err(RoutingError::AuthRequired { via: base_url });
+    }
+    let auth = crate::spawn::resolve_launch_token(supplied, None);
+    let launch_id = crate::spawn::is_launch_token(&auth).then(|| auth.clone());
 
     // Daemon liveness: auto-start a local daemon, then probe. Fail fast if the
     // daemon is still unreachable (a routed sub-agent without one is
@@ -312,7 +334,10 @@ pub async fn apply_routing(
         }
         args.extend(overlay.args);
     }
-    Ok(Some(base_url))
+    Ok(Routed {
+        via: Some(base_url),
+        launch_id,
+    })
 }
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
@@ -554,7 +579,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // Returned, not `exit(1)`: a caller that never sees a value cannot render
     // one, and the shutdown path below is skipped either way because nothing
     // has been launched yet. `run_acp` renders it to stderr.
-    apply_routing(source, &mut config, agent_id, &routing)
+    let routed = apply_routing(source, &mut config, agent_id, &routing)
         .await
         .map_err(anyhow::Error::new)?;
     let catalog = catalog_from_config(&config)?;
@@ -580,6 +605,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         Some(CostSink {
             source: source.clone(),
             session_start: chrono::Utc::now(),
+            launch_id: routed.launch_id.clone(),
             updates: cost_tx,
         }),
     )
@@ -650,8 +676,8 @@ where
     // cannot simply propagate. What *is* returned is the same failure as an
     // error value, so the caller controls the exit rather than this function
     // ending the process from inside a library.
-    let via = match apply_routing(source, &mut config, agent_id, &routing).await {
-        Ok(via) => via,
+    let routed = match apply_routing(source, &mut config, agent_id, &routing).await {
+        Ok(routed) => routed,
         Err(e) => {
             write_ndjson_line(out, &e.ndjson()).await?;
             out.flush().await.ok();
@@ -676,7 +702,11 @@ where
             "type": "session",
             "record_id": session.state().record_id,
             "agent": agent_id,
-            "via": via,
+            "via": routed.via,
+            // The token this session's requests carry, so an orchestrator can
+            // group its spend. Null when the caller supplied their own
+            // credential and the traffic is therefore not separable.
+            "launch_id": routed.launch_id,
         }),
     )
     .await?;
@@ -917,8 +947,13 @@ async fn attach_observability(
                         store = crate::metering::reader::open_readonly(&cost.source).await;
                     }
                     if let Some(store) = &store
-                        && let Some(update) =
-                            measured_usage_update(store, cost.session_start, &record).await
+                        && let Some(update) = measured_usage_update(
+                            store,
+                            cost.session_start,
+                            cost.launch_id.as_deref(),
+                            &record,
+                        )
+                        .await
                     {
                         let _ = cost.updates.send(update);
                     }
@@ -1098,13 +1133,13 @@ impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
 }
 
 /// Everything the telemetry drain needs to put measured cost on the wire.
-///
-/// The window starts at session launch, so the reported figure is *this
-/// session's* spend rather than the daemon's — the distinction the previous
-/// status bar got wrong.
 struct CostSink {
     source: ConfigSource,
     session_start: chrono::DateTime<chrono::Utc>,
+    /// This session's attribution token, when its traffic is separable from
+    /// every other caller's. `None` downgrades the reported scope rather than
+    /// silently counting someone else's spend.
+    launch_id: Option<String>,
     updates: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
 }
 
@@ -1126,29 +1161,56 @@ struct CostSink {
 async fn measured_usage_update(
     store: &crate::metering::store::MeteringStore,
     session_start: chrono::DateTime<chrono::Utc>,
+    launch_id: Option<&str>,
     record: &RequestCompleted,
 ) -> Option<SessionUpdate> {
     use crate::metering::store::TimeWindow;
-    let summary = store
-        .spend_summary(TimeWindow::Custom {
-            start: session_start,
-            end: chrono::Utc::now(),
-        })
-        .await
-        .ok()?;
+    use crate::tui::snapshot::Scope;
+
+    let window = TimeWindow::Custom {
+        start: session_start,
+        end: chrono::Utc::now(),
+    };
+    // Attribution decides the scope, and the scope decides the query. With a
+    // launch token the store can isolate this session's rows; without one the
+    // best available answer is every caller in the window — which is a
+    // different fact, so it travels labelled as one.
+    let (summary, scope) = match launch_id {
+        Some(id) => (
+            store.spend_summary_for_launch(id, window).await.ok()?,
+            Scope::Launch,
+        ),
+        None => (store.spend_summary(window).await.ok()?, Scope::DaemonWide),
+    };
     if summary.requests == 0 {
         return None;
     }
     let cost = Cost::new(summary.spend_micro_usd as f64 / 1_000_000.0, "USD");
     let context = record.context;
+    // The scope rides in `_meta`: a client that renders a number without
+    // knowing whose it is cannot be honest about it, and ACP has no field for
+    // this.
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        COST_SCOPE_META_KEY.to_string(),
+        serde_json::Value::String(scope.as_wire().to_string()),
+    );
     Some(SessionUpdate::UsageUpdate(
         UsageUpdate::new(
             context.map(|c| c.used).unwrap_or(0),
             context.map(|c| c.size).unwrap_or(0),
         )
-        .cost(cost),
+        .cost(cost)
+        .meta(meta),
     ))
 }
+
+/// `_meta` key naming whose spend a `UsageUpdate.cost` describes:
+/// `"session"` or `"daemon_wide"` ([`crate::tui::snapshot::Scope::as_wire`]).
+///
+/// Namespaced because `_meta` is a shared extension space and ACP tells
+/// implementations to assume nothing about keys they do not own.
+pub const COST_SCOPE_META_KEY: &str = "bitrouter/costScope";
 
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
@@ -1192,6 +1254,138 @@ mod cost_tests {
     /// equals what the router actually measured — the whole point of decision
     /// 4. Upstream `UsageUpdate.cost` is optional and usually absent; this is
     /// the router reporting what only it can know.
+    /// Build a settled request row charged `charge_micro_usd`, attributed to
+    /// `launch_id` when one is given.
+    fn settled(request_id: &str, launch_id: Option<&str>, charge_micro_usd: i64) -> RequestMetric {
+        RequestMetric {
+            request_id: request_id.to_string(),
+            user_id: "u1".into(),
+            api_key_id: "k1".into(),
+            launch_id: launch_id.map(ToString::to_string),
+            model_id: "claude-sonnet-4-5".into(),
+            provider_id: "anthropic".into(),
+            prompt_tokens: 1_000,
+            completion_tokens: 200,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            uncached_input_tokens: 1_000,
+            output_tokens: 200,
+            usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+            raw_usage: None,
+            charge_status: ChargeStatus::Computed,
+            charge_evidence: ChargeEvidence {
+                status: ChargeStatus::Computed,
+                charge_micro_usd: Some(charge_micro_usd),
+                normalized_usage: Default::default(),
+                effective_rates: EffectivePricingRates::default(),
+                pricing_source: PricingSource::Configured,
+                pricing_version: "sha256:test".to_string(),
+                unknown_reason: None,
+            },
+            reconciliation_status: ReconciliationStatus::NotApplicable,
+            estimated_charge_micro_usd: charge_micro_usd,
+            latency_ms: 1_200,
+            generation_time_ms: 900,
+            streamed: false,
+            error: None,
+        }
+    }
+
+    fn turn() -> RequestCompleted {
+        RequestCompleted {
+            agent: "claude-acp".into(),
+            stop_reason: "EndTurn".into(),
+            latency_ms: 1_200,
+            context: Some(bitrouter_sdk::acp::telemetry::ContextUsage {
+                used: 1_500,
+                size: 200_000,
+            }),
+        }
+    }
+
+    /// Read the cost and the `_meta` scope label off a synthesized update.
+    fn cost_and_scope(update: SessionUpdate) -> anyhow::Result<(f64, String)> {
+        let SessionUpdate::UsageUpdate(usage) = update else {
+            anyhow::bail!("expected a UsageUpdate");
+        };
+        let cost = usage
+            .cost
+            .ok_or_else(|| anyhow::anyhow!("UsageUpdate.cost must not be null"))?;
+        let scope = usage
+            .meta
+            .as_ref()
+            .and_then(|m| m.get(COST_SCOPE_META_KEY))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("a cost must carry its scope"))?
+            .to_string();
+        Ok((cost.amount, scope))
+    }
+
+    /// Two callers settle spend in the same window. A session that can attribute
+    /// its traffic must report **only its own** — the wire previously reported
+    /// every caller's and called it the session's.
+    #[tokio::test]
+    async fn reported_cost_counts_only_this_session() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = MeteringStore::new(db);
+        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
+
+        // This session's spend, and a concurrent caller's — same window.
+        store
+            .record_request(settled("mine", Some("brl_mine"), 420_000))
+            .await?;
+        store
+            .record_request(settled("theirs", Some("brl_theirs"), 900_000))
+            .await?;
+        // Plus an untagged caller, which no launch id can claim.
+        store
+            .record_request(settled("anon", None, 1_500_000))
+            .await?;
+
+        let update = measured_usage_update(&store, session_start, Some("brl_mine"), &turn())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("an attributed session must report its spend"))?;
+        let (amount, scope) = cost_and_scope(update)?;
+        assert_eq!(
+            amount, 0.42,
+            "only this session's $0.42 — not the other caller's $0.90 or the \
+             untagged $1.50"
+        );
+        assert_eq!(scope, "session", "attributed spend is labelled as such");
+        Ok(())
+    }
+
+    /// A session that cannot attribute its traffic — the caller supplied their
+    /// own credential, so nothing may be rewritten to tag it — must say the
+    /// number is daemon-wide rather than imply a precision it does not have.
+    #[tokio::test]
+    async fn unattributable_cost_is_labelled_daemon_wide() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = MeteringStore::new(db);
+        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
+
+        store
+            .record_request(settled("mine", Some("brl_mine"), 420_000))
+            .await?;
+        store
+            .record_request(settled("theirs", Some("brl_theirs"), 900_000))
+            .await?;
+
+        let update = measured_usage_update(&store, session_start, None, &turn())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("an unattributed session still reports a window"))?;
+        let (amount, scope) = cost_and_scope(update)?;
+        assert_eq!(amount, 1.32, "every caller in the window: $0.42 + $0.90");
+        assert_eq!(
+            scope, "daemon_wide",
+            "an unattributable figure must never be presented as the session's"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_settled_turn_reports_router_measured_cost() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
@@ -1211,7 +1405,7 @@ mod cost_tests {
             }),
         };
         assert!(
-            measured_usage_update(&store, session_start, &record)
+            measured_usage_update(&store, session_start, None, &record)
                 .await
                 .is_none(),
             "no settled request means no usage update"
@@ -1254,7 +1448,7 @@ mod cost_tests {
             })
             .await?;
 
-        let update = measured_usage_update(&store, session_start, &record)
+        let update = measured_usage_update(&store, session_start, None, &record)
             .await
             .ok_or_else(|| anyhow::anyhow!("a settled request must produce a usage update"))?;
 
@@ -1274,7 +1468,7 @@ mod cost_tests {
         // request settled before this session started must not be counted.
         let later_start = chrono::Utc::now() + chrono::Duration::seconds(5);
         assert!(
-            measured_usage_update(&store, later_start, &record)
+            measured_usage_update(&store, later_start, None, &record)
                 .await
                 .is_none(),
             "spend from before the session must not be attributed to it"

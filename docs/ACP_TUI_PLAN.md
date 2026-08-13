@@ -309,7 +309,7 @@ building the UI on top of them first would ship exactly the dishonesty this
 spec spends its length objecting to. They are 4.1 and 4.2, and nothing else
 depends on the TUI existing.
 
-- [ ] **4.1 Attribute ACP session traffic, and put the scope on the wire**
+- [x] **4.1 Attribute ACP session traffic, and put the scope on the wire**
   - Depends on: —
   - Files: `apps/bitrouter/src/acp_cli.rs`, `apps/bitrouter/src/spawn.rs`
   - Do: **fixes a defect shipped in 3.2.** `measured_usage_update` calls

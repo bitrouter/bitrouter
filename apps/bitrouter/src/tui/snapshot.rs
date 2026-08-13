@@ -56,6 +56,17 @@ pub enum Scope {
     Launch,
 }
 
+impl Scope {
+    /// The wire spelling, for surfaces that report scope outside this process
+    /// — an ACP client cannot see this enum, so the label has to travel.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::DaemonWide => "daemon_wide",
+            Self::Launch => "session",
+        }
+    }
+}
+
 /// One poll of everything the view draws.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
