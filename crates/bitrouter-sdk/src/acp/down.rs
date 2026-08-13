@@ -73,7 +73,7 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
     InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
+    PromptResponse, RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
@@ -169,7 +169,24 @@ impl<T: ConnectTo<Agent>> ConnectTo<Agent> for EofSignaling<T> {
 pub fn serve(
     session: Arc<Session>,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
-    serve_on(session, Stdio::new())
+    serve_on(session, Stdio::new(), None)
+}
+
+/// [`serve`], plus a channel of **router-synthesized** `SessionUpdate`s that
+/// are forwarded to the manager interleaved with the upstream's own.
+///
+/// This is the seam decision 4 needs. BitRouter sits in the agent seat, so it
+/// can report things the upstream harness cannot — measured cost being the
+/// first — but the SDK must not know *how* they are measured. The caller owns
+/// the sender and everything behind it (a metering store, a clock); this
+/// module only merges the two streams onto one wire.
+///
+/// Dropping the sender ends the injected stream without ending the session.
+pub fn serve_with_injected_updates(
+    session: Arc<Session>,
+    injected: tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>,
+) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
+    serve_on(session, Stdio::new(), Some(injected))
 }
 
 /// Serve `session` as a vanilla ACP Agent over an arbitrary transport. `serve`
@@ -178,6 +195,7 @@ pub fn serve(
 fn serve_on(
     session: Arc<Session>,
     transport: impl ConnectTo<Agent> + 'static,
+    injected: Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>>,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
     // Wrap the transport so we get a one-shot when the manager disconnects
     // (incoming EOF). `main_fn` awaits this instead of parking forever.
@@ -337,6 +355,9 @@ fn serve_on(
             transport,
             move |connection: ConnectionTo<Client>| async move {
                 spawn_update_forwarder(&connection, &session_forward, record_for_forward.clone())?;
+                if let Some(injected) = injected {
+                    spawn_injected_forwarder(&connection, injected, record_for_forward.clone())?;
+                }
                 spawn_permission_forwarder(&connection, &session_forward)?;
                 // Keep the connection (and its handlers/forwarders) alive until
                 // the manager disconnects (incoming EOF), then return so
@@ -349,6 +370,34 @@ fn serve_on(
                 Ok(())
             },
         )
+}
+
+/// Forward router-synthesized [`SessionUpdate`]s to the manager on the same
+/// notification channel as the upstream's own.
+///
+/// A separate task rather than a merge inside [`spawn_update_forwarder`]: the
+/// two streams are independent, and a synthesized update must not be held up
+/// behind an idle upstream.
+fn spawn_injected_forwarder(
+    connection: &ConnectionTo<Client>,
+    mut injected: tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>,
+    record_id: String,
+) -> agent_client_protocol::Result<()> {
+    let conn = connection.clone();
+    connection.spawn(async move {
+        while let Some(update) = injected.recv().await {
+            if conn
+                .send_notification(SessionNotification::new(
+                    SessionId::new(record_id.clone()),
+                    update,
+                ))
+                .is_err()
+            {
+                break;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Spawn the task that forwards each raw upstream [`SessionUpdate`] to the

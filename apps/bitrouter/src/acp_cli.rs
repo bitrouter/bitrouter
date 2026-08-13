@@ -43,6 +43,7 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+use agent_client_protocol::schema::v1::{Cost, SessionUpdate, UsageUpdate};
 use bitrouter_sdk::acp::engine::LaunchOptions;
 use bitrouter_sdk::acp::telemetry::RequestCompleted;
 use bitrouter_sdk::acp::translate::SessionUpdateKind;
@@ -566,9 +567,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     .await
     .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
+    // Router-measured cost onto the down-facing wire (§7). Wired before
+    // serving so the first settled turn already has somewhere to report to.
+    let measured = spawn_cost_measurer(source, &session);
     let session = Arc::new(session);
 
-    let served = bitrouter_sdk::acp::down::serve(Arc::clone(&session)).await;
+    let served = match measured {
+        Some(rx) => {
+            bitrouter_sdk::acp::down::serve_with_injected_updates(Arc::clone(&session), rx).await
+        }
+        None => bitrouter_sdk::acp::down::serve(Arc::clone(&session)).await,
+    };
 
     // No manager left: shut the session down deliberately so the agent child
     // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
@@ -920,6 +929,86 @@ async fn attach_observability(
     exporter
 }
 
+/// Drain this session's settled turns and put a router-measured `UsageUpdate`
+/// on the down-facing wire for each one.
+///
+/// Returns the receiver `down::serve_with_injected_updates` forwards, or `None`
+/// when this session cannot report cost — no telemetry channel, or no metering
+/// database to read. `None` means the manager simply sees no synthesized usage,
+/// which is the honest outcome; it is never a reason to fail the session.
+///
+/// The window starts now, so the reported figure is *this session's* spend
+/// rather than the daemon's — the distinction the previous status bar got
+/// wrong.
+fn spawn_cost_measurer(
+    source: &ConfigSource,
+    session: &bitrouter_sdk::acp::engine::Session,
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>> {
+    let mut turns = session.telemetry()?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let source = source.clone();
+    let session_start = chrono::Utc::now();
+    tokio::spawn(async move {
+        // Opened once, lazily: the database may not exist until the first
+        // routed request has settled.
+        let mut store = None;
+        while let Some(record) = turns.recv().await {
+            if store.is_none() {
+                store = crate::metering::reader::open_readonly(&source).await;
+            }
+            let Some(store) = &store else { continue };
+            if let Some(update) = measured_usage_update(store, session_start, &record).await
+                && tx.send(update).is_err()
+            {
+                break;
+            }
+        }
+    });
+    Some(rx)
+}
+
+/// Router-measured session spend, synthesized as an ACP `UsageUpdate` on every
+/// settled turn (spec §7, decision 4).
+///
+/// BitRouter sits in the agent seat, so it can report what the upstream harness
+/// cannot: what the turn actually **cost**. Upstream `UsageUpdate.cost` is
+/// optional and most harnesses never send it, which is how the old status bar
+/// ended up presenting daemon-wide spend as the session's. This measures it
+/// instead, from the metering store, scoped to this session's window.
+///
+/// `used`/`size` come from the upstream's own context reporting and are `0`
+/// when it reports none — the context window is genuinely the harness's fact,
+/// and inventing a number for it would be the exact dishonesty this replaces.
+///
+/// Returns `None` when there is nothing to say: no metering database, no
+/// requests settled yet, or a read error. A silent gap beats a fabricated zero.
+async fn measured_usage_update(
+    store: &crate::metering::store::MeteringStore,
+    session_start: chrono::DateTime<chrono::Utc>,
+    record: &RequestCompleted,
+) -> Option<SessionUpdate> {
+    use crate::metering::store::TimeWindow;
+    let summary = store
+        .spend_summary(TimeWindow::Custom {
+            start: session_start,
+            end: chrono::Utc::now(),
+        })
+        .await
+        .ok()?;
+    if summary.requests == 0 {
+        return None;
+    }
+    let cost = Cost::new(summary.spend_micro_usd as f64 / 1_000_000.0, "USD");
+    let context = record.context;
+    Some(SessionUpdate::UsageUpdate(
+        UsageUpdate::new(
+            context.map(|c| c.used).unwrap_or(0),
+            context.map(|c| c.size).unwrap_or(0),
+        )
+        .cost(cost),
+    ))
+}
+
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
 /// `tracing::info!` which the acp CLI routes to stderr.
@@ -947,4 +1036,108 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
 pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
     ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
         .context("building acp routing table from config")
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    use crate::metering::db::{ReconciliationStatus, RequestMetric};
+    use crate::metering::pricing::{
+        ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
+    };
+    use crate::metering::store::MeteringStore;
+
+    /// A settled turn must reach the manager carrying a **non-null** cost that
+    /// equals what the router actually measured — the whole point of decision
+    /// 4. Upstream `UsageUpdate.cost` is optional and usually absent; this is
+    /// the router reporting what only it can know.
+    #[tokio::test]
+    async fn a_settled_turn_reports_router_measured_cost() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = MeteringStore::new(db);
+        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
+
+        // No settled request yet: nothing to report, and reporting a zero
+        // would be a fabricated number.
+        let record = RequestCompleted {
+            agent: "claude-acp".into(),
+            stop_reason: "EndTurn".into(),
+            latency_ms: 1_200,
+            context: Some(bitrouter_sdk::acp::telemetry::ContextUsage {
+                used: 1_500,
+                size: 200_000,
+            }),
+        };
+        assert!(
+            measured_usage_update(&store, session_start, &record)
+                .await
+                .is_none(),
+            "no settled request means no usage update"
+        );
+
+        // Settle one request worth $0.42.
+        store
+            .record_request(RequestMetric {
+                request_id: "r1".into(),
+                user_id: "u1".into(),
+                api_key_id: "k1".into(),
+                launch_id: None,
+                model_id: "claude-sonnet-4-5".into(),
+                provider_id: "anthropic".into(),
+                prompt_tokens: 1_000,
+                completion_tokens: 200,
+                reasoning_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                uncached_input_tokens: 1_000,
+                output_tokens: 200,
+                usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+                raw_usage: None,
+                charge_status: ChargeStatus::Computed,
+                charge_evidence: ChargeEvidence {
+                    status: ChargeStatus::Computed,
+                    charge_micro_usd: Some(420_000),
+                    normalized_usage: Default::default(),
+                    effective_rates: EffectivePricingRates::default(),
+                    pricing_source: PricingSource::Configured,
+                    pricing_version: "sha256:test".to_string(),
+                    unknown_reason: None,
+                },
+                reconciliation_status: ReconciliationStatus::NotApplicable,
+                estimated_charge_micro_usd: 420_000,
+                latency_ms: 1_200,
+                generation_time_ms: 900,
+                streamed: false,
+                error: None,
+            })
+            .await?;
+
+        let update = measured_usage_update(&store, session_start, &record)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("a settled request must produce a usage update"))?;
+
+        let SessionUpdate::UsageUpdate(usage) = update else {
+            anyhow::bail!("expected a UsageUpdate");
+        };
+        let cost = usage
+            .cost
+            .ok_or_else(|| anyhow::anyhow!("UsageUpdate.cost must not be null"))?;
+        assert_eq!(cost.amount, 0.42, "the measured charge, in USD");
+        assert_eq!(cost.currency, "USD");
+        // Context occupancy stays the upstream's fact, relayed unchanged.
+        assert_eq!(usage.used, 1_500);
+        assert_eq!(usage.size, 200_000);
+
+        // And the window is the session's, not the daemon's lifetime: a
+        // request settled before this session started must not be counted.
+        let later_start = chrono::Utc::now() + chrono::Duration::seconds(5);
+        assert!(
+            measured_usage_update(&store, later_start, &record)
+                .await
+                .is_none(),
+            "spend from before the session must not be attributed to it"
+        );
+        Ok(())
+    }
 }

@@ -220,7 +220,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run -p bitrouter-sdk translate 2>&1 | tail -20`
   - Commit: `feat(acp): forward plan and command session updates`
 
-- [ ] **3.2 Emit router-measured cost as `UsageUpdate`**
+- [x] **3.2 Emit router-measured cost as `UsageUpdate`**
   - Depends on: —
   - Files: `crates/bitrouter-sdk/src/acp/down.rs`, `apps/bitrouter/src/acp_cli.rs`
   - Do: synthesize `UsageUpdate` from the metering store on every settled turn
