@@ -2,8 +2,9 @@
 //! No I/O — unit-tested without spawning a process.
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
-    SelectedPermissionOutcome, SessionUpdate, ToolCallContent, ToolCallStatus,
+    ContentBlock, PermissionOption, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
+    RequestPermissionOutcome, SelectedPermissionOutcome, SessionUpdate, ToolCallContent,
+    ToolCallStatus,
 };
 
 /// Tool execution status, mirroring `bitrouter_gui_core::protocol::ToolStatus`.
@@ -39,6 +40,38 @@ pub struct UsageCost {
     pub amount: f64,
     /// ISO-4217 currency code the upstream reported (e.g. `"USD"`).
     pub currency: String,
+}
+
+/// One task in the agent's execution plan.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PlanTask {
+    /// Human-readable description of what this task aims to accomplish.
+    pub content: String,
+    /// `pending` / `in_progress` / `completed`, or the raw wire value for a
+    /// status this ACP version does not know.
+    pub status: String,
+    /// `high` / `medium` / `low`, or the raw wire value for an unknown priority.
+    pub priority: String,
+}
+
+/// One command the agent advertises as runnable.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AgentCommand {
+    /// Command name, e.g. `create_plan`.
+    pub name: String,
+    /// Human-readable description of what the command does.
+    pub description: String,
+}
+
+/// One session configuration option and the value it currently holds.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigOption {
+    /// Stable identifier for the option.
+    pub id: String,
+    /// Human-readable label.
+    pub name: String,
+    /// Optional longer description for display.
+    pub description: Option<String>,
 }
 
 /// A gateway-local event produced from one ACP `SessionUpdate`.
@@ -82,6 +115,42 @@ pub enum SessionUpdateKind {
         /// The call's first diff, rendered readable, when it carries one.
         diff: Option<String>,
     },
+    /// The agent's execution plan, replaced wholesale on every update — ACP
+    /// sends the complete entry list each time, not a delta.
+    ///
+    /// This is `SessionUpdate::Plan`, ACP **v1**'s spelling. The v2 vocabulary
+    /// splits it into incremental `PlanUpdate` / `PlanRemoved` messages, which
+    /// v1 exposes only behind the `unstable_plan_operations` feature. Targeting
+    /// v1 means the whole-plan form is the one that exists.
+    Plan {
+        /// Every task in the plan, in the order the agent listed them.
+        tasks: Vec<PlanTask>,
+    },
+    /// The set of commands the agent can run has been established or changed.
+    AvailableCommands {
+        /// The full command set, replacing any previous one.
+        commands: Vec<AgentCommand>,
+    },
+    /// The session's configuration options and their current values changed.
+    ConfigOptions {
+        /// The full option set, replacing any previous one.
+        options: Vec<ConfigOption>,
+    },
+    /// The session switched mode (ACP v1's session-state signal; v2 calls the
+    /// equivalent notion `StateUpdate`).
+    ModeChanged {
+        /// Id of the mode now in force.
+        mode_id: String,
+    },
+    /// Session metadata changed. Both fields are `None` when this particular
+    /// update did not carry them — ACP distinguishes "absent" from "cleared",
+    /// and this type does not, because a renderer treats them alike.
+    SessionInfo {
+        /// New human-readable session title, when the update carried one.
+        title: Option<String>,
+        /// ISO-8601 timestamp of last activity, when the update carried one.
+        updated_at: Option<String>,
+    },
     /// Context-window occupancy (+ optional cumulative cost) from the
     /// upstream's `UsageUpdate`. ACP's stable usage signal reports tokens *in
     /// context* (`used`/`size`), not per-turn input/output deltas.
@@ -95,8 +164,21 @@ pub enum SessionUpdateKind {
     },
 }
 
-/// Map one ACP `SessionUpdate` to a `SessionUpdateKind`. Variants the gateway
-/// does not act on (`Plan`, …) → `None`.
+/// Map one ACP `SessionUpdate` to a `SessionUpdateKind`.
+///
+/// Every **stable ACP v1** update is now carried. The catch-all previously
+/// swallowed `Plan`, `AvailableCommandsUpdate`, `ConfigOptionUpdate`,
+/// `CurrentModeUpdate`, and `SessionInfoUpdate`, so a manager reading the
+/// translated stream could not show a plan or a command palette at all.
+///
+/// Note this is only the *translated* stream, which the NDJSON output and the
+/// in-process renderer consume. Managers speaking ACP to `down.rs` already get
+/// every variant verbatim off `Session::raw_updates`, which is the fidelity-
+/// preserving path — nothing here reverse-maps onto the wire.
+///
+/// `UserMessageChunk` stays dropped, and now says so by name rather than by
+/// falling into a catch-all: it is the manager's own prompt echoed back, and
+/// forwarding it would duplicate every user turn in a transcript.
 pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
     match update {
         SessionUpdate::AgentMessageChunk(c) => Some(SessionUpdateKind::MessageChunk {
@@ -127,7 +209,85 @@ pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
                 currency: c.currency,
             }),
         }),
+        SessionUpdate::Plan(p) => Some(SessionUpdateKind::Plan {
+            tasks: p
+                .entries
+                .into_iter()
+                .map(|e| PlanTask {
+                    content: e.content,
+                    status: plan_status(&e.status).to_string(),
+                    priority: plan_priority(&e.priority).to_string(),
+                })
+                .collect(),
+        }),
+        SessionUpdate::AvailableCommandsUpdate(u) => Some(SessionUpdateKind::AvailableCommands {
+            commands: u
+                .available_commands
+                .into_iter()
+                .map(|c| AgentCommand {
+                    name: c.name,
+                    description: c.description,
+                })
+                .collect(),
+        }),
+        SessionUpdate::ConfigOptionUpdate(u) => Some(SessionUpdateKind::ConfigOptions {
+            options: u
+                .config_options
+                .into_iter()
+                .map(|o| ConfigOption {
+                    id: o.id.0.to_string(),
+                    name: o.name,
+                    description: o.description,
+                })
+                .collect(),
+        }),
+        SessionUpdate::CurrentModeUpdate(u) => Some(SessionUpdateKind::ModeChanged {
+            mode_id: u.current_mode_id.0.to_string(),
+        }),
+        SessionUpdate::SessionInfoUpdate(u) => Some(SessionUpdateKind::SessionInfo {
+            title: maybe_string(u.title),
+            updated_at: maybe_string(u.updated_at),
+        }),
+        // The manager's own prompt, echoed back. See the note above.
+        SessionUpdate::UserMessageChunk(_) => None,
+        // A variant this ACP version does not know. Managers that need it read
+        // `Session::raw_updates`, which never drops anything.
         _ => None,
+    }
+}
+
+/// Collapse ACP's three-state optional (absent / explicit null / value) to two.
+///
+/// The distinction is real on the wire — "leave it alone" versus "clear it" —
+/// but a renderer showing a title treats both as "no title to show", and this
+/// stream feeds renderers. A manager that needs the distinction reads
+/// `Session::raw_updates`.
+fn maybe_string(field: agent_client_protocol_schema::MaybeUndefined<String>) -> Option<String> {
+    match field {
+        agent_client_protocol_schema::MaybeUndefined::Value(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Wire spelling of a plan entry's status, passing an unknown future value
+/// through rather than collapsing it onto a status that means something else.
+fn plan_status(status: &PlanEntryStatus) -> &str {
+    match status {
+        PlanEntryStatus::Pending => "pending",
+        PlanEntryStatus::InProgress => "in_progress",
+        PlanEntryStatus::Completed => "completed",
+        _ => "unknown",
+    }
+}
+
+/// Wire spelling of a plan entry's priority, with the same unknown-value rule
+/// as [`plan_status`].
+fn plan_priority(priority: &PlanEntryPriority) -> &str {
+    match priority {
+        PlanEntryPriority::High => "high",
+        PlanEntryPriority::Medium => "medium",
+        PlanEntryPriority::Low => "low",
+        _ => "unknown",
     }
 }
 
@@ -274,6 +434,126 @@ mod tests {
                     amount: 0.25,
                     currency: "USD".into(),
                 }),
+            })
+        );
+    }
+
+    /// The five updates the gateway used to swallow. Each is asserted
+    /// separately so a regression names the variant it lost.
+    ///
+    /// ACP v1 spellings: the plan arrives whole as `Plan` (v2 splits it into
+    /// `PlanUpdate`/`PlanRemoved`), and session state arrives as
+    /// `CurrentModeUpdate` (v2 calls it `StateUpdate`). Targeting v1 means
+    /// these are the variants that exist.
+    #[test]
+    fn a_plan_survives_translation() {
+        use agent_client_protocol_schema::v1::{Plan, PlanEntry};
+        let got = translate(SessionUpdate::Plan(Plan::new(vec![
+            PlanEntry::new(
+                "read the spec",
+                PlanEntryPriority::High,
+                PlanEntryStatus::Completed,
+            ),
+            PlanEntry::new(
+                "write the code",
+                PlanEntryPriority::Low,
+                PlanEntryStatus::InProgress,
+            ),
+        ])));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::Plan {
+                tasks: vec![
+                    PlanTask {
+                        content: "read the spec".into(),
+                        status: "completed".into(),
+                        priority: "high".into(),
+                    },
+                    PlanTask {
+                        content: "write the code".into(),
+                        status: "in_progress".into(),
+                        priority: "low".into(),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn available_commands_survive_translation() {
+        use agent_client_protocol_schema::v1::{AvailableCommand, AvailableCommandsUpdate};
+        let got = translate(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![AvailableCommand::new(
+                "create_plan",
+                "draft a plan for the task",
+            )]),
+        ));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::AvailableCommands {
+                commands: vec![AgentCommand {
+                    name: "create_plan".into(),
+                    description: "draft a plan for the task".into(),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn config_options_survive_translation() {
+        use agent_client_protocol_schema::v1::{
+            ConfigOptionUpdate, SessionConfigId, SessionConfigOption, SessionConfigValueId,
+        };
+        let got = translate(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+            vec![
+                SessionConfigOption::select(
+                    SessionConfigId::new("model"),
+                    "Model",
+                    SessionConfigValueId::new("sonnet"),
+                    Vec::<agent_client_protocol_schema::v1::SessionConfigSelectOption>::new(),
+                )
+                .description("which model serves this session".to_string()),
+            ],
+        )));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::ConfigOptions {
+                options: vec![ConfigOption {
+                    id: "model".into(),
+                    name: "Model".into(),
+                    description: Some("which model serves this session".into()),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn a_mode_change_survives_translation() {
+        use agent_client_protocol_schema::v1::{CurrentModeUpdate, SessionModeId};
+        let got = translate(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
+            SessionModeId::new("plan"),
+        )));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::ModeChanged {
+                mode_id: "plan".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn session_info_survives_translation() {
+        use agent_client_protocol_schema::v1::SessionInfoUpdate;
+        let got = translate(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title("refactor the parser".to_string()),
+        ));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::SessionInfo {
+                title: Some("refactor the parser".into()),
+                // Absent on this update — and absent is not the same wire
+                // state as an explicit null, which also lands here.
+                updated_at: None,
             })
         );
     }

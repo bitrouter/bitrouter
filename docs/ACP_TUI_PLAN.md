@@ -207,7 +207,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
 
 ### Phase 3 — The ACP agent surface
 
-- [ ] **3.1 Stop dropping session updates**
+- [x] **3.1 Stop dropping session updates**
   - Depends on: —
   - Files: `crates/bitrouter-sdk/src/acp/translate.rs`
   - Do: `translate`'s `_ => None` arm discards `Plan` and every variant the
