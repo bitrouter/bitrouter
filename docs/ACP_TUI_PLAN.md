@@ -111,7 +111,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo build -p bitrouter 2>&1 | tail -5`
   - Commit: `refactor(tui): delete the PTY host and VT adapter`
 
-- [ ] **1.3 Drop the four terminal dependencies**
+- [x] **1.3 Drop the four terminal dependencies**
   - Depends on: 1.2
   - Files: `apps/bitrouter/Cargo.toml`
   - Do: remove `alacritty_terminal`, `portable-pty`, `termwiz`,
