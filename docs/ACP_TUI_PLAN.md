@@ -442,7 +442,7 @@ depends on the TUI existing.
   - Verify: `rg -n 'chat|bitrouter-tui' docs/CLI.md docs/DEVELOPMENT.md skills/bitrouter/SKILL.md | head`
   - Commit: `docs(skill): document the chat verb`
 
-- [ ] **4.12 Phase 4 gate** — same three commands as 1.7.
+- [x] **4.12 Phase 4 gate** — same three commands as 1.7.
 
 ---
 
@@ -478,7 +478,7 @@ Work through Phase 4 of docs/ACP_TUI_PLAN.md following its §A loop protocol: on
 
 ## F. Progress
 
-Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☑ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☑ · Phase 4 ☑
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
