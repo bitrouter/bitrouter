@@ -133,7 +133,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo test -p bitrouter harness 2>&1 | tail -15`
   - Commit: `feat(launch): restore full-catalog harness support`
 
-- [ ] **1.5 Retire the fidelity matrix and fix stale claims**
+- [x] **1.5 Retire the fidelity matrix and fix stale claims**
   - Depends on: 1.2
   - Files: `docs/TUI_FIDELITY_MATRIX.md` (delete), `docs/README.md`,
     `docs/OBSERVABILITY_TUI_SPEC.md`

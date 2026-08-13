@@ -119,16 +119,13 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ### Observability surfaces (`apps/bitrouter/src/tui/`)
 
-Two surfaces share one renderer and one data layer:
+One surface, with `render.rs` / `snapshot.rs` as its formatting and data layers:
 
 - `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
-- `bitrouter launch --tui` — the same readout on a status row pinned under a harness hosted in a VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`).
 
-The emulator exists because harnesses differ on whether they take the alternate screen, and an alt-screen app clobbers a `DECSTBM`-reserved line — so guaranteeing the row means owning the screen. That cost is why `--tui` is opt-in: scrollback moves from the user's terminal to BitRouter.
+The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 
-`spawn::prepare` builds the child once; `exec_inherited` and `exec_hosted` differ only in how it is run, which is what makes "identical env and args" structural rather than a test promise. Terminal-identity env may differ, bounded by `HOSTED_ENV_SET` / `HOSTED_ENV_MAY_ADD` / `HOSTED_ENV_UNSET`.
-
-Verification is layered — input conformance against `cat -v`, replay of recorded harness output, and a manual pass for what needs hands. See [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md), which also states what the automated layers structurally cannot catch.
+`spawn::prepare` still builds the child once and `exec_inherited` runs it; the `Prepared` seam is kept independent of hosting.
 
 ## Where To Extend The System
 
