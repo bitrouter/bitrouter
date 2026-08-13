@@ -498,11 +498,9 @@ fn startup_line(
 
 /// What the gateways actually delivered to this harness, as one phrase.
 ///
-/// Shared by the startup line and the hosted status row (#796, #782). Under
-/// `--tui` the startup line is on screen for milliseconds — entering the
-/// alternate screen hides the normal screen right after it prints — so the
-/// hosted row has to carry the same fact, and carrying it from the same
-/// function is what stops the two from drifting into disagreeing.
+/// The startup line (#796, #782) and the machine-readable launch report are
+/// both built from this one function, so the two cannot drift into disagreeing
+/// about what the harness actually got.
 pub(crate) fn capability_summary(
     harness: &crate::harness::Harness,
     gateways: &[crate::harness::McpServer],
@@ -546,111 +544,6 @@ fn child_args(launch: &ChildLaunch, agent_args: &[String]) -> Vec<String> {
     let mut args = launch.args_prefix.clone();
     args.extend_from_slice(agent_args);
     args
-}
-
-/// Env keys the host **sets**, because the emulator's real capabilities differ
-/// from the outer terminal's. `TERM` must promise only what we render:
-/// passing through `xterm-kitty` invites graphics sequences the emulator
-/// cannot draw.
-pub const HOSTED_ENV_SET: &[&str] = &["TERM", "COLORTERM"];
-
-/// Env keys `portable-pty` may add when absent in the parent.
-pub const HOSTED_ENV_MAY_ADD: &[&str] = &["SHELL"];
-
-/// Env keys the host **unsets**: inherited values that would lie about the
-/// terminal the child is actually talking to, and would steer harnesses onto
-/// rendering paths the emulator does not implement.
-pub const HOSTED_ENV_UNSET: &[&str] = &[
-    "TERM_PROGRAM",
-    "TERM_PROGRAM_VERSION",
-    "KITTY_WINDOW_ID",
-    "KITTY_PID",
-    "WEZTERM_EXECUTABLE",
-    "WEZTERM_PANE",
-    "WEZTERM_UNIX_SOCKET",
-    "ITERM_SESSION_ID",
-    "ALACRITTY_SOCKET",
-    "ALACRITTY_LOG",
-    "ALACRITTY_WINDOW_ID",
-    "LINES",
-    "COLUMNS",
-];
-
-/// The child env for hosted mode: the routing overlay **verbatim**, plus the
-/// terminal-identity corrections above.
-///
-/// Gated with its only caller, [`exec_hosted`]: an item whose consumers are
-/// all behind a `cfg` has to carry the same `cfg`, or the platform that
-/// excludes them sees dead code.
-///
-/// The routing half is byte-identical to plain `launch` by construction — it
-/// is the same [`ChildLaunch`] from the same [`prepare`]. Only terminal
-/// identity may differ, and only by the three lists, which
-/// `hosted_env_differs_only_by_the_allowlist` pins.
-#[cfg(unix)]
-fn hosted_env(launch: &ChildLaunch) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> = vec![
-        ("TERM".to_string(), "xterm-256color".to_string()),
-        ("COLORTERM".to_string(), "truecolor".to_string()),
-    ];
-    for key in HOSTED_ENV_UNSET {
-        // `CommandBuilder` inherits the parent environment, so a lying value
-        // has to be actively overwritten; there is no "unset" in the overlay.
-        env.push(((*key).to_string(), String::new()));
-    }
-    // The overlay lands last so routing always wins over terminal identity.
-    env.extend(launch.env.iter().cloned());
-    env
-}
-
-/// Run the prepared child **hosted** inside BitRouter's emulator, with the
-/// status row pinned underneath (`--tui`).
-#[cfg(unix)]
-pub async fn exec_hosted(prepared: Prepared<'_>) -> Result<()> {
-    let Prepared {
-        binary,
-        launch,
-        agent_args,
-        harness,
-        source,
-        session_start,
-        launch_id,
-        model,
-        capability,
-        ..
-    } = prepared;
-
-    let socket = {
-        let cfg = crate::paths::load_config(source).await?;
-        crate::daemon::resolve_socket_path(
-            source.home().join("bitrouter.yaml").as_path(),
-            &cfg.server.control_socket,
-        )
-    };
-    let ctx = crate::tui::host::HostContext {
-        source,
-        socket,
-        harness,
-        launch_id: launch_id.clone(),
-        model,
-        capability,
-    };
-    let code = crate::tui::host::run(
-        &binary.display().to_string(),
-        &child_args(&launch, &agent_args),
-        &hosted_env(&launch),
-        ctx,
-    )
-    .await?;
-
-    print_exit_summary(
-        source,
-        launch_id.as_deref(),
-        session_start,
-        &Palette::for_stderr(),
-    )
-    .await;
-    std::process::exit(code);
 }
 
 /// Run the prepared child with the terminal **inherited** — the harness owns
@@ -1837,65 +1730,6 @@ mod tests {
         // the harness still starts *and* its spend is answerable.
         let minted = resolve_launch_token(None, None);
         assert!(is_launch_token(&minted), "{minted}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hosted_env_differs_only_by_the_allowlist() {
-        // The requirement `--tui` lives or dies on: the routing half of the
-        // child env is byte-identical to plain `launch`. Only terminal
-        // identity may differ, and only by the documented lists — anything
-        // else means the hosted child is being routed differently, which is
-        // the drift the whole `prepare`/`exec` seam exists to prevent.
-        let launch = ChildLaunch {
-            env: vec![
-                ("ANTHROPIC_BASE_URL".to_string(), "http://x:1".to_string()),
-                ("ANTHROPIC_AUTH_TOKEN".to_string(), "brl_tok".to_string()),
-            ],
-            args_prefix: vec![],
-        };
-        let hosted = hosted_env(&launch);
-
-        // Every routing pair survives verbatim.
-        for (key, value) in &launch.env {
-            assert!(
-                hosted.iter().any(|(k, v)| k == key && v == value),
-                "{key} must reach the hosted child unchanged"
-            );
-        }
-
-        // And nothing outside the allowlist was invented.
-        let allowed: Vec<&str> = HOSTED_ENV_SET
-            .iter()
-            .chain(HOSTED_ENV_MAY_ADD)
-            .chain(HOSTED_ENV_UNSET)
-            .copied()
-            .collect();
-        for (key, _) in &hosted {
-            let from_overlay = launch.env.iter().any(|(k, _)| k == key);
-            assert!(
-                from_overlay || allowed.contains(&key.as_str()),
-                "hosted mode set `{key}`, which is neither routing nor in the allowlist"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_routing_overlay_outranks_terminal_identity() {
-        // A harness that legitimately wants its own TERM (or any key we also
-        // touch) must win: routing is the contract, terminal identity is our
-        // correction to it.
-        let launch = ChildLaunch {
-            env: vec![("TERM".to_string(), "harness-choice".to_string())],
-            args_prefix: vec![],
-        };
-        let hosted = hosted_env(&launch);
-        let last_term = hosted
-            .iter()
-            .rfind(|(k, _)| k == "TERM")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(last_term, Some("harness-choice"));
     }
 
     #[test]

@@ -435,15 +435,6 @@ enum Command {
         /// without launching the agent.
         #[arg(long)]
         check: bool,
-        /// Host the harness inside BitRouter's terminal, with a persistent
-        /// status row underneath showing model, provider, tokens, and spend.
-        ///
-        /// Opt-in, and not the recommended daily driver: hosting moves
-        /// scrollback from your terminal to BitRouter, so terminal search and
-        /// selection no longer see the agent's output. Drop the flag to go
-        /// back to launching the harness directly.
-        #[arg(long, conflicts_with = "check")]
-        tui: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -1690,7 +1681,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_install,
             no_start,
             check,
-            tui,
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
@@ -1702,7 +1692,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 no_start,
                 check,
             };
-            run_launch(config.as_deref(), opts, tui, output).await
+            run_launch(config.as_deref(), opts, output).await
         }
         Command::Spawn {
             agent,
@@ -1750,7 +1740,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     no_start,
                     check,
                 };
-                return run_launch(config.as_deref(), opts, false, output).await;
+                return run_launch(config.as_deref(), opts, output).await;
             }
 
             let Some(agent) = agent else {
@@ -5187,7 +5177,6 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
 async fn run_launch(
     config: Option<&std::path::Path>,
     opts: bitrouter::spawn::SpawnOptions,
-    tui: bool,
     output: &bitrouter::output::Output,
 ) -> Result<()> {
     let source = bitrouter::paths::resolve_config(config)?;
@@ -5199,30 +5188,6 @@ async fn run_launch(
             Ok(())
         } else {
             std::process::exit(report.exit_code());
-        }
-    } else if tui {
-        // Hosting needs a real screen to attach to, and every failure here
-        // names the escape hatch: the flag is the only thing between the user
-        // and a working launch.
-        use std::io::IsTerminal;
-        if !std::io::stdout().is_terminal() {
-            anyhow::bail!(
-                "`--tui` needs a terminal to draw in (stdout is redirected). Run \
-                 `bitrouter launch` without `--tui`."
-            );
-        }
-        // A `cfg!(unix)` *runtime* check would not do: `exec_hosted` only
-        // exists under the same gate, so the call has to disappear at compile
-        // time or Windows fails to build.
-        #[cfg(not(unix))]
-        {
-            let _ = (&source, &cfg, opts);
-            anyhow::bail!("`--tui` is unix-only today. Run `bitrouter launch` without `--tui`.");
-        }
-        #[cfg(unix)]
-        {
-            let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
-            bitrouter::spawn::exec_hosted(prepared).await
         }
     } else {
         bitrouter::spawn::run(&source, &cfg, opts).await
