@@ -430,7 +430,7 @@ depends on the TUI existing.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): provider and model picker`
 
-- [ ] **4.11 Document the new surface**
+- [x] **4.11 Document the new surface**
   - Depends on: 4.4–4.10
   - Files: `skills/bitrouter/SKILL.md`, `skills/bitrouter/references/cli.md`,
     `docs/CLI.md`, `docs/DEVELOPMENT.md`

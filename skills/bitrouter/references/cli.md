@@ -159,6 +159,22 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
 
+## Interactive chat (`bitrouter chat`)
+
+The interactive counterpart to `acp serve`: same launch, same routing flags, same per-session log, but the session is rendered for a person instead of exposed to a manager over stdio.
+
+| Command | What it does |
+|---|---|
+| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and the turn's measured cost. Inline viewport — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
+
+**In-session**: type a message and press enter; `Ctrl-D` ends the session. `/route` opens the provider picker.
+
+**Cost honesty**: the cost line always carries its scope. `USD 0.4200` is this session's spend; `all callers USD 1.3200` means the traffic could not be attributed (you supplied your own credential, which BitRouter never rewrites to tag) so the figure is the daemon's window total; `cost unreported` means the agent sent no cost — it is never rendered as `$0.00`.
+
+**`/route`**: lists routable providers and switches the live session's route. Offered **only** when the session can honour it — that needs a daemon to install the override in and an attributable launch id to scope it by, so a `--direct` session or one using your own credential is told plainly that it cannot be rerouted. After a switch, `chat` re-reads `providers/list` and reports what the daemon is actually serving; a refused change reports the old route and why.
+
+**On failure**: a failed turn prints the tail of `~/.bitrouter/logs/session-<stamp>-<pid>.log` inline and names the path. There is no permanent log pane.
+
 ## Setup helpers
 
 | Command | Effect |

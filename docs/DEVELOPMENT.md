@@ -13,6 +13,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
+| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
@@ -26,6 +27,18 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`, `down` / `engine` / `up`); subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
+| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
+
+**`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
+is the boundary, and it is enforced by the build rather than by review: the
+renderer draws only what arrives over the ACP wire, so daemon-wide data — the
+metering store, the control socket, request history — is unreachable from it
+rather than merely unused. Anything it cannot learn from the protocol (the
+session log's path, for one) is passed in by the caller. The previous terminal
+UI lived inside the application, could reach any function in it, and accreted
+verbs with no command-line equivalent until it was deleted; a module boundary
+was a promise, this one is a compiler error. It also depends on neither
+`bitrouter-sdk` — only the ACP schema types, `ratatui`, and `crossterm`.
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
 
 The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate while both ACP and the API ride inside the SDK, and only the CLI lives in the binary itself.

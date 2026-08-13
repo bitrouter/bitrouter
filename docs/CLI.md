@@ -296,6 +296,30 @@ bitrouter acp prompt --agent <id> [-c <path>] <text>
 
 Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
+### `bitrouter chat`
+
+```
+bitrouter chat <agent> [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+```
+
+Chat with an ACP agent in your terminal, routed through BitRouter. The interactive counterpart to `acp serve`: instead of exposing the session to a manager over stdio, it renders the session for you — streamed messages, agent reasoning, tool calls with diffs, permission prompts, and what the turn cost.
+
+The renderer uses an **inline viewport**, not the alternate screen. Finished output is written into your terminal's real scrollback, so search, selection, and copy keep working, and `Ctrl-D` (or `Ctrl-C`) leaves the transcript behind rather than clearing it.
+
+Routing flags are shared verbatim with `acp serve` / `acp prompt`.
+
+**In-session commands**
+
+| Input | Effect |
+|---|---|
+| `/route` | List routable providers and switch this session's route mid-session. Only offered when the session can honour it — see below. |
+
+**The cost line always states whose spend it is.** When the session's traffic is attributable, the figure is the session's. When it is not — you supplied your own credential, which BitRouter never rewrites to tag — the line reads `all callers` before the number, because it is then the daemon's total for the window and not yours alone. If the agent reports no cost, the line reads `cost unreported`, never `$0.00`.
+
+**`/route` is absent when it cannot work.** Changing a live route needs a daemon to install the override in and an attributable launch id to scope it to. A `--direct` session has neither, and a session using your own credential has no launch id; in both cases `chat` says so rather than offering a command that would fail. When the switch is applied, `chat` re-reads `providers/list` and reports the route the daemon is actually serving — a refused change reports the old route and the reason.
+
+On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log inline and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved.
+
 ### `bitrouter launch`
 
 ```

@@ -178,6 +178,10 @@ Read these on demand — don't load them all upfront.
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, caller-prepared cwd, one-agent-per-session, turn queue, identity, v1 limits |
 
+`bitrouter chat <agent>` is the interactive terminal client for the same
+sessions — inline viewport, `/route` to switch provider mid-session, and a cost
+line that always states whose spend it is. See `references/cli.md`.
+
 ## 7. Gotchas
 
 - **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
