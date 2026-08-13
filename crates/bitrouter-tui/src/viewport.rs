@@ -37,6 +37,13 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 /// their shell prompt does not get back until the session ends.
 pub const LIVE_ROWS: u16 = 1;
 
+/// Enforced at compile time rather than by a test: the bound is a property of
+/// the constant, so it should fail the build that violates it, not a run.
+const _: () = assert!(
+    LIVE_ROWS <= 2,
+    "every live row is a row the user's shell does not get back"
+);
+
 /// A terminal with an inline viewport, and the two operations a session
 /// needs: commit finished lines to scrollback, and redraw the live rows.
 pub struct Inline<B: Backend> {
@@ -189,15 +196,6 @@ mod tests {
         assert!(
             !rendered.contains("thinking…"),
             "the live status row is transient and must not outlive the session: {rendered:?}"
-        );
-    }
-
-    /// The live area is the only thing this crate occupies.
-    #[test]
-    fn the_live_area_stays_small() {
-        assert!(
-            LIVE_ROWS <= 2,
-            "every live row is a row the user's shell does not get back"
         );
     }
 }

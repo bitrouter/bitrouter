@@ -35,7 +35,7 @@
 //! upstream callbacks to the manager:
 //!
 //! - **Updates:** [`Session::raw_updates`] yields each raw ACP
-//!   [`SessionUpdate`](agent_client_protocol::schema::v1::SessionUpdate);
+//!   [`SessionUpdate`];
 //!   we wrap it in a [`SessionNotification`] (with the manager-facing session id)
 //!   and send it as a `session/update` notification — verbatim, no reverse
 //!   mapping.

@@ -199,11 +199,15 @@ TUI; ACP v2.
 
 - [x] **1.7 Phase 1 gate**
   - Depends on: 1.1–1.6
-  - Verify (paste all three):
+  - Verify (paste all three) — **these are the commands CI runs**; anything
+    weaker passes locally and fails on the PR, which is exactly what happened
+    on #816 (a lint that only fires under `--tests`, and a doc warning that
+    only fires under `-D warnings`):
     `cargo nextest run --all-features 2>&1 | tail -20`,
-    `cargo clippy --all-features 2>&1 | tail -20`,
+    `cargo clippy --workspace --all-features --tests -- -D warnings 2>&1 | tail -20`,
     `cargo fmt -- --check && echo FMT_OK`
-  - Done when: all three are clean.
+  - Also run before pushing: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`
+  - Done when: all four are clean.
   - Commit: — (no code change; gate only)
 
 ### Phase 2 — Prerequisites
