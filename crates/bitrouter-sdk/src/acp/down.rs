@@ -663,7 +663,11 @@ mod tests {
 
                 // ── serve(agent side) ↔ test Client over an in-memory duplex. ──
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 // The client captures `session/update` notifications so the
                 // main_fn can await one after prompting.
@@ -783,7 +787,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(PERM_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -931,7 +939,11 @@ mod tests {
                 let record_id = session.state().record_id.clone();
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -996,7 +1008,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(CAPS_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -1075,7 +1091,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(LINK_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -1185,7 +1205,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(TWO_ALLOW_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -1301,7 +1325,11 @@ mod tests {
                 let record_id = session.state().record_id.clone();
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -1373,7 +1401,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(HANDSHAKE_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -1442,7 +1474,11 @@ mod tests {
             .run_until(async {
                 let (session, _base) = launch_stub_session(BASH_STUB).await;
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
