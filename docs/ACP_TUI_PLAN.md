@@ -203,7 +203,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
   - Commit: `feat(acp): surface launch failures structurally`
 
-- [ ] **2.4 Phase 2 gate** — same three commands as 1.7.
+- [x] **2.4 Phase 2 gate** — same three commands as 1.7.
 
 ### Phase 3 — The ACP agent surface
 
@@ -367,7 +367,7 @@ Work through Phase 4 of docs/ACP_TUI_PLAN.md following its §A loop protocol: on
 
 ## F. Progress
 
-Phase 1 ☑ · Phase 2 ☐ · Phase 3 ☐ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☐ · Phase 4 ☐
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
