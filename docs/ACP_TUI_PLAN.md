@@ -68,21 +68,62 @@ The exact strings are in §E, ready to paste.
 | 2 | `status --watch` is untouched. | §2 |
 | 3 | The differentiated work is in `down.rs`, not the TUI. | §5 |
 | 4 | Session cost comes from the metering store, emitted as ACP `UsageUpdate.cost`. | §7 |
-| 5 | TUI is in-process in `apps/bitrouter`. **No new crate.** | §9 |
+| 5 | TUI is **its own crate**, `crates/bitrouter-tui`, depending on neither the `bitrouter` app crate nor its config. | §9 — **amended, see below** |
 | 6 | ACP **v1** semantics. `providers/*` via raw JSON-RPC + schema types behind `unstable_llm_providers`. Do **not** enable `unstable_protocol_v2`. | §10 |
 | 7 | Inline viewport (`ratatui::Viewport::Inline`). No alternate screen. | §8 |
 | 8 | A distinct verb sharing `RoutingOptions` via `#[command(flatten)]`. **Working name: `chat`.** | §8.1 |
 | 9 | Both stderr streams go to one per-session log file. No permanent log pane. | §8.2 |
-| 10 | TUI renders **session-scoped data only**, over the existing `snapshot.rs` / `Scope` layer. | §8.3 |
+| 10 | TUI renders **session-scoped data only**, taken **from the ACP wire** — not from `snapshot.rs`. | §8.3 — **amended, see below** |
 
 **The one open choice:** the verb spelling (§16.3). Build it as `chat`. If a
 human renames it later that is a one-line clap change — do not block on it, and
 do not spend a turn debating it.
 
+### C.1 Amendments after Phase 3 (2026-08-13)
+
+Decisions 5 and 10 were reversed by evidence produced *by Phase 3*, not by
+re-litigation. Both spec sections are superseded on these two points.
+
+**Decision 5 — the crate.** Spec §9's load-bearing argument was that being
+in-process is *"a capability… it is how the TUI reads the metering store
+directly (§7) rather than waiting on the wire."* Phase 3 implemented §7 and
+**put cost on the wire** as `UsageUpdate.cost`. The capability that justified
+in-process no longer requires in-process. What remains of §9 is its own
+strongest counter-argument: a module can silently reach anywhere in the crate,
+which is how the previous TUI accreted itself to death, and §9's answer —
+"extract on the first accretion attempt" — is backwards. Keeping a module
+extractable takes exactly the discipline that a crate enforces mechanically, so
+the crate is the cheaper option, not the more expensive one.
+
+**Build it as a crate for the boundary, not for reuse.** A reusable ACP TUI is
+a plausible *consequence* of conforming to the protocol, and it should be free.
+It is not a design goal to pay for: `providers/*` sits behind an unstable
+feature no other agent implements, `UsageUpdate.cost` is optional and rarely
+sent, and `bitrouter-gui` is the standing warning about underwriting a design
+on a second consumer that never arrives. Negotiate capabilities because ACP
+says to, and let generality fall out.
+
+**Decision 10 — not `snapshot.rs`.** That layer is the `status --watch` shape:
+daemon-wide request rows, rate metrics, control-socket state. §8.3 forbids the
+TUI from rendering nearly all of it. Reusing it would import a daemon-wide data
+model into a session-scoped view — the exact mistake §8.3 exists to prevent.
+The TUI's data comes from its own ACP session. `Scope` is a two-variant enum;
+it moves to the wire (task 4.1), it is not a reason to share a data layer.
+
+**ACP v2 stays out**, and the crate is part of why. v2's `PromptResponse` is
+`{}` with no `stop_reason`, so a v2 **gateway** is an `engine.rs`/`turn.rs`
+rewrite. But a v2 **client** merely reads a `state_update` notification instead
+of a return value. Once the TUI is a separate crate speaking ACP over stdio, it
+can gain v2 client support without touching the engine — which makes deferring
+v2 cheap, and doing it now unjustified for a draft protocol no shipping agent
+speaks. (There is, for the record, **zero** ACP v2 support in `bitrouter-sdk`
+today; the `V2026_07_28` constants are MCP's dated protocol version, a
+different protocol.)
+
 **Out of scope — do not do these:** anything in the spec's v2 column;
 `session/fork`, `session/list`, `session/resume`, `session/set_config_option`;
 `providers/disable`; a second pane; a session list; daemon-wide data in the
-TUI; extracting a `bitrouter-tui` crate; ACP v2.
+TUI; ACP v2.
 
 ---
 
@@ -262,76 +303,146 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
 
 ### Phase 4 — The TUI
 
-- [ ] **4.1 The verb**
-  - Depends on: 2.3
-  - Files: `apps/bitrouter/src/main.rs`, `apps/bitrouter/src/acp_cli.rs`
+Phase 3 surfaced **two prerequisites that must land before any pane renders**.
+Both are gaps between what a control *looks like* it does and what it does, so
+building the UI on top of them first would ship exactly the dishonesty this
+spec spends its length objecting to. They are 4.1 and 4.2, and nothing else
+depends on the TUI existing.
+
+- [ ] **4.1 Attribute ACP session traffic, and put the scope on the wire**
+  - Depends on: —
+  - Files: `apps/bitrouter/src/acp_cli.rs`, `apps/bitrouter/src/spawn.rs`
+  - Do: **fixes a defect shipped in 3.2.** `measured_usage_update` calls
+    `spend_summary(window)` — *every caller* the daemon served during the
+    session's time window — and the ACP path mints no launch id, so there is
+    nothing to scope by. On a single-user local daemon this coincides with
+    session spend; with any concurrent caller it does not, and the wire then
+    reports daemon spend as the session's (§8.3's cardinal sin).
+    Mint a per-session attribution token on the ACP launch path the way
+    `spawn.rs` already does (`mint_launch_token` / `is_launch_token`), query
+    `spend_summary_for_launch` when it landed, and carry the resulting
+    `Scope` on the wire in `UsageUpdate`'s `_meta` so a client can label it.
+    Fall back to `spend_summary` **only** with the scope marked `daemon_wide`.
+  - Done when: a test with two callers settling spend in the same window
+    asserts the session's `UsageUpdate.cost` counts only its own, and that a
+    session whose traffic is unattributable reports `daemon_wide` rather than
+    silently over-reporting.
+  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Commit: `fix(acp): scope reported cost to the session`
+
+- [ ] **4.2 `providers/set` must actually reroute**
+  - Depends on: 2.1
+  - Files: `apps/bitrouter/src/daemon.rs`, `apps/bitrouter/src/reload.rs`,
+    `apps/bitrouter/src/acp_cli.rs`
+  - Do: today `providers/set` changes the route the session *reports* and
+    nothing more — the substrate is a separate process and the agent child
+    talks to the daemon directly. Add a `DaemonCommand` variant that installs a
+    **launch-scoped** route override into the live `PolicyTableRouter` (2.1
+    made its table swappable; 4.1 supplies the launch id to key it by), and
+    have `SessionProviders::set` send it. An override must expire with the
+    session and must never alter another caller's routing.
+  - Done when: an integration test starts a daemon, issues `providers/set`, and
+    asserts a **subsequent request on that launch id** resolves to the new
+    provider while a request without it does not.
+  - Verify: `cargo nextest run -p bitrouter providers 2>&1 | tail -20`
+  - Commit: `feat(daemon): launch-scoped route override`
+
+- [ ] **4.3 The `bitrouter-tui` crate**
+  - Depends on: —
+  - Files: `crates/bitrouter-tui/Cargo.toml`, `crates/bitrouter-tui/src/lib.rs`
+  - Do: a new workspace member (`members = ["crates/*"]` picks it up). It
+    depends on `ratatui`, `crossterm`, and the two ACP crates — and on
+    **neither the `bitrouter` app crate nor its `Config`**. That absence is the
+    whole point: the boundary the last TUI failed to hold as prose becomes a
+    compiler check. Everything it renders arrives over ACP.
+  - Done when: `cargo tree -p bitrouter-tui | rg -c '^bitrouter[ -]'` shows no
+    dependency on the app crate, and the crate builds standalone.
+  - Verify: `cargo tree -p bitrouter-tui --depth 1 && cargo build -p bitrouter-tui 2>&1 | tail -5`
+  - Commit: `feat(tui): add the bitrouter-tui crate`
+
+- [ ] **4.4 The verb**
+  - Depends on: 2.3, 4.3
+  - Files: `apps/bitrouter/src/main.rs`, `apps/bitrouter/src/acp_cli.rs`,
+    `apps/bitrouter/Cargo.toml`
   - Do: add `bitrouter chat <agent>`, reusing `RoutingOptions` via clap
-    `#[command(flatten)]` (§8.1). Do not add an interactive mode to `spawn`.
+    `#[command(flatten)]` (§8.1). The verb owns argument parsing and session
+    launch; it hands the running ACP session to `bitrouter_tui`. Do not add an
+    interactive mode to `spawn`.
   - Done when: `bitrouter chat --help` lists the shared routing flags and the
     flags have exactly one definition in source.
   - Verify: `cargo run -p bitrouter -- chat --help 2>&1 | head -25`
   - Commit: `feat(cli): add the chat verb for ACP sessions`
 
-- [ ] **4.2 Inline viewport over the shared snapshot layer**
-  - Depends on: 2.2, 4.1
-  - Files: `apps/bitrouter/src/tui/`
+- [ ] **4.5 Inline viewport over the session's own updates**
+  - Depends on: 4.3, 4.4
+  - Files: `crates/bitrouter-tui/src/`
   - Do: `ratatui::Viewport::Inline` — no alternate screen, no lifecycle restore,
-    no panic hook (§8). Render over the existing `snapshot.rs` / `Scope`; do
-    **not** add a second data layer (§8.3).
+    no panic hook (§8). State is built **from the ACP `session/update` stream**;
+    do not reach for `snapshot.rs` or any local store (decision 10, amended).
   - Done when: the session runs, output lands in real scrollback, and `Ctrl-C`
     leaves a readable transcript.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): inline viewport for ACP sessions`
 
-- [ ] **4.3 Message log and tool-call cards**
-  - Depends on: 3.1, 4.2
+- [ ] **4.6 Message log and tool-call cards**
+  - Depends on: 3.1, 4.5
   - Do: render `MessageChunk`, `ThoughtChunk`, `ToolCall`, `ToolCallUpdate` —
-    streaming chunks, status, diffs.
+    streaming chunks, status, diffs. Plans and available commands (3.1) render
+    here too, or degrade to nothing when the agent never sends them.
   - Done when: `TestBackend` assertions cover each variant.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): render messages and tool calls`
 
-- [ ] **4.4 Permission modal**
-  - Depends on: 4.3
+- [ ] **4.7 Permission modal**
+  - Depends on: 4.6
   - Do: render `session/request_permission` and return the chosen option.
   - Done when: a `TestBackend` test drives a permission request to a decision.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): permission prompt`
 
-- [ ] **4.5 Provider/model picker**
-  - Depends on: 3.3, 4.3
-  - Do: render `providers/list` and issue `providers/set` on selection.
-  - Done when: a test asserts selection issues `providers/set`.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
-  - Commit: `feat(tui): provider and model picker`
-
-- [ ] **4.6 Cost line, honest about scope**
-  - Depends on: 3.2, 4.2
-  - Do: render session cost. When attribution is unavailable (a subscription
-    harness that ignores the injected credential), render `Scope::DaemonWide`
-    **visibly** — never present daemon spend as the session's (§8.3).
-  - Done when: a test asserts the scope label renders in both scopes.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
+- [ ] **4.8 Cost line, honest about scope**
+  - Depends on: 4.1, 4.5
+  - Do: render session cost from `UsageUpdate.cost`, labelled with the scope
+    4.1 puts on the wire. Three states, all distinct: attributed session spend;
+    `daemon_wide` rendered **visibly** as such; and *no cost reported at all* —
+    which must read as "not reported", never as `$0.00`.
+  - Done when: a test asserts a distinct rendering for each of the three.
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): session cost line with honest scope`
 
-- [ ] **4.7 Log tail on abnormal exit**
-  - Depends on: 2.2, 4.2
+- [ ] **4.9 Log tail on abnormal exit**
+  - Depends on: 2.2, 4.5
   - Do: on abnormal exit, print the last N lines of the session log inline and
-    name its path (§8.2). No permanent pane.
+    name its path (§8.2). No permanent pane. The crate cannot read the app's
+    paths, so the log location arrives from the caller — `chat` passes it in.
   - Done when: a test asserts the tail and path appear on a non-zero exit.
-  - Verify: `cargo nextest run -p bitrouter tui 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): surface the session log on abnormal exit`
 
-- [ ] **4.8 Document the new surface**
-  - Depends on: 4.1–4.7
+- [ ] **4.10 Provider/model picker**
+  - Depends on: 3.3, 4.2, 4.6
+  - Do: render `providers/list` and issue `providers/set` on selection. Blocked
+    on 4.2 by design — without it the control does not do what it appears to.
+    Hide the picker entirely when the agent does not advertise `providers/*`;
+    a dead control is worse than an absent one.
+  - Done when: a test asserts selection issues `providers/set`, and a second
+    asserts the picker is absent for an agent without the capability.
+  - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
+  - Commit: `feat(tui): provider and model picker`
+
+- [ ] **4.11 Document the new surface**
+  - Depends on: 4.4–4.10
   - Files: `skills/bitrouter/SKILL.md`, `skills/bitrouter/references/cli.md`,
-    `docs/CLI.md`
-  - Do: document `chat`, its flags, and the session log location.
-  - Done when: all three describe the shipped command.
-  - Verify: `rg -n 'chat' docs/CLI.md skills/bitrouter/SKILL.md | head`
+    `docs/CLI.md`, `docs/DEVELOPMENT.md`
+  - Do: document `chat`, its flags, and the session log location. Add
+    `bitrouter-tui` to the workspace architecture guide, stating the dependency
+    rule (no edge to the app crate) so the boundary is written down as well as
+    compiled.
+  - Done when: all four describe the shipped command and the new crate.
+  - Verify: `rg -n 'chat|bitrouter-tui' docs/CLI.md docs/DEVELOPMENT.md skills/bitrouter/SKILL.md | head`
   - Commit: `docs(skill): document the chat verb`
 
-- [ ] **4.9 Phase 4 gate** — same three commands as 1.7.
+- [ ] **4.12 Phase 4 gate** — same three commands as 1.7.
 
 ---
 
@@ -360,7 +471,7 @@ Work through Phase 3 of docs/ACP_TUI_PLAN.md following its §A loop protocol: on
 **Phase 4**
 
 ```
-Work through Phase 4 of docs/ACP_TUI_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 4.1-4.9 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing. The TUI must render session-scoped data only and must not add a session list, a second pane, or a bitrouter-tui crate — if you find yourself wanting any of those, stop and report instead. Print the full Phase 4 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 45 turns.
+Work through Phase 4 of docs/ACP_TUI_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 4.1-4.12 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing, AND the transcript shows the 4.1 cost-scoping test and the 4.2 route-override test passing by name. Build the TUI as the crate crates/bitrouter-tui with no dependency on the bitrouter app crate — if you find yourself needing one, stop and report instead of adding it. The TUI renders session-scoped data taken from the ACP wire only: no snapshot.rs, no session list, no second pane, no daemon-wide data. Target ACP v1 — never enable unstable_protocol_v2. Never render a control that does not do what it appears to: no cost figure without its scope, no provider picker before 4.2 lands. Print the full Phase 4 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 45 turns.
 ```
 
 ---

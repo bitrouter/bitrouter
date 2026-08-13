@@ -416,6 +416,13 @@ the same change.
 
 ### 8.3 Scope: session-only, over the shared snapshot layer
 
+> **AMENDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** The scope
+> *rule* below is unchanged and remains authoritative. Its *mechanism* is not:
+> the TUI takes its data from the ACP wire, *not* from `snapshot.rs`. That layer
+> is the `status --watch` shape — daemon-wide rows, rate metrics, control-socket
+> state — and sharing it would import the very data model this rule exists to
+> keep out. `Scope` moves onto the wire instead (plan task 4.1).
+
 **The rule:** the TUI shows **session-scoped** data only. Anything daemon-wide
 belongs to `status --watch`. This is the *same* line as single-session in §2 —
 one scope rule governing both, not two to remember — and it is checkable in
@@ -452,6 +459,19 @@ cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
 visibly rather than silently. Inherit that behaviour; do not reinvent it.
 
 ## 9. Decision 6 — no crate yet, with a stated trigger
+
+> **SUPERSEDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** Build
+> the TUI as `crates/bitrouter-tui`, depending on neither the `bitrouter` app
+> crate nor its config.
+>
+> This section's load-bearing argument was that in-process is *"a capability…
+> how the TUI reads the metering store directly (§7)"*. Phase 3 implemented §7
+> and put cost on the wire as `UsageUpdate.cost`, so that capability no longer
+> requires in-process. The section's own "one real pro-crate argument" then
+> stands unopposed — and its answer, *extract on the first accretion attempt*,
+> is backwards: keeping a module extractable takes exactly the discipline a
+> crate enforces mechanically. The reasoning below is retained because the
+> trigger conditions it names are still the right things to watch.
 
 Build in `apps/bitrouter/src/tui/`. Do **not** extract `crates/bitrouter-tui`
 in this work.
