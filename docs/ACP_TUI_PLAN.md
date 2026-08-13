@@ -192,7 +192,7 @@ TUI; extracting a `bitrouter-tui` crate; ACP v2.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -20`
   - Commit: `feat(acp): capture agent stderr to a session log`
 
-- [ ] **2.3 Structured launch failure instead of `exit(1)`**
+- [x] **2.3 Structured launch failure instead of `exit(1)`**
   - Depends on: 2.2
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: routing failures currently `eprintln!` + `std::process::exit(1)` before

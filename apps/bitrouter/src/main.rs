@@ -1478,8 +1478,16 @@ async fn async_main() {
     match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
+            // A pre-ACP routing failure is reported on **stderr**, never as a
+            // stdout envelope: `acp serve` owns stdout for JSON-RPC and `acp
+            // prompt` for NDJSON, and `prompt` has already put the structured
+            // `error` line on that stream itself. Keyed off the error's type
+            // rather than the command shape, so it cannot misclassify a
+            // sibling mode (`spawn --check` still gets its JSON report).
             if raw_cloud_api {
                 eprintln!("error: {e:#}");
+            } else if let Some(routing) = e.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
+                eprintln!("error: {routing}");
             } else {
                 let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
             }

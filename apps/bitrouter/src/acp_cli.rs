@@ -101,8 +101,12 @@ pub enum RoutingError {
 }
 
 impl std::fmt::Display for RoutingError {
+    /// Message *and* hint, because this is what a caller renders when the
+    /// failure leaves the process as an error value rather than as an
+    /// already-printed line. The `ndjson` form keeps them as separate fields
+    /// and is unaffected.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message())
+        write!(formatter, "{}\n  hint: {}", self.message(), self.hint())
     }
 }
 
@@ -540,12 +544,15 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         routing,
     } = ctx;
     // Route the sub-agent's LLM traffic through the daemon (default) unless
-    // opted out. Fail fast to stderr — before speaking any ACP — so a manager
-    // handles "child failed to start" rather than a mid-session provider error.
-    if let Err(e) = apply_routing(source, &mut config, agent_id, &routing).await {
-        eprintln!("error: {}\n  hint: {}", e.message(), e.hint());
-        std::process::exit(1);
-    }
+    // opted out. Fail fast — before speaking any ACP — so a manager handles
+    // "child failed to start" rather than a mid-session provider error.
+    //
+    // Returned, not `exit(1)`: a caller that never sees a value cannot render
+    // one, and the shutdown path below is skipped either way because nothing
+    // has been launched yet. `run_acp` renders it to stderr.
+    apply_routing(source, &mut config, agent_id, &routing)
+        .await
+        .map_err(anyhow::Error::new)?;
     let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     // Deferred open: the upstream `session/new` runs when the manager sends
@@ -615,12 +622,18 @@ where
     } = ctx;
     // Route by default; fail fast with a single structured NDJSON `error`
     // line BEFORE any session side effect (no agent process spawned).
+    //
+    // The line goes on `out` because it is part of the NDJSON stream the
+    // orchestrator is parsing — that is the contract, and it is why this
+    // cannot simply propagate. What *is* returned is the same failure as an
+    // error value, so the caller controls the exit rather than this function
+    // ending the process from inside a library.
     let via = match apply_routing(source, &mut config, agent_id, &routing).await {
         Ok(via) => via,
         Err(e) => {
             write_ndjson_line(out, &e.ndjson()).await?;
             out.flush().await.ok();
-            std::process::exit(1);
+            return Err(anyhow::Error::new(e));
         }
     };
 
