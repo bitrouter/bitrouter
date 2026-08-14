@@ -50,6 +50,11 @@ ratatui = { version = "0.29", features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = { version = "0.28", features = ["event-stream"] }
+# The display width of a grapheme cluster, for `bitrouter-tui`'s own wrap.
+# Ratatui's `reflow` is private, so the wrap is ours — but the widths must be
+# the same ones ratatui measures with, which is why this tracks the version
+# ratatui itself depends on. Adds no crate to the build graph.
+unicode-width = "0.2"
 # `unstable_llm_providers` gives the `providers/*` schema types. The runtime
 # crate (1.2) does not forward that feature, so the two methods are dispatched
 # as raw JSON-RPC over these types — see ACP_TUI_SPEC §10. NOT

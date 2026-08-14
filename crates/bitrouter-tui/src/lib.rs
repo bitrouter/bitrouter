@@ -37,6 +37,7 @@ pub mod permission;
 pub mod picker;
 pub mod transcript;
 pub mod viewport;
+pub mod wrap;
 
 use agent_client_protocol_schema::v1::AgentCapabilities;
 

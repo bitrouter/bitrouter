@@ -146,7 +146,7 @@ Everything here lands **alongside** the shipping `Transcript`/`Inline` stack.
 The crate carries both until Phase 3 flips it. Tests stay green throughout, and
 no user-visible behaviour changes.
 
-- [ ] **2.1 Wrapping: `unicode-width` and a row-wrap module**
+- [x] **2.1 Wrapping: `unicode-width` and a row-wrap module**
   - Depends on: 1.4
   - Files: `Cargo.toml`, `crates/bitrouter-tui/Cargo.toml`,
     `crates/bitrouter-tui/src/wrap.rs`
