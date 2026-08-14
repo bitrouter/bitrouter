@@ -95,6 +95,10 @@ jobs:
       - name: diagnose ubuntu test build
         if: runner.os == 'Linux'
         shell: bash
+        # Bypass the partial target cache created by the two-minute probe so
+        # this run exercises a known-cold build on the same runner shape.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cold-target
         run: |
           snapshot() {
             {
