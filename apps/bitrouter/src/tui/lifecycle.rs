@@ -16,6 +16,17 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
+/// Take raw mode, and nothing else.
+///
+/// The inline chat renderer wants the keys but not the screen switch — its
+/// whole design is that finished rows stay in ordinary scrollback. Splitting
+/// this out is also what keeps `enable_raw_mode` to a single call site in the
+/// binary, so there is exactly one thing for [`restore`] to undo.
+pub fn enter_raw() -> Result<()> {
+    enable_raw_mode()?;
+    Ok(())
+}
+
 /// Put the terminal into the state the view draws against: raw mode,
 /// alternate screen, key reporting, and the user's window title saved so
 /// [`restore`] can put it back.
@@ -24,7 +35,7 @@ use crossterm::terminal::{
 /// succeeded — the panic hook is installed by the caller only once this
 /// returns `Ok`, so a half-entered terminal must clean up after itself.
 pub fn enter() -> Result<()> {
-    enable_raw_mode()?;
+    enter_raw()?;
     let mut out = std::io::stdout();
     if let Err(e) = execute!(out, EnterAlternateScreen) {
         let _ = disable_raw_mode();
@@ -44,7 +55,15 @@ pub fn enter() -> Result<()> {
 pub fn restore() {
     let _ = disable_raw_mode();
     let mut out = std::io::stdout();
-    let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
+    // Bracketed paste is the chat session's, not this view's, and disabling a
+    // mode that was never enabled costs nothing — which is why it belongs
+    // here, in the one function every exit already reaches.
+    let _ = execute!(
+        out,
+        crossterm::event::DisableBracketedPaste,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
     // XTWINOPS pop: put the user's window title back.
     let _ = write!(out, "\x1b[23;0t");
     let _ = out.flush();

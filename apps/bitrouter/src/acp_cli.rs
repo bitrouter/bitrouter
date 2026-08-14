@@ -712,8 +712,6 @@ fn commit_log_tail(
 /// belongs to `bitrouter-tui`, which cannot depend on this crate and so is
 /// handed only what ACP carries.
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
-    use tokio::io::AsyncBufReadExt;
-
     let SpawnContext {
         source,
         mut config,
@@ -761,6 +759,11 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         eprintln!("chat: type /route to change provider mid-session.");
     }
     eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
+
+    // Raw mode starts here, after the last plain `eprintln!` — a cooked
+    // newline in a raw terminal does not return the carriage. From this point
+    // the terminal echoes nothing and delivers no SIGINT: both are ours.
+    let mut stdin = crate::chat::input::Stdin::open().context("taking the terminal for input")?;
 
     // The renderer owns the terminal from here. It is handed lines, never
     // the session — `bitrouter-tui` cannot depend on this crate, and that is
@@ -820,16 +823,24 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         }
     });
 
-    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
+    loop {
+        // The live row is the prompt while a line is being typed: raw mode
+        // means nothing is echoed unless we echo it.
+        let read = stdin
+            .read_line(|buffer| {
+                view.draw(&ratatui::text::Line::from(format!("> {buffer}")))
+                    .context("echoing the prompt")
+            })
+            .await?;
+        let line = match read {
+            crate::chat::input::Prompt::Line(line) => line,
+            crate::chat::input::Prompt::End => break,
+        };
         // A line of exactly `/route` opens the picker. Only offered when the
         // session can honour it — see `can_reroute`.
         if line.trim() == "/route" {
             if routable {
-                pick_provider(&mut view, &providers).await?;
+                pick_provider(&mut view, &mut stdin, &providers).await?;
             } else {
                 view.commit(&[ratatui::text::Line::from(
                     "this session cannot be rerouted (running direct, or its credential is \
@@ -847,6 +858,12 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 
         let turn = session.prompt(&line);
         tokio::pin!(turn);
+        // Both are handled *after* the `select!` rather than inside a branch:
+        // the branch bodies run while the arms' futures are still borrowed,
+        // and one of those arms holds `stdin` — which is exactly what
+        // answering a permission needs.
+        let mut requested = None;
+        let mut interrupted = false;
         let outcome = loop {
             tokio::select! {
                 update = rendered_rx.recv() => match update {
@@ -854,11 +871,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     None => continue,
                 },
                 request = permission_rx.recv() => match request {
-                    Some(request) => {
-                        answer_permission(&mut view, request).await?;
-                        // The prompt took the live row; put the cost back.
-                        view.draw(&cost_line).context("redrawing the live row")?;
-                    }
+                    Some(request) => requested = Some(request),
                     None => continue,
                 },
                 reported = cost_rx.recv() => match reported {
@@ -868,7 +881,23 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     }
                     None => continue,
                 },
-                result = &mut turn => break result,
+                event = stdin.next_event() => match event {
+                    // Ctrl-C during a turn is a cancel, not an exit: the
+                    // session survives it and the next prompt is drawn.
+                    Some(event) => interrupted = crate::chat::input::is_interrupt(&event),
+                    // The terminal went away. Nothing can answer the rest of
+                    // this turn, so stop waiting on it.
+                    None => interrupted = true,
+                },
+                result = &mut turn => break Some(result),
+            }
+            if let Some(request) = requested.take() {
+                answer_permission(&mut view, &mut stdin, request).await?;
+                // The prompt took the live row; put the cost back.
+                view.draw(&cost_line).context("redrawing the live row")?;
+            }
+            if interrupted {
+                break None;
             }
         };
         // Drain whatever the agent emitted between its last update and the
@@ -889,11 +918,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 .context("committing the turn's final lines")?;
         }
         match outcome {
-            Ok(response) => view.commit(&[ratatui::text::Line::from(format!(
+            // Dropping the turn future stops this side waiting; the agent is
+            // told to stop by `session/cancel`, which is a later task. Saying
+            // "abandoned" rather than "cancelled" is the honest difference.
+            None => view.commit(&[ratatui::text::Line::from("[turn abandoned]")])?,
+            Some(Ok(response)) => view.commit(&[ratatui::text::Line::from(format!(
                 "[{:?}]",
                 response.stop_reason
             ))])?,
-            Err(e) => {
+            Some(Err(e)) => {
                 view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?;
                 // A failed turn is the abnormal exit this exists for: the log
                 // holds both the substrate's side and the agent child's.
@@ -929,11 +962,11 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 /// old route marked, and says why.
 async fn pick_provider(
     view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    stdin: &mut crate::chat::input::Stdin,
     providers: &SessionProviders,
 ) -> Result<()> {
     use bitrouter_sdk::acp::down::ProviderSurface;
-    use crossterm::event::{Event, EventStream, KeyCode};
-    use futures::StreamExt as _;
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
     let listed = providers.list().await;
     let Some(picker) = bitrouter_tui::picker::Picker::open(true, &listed) else {
@@ -944,26 +977,32 @@ async fn pick_provider(
     };
     view.draw(&picker.render()).context("drawing the picker")?;
 
-    let raw = crossterm::terminal::enable_raw_mode().is_ok();
-    let mut keys = EventStream::new();
+    // Keys come from the session's one stdin owner, which already holds raw
+    // mode: a modal that took and dropped it would be a second owner, and the
+    // window between them is where a keystroke gets lost.
     let chosen = loop {
-        match keys.next().await {
-            Some(Ok(Event::Key(key))) => match key.code {
-                KeyCode::Char(c) => {
-                    if let Some(id) = picker.choose(c) {
-                        break Some(id);
-                    }
+        match stdin.next_event().await {
+            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                // A control chord is never a choice — Ctrl-C closes the
+                // picker instead of selecting whatever `c` happens to be.
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    break None;
                 }
-                KeyCode::Esc => break None,
-                _ => {}
-            },
-            Some(Err(_)) | None => break None,
-            _ => {}
+                match key.code {
+                    KeyCode::Char(c) => {
+                        if let Some(id) = picker.choose(c) {
+                            break Some(id);
+                        }
+                    }
+                    KeyCode::Esc => break None,
+                    _ => {}
+                }
+            }
+            // The terminal went away mid-question; the route is unchanged.
+            None => break None,
+            Some(_) => {}
         }
     };
-    if raw {
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
 
     let Some(id) = chosen else {
         view.commit(&[ratatui::text::Line::from("route unchanged")])?;
@@ -1004,11 +1043,11 @@ async fn pick_provider(
 /// A prompt that resolved ambiguity as consent would be worse than no prompt.
 async fn answer_permission(
     view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    stdin: &mut crate::chat::input::Stdin,
     request: bitrouter_sdk::acp::up::PendingPermission,
 ) -> Result<()> {
     use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
-    use crossterm::event::{Event, EventStream, KeyCode};
-    use futures::StreamExt as _;
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
     let prompt = bitrouter_tui::permission::Prompt::new(
         request.tool_call.fields.title.clone(),
@@ -1025,33 +1064,37 @@ async fn answer_permission(
         None => RequestPermissionOutcome::Cancelled,
     };
 
-    // Raw mode only for as long as the question is up: a session that left the
-    // terminal in raw mode after a panic would be the lifecycle bug this
-    // design exists to avoid.
-    let raw = crossterm::terminal::enable_raw_mode().is_ok();
-    let mut keys = EventStream::new();
+    // Keys come from the session's one stdin owner. It already holds raw mode
+    // for the whole session, so there is no mode to take here and none to
+    // leave behind if this future is dropped.
     let outcome = loop {
-        match keys.next().await {
-            Some(Ok(Event::Key(key))) => match key.code {
-                KeyCode::Char(c) => {
-                    if let Some(id) = prompt.choose(c) {
-                        break RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                            id,
-                        ));
-                    }
+        match stdin.next_event().await {
+            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                // Ctrl-C answers the question the only way an interrupt can be
+                // read: no. Passing the chord's letter to `choose` could
+                // select an option, which is the one outcome a cancel must
+                // never produce.
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    break deny();
                 }
-                KeyCode::Esc => break deny(),
-                _ => {}
-            },
+                match key.code {
+                    KeyCode::Char(c) => {
+                        if let Some(id) = prompt.choose(c) {
+                            break RequestPermissionOutcome::Selected(
+                                SelectedPermissionOutcome::new(id),
+                            );
+                        }
+                    }
+                    KeyCode::Esc => break deny(),
+                    _ => {}
+                }
+            }
             // The terminal went away mid-question. Deny — an unanswerable
             // prompt must not become an allow.
-            Some(Err(_)) | None => break deny(),
-            _ => {}
+            None => break deny(),
+            Some(_) => {}
         }
     };
-    if raw {
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
 
     let chosen = matches!(outcome, RequestPermissionOutcome::Selected(_));
     request.resolve(outcome);
