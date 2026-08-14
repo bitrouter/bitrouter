@@ -283,7 +283,7 @@ left the old stack intact.
 
 ### Phase 4 — Moves, new surfaces, and lockstep
 
-- [ ] **4.1 Move `cost.rs` to the app, whole**
+- [x] **4.1 Move `cost.rs` to the app, whole**
   - Depends on: 3.3, and §C.1's §19.5 decision recorded
   - Files: `crates/bitrouter-tui/src/cost.rs` → `apps/bitrouter/src/chat/cost.rs`
   - Do: move the constant, `Scope`, `from_usage`, `render`, `unreported`, and

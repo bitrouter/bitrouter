@@ -35,4 +35,5 @@
 //! `lifecycle`'s `the_panic_hook_restores_and_still_reports`, which pins that
 //! `restore` runs *and* that the panic is still reported afterwards.
 
+pub mod cost;
 pub mod input;

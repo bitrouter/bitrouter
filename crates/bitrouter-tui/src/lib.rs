@@ -35,7 +35,6 @@
 //! the caller into the footer, because the caller is what knows whether the
 //! control would do anything.
 
-pub mod cost;
 pub mod journal;
 pub mod log_tail;
 pub mod permission;

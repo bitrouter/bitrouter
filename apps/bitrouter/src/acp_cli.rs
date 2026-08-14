@@ -767,8 +767,8 @@ impl View {
 
         let cost = journal
             .usage()
-            .and_then(bitrouter_tui::cost::Cost::from_usage)
-            .map_or_else(bitrouter_tui::cost::unreported, |cost| cost.render());
+            .and_then(crate::chat::cost::Cost::from_usage)
+            .map_or_else(crate::chat::cost::unreported, |cost| cost.render());
         let mut status: Vec<Span<'static>> = cost.spans;
         if let Some(route) = &self.route {
             status.push(Span::raw(format!(" · via {route}")));
@@ -2048,7 +2048,7 @@ async fn measured_usage_update(
     // this.
     let mut meta = serde_json::Map::new();
     meta.insert(
-        bitrouter_tui::cost::COST_SCOPE_META_KEY.to_string(),
+        crate::chat::cost::COST_SCOPE_META_KEY.to_string(),
         serde_json::Value::String(scope.as_wire().to_string()),
     );
     Some(SessionUpdate::UsageUpdate(
@@ -2164,7 +2164,7 @@ mod cost_tests {
         let scope = usage
             .meta
             .as_ref()
-            .and_then(|m| m.get(bitrouter_tui::cost::COST_SCOPE_META_KEY))
+            .and_then(|m| m.get(crate::chat::cost::COST_SCOPE_META_KEY))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("a cost must carry its scope"))?
             .to_string();

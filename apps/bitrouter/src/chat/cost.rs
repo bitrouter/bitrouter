@@ -19,15 +19,17 @@
 //!   never as `$0.00`: a router that cannot see a price has not observed a
 //!   free turn.
 
-use agent_client_protocol_schema::v1::UsageUpdate;
+use agent_client_protocol::schema::v1::UsageUpdate;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 /// `_meta` key naming whose spend a `UsageUpdate.cost` describes.
 ///
 /// Namespaced, because `_meta` is a shared extension space and ACP tells
-/// implementations to assume nothing about keys they do not own. Must match
-/// the emitting side (`bitrouter`'s `acp_cli::COST_SCOPE_META_KEY`).
+/// implementations to assume nothing about keys they do not own. Both sides of
+/// it now live in this crate — `acp_cli` writes the key, this reads it — which
+/// is the point of the move: the key is BitRouter's, not ACP's, so a renderer
+/// that knew it did not belong in a crate that knows only ACP.
 pub const COST_SCOPE_META_KEY: &str = "bitrouter/costScope";
 
 /// Whose traffic a cost figure describes.
@@ -123,7 +125,7 @@ pub fn unreported() -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol_schema::v1::Cost as WireCost;
+    use agent_client_protocol::schema::v1::Cost as WireCost;
 
     fn text(line: &Line<'static>) -> String {
         line.spans
