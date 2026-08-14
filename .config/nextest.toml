@@ -24,6 +24,21 @@ leak-timeout = "2s"
 # CI has no tty and no operator: fail rather than retry into another 49-minute
 # stall, and keep the leaf output so a failure is readable without a re-run.
 [profile.ci]
+# Bounded parallelism, and this is a mitigation rather than a diagnosis.
+#
+# Established on #816: every one of the seven partitions passes on
+# ubuntu-latest, together covering all 2503 tests, and the whole suite passes
+# there serially in 3m6s — but the same suite in the same job hangs
+# indefinitely in parallel, until the runner stops answering and takes its own
+# log with it. macOS and Windows are unaffected. No test is terminated by
+# `terminate-after`, so nothing is individually stuck; the contention is
+# between tests running at once over something machine-global.
+#
+# Two threads keeps CI deterministic for well under a minute of wall-clock
+# (serial is 3m6s against a 2m29s parallel baseline on main). The root cause is
+# still unidentified — if you are here because CI got slow, find it rather than
+# raising this number.
+test-threads = 2
 slow-timeout = { period = "60s", terminate-after = 3 }
 failure-output = "immediate-final"
 fail-fast = false
