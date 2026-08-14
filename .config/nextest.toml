@@ -34,11 +34,15 @@ leak-timeout = "2s"
 # `terminate-after`, so nothing is individually stuck; the contention is
 # between tests running at once over something machine-global.
 #
-# Two threads keeps CI deterministic for well under a minute of wall-clock
-# (serial is 3m6s against a 2m29s parallel baseline on main). The root cause is
-# still unidentified — if you are here because CI got slow, find it rather than
-# raising this number.
-test-threads = 2
+# `2` was tried first and still hung; `1` is the only setting observed green on
+# ubuntu (3m6s for the full suite, against a 2m29s parallel baseline on main).
+# That any concurrency at all reproduces it is itself the sharpest clue left:
+# this is two specific tests colliding, not the suite being too heavy — two
+# threads is no more memory than one.
+#
+# So the real fix is to find that pair and give them a `[test-groups]` entry,
+# not to keep this at 1 forever. Costs ~40s of wall-clock until someone does.
+test-threads = 1
 slow-timeout = { period = "60s", terminate-after = 3 }
 failure-output = "immediate-final"
 fail-fast = false
