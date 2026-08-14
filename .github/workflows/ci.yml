@@ -98,8 +98,10 @@ jobs:
         include:
           - target: lib
             flags: --lib
+            test_debug: "0"
           - target: bin
             flags: --bin bitrouter
+            test_debug: "2"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -108,6 +110,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/ci-target
+          CARGO_PROFILE_TEST_DEBUG: ${{ matrix.test_debug }}
           TEST_TARGET_FLAGS: ${{ matrix.flags }}
         shell: bash
         run: |
