@@ -2,11 +2,11 @@
 //!
 //! # Why retained, and not append-only
 //!
-//! [`crate::transcript::Transcript`] turns each update into finished lines and
-//! forgets it. That is append-only against a protocol whose entities are
-//! **patchable**: one tool call going pending → in-progress → completed emits
-//! three lines, because by the time the second arrives the first belongs to the
-//! terminal.
+//! What this replaced — a `Transcript` that turned each update into finished
+//! lines and forgot it — was append-only against a protocol whose entities are
+//! **patchable**: one tool call going pending → in-progress → completed emitted
+//! three lines, because by the time the second arrived the first belonged to
+//! the terminal.
 //!
 //! So this keeps the entities instead of their rendering. [`Journal::apply`]
 //! returns `()` — nothing for a caller to order, nothing to commit early — and
@@ -17,8 +17,8 @@
 //!
 //! - **First-seen order is stable.** A patch to an early entity keeps its
 //!   place; only genuinely new entities extend the document.
-//! - **There is nothing to flush.** `Transcript` has to be flushed at every
-//!   turn end or a plain answer is never drawn, because a turn ends on the
+//! - **There is nothing to flush.** The old renderer had to be flushed at every
+//!   turn end or a plain answer was never drawn, because a turn ends on the
 //!   `session/prompt` *response*, which never appears on the update stream. An
 //!   in-flight message here is simply a [`Message`] with `complete: false`,
 //!   already in the document and already on screen.

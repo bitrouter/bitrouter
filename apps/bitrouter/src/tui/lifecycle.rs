@@ -85,7 +85,7 @@ pub fn install_panic_restore() {
 /// Normal teardown and a panic both run Rust code that can reach [`restore`].
 /// A signal runs none: `kill`, a supervisor stopping the process, or a closed
 /// terminal window sending SIGHUP would otherwise end it with the terminal
-/// still in raw mode. This wraps [`crate::tui::watch::ShutdownSignals`] — the
+/// still in raw mode. This wraps the watch view's `ShutdownSignals` — the
 /// registration is the same, only the caller is new — so an inline session can
 /// await it alongside its own futures and leave by the front door.
 ///

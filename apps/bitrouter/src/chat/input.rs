@@ -15,7 +15,7 @@
 //! Raw mode is not free. It means the terminal no longer echoes, no longer
 //! assembles a line, and no longer turns Ctrl-C into a signal — all three
 //! become ours. [`Stdin::read_line`] is the line editor that pays for the
-//! first two; [`is_interrupt`] and [`Prompt::End`] pay for the third.
+//! first two; [`is_cancel`] and [`Prompt::End`] pay for the third.
 //!
 //! Deliberately absent: history, multi-line entry, and cursor movement within
 //! the line. Each is a real feature with real state, and none of them is what
