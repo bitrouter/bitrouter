@@ -158,7 +158,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -10`
   - Commit: `feat(tui): grapheme-aware row wrapping`
 
-- [ ] **2.2 The journal**
+- [x] **2.2 The journal**
   - Depends on: 2.1
   - Files: `crates/bitrouter-tui/src/journal.rs`
   - Do: implement spec §3 in full — every field, `apply`, and
