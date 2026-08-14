@@ -50,6 +50,11 @@ ratatui = { version = "0.29", features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = { version = "0.28", features = ["event-stream"] }
+# The line diff behind `bitrouter-tui`'s hunked diff rendering. A dependency
+# rather than a hand-rolled diff because subtly wrong diff output is worse than
+# a dependency, and hunk grouping with context is exactly where the subtle
+# wrongness would live — see TUI_RENDERER_PLAN §C.1 (§19.2).
+similar = "3.1"
 # The display width of a grapheme cluster, for `bitrouter-tui`'s own wrap.
 # Ratatui's `reflow` is private, so the wrap is ours — but the widths must be
 # the same ones ratatui measures with, which is why this tracks the version

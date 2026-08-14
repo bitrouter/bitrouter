@@ -25,10 +25,13 @@
 //! `raw_input`, no `locations`: no renderer here reads them, and a field
 //! added before its reader exists is dead code.
 
+pub mod content;
+pub mod diff;
+
 use std::collections::HashMap;
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolKind,
+    ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolKind,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -47,6 +50,9 @@ pub struct ToolContext<'a> {
     pub content: &'a [ToolCallContent],
     /// The terminal width the result will be wrapped to.
     pub width: u16,
+    /// The terminal height, which is what bounds a single diff: one edit must
+    /// never occupy more than the screen the rest of the session lives in.
+    pub height: u16,
 }
 
 impl<'a> ToolContext<'a> {
@@ -54,7 +60,7 @@ impl<'a> ToolContext<'a> {
     ///
     /// One place knows which fields a renderer may see, so adding a field to
     /// the protocol does not quietly widen what renderers can reach.
-    pub fn new(call: &'a ToolCall, width: u16) -> Self {
+    pub fn new(call: &'a ToolCall, width: u16, height: u16) -> Self {
         Self {
             id: &call.tool_call_id,
             kind: call.kind,
@@ -62,6 +68,7 @@ impl<'a> ToolContext<'a> {
             title: &call.title,
             content: &call.content,
             width,
+            height,
         }
     }
 }
@@ -163,7 +170,7 @@ pub struct Generic;
 impl ToolRenderer for Generic {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
-        lines.extend(content_lines(ctx.content));
+        lines.extend(content_lines(ctx));
         lines
     }
 }
@@ -174,7 +181,7 @@ pub struct Diffs;
 impl ToolRenderer for Diffs {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
-        lines.extend(content_lines(ctx.content));
+        lines.extend(content_lines(ctx));
         lines
     }
 }
@@ -185,7 +192,7 @@ pub struct Output;
 impl ToolRenderer for Output {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
-        lines.extend(content_lines(ctx.content));
+        lines.extend(content_lines(ctx));
         lines
     }
 }
@@ -197,7 +204,7 @@ pub struct Reasoning;
 impl ToolRenderer for Reasoning {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
-        for line in content_lines(ctx.content) {
+        for line in content_lines(ctx) {
             lines.push(Line::from(
                 line.spans
                     .into_iter()
@@ -252,43 +259,22 @@ fn header(ctx: &ToolContext<'_>) -> Line<'static> {
     ])
 }
 
-/// A call's content, rendered plainly.
-///
-/// Deliberately simple: capping output, hunking diffs, and describing non-text
-/// blocks are task 2.4's subject. What matters here is that content reaches
-/// the screen at all — `Transcript` drops every variant but `Diff`, which is
-/// defect 2.
-fn content_lines(content: &[ToolCallContent]) -> Vec<Line<'static>> {
+/// Everything a call has produced, each piece through the renderer that knows
+/// how to bound it.
+fn content_lines(ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for item in content {
+    for item in ctx.content {
         match item {
-            ToolCallContent::Content(block) => {
-                for text in block_text(&block.content).lines() {
-                    lines.push(Line::from(format!("  {text}")));
-                }
-            }
-            ToolCallContent::Diff(diff) => {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", diff.path.display()),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )));
-                if let Some(old) = &diff.old_text {
-                    for removed in old.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("  -{removed}"),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                }
-                for added in diff.new_text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  +{added}"),
-                        Style::default().fg(Color::Green),
-                    )));
-                }
-            }
+            ToolCallContent::Content(block) => lines.extend(content::render(&block.content)),
+            ToolCallContent::Diff(file) => lines.extend(diff::render(file, ctx.height)),
+            // A terminal is a live thing owned by the agent, addressed by id.
+            // Naming it is all a static renderer can honestly do; embedding it
+            // would mean rendering a stream this crate does not hold.
             ToolCallContent::Terminal(terminal) => {
-                lines.push(Line::from(format!("  [terminal {}]", terminal.terminal_id)));
+                lines.push(Line::from(Span::styled(
+                    format!("  [terminal {}]", terminal.terminal_id),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
             // `ToolCallContent` is `#[non_exhaustive]`.
             _ => {}
@@ -297,17 +283,9 @@ fn content_lines(content: &[ToolCallContent]) -> Vec<Line<'static>> {
     lines
 }
 
-/// The text of a content block, or empty for the kinds that have none.
-fn block_text(block: &ContentBlock) -> String {
-    match block {
-        ContentBlock::Text(text) => text.text.clone(),
-        _ => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol_schema::v1::{Diff, TextContent};
+    use agent_client_protocol_schema::v1::{ContentBlock, Diff, TextContent};
 
     use super::*;
 
@@ -350,7 +328,7 @@ mod tests {
 
         let searched = call(ToolKind::Search, "grep for it");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&searched, 80))),
+            text(&registry.render(&ToolContext::new(&searched, 80, 24))),
             "searched",
             "a registered key reaches its renderer"
         );
@@ -358,7 +336,7 @@ mod tests {
         // `Fetch` has no renderer registered, so this must reach `Generic` —
         // and `Generic` draws the title, which no spy does.
         let fetched = call(ToolKind::Fetch, "GET https://example.test");
-        let rendered = text(&registry.render(&ToolContext::new(&fetched, 80)));
+        let rendered = text(&registry.render(&ToolContext::new(&fetched, 80, 24)));
         assert!(
             rendered.contains("GET https://example.test"),
             "an unregistered key falls through to the default: {rendered:?}"
@@ -378,7 +356,7 @@ mod tests {
         registry.register(ToolKey::Edit, Box::new(Spy("second")));
         let edit = call(ToolKind::Edit, "Edit src/lib.rs");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&edit, 80))),
+            text(&registry.render(&ToolContext::new(&edit, 80, 24))),
             "second"
         );
     }
@@ -431,7 +409,7 @@ mod tests {
                     TextContent::new("running 3 tests\ntest result: ok."),
                 )),
             )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&executed, 80)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&executed, 80, 24)));
         assert!(rendered.contains("cargo test"), "{rendered:?}");
         assert!(rendered.contains("running 3 tests"), "{rendered:?}");
         assert!(rendered.contains("test result: ok."), "{rendered:?}");
@@ -443,7 +421,7 @@ mod tests {
         let edited = call(ToolKind::Edit, "Edit src/lib.rs").content(vec![ToolCallContent::Diff(
             Diff::new("src/lib.rs", "let b = 2;").old_text("let a = 1;".to_string()),
         )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 80)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 80, 24)));
         assert!(rendered.contains("src/lib.rs"), "{rendered:?}");
         assert!(rendered.contains("-let a = 1;"), "{rendered:?}");
         assert!(rendered.contains("+let b = 2;"), "{rendered:?}");
@@ -458,7 +436,7 @@ mod tests {
                 ContentBlock::Text(TextContent::new("weighing two designs")),
             )),
         ]);
-        let lines = Registry::default().render(&ToolContext::new(&thinking, 80));
+        let lines = Registry::default().render(&ToolContext::new(&thinking, 80, 24));
         let styles: Vec<Style> = lines
             .iter()
             .skip(1)
@@ -492,7 +470,7 @@ mod tests {
     #[test]
     fn an_untitled_call_is_named_by_its_id() {
         let untitled = ToolCall::new(ToolCallId::new("t-42"), String::new());
-        let rendered = text(&Registry::default().render(&ToolContext::new(&untitled, 80)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&untitled, 80, 24)));
         assert!(rendered.contains("t-42"), "{rendered:?}");
     }
 }

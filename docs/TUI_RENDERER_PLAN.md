@@ -189,7 +189,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui render 2>&1 | tail -15`
   - Commit: `feat(tui): tool renderer registry keyed on ToolKey`
 
-- [ ] **2.4 Content and diff rendering**
+- [x] **2.4 Content and diff rendering**
   - Depends on: 2.3, and §C.1's §19.2 decision recorded
   - Files: `crates/bitrouter-tui/src/render/`, manifests if §19.2 adds a crate
   - Do: spec §6. `ToolCallContent::Content` renders and is capped at 40 rows
