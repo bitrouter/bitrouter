@@ -94,7 +94,15 @@ These are spec §19 open questions. Phase 1 does not depend on them; Phase 2 doe
   carries `diff 0.1.13` today, but only as a dev-only transitive of
   `pretty_assertions`. Task 2.4 adds it to the workspace manifest and to
   `bitrouter-tui`.
-- **§19.5 — how does the app name ACP schema types?** Blocks task 4.1.
+- **§19.5 — how does the app name ACP schema types?** **Answered 2026-08-14:
+  through the runtime crate's re-export, `agent_client_protocol::schema::v1::*`.**
+  The app already does this for these exact types —
+  [`acp_cli.rs:46`](../apps/bitrouter/src/acp_cli.rs:46) names `UsageUpdate`
+  and `ProviderInfo` that way — so the decision is to keep one dependency edge
+  rather than add a second to the same crate, which would then have to be held
+  in version lockstep and could otherwise compile the app against a different
+  schema than the SDK. Task 4.1 rewrites the moved files' imports; no manifest
+  changes.
 
 ---
 
