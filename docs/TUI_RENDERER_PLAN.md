@@ -339,7 +339,7 @@ left the old stack intact.
   - Verify: `grep -rn "bitrouter/" crates/bitrouter-tui/src && echo "FAIL: matches above" || echo "PASS: no matches"`
   - Commit: `test(tui): make the crate boundary check satisfiable`
 
-- [ ] **4.6 Lockstep the docs**
+- [x] **4.6 Lockstep the docs**
   - Depends on: 4.4, 4.5
   - Files: `docs/CLI.md`, `skills/bitrouter/references/cli.md`,
     `docs/ACP_TUI_SPEC.md`, `docs/ACP_TUI_PLAN.md`

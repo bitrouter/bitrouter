@@ -71,6 +71,7 @@ The exact strings are in §E, ready to paste.
 | 5 | TUI is **its own crate**, `crates/bitrouter-tui`, depending on neither the `bitrouter` app crate nor its config. | §9 — **amended, see below** |
 | 6 | ACP **v1** semantics. `providers/*` via raw JSON-RPC + schema types behind `unstable_llm_providers`. Do **not** enable `unstable_protocol_v2`. | §10 |
 | 7 | Inline viewport (`ratatui::Viewport::Inline`). No alternate screen. | §8 |
+| | **Superseded** by [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md) §4: still inline and still no alternate screen, but the mechanism is a differential writer over `Backend`, not `Viewport::Inline`. That is the one decision here that spec replaces. | |
 | 8 | A distinct verb sharing `RoutingOptions` via `#[command(flatten)]`. **Working name: `chat`.** | §8.1 |
 | 9 | Both stderr streams go to one per-session log file. No permanent log pane. | §8.2 |
 | 10 | TUI renders **session-scoped data only**, taken **from the ACP wire** — not from `snapshot.rs`. | §8.3 — **amended, see below** |
@@ -387,6 +388,14 @@ depends on the TUI existing.
     leaves a readable transcript.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
   - Commit: `feat(tui): inline viewport for ACP sessions`
+  - **Superseded** by [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md) §4, shipped
+    2026-08-14. What this task built was append-only against a protocol whose
+    entities are patchable, so one tool call printed a line per status change.
+    `Viewport::Inline` is replaced by a differential writer; *inline* itself
+    survives, and so does the done-when above. The `Ctrl-C` named there is now
+    one of four bindings — `Esc`, `Ctrl-C`, `Ctrl-D`, `Ctrl-L` — because `chat`
+    holds raw mode for the session; see that spec's §9 and
+    [`CLI.md`](CLI.md).
 
 - [x] **4.6 Message log and tool-call cards**
   - Depends on: 3.1, 4.5

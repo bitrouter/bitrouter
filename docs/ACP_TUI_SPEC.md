@@ -313,6 +313,32 @@ scope creep back toward the orchestrator.
 
 ## 8. Decision 5 — the TUI: ratatui, inline viewport
 
+> **Superseded in part by [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md)
+> (accepted, shipped 2026-08-14).** Two corrections, both of them ours rather
+> than the reader's:
+>
+> - **`ratatui::Viewport::Inline` is gone**, replaced by a differential writer
+>   over `ratatui::backend::Backend` (that spec's §4). *Inline* was the right
+>   stance and it is kept — no alternate screen, output in real scrollback —
+>   but `Inline` could own only a fixed live region, which is why a tool call
+>   printed once per status change. The writer owns the whole document and
+>   repaints rows in place.
+> - **The status line below is superseded** by that spec's §4.5 footer: cost,
+>   route, mode, title and the open permission are the last rows of the
+>   document, repainted in place, rather than a borrowed region.
+>
+> One reading here was also half the story: the `TuiMainScreen`/`TuiAltScreen`
+> split is cited below as *inline vs alternate screen*, and pi's main-screen
+> renderer is itself differential — it diffs rendered rows and repaints only
+> what changed. Taking the stance without the mechanism is what left this
+> design append-only.
+>
+> `Ctrl-C` below is still true and is no longer the whole set. `chat` holds the
+> terminal in raw mode for the session, so the bindings are its own: `Esc` denies an open
+> permission or closes the picker and otherwise cancels the turn, `Ctrl-C`
+> cancels a turn and ends an idle session, `Ctrl-D` ends an idle session, and
+> `Ctrl-L` repaints. See that spec's §9 and [`CLI.md`](CLI.md).
+
 Built in `apps/bitrouter` (see §9 on why not a crate), rendering the normalized
 stream.
 

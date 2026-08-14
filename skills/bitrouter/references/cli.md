@@ -165,15 +165,32 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 
 | Command | What it does |
 |---|---|
-| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and the turn's measured cost. Inline viewport — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
+| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and the turn's measured cost. Draws inline — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
 
-**In-session**: type a message and press enter; `Ctrl-D` ends the session. `/route` opens the provider picker.
+**Raw mode**: `chat` holds the terminal in raw mode for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are its own line editor's rather than the shell's. Typing, backspace, word-delete and bracketed paste; no history, no multi-line. A redirected stdout takes no raw mode and prints plain text with no escape sequences.
+
+**Keys**
+
+| Key | Effect |
+|---|---|
+| `Enter` | Send the line |
+| `Esc` | Deny the open permission prompt, or close the picker; with neither open, cancel the running turn |
+| `Ctrl-C` | Cancel the running turn; end the session when idle |
+| `Ctrl-D` | End the session (idle only) |
+| `Ctrl-L` | Repaint the screen |
+| `Ctrl-W` | Delete the previous word |
+
+Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
+
+**In-session commands**: `/route` opens the provider picker; `/commands` lists the slash commands the agent itself advertises.
+
+**A scrolled-off row can be stale**: rows are repainted only while they are on screen, so a tool call that scrolls away mid-run keeps the status it had when it left. The renderer will not clear your scrollback to fix that. `Ctrl-L` repaints what is on screen.
 
 **Cost honesty**: the cost line always carries its scope. `USD 0.4200` is this session's spend; `all callers USD 1.3200` means the traffic could not be attributed (you supplied your own credential, which BitRouter never rewrites to tag) so the figure is the daemon's window total; `cost unreported` means the agent sent no cost — it is never rendered as `$0.00`.
 
 **`/route`**: lists routable providers and switches the live session's route. Offered **only** when the session can honour it — that needs a daemon to install the override in and an attributable launch id to scope it by, so a `--direct` session or one using your own credential is told plainly that it cannot be rerouted. After a switch, `chat` re-reads `providers/list` and reports what the daemon is actually serving; a refused change reports the old route and why.
 
-**On failure**: a failed turn prints the tail of `~/.bitrouter/logs/session-<stamp>-<pid>.log` inline and names the path. There is no permanent log pane.
+**On failure**: a failed turn prints the tail of `~/.bitrouter/logs/session-<stamp>-<pid>.log` after the session ends and names the path. There is no permanent log pane. `chat` logs **only** to that file — it owns the terminal, so a stray log line would scroll the screen out from under the renderer.
 
 ## Setup helpers
 
