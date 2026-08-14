@@ -228,7 +228,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -15`
   - Commit: `feat(tui): coalesced rendering with a per-entity cache`
 
-- [ ] **2.7 Phase 2 gate**
+- [x] **2.7 Phase 2 gate**
   - Depends on: 2.1–2.6
   - Do: run the three workspace checks. The shipping TUI must be **unchanged** —
     `Transcript` and `Inline` are still what the driver uses.
@@ -384,7 +384,7 @@ Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 
 ## F. Progress
 
-Phase 1 ☑ · Phase 2 ☐ · Phase 3 ☐ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☐ · Phase 4 ☐
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
