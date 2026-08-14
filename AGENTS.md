@@ -60,10 +60,30 @@ design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
 3. On each release, an agent in `bitrouter-docs` drafts a docs update from the
    changelog for human review — no docs action is needed in this repo.
 
+## Changelog
+
+The changelog's primary reader is the release agent in `bitrouter-docs`, which
+drafts the docs update from it. A commit subject gives that agent nothing to
+work with, so the changelog is written by hand, on the branch, and only the
+version bump is derived from commits.
+
+1. **ALWAYS** add a `.changes/<slug>.md` file in the same change when you alter
+   behaviour a user or an SDK caller can observe — a CLI surface, config key,
+   wire format, default, or public Rust API. CI fails the PR otherwise. Pure
+   refactors, test-only work, and CI plumbing carry the `no-changelog` label
+   instead. The format is in [`.changes/README.md`](.changes/README.md).
+2. **NEVER** write pending entries under `## [Unreleased]` in `CHANGELOG.md`.
+   That section is release-plz's insertion point and stays empty; parallel
+   branches conflict there and never conflict on separate files.
+3. For anything breaking, the body must say **how to migrate** — the old
+   spelling, the new spelling, and what happens to existing data or config.
+4. Validate with `cargo run -p dist-helper -- changelog check` (also part of
+   `dist-helper check`). `changelog fold` is the release PR's job, not yours.
+
 ## Contributing
 
 1. **ALWAYS** use the **conventional** git commit message format. Keep the title under 60 characters. The message body and footer can be any length.
-2. **ALWAYS** use the format of **conventional** git commit message's header part for your PR title. We validate this.
+2. **ALWAYS** use the format of **conventional** git commit message's header part for your PR title. We validate this. release-plz still derives the version bump from these, so `feat` / `fix` / `!` still have to be honest.
 
 ## Run Checks Before Submitting Code
 
