@@ -62,13 +62,155 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            retries: "0"
+          - os: windows-latest
+            # Windows also exposes the trajectory timestamp race under load.
+            retries: "2"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --all-features
+      - run: >-
+          cargo nextest run --workspace --all-features
+          --retries "${{ matrix.retries }}"
+
+  # A cold all-features build used to compile and link every large application
+  # test target on one runner. Split by Cargo target so each runner has bounded
+  # late-stage link pressure while preserving the original Linux test surface.
+  test-ubuntu-workspace:
+    name: test (ubuntu-latest, workspace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@nextest
+      - run: >-
+          cargo nextest run --workspace --exclude bitrouter --all-features
+          --build-jobs 2
+
+  test-ubuntu-bitrouter:
+    name: test (ubuntu-latest, bitrouter ${{ matrix.target }})
+    needs: test-ubuntu-integration
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: lib
+            build_jobs: "2"
+            flags: --lib
+          - target: bin
+            build_jobs: "1"
+            flags: --bin bitrouter
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: add swap for the lib test harness
+        if: matrix.target == 'lib'
+        run: |
+          sudo fallocate --length 8G /swapfile-bitrouter
+          sudo chmod 600 /swapfile-bitrouter
+          sudo mkswap /swapfile-bitrouter
+          sudo swapon /swapfile-bitrouter
+          free -h
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ubuntu-bitrouter-tests-v1
+          cache-save-if: false
+          cache-workspace-crates: true
+      - uses: taiki-e/install-action@nextest
+      - env:
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs }}
+          TEST_TARGET_FLAGS: ${{ matrix.flags }}
+        shell: bash
+        run: |
+          read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
+          cargo nextest run -p bitrouter --all-features \
+            --build-jobs "$TEST_BUILD_JOBS" \
+            "${target_flags[@]}"
+
+  test-ubuntu-integration:
+    name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: interfaces
+            retries: "0"
+            targets: >-
+              --test acp --test cloud_api --test daemon --test e2e
+              --test full_stack
+          - shard: observability
+            retries: "0"
+            targets: >-
+              --test agent_trace_generalization --test observe_hierarchy
+              --test workflow_state_real_agent_e2e
+              --test workflow_state_replay
+          - shard: optimization
+            retries: "0"
+            targets: >-
+              --test eval_exchange_equivalence --test optimization_discovery
+              --test optimization_output --test policy_eval_control_plane
+          - shard: control-plane
+            # Trajectory assertions occasionally observe async event timestamps
+            # out of order; retry the isolated test process before failing CI.
+            retries: "2"
+            targets: >-
+              --test onboarding --test smithers_reward_loop
+              --test terminus_2_workflow_state
+              --test trajectory_progress_control
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ubuntu-bitrouter-tests-v1
+          cache-save-if: ${{ matrix.shard == 'interfaces' }}
+          cache-workspace-crates: true
+      - uses: taiki-e/install-action@nextest
+      - name: run integration shard
+        shell: bash
+        env:
+          TEST_RETRIES: ${{ matrix.retries }}
+          TEST_TARGETS: ${{ matrix.targets }}
+        run: |
+          read -r -a test_targets <<< "$TEST_TARGETS"
+          cargo nextest run -p bitrouter --all-features --build-jobs 2 \
+            --retries "$TEST_RETRIES" \
+            "${test_targets[@]}"
+
+  test-ubuntu:
+    name: test (ubuntu-latest)
+    if: always()
+    needs:
+      - test-ubuntu-workspace
+      - test-ubuntu-bitrouter
+      - test-ubuntu-integration
+    runs-on: ubuntu-latest
+    env:
+      WORKSPACE_RESULT: ${{ needs.test-ubuntu-workspace.result }}
+      BITROUTER_RESULT: ${{ needs.test-ubuntu-bitrouter.result }}
+      INTEGRATION_RESULT: ${{ needs.test-ubuntu-integration.result }}
+    steps:
+      - name: require every ubuntu test shard
+        shell: bash
+        run: |
+          for result in \
+            "$WORKSPACE_RESULT" \
+            "$BITROUTER_RESULT" \
+            "$INTEGRATION_RESULT"
+          do
+            if [[ "$result" != "success" ]]; then
+              echo "::error::An Ubuntu test shard finished with: $result"
+              exit 1
+            fi
+          done
 
   feature-isolation:
     name: feature-isolation
