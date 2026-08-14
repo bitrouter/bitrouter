@@ -452,7 +452,9 @@ mod tests {
             Diff::new("src/lib.rs", "let b = 2;").old_text("let a = 1;".to_string()),
         )]);
         let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 80, 24)));
-        assert!(rendered.contains("src/lib.rs"), "{rendered:?}");
+        // The name, not the shape: the diff renderer absolutizes, and an
+        // absolute path is `D:\...\src\lib.rs` on Windows.
+        assert!(rendered.contains("lib.rs"), "{rendered:?}");
         assert!(rendered.contains("-let a = 1;"), "{rendered:?}");
         assert!(rendered.contains("+let b = 2;"), "{rendered:?}");
     }

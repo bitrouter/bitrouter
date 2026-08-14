@@ -136,6 +136,12 @@ fn unchanged(count: usize) -> Line<'static> {
 mod tests {
     use super::*;
 
+    // The path row is absolute, and what "absolute" *looks* like belongs to
+    // the platform: `/tmp/all.rs` renders as `D:\tmp\all.rs` on Windows. So
+    // these tests assert the file is *named* — a check that means the same
+    // thing everywhere — and `the_path_is_absolute` is the one place holding
+    // absoluteness itself, via `Path`, not via string shape.
+
     fn text_of(lines: &[Line<'static>]) -> String {
         lines
             .iter()
@@ -173,7 +179,7 @@ mod tests {
         );
         let text = text_of(&rendered);
         assert!(
-            text.contains("src/lib.rs"),
+            text.contains("lib.rs"),
             "the path is always named: {text:?}"
         );
         assert!(text.contains("-line 250\n"), "the old line: {text:?}");
@@ -204,7 +210,8 @@ mod tests {
             Path::new(&first).is_absolute(),
             "a bare path leaves the reader nowhere to go: {first:?}"
         );
-        assert!(first.ends_with("src/lib.rs"), "{first:?}");
+        // By components, not by bytes: the separator is `\` on Windows.
+        assert!(Path::new(&first).ends_with("src/lib.rs"), "{first:?}");
     }
 
     /// Two edits far apart are two hunks, with the gap between them counted.
@@ -242,10 +249,7 @@ mod tests {
         let rendered = render(&diff, 24);
         assert_eq!(rendered.len(), 24, "exactly one terminal height");
         let text = text_of(&rendered);
-        assert!(
-            text.contains("/tmp/all.rs"),
-            "still names the file: {text:?}"
-        );
+        assert!(text.contains("all.rs"), "still names the file: {text:?}");
         assert!(
             text.ends_with("more lines"),
             "and says how much it is not showing: {text:?}"
@@ -258,7 +262,7 @@ mod tests {
     fn a_created_file_renders_as_all_insertions() {
         let diff = Diff::new("/tmp/new.rs", "fn main() {}\n");
         let text = text_of(&render(&diff, 40));
-        assert!(text.contains("/tmp/new.rs"), "{text:?}");
+        assert!(text.contains("new.rs"), "{text:?}");
         assert!(text.contains("+fn main() {}"), "{text:?}");
         assert!(!text.contains('-'), "nothing was removed: {text:?}");
     }
@@ -270,7 +274,7 @@ mod tests {
         let diff = Diff::new("/tmp/same.rs", "same\n").old_text("same\n".to_string());
         let rendered = render(&diff, 40);
         let text = text_of(&rendered);
-        assert!(text.contains("/tmp/same.rs"), "{text:?}");
+        assert!(text.contains("same.rs"), "{text:?}");
         assert!(text.contains("… 1 unchanged lines"), "{text:?}");
     }
 
@@ -284,6 +288,6 @@ mod tests {
         let rendered = render(&diff, 1);
         let text = text_of(&rendered);
         assert!(rendered.len() >= 2, "{text:?}");
-        assert!(text.contains("/tmp/small.rs"), "{text:?}");
+        assert!(text.contains("small.rs"), "{text:?}");
     }
 }
