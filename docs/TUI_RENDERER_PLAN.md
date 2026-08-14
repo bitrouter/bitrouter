@@ -111,7 +111,7 @@ renderer and are worth having even if §19.1 goes the other way.
   - Verify: `cargo nextest run -p bitrouter 2>&1 | tail -5`
   - Commit: `refactor(chat): one stdin owner in raw mode`
 
-- [ ] **1.2 Restore the terminal on all three exits**
+- [x] **1.2 Restore the terminal on all three exits**
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/acp_cli.rs`, `apps/bitrouter/src/tui/lifecycle.rs`
   - Do: reuse the existing handle-free `restore()` (`lifecycle.rs:44`) and

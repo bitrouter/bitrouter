@@ -764,6 +764,12 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // newline in a raw terminal does not return the carriage. From this point
     // the terminal echoes nothing and delivers no SIGINT: both are ours.
     let mut stdin = crate::chat::input::Stdin::open().context("taking the terminal for input")?;
+    // The three exits, all landing at `lifecycle::restore()`: `Stdin`'s drop
+    // covers the normal one and every `?` on the way out, the panic hook
+    // covers the second, and `Shutdown` is the third — a signal runs no Rust
+    // the loop controls, so it has to be awaited rather than caught.
+    crate::tui::lifecycle::install_panic_restore();
+    let mut shutdown = crate::tui::lifecycle::Shutdown::install();
 
     // The renderer owns the terminal from here. It is handed lines, never
     // the session — `bitrouter-tui` cannot depend on this crate, and that is
@@ -823,15 +829,18 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         }
     });
 
-    loop {
+    'session: loop {
         // The live row is the prompt while a line is being typed: raw mode
         // means nothing is echoed unless we echo it.
-        let read = stdin
-            .read_line(|buffer| {
+        let read = tokio::select! {
+            read = stdin.read_line(|buffer| {
                 view.draw(&ratatui::text::Line::from(format!("> {buffer}")))
                     .context("echoing the prompt")
-            })
-            .await?;
+            }) => read?,
+            // A signal at an idle prompt ends the session the same way Ctrl-D
+            // does — through teardown, not around it.
+            () = shutdown.recv() => break 'session,
+        };
         let line = match read {
             crate::chat::input::Prompt::Line(line) => line,
             crate::chat::input::Prompt::End => break,
@@ -890,6 +899,9 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     None => interrupted = true,
                 },
                 result = &mut turn => break Some(result),
+                // Mid-turn, a signal still leaves by the front door: the agent
+                // is shut down and the terminal restored on the way out.
+                () = shutdown.recv() => break 'session,
             }
             if let Some(request) = requested.take() {
                 answer_permission(&mut view, &mut stdin, request).await?;
