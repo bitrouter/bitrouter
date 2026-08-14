@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::protocol::{
@@ -31,13 +32,819 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool,
-    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
-    set_provider_metadata,
+    Prompt, ProviderMetadata, ResponseFormat, ResponseOutputCommitment, Role, RoutingTarget,
+    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
+    UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
 const MAX_GATEWAY_REQUEST_ID_BYTES: usize = 128;
+const ASSISTANT_TURN_COMMITMENT_DOMAIN: &[u8] = b"bitrouter.assistant-turn.v1";
+const ASSISTANT_TURN_FIELD_DOMAIN: &[u8] = b"bitrouter.assistant-turn.field.v1";
+const CAUSAL_PREFIX_ROOT_DOMAIN: &[u8] = b"bitrouter.causal-prefix.root.v1";
+const CAUSAL_PREFIX_STEP_DOMAIN: &[u8] = b"bitrouter.causal-prefix.step.v1";
+const MAX_STREAMING_COMMITMENT_TOOL_CALLS: usize = 64;
+
+/// Fixed-size, protocol-neutral commitment to one canonical assistant turn.
+/// Provider metadata and stream fragmentation are intentionally excluded.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AssistantTurnCommitment {
+    encoded: String,
+    digest: [u8; 32],
+}
+
+impl AssistantTurnCommitment {
+    /// Parse the bounded canonical storage representation.
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(Self {
+            encoded: value.to_owned(),
+            digest: decode_digest(value)?,
+        })
+    }
+
+    /// Borrow the bounded canonical storage representation.
+    pub fn as_str(&self) -> &str {
+        &self.encoded
+    }
+
+    fn from_digest(digest: [u8; 32]) -> Self {
+        Self {
+            encoded: format!("sha256:{}", encode_digest(digest)),
+            digest,
+        }
+    }
+}
+
+impl std::fmt::Debug for AssistantTurnCommitment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("AssistantTurnCommitment(<redacted>)")
+    }
+}
+
+/// Fixed-size rolling commitment to one complete causal message prefix.
+/// The encrypted continuation row supplies owner and gateway identity binding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CausalPrefixCommitment {
+    encoded: String,
+    digest: [u8; 32],
+}
+
+impl CausalPrefixCommitment {
+    /// Parse the bounded canonical storage representation.
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(Self {
+            encoded: value.to_owned(),
+            digest: decode_digest(value)?,
+        })
+    }
+
+    /// Borrow the bounded canonical storage representation.
+    pub fn as_str(&self) -> &str {
+        &self.encoded
+    }
+
+    fn from_digest(digest: [u8; 32]) -> Self {
+        Self {
+            encoded: format!("sha256:{}", encode_digest(digest)),
+            digest,
+        }
+    }
+}
+
+impl std::fmt::Debug for CausalPrefixCommitment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CausalPrefixCommitment(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct FieldDigest {
+    len: u64,
+    digest: [u8; 32],
+}
+
+impl FieldDigest {
+    fn from_bytes(value: &[u8]) -> Option<Self> {
+        let mut hasher = Sha256::new();
+        hasher.update(ASSISTANT_TURN_FIELD_DOMAIN);
+        hasher.update(value);
+        Some(Self {
+            len: u64::try_from(value.len()).ok()?,
+            digest: hasher.finalize().into(),
+        })
+    }
+}
+
+struct FieldAccumulator {
+    hasher: Sha256,
+    len: u64,
+}
+
+impl Default for FieldAccumulator {
+    fn default() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(ASSISTANT_TURN_FIELD_DOMAIN);
+        Self { hasher, len: 0 }
+    }
+}
+
+impl FieldAccumulator {
+    fn update(&mut self, value: &[u8]) -> bool {
+        let Ok(len) = u64::try_from(value.len()) else {
+            return false;
+        };
+        let Some(total) = self.len.checked_add(len) else {
+            return false;
+        };
+        self.hasher.update(value);
+        self.len = total;
+        true
+    }
+
+    fn finish(self) -> FieldDigest {
+        FieldDigest {
+            len: self.len,
+            digest: self.hasher.finalize().into(),
+        }
+    }
+}
+
+struct TurnAccumulator {
+    hasher: Sha256,
+    part_count: u64,
+    meaningful: bool,
+    valid: bool,
+}
+
+impl Default for TurnAccumulator {
+    fn default() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(ASSISTANT_TURN_COMMITMENT_DOMAIN);
+        Self {
+            hasher,
+            part_count: 0,
+            meaningful: false,
+            valid: true,
+        }
+    }
+}
+
+impl TurnAccumulator {
+    fn add_part(&mut self, tag: u8, fields: &[FieldDigest], meaningful: bool) {
+        if !self.valid {
+            return;
+        }
+        let Some(part_count) = self.part_count.checked_add(1) else {
+            self.valid = false;
+            return;
+        };
+        self.hasher.update([tag]);
+        self.hasher.update((fields.len() as u64).to_be_bytes());
+        for field in fields {
+            self.hasher.update(field.len.to_be_bytes());
+            self.hasher.update(field.digest);
+        }
+        self.part_count = part_count;
+        self.meaningful |= meaningful;
+    }
+
+    fn invalidate(&mut self) {
+        self.valid = false;
+    }
+
+    fn finish(mut self) -> Option<AssistantTurnCommitment> {
+        if !self.valid || !self.meaningful || self.part_count == 0 {
+            return None;
+        }
+        self.hasher.update(self.part_count.to_be_bytes());
+        Some(AssistantTurnCommitment::from_digest(
+            self.hasher.finalize().into(),
+        ))
+    }
+}
+
+fn encode_digest(digest: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_digest(value: &str) -> Option<[u8; 32]> {
+    let encoded = value.strip_prefix("sha256:")?.as_bytes();
+    if encoded.len() != 64 {
+        return None;
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in encoded.chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(pair[0])?;
+        let low = decode_hex_nibble(pair[1])?;
+        digest[index] = (high << 4) | low;
+    }
+    Some(digest)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn field(value: &str) -> Option<FieldDigest> {
+    FieldDigest::from_bytes(value.as_bytes())
+}
+
+fn bool_field(value: bool) -> FieldDigest {
+    let value = [u8::from(value)];
+    let mut hasher = Sha256::new();
+    hasher.update(ASSISTANT_TURN_FIELD_DOMAIN);
+    hasher.update(value);
+    FieldDigest {
+        len: 1,
+        digest: hasher.finalize().into(),
+    }
+}
+
+fn observe_tool_call(
+    turn: &mut TurnAccumulator,
+    id: &str,
+    name: &str,
+    arguments: &str,
+    provider_executed: bool,
+    dynamic: bool,
+) {
+    let (Some(id), Some(name), Some(arguments)) = (field(id), field(name), field(arguments)) else {
+        turn.invalidate();
+        return;
+    };
+    if id.len == 0 || name.len == 0 {
+        turn.invalidate();
+        return;
+    }
+    turn.add_part(
+        3,
+        &[
+            id,
+            name,
+            arguments,
+            bool_field(provider_executed),
+            bool_field(dynamic),
+        ],
+        true,
+    );
+}
+
+fn observe_content(turn: &mut TurnAccumulator, content: &Content) {
+    let mut fields = Vec::with_capacity(8);
+    let (tag, meaningful) = match content {
+        Content::Text { text, .. } => {
+            let Some(value) = field(text) else {
+                turn.invalidate();
+                return;
+            };
+            fields.push(value);
+            (1, !text.is_empty())
+        }
+        Content::Reasoning { text, .. } => {
+            let Some(value) = field(text) else {
+                turn.invalidate();
+                return;
+            };
+            fields.push(value);
+            (2, !text.is_empty())
+        }
+        Content::ToolCall {
+            id,
+            name,
+            arguments,
+            provider_executed,
+            dynamic,
+            ..
+        } => {
+            observe_tool_call(turn, id, name, arguments, *provider_executed, *dynamic);
+            return;
+        }
+        Content::File { .. }
+        | Content::ToolResult { .. }
+        | Content::Source { .. }
+        | Content::ToolApprovalRequest { .. }
+        | Content::ToolApprovalResponse { .. } => {
+            turn.invalidate();
+            return;
+        }
+    };
+    turn.add_part(tag, &fields, meaningful);
+}
+
+/// Compute the same commitment used by streaming finalization without cloning
+/// or retaining the canonical response content.
+pub fn assistant_turn_commitment(content: &[Content]) -> Option<AssistantTurnCommitment> {
+    let mut turn = TurnAccumulator::default();
+    for part in content {
+        observe_content(&mut turn, part);
+    }
+    turn.finish()
+}
+
+/// Hash the complete terminal Responses output without materializing another
+/// transcript. Only protocol-neutral assistant semantics supported by the
+/// post-hook stream accumulator are eligible; every other item fails closed.
+fn terminal_assistant_turn_commitment(
+    response: &serde_json::Value,
+) -> Option<AssistantTurnCommitment> {
+    let output = response.get("output")?.as_array()?;
+    if output.is_empty() {
+        return None;
+    }
+    let mut turn = TurnAccumulator::default();
+    for item in output {
+        match item.get("type")?.as_str()? {
+            "message" => {
+                if item.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+                    return None;
+                }
+                let content = item.get("content")?.as_array()?;
+                if content.is_empty() {
+                    return None;
+                }
+                for part in content {
+                    if !matches!(
+                        part.get("type").and_then(serde_json::Value::as_str),
+                        Some("output_text" | "text")
+                    ) || part.get("annotations").is_some_and(|annotations| {
+                        !annotations.as_array().is_some_and(Vec::is_empty)
+                    }) {
+                        return None;
+                    }
+                    let text = part.get("text")?.as_str()?;
+                    let value = field(text)?;
+                    turn.add_part(1, std::slice::from_ref(&value), !text.is_empty());
+                }
+            }
+            "reasoning" => {
+                let summary = item.get("summary")?.as_array()?;
+                if summary.is_empty() {
+                    return None;
+                }
+                let mut value = FieldAccumulator::default();
+                for part in summary {
+                    if part.get("type").and_then(serde_json::Value::as_str) != Some("summary_text")
+                    {
+                        return None;
+                    }
+                    if !value.update(part.get("text")?.as_str()?.as_bytes()) {
+                        return None;
+                    }
+                }
+                let value = value.finish();
+                turn.add_part(2, std::slice::from_ref(&value), value.len > 0);
+            }
+            "function_call" => observe_tool_call(
+                &mut turn,
+                item.get("call_id")?.as_str()?,
+                item.get("name")?.as_str()?,
+                item.get("arguments")?.as_str()?,
+                false,
+                false,
+            ),
+            _ => return None,
+        }
+    }
+    turn.finish()
+}
+
+fn causal_content_role(message_role: Role, content: &Content) -> Option<Role> {
+    match content {
+        Content::Text { .. } => Some(message_role),
+        Content::Reasoning { .. } | Content::ToolCall { .. } => Some(Role::Assistant),
+        Content::ToolResult { .. } => Some(Role::Tool),
+        Content::File { .. }
+        | Content::Source { .. }
+        | Content::ToolApprovalRequest { .. }
+        | Content::ToolApprovalResponse { .. } => None,
+    }
+}
+
+fn causal_message_role(message: &Message) -> Option<Role> {
+    if message.role == Role::System {
+        return Some(Role::System);
+    }
+    let first = message.content.first()?;
+    let role = causal_content_role(message.role, first)?;
+    if message
+        .content
+        .iter()
+        .any(|content| causal_content_role(message.role, content) != Some(role))
+    {
+        return None;
+    }
+    Some(role)
+}
+
+fn observe_causal_content(turn: &mut TurnAccumulator, content: &Content) {
+    match content {
+        Content::Text { .. } | Content::Reasoning { .. } | Content::ToolCall { .. } => {
+            observe_content(turn, content);
+        }
+        Content::ToolResult {
+            call_id,
+            output,
+            dynamic,
+            ..
+        } => {
+            let (output_tag, output_value) = match output {
+                ToolResultOutput::Text { value } => ("text", value.as_str()),
+                ToolResultOutput::ErrorText { value } => ("error_text", value.as_str()),
+                ToolResultOutput::ExecutionDenied { reason } => {
+                    ("execution_denied", reason.as_deref().unwrap_or(""))
+                }
+                ToolResultOutput::Json { .. }
+                | ToolResultOutput::ErrorJson { .. }
+                | ToolResultOutput::Content { .. } => {
+                    turn.invalidate();
+                    return;
+                }
+            };
+            let (Some(call_id), Some(output_tag), Some(output_value)) =
+                (field(call_id), field(output_tag), field(output_value))
+            else {
+                turn.invalidate();
+                return;
+            };
+            if call_id.len == 0 {
+                turn.invalidate();
+                return;
+            }
+            turn.add_part(
+                4,
+                &[call_id, output_tag, output_value, bool_field(*dynamic)],
+                true,
+            );
+        }
+        Content::File { .. }
+        | Content::Source { .. }
+        | Content::ToolApprovalRequest { .. }
+        | Content::ToolApprovalResponse { .. } => turn.invalidate(),
+    }
+}
+
+fn initial_causal_prefix() -> CausalPrefixCommitment {
+    CausalPrefixCommitment::from_digest(Sha256::digest(CAUSAL_PREFIX_ROOT_DOMAIN).into())
+}
+
+fn extend_causal_step(
+    prior: &CausalPrefixCommitment,
+    role: Role,
+    message: &AssistantTurnCommitment,
+) -> CausalPrefixCommitment {
+    let mut hasher = Sha256::new();
+    hasher.update(CAUSAL_PREFIX_STEP_DOMAIN);
+    hasher.update(prior.digest);
+    hasher.update([match role {
+        Role::System => 0,
+        Role::User => 1,
+        Role::Assistant => 2,
+        Role::Tool => 3,
+    }]);
+    hasher.update(message.digest);
+    CausalPrefixCommitment::from_digest(hasher.finalize().into())
+}
+
+fn fold_causal_messages(
+    prior: Option<&CausalPrefixCommitment>,
+    messages: &[Message],
+    mut observe: impl FnMut(usize, Role, &CausalPrefixCommitment),
+) -> Option<CausalPrefixCommitment> {
+    let mut root = prior.cloned().unwrap_or_else(initial_causal_prefix);
+    let mut index = 0;
+    while index < messages.len() {
+        let role = causal_message_role(&messages[index])?;
+        let mut end = index + 1;
+        let mut turn = TurnAccumulator::default();
+        for content in &messages[index].content {
+            observe_causal_content(&mut turn, content);
+        }
+        if matches!(role, Role::Assistant | Role::Tool) {
+            while end < messages.len() && causal_message_role(&messages[end]) == Some(role) {
+                for content in &messages[end].content {
+                    observe_causal_content(&mut turn, content);
+                }
+                end += 1;
+            }
+        }
+        let message = turn.finish()?;
+        root = extend_causal_step(&root, role, &message);
+        observe(end, role, &root);
+        index = end;
+    }
+    Some(root)
+}
+
+/// Extend an authenticated prior causal root with the current visible suffix
+/// and the newly delivered assistant turn. Canonical system/developer messages
+/// are causal Responses input items and are therefore committed like other turns;
+/// top-level prompt instructions are not part of `messages` and remain request
+/// envelope state.
+pub fn extend_causal_prefix(
+    prior: Option<&CausalPrefixCommitment>,
+    messages: &[Message],
+    delivered: &AssistantTurnCommitment,
+) -> Option<CausalPrefixCommitment> {
+    let root = fold_causal_messages(prior, messages, |_, _, _| {})?;
+    Some(extend_causal_step(&root, Role::Assistant, delivered))
+}
+
+/// Find the unique exact prior root in a complete visible history. The match
+/// must end at the last assistant turn; truncated and repeated-parent suffixes
+/// therefore fail closed.
+pub fn find_unique_causal_prefix(
+    messages: &[Message],
+    expected: &CausalPrefixCommitment,
+) -> Option<usize> {
+    let mut matching_end = None;
+    let mut ambiguous = false;
+    let mut last_assistant_end = None;
+    fold_causal_messages(None, messages, |end, role, root| {
+        if role == Role::Assistant {
+            last_assistant_end = Some(end);
+            if root == expected && matching_end.replace(end).is_some() {
+                ambiguous = true;
+            }
+        }
+    })?;
+    let matching_end = matching_end?;
+    (!ambiguous && last_assistant_end == Some(matching_end)).then_some(matching_end)
+}
+
+/// Request-local instructions for extending a continuation's authenticated
+/// causal root during required finalization.
+#[derive(Clone, Debug)]
+pub struct CausalPrefixPlan {
+    prior: Option<CausalPrefixCommitment>,
+    suffix_start: Option<usize>,
+}
+
+impl CausalPrefixPlan {
+    /// Extend `prior` with `messages[suffix_start..]` and the delivered turn.
+    pub fn extend(prior: CausalPrefixCommitment, suffix_start: usize) -> Self {
+        Self {
+            prior: Some(prior),
+            suffix_start: Some(suffix_start),
+        }
+    }
+
+    /// Prevent publication of a new root when ancestry cannot be reconstructed.
+    pub fn ineligible() -> Self {
+        Self {
+            prior: None,
+            suffix_start: None,
+        }
+    }
+
+    pub(crate) fn finalize(
+        &self,
+        messages: &[Message],
+        delivered: &AssistantTurnCommitment,
+    ) -> Option<CausalPrefixCommitment> {
+        let start = self.suffix_start?;
+        let suffix = messages.get(start..)?;
+        extend_causal_prefix(self.prior.as_ref(), suffix, delivered)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamingFieldKind {
+    Text,
+    Reasoning,
+}
+
+struct ActiveStreamingField {
+    kind: StreamingFieldKind,
+    marker: Option<FieldDigest>,
+    value: FieldAccumulator,
+}
+
+struct StreamingToolCall {
+    id: FieldDigest,
+    name: Option<FieldDigest>,
+    arguments: FieldAccumulator,
+}
+
+/// Fixed-size incremental commitment builder for streamed assistant output.
+/// It never retains text, reasoning, arguments, files, or tool results.
+pub struct StreamingAssistantTurnCommitment {
+    turn: TurnAccumulator,
+    active: Option<ActiveStreamingField>,
+    tools: [Option<StreamingToolCall>; MAX_STREAMING_COMMITMENT_TOOL_CALLS],
+    tool_count: usize,
+    tool_batch_started: bool,
+}
+
+impl Default for StreamingAssistantTurnCommitment {
+    fn default() -> Self {
+        Self {
+            turn: TurnAccumulator::default(),
+            active: None,
+            tools: std::array::from_fn(|_| None),
+            tool_count: 0,
+            tool_batch_started: false,
+        }
+    }
+}
+
+impl StreamingAssistantTurnCommitment {
+    fn finish_active(&mut self) {
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        let value = active.value.finish();
+        let tag = match active.kind {
+            StreamingFieldKind::Text => 1,
+            StreamingFieldKind::Reasoning => 2,
+        };
+        self.turn
+            .add_part(tag, std::slice::from_ref(&value), value.len > 0);
+    }
+
+    fn begin_field(&mut self, kind: StreamingFieldKind, marker: Option<&str>) {
+        if self.tool_batch_started {
+            self.turn.invalidate();
+            return;
+        }
+        self.finish_active();
+        self.active = Some(ActiveStreamingField {
+            kind,
+            marker: marker.and_then(field),
+            value: FieldAccumulator::default(),
+        });
+    }
+
+    fn update_field(&mut self, kind: StreamingFieldKind, value: &str) {
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|active| active.kind != kind)
+        {
+            self.begin_field(kind, None);
+        }
+        if let Some(active) = self.active.as_mut()
+            && !active.value.update(value.as_bytes())
+        {
+            self.turn.invalidate();
+        }
+    }
+
+    fn end_field(&mut self, kind: StreamingFieldKind, marker: &str) {
+        let marker = field(marker);
+        if self.active.as_ref().is_none_or(|active| {
+            active.kind != kind || (active.marker.is_some() && active.marker != marker)
+        }) {
+            self.turn.invalidate();
+            return;
+        }
+        self.finish_active();
+    }
+
+    fn observe_tool_delta(&mut self, id: &str, name: Option<&str>, arguments: &str) {
+        self.finish_active();
+        self.tool_batch_started = true;
+        let Some(id_digest) = field(id) else {
+            self.turn.invalidate();
+            return;
+        };
+        if id_digest.len == 0 {
+            self.turn.invalidate();
+            return;
+        }
+        let index = self.tools[..self.tool_count]
+            .iter()
+            .position(|tool| tool.as_ref().is_some_and(|tool| tool.id == id_digest));
+        let index = match (index, name) {
+            (Some(index), None) => index,
+            (Some(_), Some(_)) | (None, None) => {
+                self.turn.invalidate();
+                return;
+            }
+            (None, Some(_)) if self.tool_count < MAX_STREAMING_COMMITMENT_TOOL_CALLS => {
+                let index = self.tool_count;
+                self.tools[index] = Some(StreamingToolCall {
+                    id: id_digest,
+                    name: None,
+                    arguments: FieldAccumulator::default(),
+                });
+                self.tool_count += 1;
+                index
+            }
+            (None, Some(_)) => {
+                self.turn.invalidate();
+                return;
+            }
+        };
+        let Some(tool) = self.tools[index].as_mut() else {
+            self.turn.invalidate();
+            return;
+        };
+        if let Some(name) = name {
+            let Some(name) = field(name) else {
+                self.turn.invalidate();
+                return;
+            };
+            if name.len == 0 || tool.name.as_ref().is_some_and(|existing| existing != &name) {
+                self.turn.invalidate();
+                return;
+            }
+            tool.name = Some(name);
+        }
+        if !tool.arguments.update(arguments.as_bytes()) {
+            self.turn.invalidate();
+        }
+    }
+
+    /// Observe one post-hook downstream part.
+    pub fn observe(&mut self, part: &StreamPart) {
+        match part {
+            StreamPart::TextStart { id } => {
+                self.begin_field(StreamingFieldKind::Text, Some(id));
+            }
+            StreamPart::TextDelta { text } => {
+                self.update_field(StreamingFieldKind::Text, text);
+            }
+            StreamPart::TextEnd { id } => self.end_field(StreamingFieldKind::Text, id),
+            StreamPart::ReasoningStart { id } => {
+                self.begin_field(StreamingFieldKind::Reasoning, Some(id));
+            }
+            StreamPart::ReasoningDelta { text } => {
+                self.update_field(StreamingFieldKind::Reasoning, text);
+            }
+            StreamPart::ReasoningEnd { id, .. } => {
+                self.end_field(StreamingFieldKind::Reasoning, id);
+            }
+            StreamPart::ToolCallDelta {
+                id,
+                name,
+                arguments,
+            } => self.observe_tool_delta(id, name.as_deref(), arguments),
+            StreamPart::ServerToolCall {
+                id,
+                name,
+                arguments,
+                dynamic,
+                ..
+            } => {
+                self.finish_active();
+                if self.tool_batch_started {
+                    self.turn.invalidate();
+                    return;
+                }
+                observe_tool_call(&mut self.turn, id, name, arguments, true, *dynamic);
+            }
+            StreamPart::ServerToolResult { .. }
+            | StreamPart::File { .. }
+            | StreamPart::Source { .. } => {
+                self.finish_active();
+                self.turn.invalidate();
+            }
+            StreamPart::Usage { .. }
+            | StreamPart::ResponseStarted { .. }
+            | StreamPart::Finish { .. }
+            | StreamPart::ResponseCompleted { .. } => {}
+        }
+    }
+
+    /// Finalize the bounded commitment. Unsupported or ambiguous stream shapes
+    /// return `None`, forcing continuation pinning rather than detach.
+    pub fn finish(mut self) -> Option<AssistantTurnCommitment> {
+        self.finish_active();
+        for index in 0..self.tool_count {
+            let Some(tool) = self.tools[index].take() else {
+                self.turn.invalidate();
+                continue;
+            };
+            let Some(name) = tool.name else {
+                self.turn.invalidate();
+                continue;
+            };
+            let arguments = tool.arguments.finish();
+            self.turn.add_part(
+                3,
+                &[
+                    tool.id,
+                    name,
+                    arguments,
+                    bool_field(false),
+                    bool_field(false),
+                ],
+                true,
+            );
+        }
+        self.turn.finish()
+    }
+}
 
 fn created_at_unix_seconds() -> u64 {
     SystemTime::now()
@@ -97,6 +904,350 @@ fn validate_gateway_request_id(request_id: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod assistant_turn_commitment_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn text(value: &str) -> Content {
+        Content::Text {
+            text: value.to_owned(),
+            provider_metadata: Default::default(),
+        }
+    }
+
+    fn client_tool_call(id: &str, name: &str, arguments: &str) -> Content {
+        Content::ToolCall {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            arguments: arguments.to_owned(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn commitment_is_shared_by_nonstream_history_and_fragmented_streams() {
+        let content = vec![text("parent response")];
+        let expected = assistant_turn_commitment(&content);
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        streamed.observe(&StreamPart::TextStart {
+            id: "item-1".into(),
+        });
+        streamed.observe(&StreamPart::TextDelta {
+            text: "parent ".into(),
+        });
+        streamed.observe(&StreamPart::TextDelta {
+            text: "response".into(),
+        });
+        streamed.observe(&StreamPart::TextEnd {
+            id: "item-1".into(),
+        });
+
+        assert!(expected.is_some());
+        assert_eq!(streamed.finish(), expected);
+    }
+
+    #[test]
+    fn commitment_ignores_provider_metadata_but_rejects_empty_semantics() {
+        let baseline = vec![text("visible")];
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "openai".to_owned(),
+            serde_json::json!({"itemId": "provider-private"}),
+        );
+        let decorated = vec![Content::Text {
+            text: "visible".to_owned(),
+            provider_metadata: metadata,
+        }];
+
+        assert_eq!(
+            assistant_turn_commitment(&baseline),
+            assistant_turn_commitment(&decorated)
+        );
+        assert_eq!(assistant_turn_commitment(&[]), None);
+        assert_eq!(assistant_turn_commitment(&[text("")]), None);
+    }
+
+    #[test]
+    fn unsupported_content_fails_closed_in_nonstream_and_streaming_paths() {
+        let unsupported = Content::Source {
+            source: Source::Url {
+                id: "source-1".into(),
+                url: "https://example.test/evidence".into(),
+                title: Some("evidence".into()),
+            },
+            provider_metadata: Default::default(),
+        };
+        assert_eq!(
+            assistant_turn_commitment(&[text("answer"), unsupported]),
+            None
+        );
+
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        streamed.observe(&StreamPart::TextDelta {
+            text: "answer".into(),
+        });
+        streamed.observe(&StreamPart::Source {
+            source: Source::Url {
+                id: "source-1".into(),
+                url: "https://example.test/evidence".into(),
+                title: Some("evidence".into()),
+            },
+        });
+        assert_eq!(streamed.finish(), None);
+    }
+
+    #[test]
+    fn terminal_output_is_authoritative_and_rejects_silently_dropped_items() {
+        let supported = serde_json::json!({
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer", "annotations": []}]
+            }]
+        });
+        assert_eq!(
+            terminal_assistant_turn_commitment(&supported),
+            assistant_turn_commitment(&[text("answer")])
+        );
+
+        for unsupported in [
+            serde_json::json!({"output": [{"type": "mcp_call", "id": "mcp-1"}]}),
+            serde_json::json!({"output": [{"type": "mcp_approval_request", "id": "approval-1"}]}),
+            serde_json::json!({"output": [{"type": "web_search_call", "id": "search-1"}]}),
+            serde_json::json!({
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [{"type": "url_citation", "url": "https://example.test"}]
+                    }]
+                }]
+            }),
+        ] {
+            assert_eq!(terminal_assistant_turn_commitment(&unsupported), None);
+        }
+    }
+
+    #[test]
+    fn interleaved_tool_call_fragments_match_complete_content() {
+        let expected = assistant_turn_commitment(&[
+            client_tool_call("call-a", "inspect", r#"{"path":"src/"}"#),
+            client_tool_call("call-b", "search", r#"{"query":"TODO"}"#),
+        ]);
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        for part in [
+            StreamPart::ToolCallDelta {
+                id: "call-a".into(),
+                name: Some("inspect".into()),
+                arguments: "{\"path\":\"".into(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-b".into(),
+                name: Some("search".into()),
+                arguments: "{\"query\":\"".into(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-a".into(),
+                name: None,
+                arguments: "src/\"}".into(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-b".into(),
+                name: None,
+                arguments: "TODO\"}".into(),
+            },
+        ] {
+            streamed.observe(&part);
+        }
+
+        assert!(expected.is_some());
+        assert_eq!(streamed.finish(), expected);
+    }
+
+    #[test]
+    fn duplicate_name_bearing_tool_call_id_fails_closed() {
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        for part in [
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("inspect".into()),
+                arguments: "{".into(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("inspect".into()),
+                arguments: "}".into(),
+            },
+        ] {
+            streamed.observe(&part);
+        }
+
+        assert_eq!(streamed.finish(), None);
+    }
+
+    #[test]
+    fn streaming_tool_call_capacity_is_exactly_sixty_four() {
+        let mut at_limit = StreamingAssistantTurnCommitment::default();
+        for index in 0..64 {
+            at_limit.observe(&StreamPart::ToolCallDelta {
+                id: format!("call-{index}"),
+                name: Some(format!("tool-{index}")),
+                arguments: "{}".into(),
+            });
+        }
+        assert!(at_limit.finish().is_some());
+
+        let mut over_limit = StreamingAssistantTurnCommitment::default();
+        for index in 0..65 {
+            over_limit.observe(&StreamPart::ToolCallDelta {
+                id: format!("call-{index}"),
+                name: Some(format!("tool-{index}")),
+                arguments: "{}".into(),
+            });
+        }
+        assert_eq!(over_limit.finish(), None);
+    }
+
+    #[test]
+    fn large_fragmented_stream_has_a_fixed_size_accumulator() {
+        const FRAGMENT: &str = "0123456789abcdef0123456789abcdef";
+        const REPEATS: usize = 262_144;
+        let full = FRAGMENT.repeat(REPEATS);
+        let expected = assistant_turn_commitment(&[text(&full)]);
+        let mut streamed = StreamingAssistantTurnCommitment::default();
+        streamed.observe(&StreamPart::TextStart { id: "large".into() });
+        for _ in 0..REPEATS {
+            streamed.observe(&StreamPart::TextDelta {
+                text: FRAGMENT.into(),
+            });
+        }
+        streamed.observe(&StreamPart::TextEnd { id: "large".into() });
+
+        assert!(std::mem::size_of::<StreamingAssistantTurnCommitment>() <= 32 * 1024);
+        assert_eq!(streamed.finish(), expected);
+    }
+
+    #[test]
+    fn rolling_causal_prefix_binds_the_complete_visible_history() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &parent_output)
+            .expect("root commitment");
+        let followup = Message::text(Role::User, "follow up");
+        let visible = vec![opening.clone(), parent.clone(), followup.clone()];
+
+        assert_eq!(find_unique_causal_prefix(&visible, &root), Some(2));
+
+        let changed = vec![
+            Message::text(Role::User, "different opening"),
+            parent.clone(),
+            followup.clone(),
+        ];
+        let sliding = vec![parent.clone(), followup.clone()];
+        let repeated = vec![
+            opening,
+            parent.clone(),
+            Message::text(Role::User, "middle"),
+            parent,
+            followup,
+        ];
+        for rejected in [changed, sliding, repeated] {
+            assert_eq!(find_unique_causal_prefix(&rejected, &root), None);
+        }
+    }
+
+    #[test]
+    fn assistant_output_item_fragmentation_keeps_one_causal_turn() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent_content = vec![
+            text("I will inspect it."),
+            client_tool_call("call-1", "inspect", r#"{"path":"src"}"#),
+        ];
+        let delivered = assistant_turn_commitment(&parent_content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &delivered)
+            .expect("root commitment");
+        let visible = vec![
+            opening,
+            Message::text(Role::Assistant, "I will inspect it."),
+            Message {
+                role: Role::Assistant,
+                content: vec![client_tool_call("call-1", "inspect", r#"{"path":"src"}"#)],
+            },
+            Message::text(Role::User, "continue"),
+        ];
+
+        assert_eq!(find_unique_causal_prefix(&visible, &root), Some(3));
+    }
+
+    #[test]
+    fn hidden_suffix_extension_matches_the_full_visible_chain() {
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, std::slice::from_ref(&opening), &parent_output)
+            .expect("root commitment");
+        let followup = Message::text(Role::User, "hidden follow up");
+        let second = Message::text(Role::Assistant, "second response");
+        let second_output = assistant_turn_commitment(&second.content).expect("second commitment");
+
+        let extended =
+            extend_causal_prefix(Some(&root), std::slice::from_ref(&followup), &second_output)
+                .expect("extended commitment");
+        let rebuilt = extend_causal_prefix(None, &[opening, parent, followup], &second_output)
+            .expect("rebuilt commitment");
+
+        assert_eq!(extended, rebuilt);
+    }
+
+    #[test]
+    fn canonical_system_messages_are_bound_into_the_causal_root() {
+        let system = Message::text(Role::System, "system one");
+        let changed_system = Message::text(Role::System, "system two");
+        let opening = Message::text(Role::User, "opening request");
+        let parent = Message::text(Role::Assistant, "parent response");
+        let parent_output = assistant_turn_commitment(&parent.content).expect("parent commitment");
+        let root = extend_causal_prefix(None, &[system.clone(), opening.clone()], &parent_output)
+            .expect("root commitment");
+        let exact = vec![
+            system,
+            opening.clone(),
+            parent.clone(),
+            Message::text(Role::User, "follow up"),
+        ];
+        let changed = vec![
+            changed_system,
+            opening,
+            parent,
+            Message::text(Role::User, "follow up"),
+        ];
+
+        assert_eq!(find_unique_causal_prefix(&exact, &root), Some(3));
+        assert_eq!(find_unique_causal_prefix(&changed, &root), None);
+    }
+
+    #[test]
+    fn terminal_stream_part_debug_redacts_internal_commitment() {
+        let sentinel = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let terminal = StreamPart::ResponseCompleted {
+            id: "resp-debug".into(),
+            source_protocol: ApiProtocol::Responses,
+            status: "completed".into(),
+            usage: None,
+            response_output_commitment: Some(ResponseOutputCommitment::new(sentinel.to_owned())),
+        };
+
+        let rendered = format!("{terminal:?}");
+        assert!(!rendered.contains(sentinel));
+        assert!(rendered.contains("<redacted>"));
+    }
 }
 
 /// Synthesize a stable `tool_call_id` for a [`Content::ToolApprovalRequest`]
@@ -2451,6 +3602,11 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     });
                 }
                 let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
+                let response_output_commitment = response
+                    .and_then(terminal_assistant_turn_commitment)
+                    .map(|commitment| {
+                        ResponseOutputCommitment::new(commitment.as_str().to_owned())
+                    });
                 let id = response
                     .and_then(|r| r.get("id"))
                     .and_then(|i| i.as_str())
@@ -2475,6 +3631,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     source_protocol: ApiProtocol::Responses,
                     status: expected_status.to_string(),
                     usage,
+                    response_output_commitment,
                 });
             }
             "error" | "response.failed" => {

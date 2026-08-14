@@ -1,0 +1,64 @@
+{
+  "id": "predictive-repeated-failure-replan-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "headers": {},
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Make the parser implementation satisfy the acceptance tests."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "test-1",
+            "type": "function",
+            "function": {
+              "name": "bash",
+              "arguments": "{\"cmd\":\"cargo test -p parser\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "test-1",
+        "content": "error: parser acceptance test failed"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "test-2",
+            "type": "function",
+            "function": {
+              "name": "bash",
+              "arguments": "{\"cmd\":\"cargo test -p parser\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "test-2",
+        "content": "Process exited with code 1\nerror: parser acceptance test failed again"
+      }
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "test",
+    "baseline_fingerprint": "after_bash",
+    "confidence_min": 0.7,
+    "prediction": {
+      "next_step_role": "orchestrate",
+      "next_action_class": "reason_or_plan",
+      "route_risk": "guarded"
+    }
+  }
+}

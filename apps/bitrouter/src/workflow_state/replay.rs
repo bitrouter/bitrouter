@@ -5,8 +5,11 @@ use serde::Serialize;
 use crate::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
 use crate::workflow_state::ir::{
-    CapabilityConstraints, EvidenceLevel, HarnessId, RequirementLevel, SessionConfidence,
-    WorkflowStateKind,
+    CapabilityConstraints, EvidenceLevel, HarnessId, RequirementLevel, RouteProjection,
+    SessionConfidence, WorkflowStateKind,
+};
+use crate::workflow_state::predictive::{
+    NextActionClass, PredictiveRouteProjection, is_predictive_reason_code, predict_next_step,
 };
 
 #[derive(Debug, Default)]
@@ -25,7 +28,25 @@ pub struct ReplaySummary {
     pub session_confidence_distribution: BTreeMap<String, usize>,
     pub baseline_midstream_count: usize,
     pub ir_unknown_count: usize,
+    pub predictive_expectation_count: usize,
+    pub predictive_exact_count: usize,
+    pub records: Vec<ReplayRecord>,
     pub model_ladder: ModelLadderConstraintSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayRecord {
+    pub fixture_id: String,
+    pub observed_projection: RouteProjection,
+    pub observed_route_key: String,
+    pub predictive_projection: PredictiveRouteProjection,
+    pub predictive_route_key: String,
+    pub next_action_class: NextActionClass,
+    pub predictor_contract_digest: String,
+    pub prediction_confidence_kind: String,
+    pub prediction_confidence_ppm: u32,
+    pub prediction_reason_codes: Vec<String>,
+    pub prediction_matches_expected: Option<bool>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -64,10 +85,11 @@ impl ReplayEvaluator {
                 summary.covered += 1;
             }
 
-            let key = ir.route_projection().key();
-            ir_buckets.insert(key.clone());
+            let observed_projection = ir.route_projection();
+            let observed_route_key = observed_projection.key();
+            ir_buckets.insert(observed_route_key.clone());
             labels_by_projection_key
-                .entry(key)
+                .entry(observed_route_key.clone())
                 .or_default()
                 .insert(fixture.expected.state_kind.to_string());
 
@@ -89,6 +111,43 @@ impl ReplayEvaluator {
                 .or_insert(0) += 1;
 
             summary.model_ladder.observe(&ir.capability_constraints);
+
+            let prediction = predict_next_step(&ir, &fixture.prompt);
+            let predictive_projection =
+                PredictiveRouteProjection::new(prediction.next_step_role, prediction.route_risk);
+            let predictive_route_key = predictive_projection.key();
+            let prediction_reason_codes = prediction
+                .evidence
+                .iter()
+                .map(|evidence| evidence.code.as_str())
+                .filter(|code| is_predictive_reason_code(code))
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let prediction_matches_expected =
+                fixture.expected.prediction.as_ref().map(|expected| {
+                    expected.next_step_role == prediction.next_step_role
+                        && expected.next_action_class == prediction.next_action_class
+                        && expected.route_risk == prediction.route_risk
+                });
+            if let Some(matches) = prediction_matches_expected {
+                summary.predictive_expectation_count += 1;
+                summary.predictive_exact_count += usize::from(matches);
+            }
+            summary.records.push(ReplayRecord {
+                fixture_id: fixture.id.clone(),
+                observed_projection,
+                observed_route_key,
+                predictive_projection,
+                predictive_route_key,
+                next_action_class: prediction.next_action_class,
+                predictor_contract_digest: prediction.predictor_contract_digest,
+                prediction_confidence_kind: prediction.confidence_kind,
+                prediction_confidence_ppm: confidence_ppm(prediction.confidence),
+                prediction_reason_codes,
+                prediction_matches_expected,
+            });
         }
 
         summary.coverage = if summary.total == 0 {
@@ -103,6 +162,16 @@ impl ReplayEvaluator {
             .filter(|labels| labels.len() > 1)
             .count();
         summary
+    }
+}
+
+fn confidence_ppm(confidence: f32) -> u32 {
+    if !confidence.is_finite() || confidence <= 0.0 {
+        0
+    } else if confidence >= 1.0 {
+        1_000_000
+    } else {
+        (confidence * 1_000_000.0).round() as u32
     }
 }
 

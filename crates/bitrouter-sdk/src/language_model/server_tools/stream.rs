@@ -104,6 +104,7 @@ impl ServerToolLoop {
                             source_protocol,
                             status,
                             usage,
+                            response_output_commitment,
                         } => {
                             // The Responses decoder carries usage only here (never
                             // a standalone `Usage` part), so it must be folded in
@@ -115,7 +116,8 @@ impl ServerToolLoop {
                             if finish.is_none() {
                                 finish = Some(FinishReason::Stop);
                             }
-                            response_completion = Some((id, source_protocol, status));
+                            response_completion =
+                                Some((id, source_protocol, status, response_output_commitment));
                         }
                         StreamPart::ToolCallDelta {
                             id,
@@ -173,7 +175,9 @@ impl ServerToolLoop {
                     if had_usage {
                         yield Ok(StreamPart::Usage { usage: total });
                     }
-                    if let Some((id, source_protocol, status)) = response_completion {
+                    if let Some((id, source_protocol, status, response_output_commitment)) =
+                        response_completion
+                    {
                         // Preserve typed proof that this exposed terminal came
                         // from the final provider Responses completion. Usage
                         // remains on the consolidated `Usage` part above so
@@ -183,6 +187,7 @@ impl ServerToolLoop {
                             source_protocol,
                             status,
                             usage: None,
+                            response_output_commitment,
                         });
                     } else {
                         yield Ok(StreamPart::Finish {
@@ -586,6 +591,7 @@ mod tests {
                     completion_tokens: 3,
                     ..Default::default()
                 }),
+                response_output_commitment: None,
             },
         ]];
         let upstream = Arc::new(ScriptedStream {

@@ -4164,6 +4164,11 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
             "response": {
                 "id": "resp_xyz",
                 "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer", "annotations": []}]
+                }],
                 "usage": { "input_tokens": 12, "output_tokens": 8 }
             }
         })
@@ -4177,15 +4182,47 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     parts.extend(decoder.finish().unwrap());
     match parts.first() {
         Some(StreamPart::ResponseCompleted {
-            id, status, usage, ..
+            id,
+            status,
+            usage,
+            response_output_commitment,
+            ..
         }) => {
             assert_eq!(id, "resp_xyz");
             assert_eq!(status, "completed");
             assert_eq!(usage.as_ref().unwrap().prompt_tokens, 12);
             assert_eq!(usage.as_ref().unwrap().completion_tokens, 8);
+            assert!(response_output_commitment.is_some());
         }
         other => panic!("expected ResponseCompleted, got {other:?}"),
     }
+
+    let mut unsupported_decoder = adapter.stream_decoder();
+    let unsupported_terminal = SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_unsupported",
+                "status": "completed",
+                "output": [{"type": "mcp_call", "id": "mcp-1"}]
+            }
+        })
+        .to_string(),
+    };
+    assert!(
+        unsupported_decoder
+            .decode(&unsupported_terminal)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        unsupported_decoder.finish().unwrap().as_slice(),
+        [StreamPart::ResponseCompleted {
+            response_output_commitment: None,
+            ..
+        }]
+    ));
 
     // Re-encode a native lifecycle whose provider id differs from the gateway
     // id. Every public frame must retain the gateway identity.
@@ -4215,6 +4252,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
                     reasoning_tokens: 0,
                     ..Default::default()
                 }),
+                response_output_commitment: None,
             })
             .unwrap(),
     );
@@ -4258,6 +4296,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
                     source_protocol: ApiProtocol::Responses,
                     status: status.to_string(),
                     usage: None,
+                    response_output_commitment: None,
                 })
                 .unwrap(),
         );
@@ -4386,6 +4425,7 @@ fn responses_stream_uses_gateway_id_without_native_start() {
             source_protocol: ApiProtocol::Responses,
             status: "completed".to_string(),
             usage: None,
+            response_output_commitment: None,
         })
         .unwrap();
     let response_ids = frames

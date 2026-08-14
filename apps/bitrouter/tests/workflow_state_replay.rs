@@ -18,10 +18,13 @@ use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
-use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
+use bitrouter::workflow_state::decision::{
+    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
+};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::online::OnlineWorkflowState;
+use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
@@ -126,13 +129,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "agent_trace/v2|opening|normal",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|normal",
+            "agent_route/v1|unknown|normal",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|guarded",
+            "agent_route/v1|implement|normal",
+            "agent_route/v1|implement|normal",
+            "agent_route/v1|implement|normal",
         ]
     );
     Ok(())
@@ -393,6 +396,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
     PolicyDecisionRecord {
         captured_at: None,
         request_id: Some(request_id.to_string()),
+        ingress_request_id_sha256: None,
         input_model: "inbound".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|opening|normal".to_string(),
@@ -408,6 +412,16 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         static_model: Some("vendor/strong".to_string()),
         selected_tier: Some("strong".to_string()),
         selected_model: Some("vendor/strong".to_string()),
+        continuation_proposed_tier: None,
+        continuation_proposed_model: None,
+        continuation_adjustment: None,
+        predicted_role: None,
+        predicted_action: None,
+        prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
+        prediction_reason_codes: Vec::new(),
+        observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
         trajectory_completeness: None,
@@ -904,6 +918,69 @@ fn benchmark_bundle_accepts_equivalent_native_and_generic_request_id_joins() {
 }
 
 #[test]
+fn benchmark_bundle_joins_opaque_decisions_by_ingress_request_commitment() {
+    let trace = benchmark_trace("br-bench-request-1");
+    let usage = computed_usage("br-bench-request-1", "openai", "gpt-test", 10, 2, 30);
+    let mut decision = benchmark_decision("trajectory-request-opaque");
+    decision.ingress_request_id_sha256 = Some(ingress_request_id_sha256("br-bench-request-1"));
+
+    WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[trace],
+        &[usage],
+        &[decision],
+    )
+    .expect("an opaque policy identity must join through its ingress commitment");
+}
+
+#[test]
+fn benchmark_bundle_rejects_mixed_or_duplicate_ingress_commitments() {
+    let traces = vec![benchmark_trace("req-1"), benchmark_trace("req-2")];
+    let usage = vec![
+        computed_usage("req-1", "openai", "gpt-test", 10, 2, 30),
+        computed_usage("req-2", "openai", "gpt-test", 10, 2, 30),
+    ];
+    let mut committed = benchmark_decision("trajectory-request-1");
+    committed.ingress_request_id_sha256 = Some(ingress_request_id_sha256("req-1"));
+    let legacy = benchmark_decision("req-2");
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &traces,
+        &usage,
+        &[committed.clone(), legacy],
+    )
+    .expect_err("mixed committed and legacy decision identities must fail closed");
+    assert!(error.to_string().contains("mix"), "{error}");
+
+    let mut duplicate = benchmark_decision("trajectory-request-2");
+    duplicate.ingress_request_id_sha256 = committed.ingress_request_id_sha256.clone();
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &traces,
+        &usage,
+        &[committed, duplicate],
+    )
+    .expect_err("duplicate ingress commitments must fail closed");
+    assert!(error.to_string().contains("duplicate"), "{error}");
+}
+
+#[test]
+fn reward_feedback_joins_opaque_decisions_by_ingress_request_commitment() {
+    let trace = benchmark_trace("br-bench-reward-1");
+    let usage = computed_usage("br-bench-reward-1", "openai", "gpt-test", 10, 2, 30);
+    let mut decision = benchmark_decision("trajectory-request-reward-opaque");
+    decision.ingress_request_id_sha256 = Some(ingress_request_id_sha256("br-bench-reward-1"));
+    let outcome = BenchmarkOutcomeRecord::new("episode-a", "terminal-bench/regex-log", 1.0)
+        .with_request_id("br-bench-reward-1");
+
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[trace],
+        &[usage],
+        &[outcome],
+        &[decision],
+    )
+    .expect("reward feedback must use the same opaque ingress commitment join");
+}
+
+#[test]
 fn benchmark_bundle_rejects_mismatched_or_duplicate_decision_request_ids() {
     let trace = benchmark_trace("req-1");
     let usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
@@ -940,6 +1017,147 @@ fn replay_reports_coverage() {
     let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.total >= 6);
     assert!(summary.coverage >= 0.80, "{summary:#?}");
+}
+
+#[test]
+fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
+    let fixtures = WorkflowTraceFixture::load_dir(fixture_root().join("predictive")).unwrap();
+
+    let summary = ReplayEvaluator.run(&fixtures);
+
+    assert_eq!(summary.predictive_expectation_count, 5);
+    assert_eq!(summary.predictive_exact_count, 5);
+    assert_eq!(summary.records.len(), 5);
+    let records = summary
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.fixture_id.as_str(),
+                record.observed_route_key.clone(),
+                record.predictive_route_key.clone(),
+                record.next_action_class,
+                record.prediction_matches_expected,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        vec![
+            (
+                "predictive-near-done-finalize-001",
+                "agent_trace/v2|test|normal".to_string(),
+                "agent_route/v1|finalize|normal".to_string(),
+                NextActionClass::AnswerOrSummarize,
+                Some(true),
+            ),
+            (
+                "predictive-opening-plan-001",
+                "agent_trace/v2|opening|normal".to_string(),
+                "agent_route/v1|orchestrate|normal".to_string(),
+                NextActionClass::ReasonOrPlan,
+                Some(true),
+            ),
+            (
+                "predictive-post-edit-verify-001",
+                "agent_trace/v2|edit|normal".to_string(),
+                "agent_route/v1|verify|normal".to_string(),
+                NextActionClass::ExecuteOrTest,
+                Some(true),
+            ),
+            (
+                "predictive-post-read-implement-001",
+                "agent_trace/v2|tool_followup|normal".to_string(),
+                "agent_route/v1|implement|normal".to_string(),
+                NextActionClass::Mutate,
+                Some(true),
+            ),
+            (
+                "predictive-repeated-failure-replan-001",
+                "agent_trace/v2|test|guarded".to_string(),
+                "agent_route/v1|orchestrate|guarded".to_string(),
+                NextActionClass::ReasonOrPlan,
+                Some(true),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
+    let fixture = WorkflowTraceFixture::from_value(json!({
+        "id": "legacy-opening",
+        "harness": "generic",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{"role": "user", "content": "inspect this repository"}]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0
+        }
+    }))
+    .unwrap();
+
+    assert!(fixture.expected.prediction.is_none());
+    let summary = ReplayEvaluator.run(&[fixture]);
+    assert_eq!(summary.predictive_expectation_count, 0);
+    assert_eq!(summary.predictive_exact_count, 0);
+    assert_eq!(summary.records.len(), 1);
+    assert_eq!(
+        summary.records[0].observed_route_key.as_str(),
+        "agent_trace/v2|opening|normal"
+    );
+    assert_eq!(
+        summary.records[0].predictive_projection.next_step_role,
+        NextStepRole::Orchestrate
+    );
+    assert_eq!(
+        summary.records[0].predictive_route_key.as_str(),
+        "agent_route/v1|orchestrate|normal"
+    );
+    assert_eq!(summary.records[0].prediction_matches_expected, None);
+}
+
+#[test]
+fn new_fixture_prediction_is_compared_exactly() {
+    let fixture = WorkflowTraceFixture::from_value(json!({
+        "id": "new-mismatched-opening",
+        "harness": "generic",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{
+                "role": "user",
+                "content": "Investigate the repository architecture."
+            }]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0,
+            "prediction": {
+                "next_step_role": "implement",
+                "next_action_class": "mutate",
+                "route_risk": "normal"
+            }
+        }
+    }))
+    .unwrap();
+
+    let summary = ReplayEvaluator.run(&[fixture]);
+
+    assert_eq!(summary.predictive_expectation_count, 1);
+    assert_eq!(summary.predictive_exact_count, 0);
+    assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
+    assert_eq!(
+        summary.records[0].predictive_route_key,
+        "agent_route/v1|orchestrate|normal"
+    );
 }
 
 #[test]
@@ -1049,19 +1267,19 @@ fn replay_summary_matches_current_experiment_fixture_set() {
         );
     }
     let summary = ReplayEvaluator.run(&fixtures);
-    assert_eq!(summary.total, 10, "{summary:#?}");
-    assert_eq!(summary.covered, 10, "{summary:#?}");
+    assert_eq!(summary.total, 15, "{summary:#?}");
+    assert_eq!(summary.covered, 15, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
     assert_eq!(summary.baseline_bucket_count, 5, "{summary:#?}");
-    assert_eq!(summary.ir_bucket_count, 5, "{summary:#?}");
+    assert_eq!(summary.ir_bucket_count, 6, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
     assert_eq!(summary.ir_unknown_count, 0, "{summary:#?}");
-    assert_eq!(summary.model_ladder.flagship, 10, "{summary:#?}");
-    assert_eq!(summary.model_ladder.standard, 10, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_tool_safe, 10, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_fast, 6, "{summary:#?}");
+    assert_eq!(summary.model_ladder.flagship, 15, "{summary:#?}");
+    assert_eq!(summary.model_ladder.standard, 14, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_tool_safe, 15, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_fast, 7, "{summary:#?}");
 }
 
 #[test]
@@ -1931,6 +2149,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -1946,6 +2165,16 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        continuation_proposed_tier: None,
+        continuation_proposed_model: None,
+        continuation_adjustment: None,
+        predicted_role: None,
+        predicted_action: None,
+        prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
+        prediction_reason_codes: Vec::new(),
+        observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
         trajectory_completeness: None,
@@ -2211,6 +2440,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -2226,6 +2456,16 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        continuation_proposed_tier: None,
+        continuation_proposed_model: None,
+        continuation_adjustment: None,
+        predicted_role: None,
+        predicted_action: None,
+        prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
+        prediction_reason_codes: Vec::new(),
+        observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
         trajectory_completeness: None,
@@ -2326,6 +2566,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-success-001".to_string()),
+        ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -2343,6 +2584,16 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        continuation_proposed_tier: None,
+        continuation_proposed_model: None,
+        continuation_adjustment: None,
+        predicted_role: None,
+        predicted_action: None,
+        prediction_confidence_ppm: None,
+        predictor_contract_digest: None,
+        prediction_confidence_kind: None,
+        prediction_reason_codes: Vec::new(),
+        observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
         trajectory_completeness: None,
