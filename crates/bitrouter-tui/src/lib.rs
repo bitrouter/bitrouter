@@ -36,6 +36,7 @@ pub mod journal;
 pub mod log_tail;
 pub mod permission;
 pub mod picker;
+pub mod render;
 pub mod transcript;
 pub mod viewport;
 pub mod wrap;

@@ -169,7 +169,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui journal 2>&1 | tail -15`
   - Commit: `feat(tui): retained, id-addressed journal`
 
-- [ ] **2.3 `ToolKey`, `ToolRenderer`, and the registry**
+- [x] **2.3 `ToolKey`, `ToolRenderer`, and the registry**
   - Depends on: 2.2
   - Files: `crates/bitrouter-tui/src/render/mod.rs`
   - Do: spec §7 — the trait, `ToolContext`, the `ToolKey` mirror with
