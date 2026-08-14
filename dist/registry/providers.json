@@ -3821,13 +3821,14 @@
         {
           "api_protocol": [
             "openai",
+            "responses",
             "anthropic"
           ],
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "id": "deepseek/deepseek-v4-pro",
+          "id": "deepseek/deepseek-v4-pro-0813",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.003625,
@@ -4319,6 +4320,30 @@
               "medium",
               "high"
             ]
+          }
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "google/gemini-3.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "gemini-3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
@@ -9488,6 +9513,30 @@
         "terms_of_service_url": "https://x.ai/legal/terms-of-service"
       },
       "models": [
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "x-ai/grok-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "grok-4.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": [
             "responses",
