@@ -108,6 +108,14 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+      - name: add swap for the lib test harness
+        if: matrix.target == 'lib'
+        run: |
+          sudo fallocate --length 8G /swapfile-bitrouter
+          sudo chmod 600 /swapfile-bitrouter
+          sudo mkswap /swapfile-bitrouter
+          sudo swapon /swapfile-bitrouter
+          free -h
       - name: install lld for the lib test harness
         if: matrix.target == 'lib'
         run: |
