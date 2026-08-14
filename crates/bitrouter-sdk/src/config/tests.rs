@@ -751,14 +751,25 @@ fn auto_router_template_resolves_auto_and_cost_variant() {
     let yaml = std::fs::read_to_string(path).unwrap();
     let config = parse(&yaml).unwrap();
 
-    let auto = resolve_presets("@auto", &config.presets, &config.variants).unwrap();
+    // The documented public slug, resolved against the template as shipped.
+    let auto = resolve_presets("bitrouter/auto", &config.presets, &config.variants).unwrap();
     assert_eq!(auto.clean_model, "openai-codex:gpt-5.6-sol");
     assert_eq!(auto.policy.as_deref(), Some("auto"));
 
-    let cost = resolve_presets("@auto:cost", &config.presets, &config.variants).unwrap();
+    let cost = resolve_presets("bitrouter/auto:cost", &config.presets, &config.variants).unwrap();
     assert_eq!(cost.clean_model, "openai-codex:gpt-5.6-sol");
     assert_eq!(cost.policy.as_deref(), Some("auto"));
     assert_eq!(cost.prefs.sort, SortOrder::Cost);
+
+    // The generic preset form keeps addressing the same policy, so configs
+    // written before the slug existed are unaffected.
+    let legacy = resolve_presets("@auto", &config.presets, &config.variants).unwrap();
+    assert_eq!(legacy.clean_model, auto.clean_model);
+    assert_eq!(legacy.policy, auto.policy);
+
+    let legacy_cost = resolve_presets("@auto:cost", &config.presets, &config.variants).unwrap();
+    assert_eq!(legacy_cost.policy, cost.policy);
+    assert_eq!(legacy_cost.prefs.sort, SortOrder::Cost);
 
     let physical = resolve_presets(
         "openai-codex:gpt-5.6-sol",

@@ -1048,10 +1048,17 @@ impl PromptTransform for PolicyTableRouter {
 }
 
 /// Whether `model` already names an explicit upstream route or preset. A
-/// `provider:model` id triggers Strategy 1; `@preset` must survive until Stage
-/// 0 can resolve its prompt defaults, provider preferences, and named policy.
+/// `provider:model` id triggers Strategy 1; `@preset` and its public
+/// `bitrouter/<slug>` spelling must both survive until Stage 0 can resolve
+/// their prompt defaults, provider preferences, and named policy. The reserved
+/// namespace carries neither an `@` nor a colon, so it needs naming here — a
+/// `bitrouter/auto` request left to this table would be fingerprinted and
+/// rewritten by the legacy inline policy table instead of reaching the signed
+/// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@') || model.contains(':')
+    model.starts_with('@')
+        || model.contains(':')
+        || bitrouter_sdk::config::presets::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -1255,6 +1262,21 @@ mod tests {
 
     fn user(text: &str) -> Message {
         Message::text(Role::User, text)
+    }
+
+    /// The reserved namespace is an addressing form the signed policy owns, so
+    /// the legacy inline table must leave it alone exactly as it leaves `@auto`
+    /// alone. `bitrouter/auto` carries neither an `@` nor a colon, so this is
+    /// the one classification that does not fall out of the old shape checks.
+    #[test]
+    fn reserved_namespace_counts_as_an_explicit_route() {
+        assert!(is_explicitly_routed("bitrouter/auto"));
+        assert!(is_explicitly_routed("bitrouter/auto:cost"));
+        assert!(is_explicitly_routed("@auto"));
+        assert!(is_explicitly_routed("openai:gpt-5.5"));
+        // A vendor-qualified catalog model is still an ordinary bare model the
+        // table may route.
+        assert!(!is_explicitly_routed("anthropic/claude-opus-5"));
     }
 
     /// An assistant message whose only content is a call to `tool`.

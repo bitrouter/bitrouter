@@ -104,7 +104,7 @@ pub fn ensure_workflow_optimization_compatible(
         .collect::<Vec<_>>();
     if !guarded.is_empty() {
         anyhow::bail!(
-            "workflow optimization cannot preserve the active progress guard for policies [{}] in its exact two-tier experiment; use an unguarded @auto policy for this optimization lineage",
+            "workflow optimization cannot preserve the active progress guard for policies [{}] in its exact two-tier experiment; use an unguarded bitrouter/auto policy for this optimization lineage",
             guarded.join(", ")
         );
     }

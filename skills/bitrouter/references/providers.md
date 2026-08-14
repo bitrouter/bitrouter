@@ -316,6 +316,11 @@ server_tools:
 
 Setting `fusion:` also enables the `bitrouter/fusion` model alias, which expands a request to the configured panel + judge. The judge *compares* the panel's answers (consensus / contradictions / partial coverage / unique insights / blind spots); the calling model writes the final answer from that analysis.
 
+A custom Fusion `alias` may use an ordinary model name, but it cannot start
+with `@` or `bitrouter:` and cannot claim the reserved `bitrouter/` namespace.
+Use the default `bitrouter/fusion` spelling when the alias should live in that
+namespace; conflicting aliases are rejected at startup.
+
 ### Built-in web search (BYOK)
 
 The `web_search` server tool gives *any* model routed through BitRouter a web search, served by a search backend you bring keys for. Advertised only when the caller declares `{"type":"bitrouter:web_search"}` (optionally with `backend` / `max_results` overrides). The model calls `web_search` with a `query`; BitRouter runs it and returns `{backend, answer?, results:[{url,title?,snippet?,content?,published?,score?}]}` — `answer` is present only for the answer-engine `native` backend.

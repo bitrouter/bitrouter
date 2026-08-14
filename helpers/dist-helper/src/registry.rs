@@ -1050,6 +1050,7 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
                     model.id
                 ));
             }
+            reject_reserved_namespace(&model.id, "registry/models", &mut issues);
             if let Some((org, _)) = model.id.split_once('/')
                 && Some(org) != stem
             {
@@ -1078,6 +1079,27 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
     }
     advisories.sort();
     Ok(advisories)
+}
+
+/// BitRouter's own model namespace — the `bitrouter/` in `bitrouter/auto`.
+///
+/// Stage-0 resolution claims this whole prefix and resolves it locally, so a
+/// catalog entry underneath it could never be reached by a request: the router
+/// answers first. Keeping the namespace empty here is the other half of that
+/// bargain, and it keeps the reserved slugs meaning one thing whether a caller
+/// is talking to a local daemon or to BitRouter Cloud.
+const RESERVED_MODEL_NAMESPACE: &str = "bitrouter/";
+
+/// Reject a model id that lands in the reserved namespace. Applied to both the
+/// curated catalog and provider-declared models, because a provider may serve
+/// ids beyond the catalog and those are otherwise only advisory.
+fn reject_reserved_namespace(model_id: &str, context: &str, issues: &mut Vec<String>) {
+    if model_id.starts_with(RESERVED_MODEL_NAMESPACE) {
+        issues.push(format!(
+            "{context}: model '{model_id}' uses the reserved '{RESERVED_MODEL_NAMESPACE}' \
+             namespace, which BitRouter resolves locally and no provider may declare"
+        ));
+    }
 }
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
@@ -1246,6 +1268,10 @@ fn validate_provider<'a>(
                 model.id, model.provider_model_id
             ));
         }
+        // A provider may serve ids beyond the catalog, so the reserved
+        // namespace has to be rejected here too — the advisory above would
+        // otherwise let one through without failing validation.
+        reject_reserved_namespace(&model.id, &file, issues);
         if let Some(protocols) = &model.api_protocol {
             validate_protocol_list(protocols, &file, "models.api_protocol", issues);
         }
@@ -2500,6 +2526,28 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn canonical_model_cannot_use_the_reserved_bitrouter_namespace() {
+        let root = test_root("reserved-canonical-model");
+        write(
+            &root,
+            "registry/models/bitrouter.yaml",
+            r#"
+- id: bitrouter/physical-model
+  name: "BitRouter: Physical Model"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("reserved catalog model must fail");
+        assert!(
+            err.to_string().contains("reserved 'bitrouter/' namespace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn build_artifacts_emits_required_config_and_omits_unset_api_base() {
         let root = test_root("required-config");
         write(
@@ -3172,6 +3220,58 @@ api_base: https://api.acme.test/v1
         assert!(
             advisories.iter().any(|a| a.contains("acme/byok-extra")),
             "expected an advisory for acme/byok-extra, got: {advisories:?}"
+        );
+    }
+
+    #[test]
+    fn provider_declared_model_cannot_use_the_reserved_bitrouter_namespace() {
+        let root = test_root("reserved-provider-model");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  - id: bitrouter/provider-only
+    provider_model_id: provider-only
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("reserved provider model must fail");
+        assert!(
+            err.to_string().contains("reserved 'bitrouter/' namespace"),
+            "unexpected error: {err}"
         );
     }
 
