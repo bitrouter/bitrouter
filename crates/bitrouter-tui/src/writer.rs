@@ -70,6 +70,9 @@ use ratatui::text::Line;
 use ratatui::widgets::Widget as _;
 use unicode_width::UnicodeWidthStr as _;
 
+use crate::journal::{Entry, EntryId, Journal};
+use crate::render;
+use crate::render::{Registry, ToolContext};
 use crate::wrap::wrap;
 
 /// Synchronized output — DEC private mode 2026 — around a frame, so a terminal
@@ -364,6 +367,149 @@ fn changed_range(prev: &[Line<'static>], next: &[Line<'static>]) -> Option<(usiz
     Some((first, last))
 }
 
+/// Why a frame is being considered.
+///
+/// The distinction is latency the user can feel against noise they cannot.
+/// Streamed chunks arrive per token; painting each one would repaint hundreds
+/// of times a second to no visible benefit. A keystroke or a permission
+/// question is the opposite: any delay there is the interface feeling slow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    /// The journal changed — a chunk, a tool call, a usage figure.
+    Update,
+    /// The periodic wake-up.
+    Tick,
+    /// A permission question appeared or was answered.
+    Permission,
+    /// The turn ended.
+    TurnSettled,
+    /// The user pressed a key.
+    Key,
+    /// The terminal changed size.
+    Resize,
+}
+
+/// Decides when a frame is worth painting.
+///
+/// Holds no clock of its own: the caller passes the time in, which is what
+/// makes the policy testable without sleeping through it.
+#[derive(Debug, Default)]
+pub struct Schedule {
+    dirty: bool,
+    painted: Option<std::time::Instant>,
+}
+
+impl Schedule {
+    /// The floor between two streaming frames.
+    ///
+    /// An agent transcript has no animation, so 30 ms is chosen to halve the
+    /// wake-ups of a 16 ms frame budget rather than to hit one. It is a floor,
+    /// not a cadence: nothing is painted at all unless something changed.
+    pub const INTERVAL: std::time::Duration = std::time::Duration::from_millis(30);
+
+    /// Note that `trigger` happened at `now`, and answer whether to paint.
+    ///
+    /// An immediate trigger paints and **clears the dirty flag**, which is the
+    /// preemption rule: the tick that was going to paint the same content
+    /// finds nothing to do, so at most one frame is ever in flight.
+    pub fn wake(&mut self, trigger: Trigger, now: std::time::Instant) -> bool {
+        match trigger {
+            Trigger::Update => {
+                self.dirty = true;
+                false
+            }
+            Trigger::Tick => {
+                let due = self
+                    .painted
+                    .is_none_or(|painted| now.duration_since(painted) >= Self::INTERVAL);
+                if self.dirty && due {
+                    self.paint(now);
+                    true
+                } else {
+                    false
+                }
+            }
+            Trigger::Permission | Trigger::TurnSettled | Trigger::Key | Trigger::Resize => {
+                self.paint(now);
+                true
+            }
+        }
+    }
+
+    fn paint(&mut self, now: std::time::Instant) {
+        self.dirty = false;
+        self.painted = Some(now);
+    }
+}
+
+/// Rendered rows per entity, so a frame re-renders only what changed.
+///
+/// Without this, §4.1's first step is a full re-derivation of the document on
+/// every frame — every diff hunked again, every tool's output re-capped — up
+/// to thirty times a second. The key is `(width, revision)`: rendering depends
+/// on the width, and the revision is how the journal says an entity moved on.
+#[derive(Debug, Default)]
+pub struct Cache {
+    rows: std::collections::HashMap<EntryId, Cached>,
+}
+
+#[derive(Debug)]
+struct Cached {
+    width: u16,
+    revision: u64,
+    rows: Vec<Line<'static>>,
+}
+
+impl Cache {
+    /// The whole document: every entry, then the caller's footer.
+    ///
+    /// The footer is never cached. It is composed by the caller out of things
+    /// this crate cannot see — cost, route, the open permission — and it
+    /// changes on almost every frame that changes at all.
+    pub fn document(
+        &mut self,
+        journal: &Journal,
+        registry: &Registry,
+        size: Size,
+        footer: &[Line<'static>],
+    ) -> Vec<Line<'static>> {
+        let mut document: Vec<Line<'static>> = Vec::new();
+        let mut live: std::collections::HashSet<EntryId> = std::collections::HashSet::new();
+
+        for item in journal.entries() {
+            let fresh = self.rows.get(&item.id).is_some_and(|cached| {
+                cached.width == size.width && cached.revision == item.revision
+            });
+            if !fresh {
+                let rows = match item.entry {
+                    Entry::Message(message) => render::message(message),
+                    Entry::Tool(call) => {
+                        registry.render(&ToolContext::new(call, size.width, size.height))
+                    }
+                };
+                self.rows.insert(
+                    item.id.clone(),
+                    Cached {
+                        width: size.width,
+                        revision: item.revision,
+                        rows,
+                    },
+                );
+            }
+            if let Some(cached) = self.rows.get(&item.id) {
+                document.extend(cached.rows.iter().cloned());
+            }
+            live.insert(item.id);
+        }
+
+        // An entry the journal no longer has cannot come back — ids are
+        // first-seen and never reissued — so its rows are dead weight.
+        self.rows.retain(|id, _| live.contains(id));
+        document.extend(footer.iter().cloned());
+        document
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
@@ -649,6 +795,210 @@ mod tests {
             );
         }
         assert_eq!(painted[1], "after", "the next row is still its own");
+        Ok(())
+    }
+
+    // ── scheduling and the cache ───────────────────────────────────────────
+
+    use std::time::{Duration, Instant};
+
+    use agent_client_protocol_schema::v1::{
+        ContentBlock, ContentChunk, SessionUpdate, TextContent, ToolCall, ToolCallId, ToolKind,
+    };
+
+    use crate::journal::Journal;
+
+    fn chunk(text: &str) -> SessionUpdate {
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            text.to_string(),
+        ))))
+    }
+
+    /// The done-when: N streamed chunks coalesce into **one** frame.
+    ///
+    /// Painting per chunk is painting per token — hundreds of frames a second
+    /// for text that is unreadable until it stops moving.
+    #[test]
+    fn many_chunks_coalesce_into_one_frame() -> io::Result<()> {
+        let start = Instant::now();
+        let mut journal = Journal::default();
+        let mut schedule = Schedule::default();
+        let mut painted = 0_usize;
+
+        for n in 0..50 {
+            journal.apply(chunk(&format!("token{n} ")));
+            if schedule.wake(Trigger::Update, start) {
+                painted += 1;
+            }
+        }
+        assert_eq!(painted, 0, "a chunk never paints on its own");
+
+        assert!(
+            schedule.wake(Trigger::Tick, start + Schedule::INTERVAL),
+            "the tick after them paints once"
+        );
+        assert!(
+            !schedule.wake(Trigger::Tick, start + Schedule::INTERVAL * 2),
+            "and the next tick has nothing to do"
+        );
+        Ok(())
+    }
+
+    /// A tick inside the interval waits, so the floor is a floor.
+    #[test]
+    fn a_tick_before_the_interval_does_not_paint() {
+        let start = Instant::now();
+        let mut schedule = Schedule::default();
+        schedule.wake(Trigger::Update, start);
+        assert!(
+            schedule.wake(Trigger::Tick, start),
+            "the first frame is due as soon as there is one to paint"
+        );
+        schedule.wake(Trigger::Update, start);
+        assert!(
+            !schedule.wake(Trigger::Tick, start + Duration::from_millis(5)),
+            "5 ms after a frame is too soon"
+        );
+        assert!(schedule.wake(Trigger::Tick, start + Schedule::INTERVAL));
+    }
+
+    /// The other done-when: a permission renders immediately, and preempts —
+    /// the tick that was going to paint the same content finds nothing to do,
+    /// so at most one frame is ever in flight.
+    #[test]
+    fn a_permission_paints_immediately_and_preempts_the_tick() {
+        let start = Instant::now();
+        let mut schedule = Schedule::default();
+        schedule.wake(Trigger::Update, start);
+
+        assert!(
+            schedule.wake(Trigger::Permission, start),
+            "a question waiting on a person does not wait on a tick"
+        );
+        assert!(
+            !schedule.wake(Trigger::Tick, start + Schedule::INTERVAL),
+            "the pending tick was preempted"
+        );
+    }
+
+    /// Every user-visible trigger is immediate, for the same reason.
+    #[test]
+    fn the_immediate_triggers_never_wait() {
+        let start = Instant::now();
+        for trigger in [
+            Trigger::Permission,
+            Trigger::TurnSettled,
+            Trigger::Key,
+            Trigger::Resize,
+        ] {
+            let mut schedule = Schedule::default();
+            schedule.wake(Trigger::Update, start);
+            assert!(schedule.wake(trigger, start), "{trigger:?} waited");
+        }
+    }
+
+    /// A registry whose `Read` renderer counts how often it is asked to draw,
+    /// so "cached" is observable rather than assumed.
+    fn counting_registry() -> (Registry, std::rc::Rc<std::cell::Cell<usize>>) {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        struct Shared(std::rc::Rc<std::cell::Cell<usize>>);
+        impl crate::render::ToolRenderer for Shared {
+            fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
+                self.0.set(self.0.get().saturating_add(1));
+                vec![Line::from(ctx.title.to_string())]
+            }
+        }
+        let mut registry = Registry::default();
+        registry.register(
+            crate::render::ToolKey::Read,
+            Box::new(Shared(std::rc::Rc::clone(&count))),
+        );
+        (registry, count)
+    }
+
+    /// An entity that has not changed is not re-rendered. Without this, every
+    /// frame re-hunks every diff in the session.
+    #[test]
+    fn an_unchanged_entity_is_rendered_once() {
+        let (registry, count) = counting_registry();
+        let mut journal = Journal::default();
+        journal.apply(SessionUpdate::ToolCall(
+            ToolCall::new(ToolCallId::new("t1"), "Read src/lib.rs").kind(ToolKind::Read),
+        ));
+        let mut cache = Cache::default();
+        let size = Size::new(80, 24);
+
+        let first = cache.document(&journal, &registry, size, &[]);
+        let second = cache.document(&journal, &registry, size, &[]);
+        assert_eq!(first, second, "the same document either way");
+        assert_eq!(count.get(), 1, "rendered once, then cached");
+
+        // A patch bumps the revision, so the next frame re-renders it.
+        journal.apply(SessionUpdate::ToolCall(
+            ToolCall::new(ToolCallId::new("t1"), "Read src/main.rs").kind(ToolKind::Read),
+        ));
+        cache.document(&journal, &registry, size, &[]);
+        assert_eq!(count.get(), 2, "a changed entity is re-rendered");
+    }
+
+    /// The width is half the cache key: the same entity at a new width is a
+    /// different rendering, because wrapping and every cap depend on it.
+    #[test]
+    fn a_width_change_invalidates_the_cache() {
+        let (registry, count) = counting_registry();
+        let mut journal = Journal::default();
+        journal.apply(SessionUpdate::ToolCall(
+            ToolCall::new(ToolCallId::new("t1"), "Read src/lib.rs").kind(ToolKind::Read),
+        ));
+        let mut cache = Cache::default();
+
+        cache.document(&journal, &registry, Size::new(80, 24), &[]);
+        cache.document(&journal, &registry, Size::new(40, 24), &[]);
+        assert_eq!(count.get(), 2);
+    }
+
+    /// The footer is the document's tail, and is never cached — it is composed
+    /// by the caller out of things this crate cannot see.
+    #[test]
+    fn the_footer_is_appended_to_every_document() {
+        let registry = Registry::default();
+        let mut journal = Journal::default();
+        journal.apply(chunk("hello"));
+        let mut cache = Cache::default();
+        let footer = vec![Line::from("USD 0.4200 · claude-opus")];
+
+        let document = cache.document(&journal, &registry, Size::new(80, 24), &footer);
+        assert_eq!(
+            document.last().map(ToString::to_string),
+            Some("USD 0.4200 · claude-opus".to_string())
+        );
+    }
+
+    /// The pieces together: chunks accumulate, one tick paints one frame, and
+    /// what lands on screen is the finished text rather than fifty repaints of
+    /// a growing one.
+    #[test]
+    fn the_scheduler_the_cache_and_the_writer_agree() -> io::Result<()> {
+        let start = Instant::now();
+        let registry = Registry::default();
+        let mut journal = Journal::default();
+        let mut cache = Cache::default();
+        let mut schedule = Schedule::default();
+        let mut writer = writer(40, 6);
+
+        for word in ["the ", "answer ", "is ", "42."] {
+            journal.apply(chunk(word));
+            assert!(!schedule.wake(Trigger::Update, start));
+        }
+        assert!(journal.dirty(), "the journal knows it owes a frame");
+
+        if schedule.wake(Trigger::Tick, start + Schedule::INTERVAL) {
+            let document = cache.document(&journal, &registry, writer.size(), &[]);
+            writer.frame(&document)?;
+            journal.painted();
+        }
+        assert_eq!(screen(&writer)[0], "the answer is 42.");
+        assert!(!journal.dirty(), "and knows it no longer does");
         Ok(())
     }
 

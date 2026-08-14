@@ -217,7 +217,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui writer 2>&1 | tail -20`
   - Commit: `feat(tui): differential writer over ratatui Backend`
 
-- [ ] **2.6 Scheduling and the per-entity render cache**
+- [x] **2.6 Scheduling and the per-entity render cache**
   - Depends on: 2.5
   - Files: `crates/bitrouter-tui/src/journal.rs`,
     `crates/bitrouter-tui/src/writer.rs`

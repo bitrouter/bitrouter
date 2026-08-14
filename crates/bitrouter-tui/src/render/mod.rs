@@ -219,6 +219,35 @@ impl ToolRenderer for Reasoning {
     }
 }
 
+/// One message run, in its own voice.
+///
+/// Not a registry entry: the registry keys on `ToolKind`, and a message has no
+/// kind. There are exactly three voices and they are fixed by the protocol, so
+/// a lookup table would be indirection with nothing to look up.
+pub fn message(message: &crate::journal::Message) -> Vec<Line<'static>> {
+    let (prefix, style) = match message.voice {
+        // The user's own words, marked the way they were entered.
+        crate::journal::Voice::User => ("> ", Style::default().fg(Color::Cyan)),
+        crate::journal::Voice::Agent => ("", Style::default()),
+        crate::journal::Voice::Thought => (THOUGHT_PREFIX, thought_style()),
+    };
+    // An empty run still occupies a row: it is a message that has arrived and
+    // has no text yet, and collapsing it would make the document jump when the
+    // first chunk lands.
+    if message.text.is_empty() {
+        return vec![Line::from(Span::styled(prefix.to_string(), style))];
+    }
+    message
+        .text
+        .lines()
+        .map(|line| Line::from(Span::styled(format!("{prefix}{line}"), style)))
+        .collect()
+}
+
+/// Marks the agent's reasoning as reasoning, in the transcript as well as on
+/// a `Think` call.
+const THOUGHT_PREFIX: &str = "· ";
+
 /// The dimmed italic the agent's reasoning is drawn in, wherever it appears.
 fn thought_style() -> Style {
     Style::default()

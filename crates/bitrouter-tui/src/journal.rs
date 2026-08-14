@@ -98,6 +98,18 @@ pub enum Entry<'a> {
     Tool(&'a ToolCall),
 }
 
+/// A document entry with the two things a render cache needs alongside it.
+#[derive(Debug, Clone)]
+pub struct Item<'a> {
+    /// Which entry this is.
+    pub id: EntryId,
+    /// How many times it has been touched. Cached rows for an older revision
+    /// are stale by definition.
+    pub revision: u64,
+    /// The entry itself.
+    pub entry: Entry<'a>,
+}
+
 /// The session, retained.
 #[derive(Debug, Default)]
 pub struct Journal {
@@ -118,6 +130,18 @@ pub struct Journal {
     open: Option<(Voice, MessageId)>,
     /// How many ids have been synthesized for chunks that carried none.
     synthesized: usize,
+    /// Something changed since the last frame was painted.
+    ///
+    /// The journal never writes to a terminal. It raises this instead, and a
+    /// scheduler decides when a frame is worth painting — otherwise a streamed
+    /// answer would repaint once per token.
+    dirty: bool,
+    /// How many times each entity has been touched.
+    ///
+    /// A renderer caches an entity's rows against this, so a frame re-renders
+    /// only what actually changed rather than re-deriving a document of
+    /// thousands of rows thirty times a second.
+    revisions: HashMap<EntryId, u64>,
 }
 
 impl Journal {
@@ -127,6 +151,11 @@ impl Journal {
     /// there is no per-update line list for a caller to mis-order, and no
     /// buffered text for it to forget to flush.
     pub fn apply(&mut self, update: SessionUpdate) {
+        // Every arm below either changes the document or changes the footer,
+        // and both are drawn. The one exception — an update this build does
+        // not understand — is subtracted at the end.
+        let previously_dirty = self.dirty;
+        self.dirty = true;
         match update {
             SessionUpdate::UserMessageChunk(chunk) => self.chunk(Voice::User, chunk),
             SessionUpdate::AgentMessageChunk(chunk) => self.chunk(Voice::Agent, chunk),
@@ -165,8 +194,8 @@ impl Journal {
             // A variant this build does not know about. Ignored rather than
             // guessed at: `SessionUpdate` is `#[non_exhaustive]`, and the
             // unstable plan operations are behind a feature the workspace does
-            // not enable.
-            _ => {}
+            // not enable. Nothing changed, so nothing needs repainting.
+            _ => self.dirty = previously_dirty,
         }
     }
 
@@ -176,15 +205,41 @@ impl Journal {
     /// is a request, not an update: it arrives on its own channel and is
     /// resolved by an answer rather than superseded by the next notification.
     pub fn set_pending_permission(&mut self, prompt: Option<Prompt>) {
+        self.dirty = true;
         self.pending_permission = prompt;
     }
 
     /// The document, in first-seen order.
-    pub fn entries(&self) -> impl Iterator<Item = Entry<'_>> {
-        self.order.iter().filter_map(|id| match id {
-            EntryId::Message(id) => self.messages.get(id).map(Entry::Message),
-            EntryId::Tool(id) => self.tools.get(id).map(Entry::Tool),
+    ///
+    /// Each item carries its id and revision as well as its content, because
+    /// that pair is what a render cache is keyed on — a renderer that only saw
+    /// the content would have to re-derive every row to find out nothing had
+    /// changed.
+    pub fn entries(&self) -> impl Iterator<Item = Item<'_>> {
+        self.order.iter().filter_map(|id| {
+            let entry = match id {
+                EntryId::Message(message) => self.messages.get(message).map(Entry::Message)?,
+                EntryId::Tool(tool) => self.tools.get(tool).map(Entry::Tool)?,
+            };
+            Some(Item {
+                id: id.clone(),
+                revision: self.revisions.get(id).copied().unwrap_or_default(),
+                entry,
+            })
         })
+    }
+
+    /// Has anything changed since [`Journal::painted`] was last called?
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Record that a frame has been painted, clearing the dirty flag.
+    ///
+    /// The journal cannot know when a frame happened — it never writes — so
+    /// the scheduler tells it.
+    pub fn painted(&mut self) {
+        self.dirty = false;
     }
 
     /// The agent's plan, if it sent one.
@@ -263,6 +318,14 @@ impl Journal {
             message.complete = false;
             message.text.push_str(&text);
         }
+        self.touch(EntryId::Message(id));
+    }
+
+    /// Note that an entity changed: its cached rows are stale, and a frame is
+    /// owed.
+    fn touch(&mut self, id: EntryId) {
+        let revision = self.revisions.entry(id).or_default();
+        *revision = revision.saturating_add(1);
     }
 
     /// Close the open run, if there is one.
@@ -271,6 +334,9 @@ impl Journal {
             && let Some(message) = self.messages.get_mut(&id)
         {
             message.complete = true;
+            // Completion is visible — a renderer may mark a run as still
+            // arriving — so closing one is a change like any other.
+            self.touch(EntryId::Message(id));
         }
     }
 
@@ -285,7 +351,8 @@ impl Journal {
         if !self.tools.contains_key(&id) {
             self.order.push(EntryId::Tool(id.clone()));
         }
-        self.tools.insert(id, call);
+        self.tools.insert(id.clone(), call);
+        self.touch(EntryId::Tool(id));
     }
 
     /// Apply the fields an update actually carried, and only those.
@@ -325,6 +392,7 @@ impl Journal {
         if fields.raw_output.is_some() {
             call.raw_output = fields.raw_output;
         }
+        self.touch(EntryId::Tool(id));
     }
 }
 
@@ -360,7 +428,7 @@ mod tests {
 
     /// The one tool call in the document, if there is one.
     fn tool(journal: &Journal) -> Option<&ToolCall> {
-        journal.entries().find_map(|entry| match entry {
+        journal.entries().find_map(|item| match item.entry {
             Entry::Tool(call) => Some(call),
             Entry::Message(_) => None,
         })
@@ -370,7 +438,7 @@ mod tests {
     fn messages(journal: &Journal) -> Vec<&Message> {
         journal
             .entries()
-            .filter_map(|entry| match entry {
+            .filter_map(|item| match item.entry {
                 Entry::Message(message) => Some(message),
                 Entry::Tool(_) => None,
             })
@@ -382,7 +450,7 @@ mod tests {
     fn document(journal: &Journal) -> Vec<(String, String)> {
         journal
             .entries()
-            .map(|entry| match entry {
+            .map(|item| match item.entry {
                 Entry::Message(message) => (
                     format!("{:?}", message.voice).to_lowercase(),
                     message.text.clone(),
