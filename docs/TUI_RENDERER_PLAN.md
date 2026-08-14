@@ -257,7 +257,7 @@ left the old stack intact.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15`
   - Commit: `feat(chat): render through the journal and writer`
 
-- [ ] **3.2 Delete the superseded stack**
+- [x] **3.2 Delete the superseded stack**
   - Depends on: 3.1
   - Files: `crates/bitrouter-tui/src/{viewport.rs,transcript.rs,lib.rs}`
   - Do: delete `viewport.rs` (and its 3 tests), `transcript.rs` (its 8 tests are
