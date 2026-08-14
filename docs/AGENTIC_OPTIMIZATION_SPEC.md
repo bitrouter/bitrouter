@@ -230,7 +230,7 @@ bitrouter optimize status [--config FILE]
 Interactive `setup` may omit workflow and route flags. It deterministically
 discovers repository-owned eval/benchmark package scripts and executable
 entrypoints, adopts a unique candidate, prompts on ambiguity, and reuses an
-existing `@auto` strong/economy ladder when present. If repository facts are
+existing `bitrouter/auto` strong/economy ladder when present. If repository facts are
 insufficient it asks for exact argv/model ids; non-interactive execution fails
 before mutation and prints the required explicit flags.
 

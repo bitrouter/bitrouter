@@ -1,4 +1,4 @@
-# Predictive `@auto:cost` routing
+# Predictive `bitrouter/auto:cost` routing
 
 This starter policy predicts the role of the next response from the native
 prompt and causal history, then selects a tier from the resulting
@@ -38,9 +38,10 @@ lock. Traces, metering, eval subjects/results, snapshots, and separate candidate
 exports remain available. Set `policy.mode: adaptive` only when the process may
 publish a reviewed candidate; it does not enable request-time learning.
 
-Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
-cost routing variant. Physical model ids remain passthrough, so an explicit
-`openai-codex:gpt-5.6-sol` request is not converted to a preset.
+Use `bitrouter/auto` for the strong base policy, or `bitrouter/auto:cost` to add
+the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
+form addresses the same policy. Physical model ids remain passthrough, so an
+explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
 The v3 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
 are `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk

@@ -61,7 +61,7 @@ fn human_review_leads_with_quality_and_cost_tradeoff_for_auto() -> Result<()> {
 
     let rendered = String::from_utf8(Output::new(Format::Human).render_to_vec(&view))?;
 
-    assert!(rendered.contains("@auto candidate is ready for review"));
+    assert!(rendered.contains("bitrouter/auto candidate is ready for review"));
     assert!(rendered.contains("pass → pass"));
     assert!(rendered.contains("$0.010000 → $0.006000"));
     assert!(rendered.contains("40.0% lower"));
@@ -74,7 +74,7 @@ fn human_review_leads_with_quality_and_cost_tradeoff_for_auto() -> Result<()> {
 fn human_setup_explains_auto_workflow_and_next_step() -> Result<()> {
     let view = OptimizationSetupReport {
         action: "optimize.setup",
-        model: "@auto",
+        model: "bitrouter/auto",
         intent: "bitrouter.optimize.yaml".into(),
         lock: "bitrouter.optimize.lock.yaml".into(),
         contract: "bitrouter.eval.md".into(),
@@ -92,7 +92,7 @@ fn human_setup_explains_auto_workflow_and_next_step() -> Result<()> {
 
     let rendered = String::from_utf8(Output::new(Format::Human).render_to_vec(&view))?;
 
-    assert!(rendered.contains("@auto optimization is configured"));
+    assert!(rendered.contains("bitrouter/auto optimization is configured"));
     assert!(rendered.contains("npm run eval"));
     assert!(rendered.contains("openai-codex:gpt-5.6-sol → bitrouter:deepseek"));
     assert!(rendered.contains("edit bitrouter.eval.md"));
@@ -104,7 +104,7 @@ fn human_setup_explains_auto_workflow_and_next_step() -> Result<()> {
 fn human_status_explains_ready_state_and_repair_before_running() -> Result<()> {
     let view = OptimizationStatusReport {
         action: "optimize.status",
-        model: "@auto",
+        model: "bitrouter/auto",
         intent: "bitrouter.optimize.yaml".into(),
         intent_digest: "sha256:8888888888888888888888888888888888888888888888888888888888888888"
             .into(),
@@ -126,7 +126,7 @@ fn human_status_explains_ready_state_and_repair_before_running() -> Result<()> {
 
     let rendered = String::from_utf8(Output::new(Format::Human).render_to_vec(&view))?;
 
-    assert!(rendered.contains("@auto is ready to measure"));
+    assert!(rendered.contains("bitrouter/auto is ready to measure"));
     assert!(rendered.contains("lineage"));
     assert!(rendered.contains("consistent"));
     assert!(rendered.contains("bitrouter optimize run --human"));

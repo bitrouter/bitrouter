@@ -198,6 +198,11 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    // Validate and construct ingress aliases before opening the database or
+    // performing any other startup work. A custom transform must not run ahead
+    // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    let fusion_alias = build_fusion_alias(config)?;
+
     // ---- database + migrations ----
     // `database.url` may name any backend sea-orm supports (sqlite /
     // postgres / mysql); `crate::db::connect` handles the per-backend
@@ -491,15 +496,6 @@ pub async fn build_app_with_path(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
-    // The bitrouter/fusion model alias (an ingress prompt transform) and the
-    // server-tool declaration-parsing hook are wired below when enabled.
-    let fusion_alias: Option<Arc<dyn PromptTransform>> = config
-        .server_tools
-        .fusion
-        .as_ref()
-        .and_then(FusionAliasConfig::from_settings)
-        .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
-
     // Legacy inline policy tables remain declarative and lock-only. Process
     // mode controls publication, never request-time learned-state reads.
     let mut effective_policy_table_config = config.policy_table.clone();
@@ -744,6 +740,15 @@ pub async fn build_app_with_path(
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>>> {
+    let Some(settings) = config.server_tools.fusion.as_ref() else {
+        return Ok(None);
+    };
+    FusionAliasConfig::validate_settings(settings)?;
+    Ok(FusionAliasConfig::from_settings(settings)
+        .map(|alias| Arc::new(alias) as Arc<dyn PromptTransform>))
 }
 
 /// Merge the provider registry into `config`, then re-apply built-in defaults
@@ -1861,7 +1866,7 @@ mod server_tools_tests {
     };
     use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
 
-    use super::{Config, build_server_tool_loop};
+    use super::{Config, build_fusion_alias, build_server_tool_loop};
 
     struct NoopRunner;
     #[async_trait::async_trait]
@@ -1906,6 +1911,26 @@ mod server_tools_tests {
         advisor_cfg.server_tools.advisor = true;
         let runner2: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
         assert!(build_server_tool_loop(&advisor_cfg, &None, &None, Some(runner2)).is_some());
+    }
+
+    #[test]
+    fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
+        let mut config = Config::default();
+        config.server_tools.fusion = Some(
+            bitrouter_sdk::language_model::server_tools::fusion::config::FusionSettings {
+                alias: Some("bitrouter/auto".to_string()),
+                outer_model: Some("anthropic/claude-opus-4.8".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let result = build_fusion_alias(&config);
+        let error = match result {
+            Ok(_) => panic!("reserved Fusion alias must fail app assembly"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("server_tools.fusion.alias"));
+        assert!(error.to_string().contains("bitrouter/auto"));
     }
 
     #[test]

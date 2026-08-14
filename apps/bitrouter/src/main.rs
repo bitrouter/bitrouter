@@ -1160,13 +1160,13 @@ struct OptimizeSetupArgs {
     /// Preset passed to the workflow as `@preset`.
     #[arg(long, default_value = "auto")]
     preset: String,
-    /// Provider-qualified strong route. Omit to reuse @auto or prompt.
+    /// Provider-qualified strong route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     strong: Option<String>,
     /// Policy-owned effort for the strong route.
     #[arg(long, requires = "strong")]
     strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    /// Provider-qualified economy route. Omit to reuse @auto or prompt.
+    /// Provider-qualified economy route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     economy: Option<String>,
     /// Policy-owned effort for the economy route.
@@ -3697,7 +3697,7 @@ fn select_optimization_route(
     }
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
-            "no {label} route exists in @auto; pass --{label} with a provider-qualified model"
+            "no {label} route exists in bitrouter/auto; pass --{label} with a provider-qualified model"
         );
     }
     let route = read_optimization_prompt(&format!("  {label} route (provider:model): "))?;
@@ -3724,7 +3724,7 @@ fn resolve_adaptive_publication_consent(
     {
         return Ok(true);
     }
-    anyhow::bail!("publication cancelled; @auto remains frozen and unchanged")
+    anyhow::bail!("publication cancelled; bitrouter/auto remains frozen and unchanged")
 }
 
 async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
@@ -3828,7 +3828,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let economy_target = outcome.intent.economy_target().to_string();
             output.emit(&OptimizationSetupReport {
                 action: "optimize.setup",
-                model: "@auto",
+                model: "bitrouter/auto",
                 intent: outcome.paths.intent.display().to_string(),
                 lock: outcome.paths.lock.display().to_string(),
                 contract: outcome.contract_path.display().to_string(),
@@ -4152,7 +4152,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
 
                 let interactive = std::io::stdin().is_terminal();
                 let answer = if !enable_adaptive && interactive {
-                    eprintln!("  Publish reviewed candidate {} to @auto?", latest.run_id);
+                    eprintln!(
+                        "  Publish reviewed candidate {} to bitrouter/auto?",
+                        latest.run_id
+                    );
                     eprintln!(
                         "  This enables adaptive policy publication; rollback remains available from policy history."
                     );
@@ -4517,7 +4520,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             };
             output.emit(&OptimizationStatusReport {
                 action: "optimize.status",
-                model: "@auto",
+                model: "bitrouter/auto",
                 intent: loaded.paths.intent.display().to_string(),
                 intent_digest: loaded.digest,
                 lock_active_policy_digest: lock.document.active_policy_digest,

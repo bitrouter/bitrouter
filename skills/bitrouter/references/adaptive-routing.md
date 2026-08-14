@@ -1,15 +1,28 @@
 # Adaptive routing
 
 Use the `templates/auto-router` starter when you want a conservative adaptive
-policy without coupling it to an agent or workflow. Its config exposes the
-standard `@preset[:variant]` form:
+policy without coupling it to an agent or workflow. Address it with the public
+model slug:
 
 ```text
-@auto       # strong base policy
-@auto:cost  # same policy plus the top-level cost variant
+bitrouter/auto       # strong base policy
+bitrouter/auto:cost  # same policy plus the top-level cost variant
 ```
 
-Explicit physical model ids remain passthrough. Copy the template, then start
+`bitrouter/auto` follows the `vendor/auto` convention other gateways use, so a
+config already pointing at some other `.../auto` model only needs its vendor
+segment changed. The vendor segment names the router being addressed, not the
+token destination — the bound policy still dispatches to whichever upstream
+provider its tiers name.
+
+The whole `bitrouter/` namespace is reserved and resolved locally, so an
+unrecognised slug is a clean `400` rather than a provider lookup. Requesting
+`bitrouter/auto` before a policy is bound reports the missing binding and names
+`bitrouter optimize setup`.
+
+The same policy is also reachable through the generic `@preset[:variant]` form
+(`@auto`, `@auto:cost`) that every preset uses; `bitrouter/auto` is the
+documented spelling. Explicit physical model ids remain passthrough. Copy the template, then start
 the daemon with its config and validate it before serving traffic:
 
 ```bash

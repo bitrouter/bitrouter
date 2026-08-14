@@ -415,7 +415,9 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             if model.model().trim().is_empty() {
                 anyhow::bail!("policy '{name}' tier '{tier}' must use a non-empty model id");
             }
-            if model.model().starts_with('@') {
+            if model.model().starts_with('@')
+                || bitrouter_sdk::config::presets::is_reserved(model.model())
+            {
                 anyhow::bail!(
                     "policy '{name}' tier target '{}' cannot reference another preset",
                     model.model()
@@ -2109,7 +2111,10 @@ fn readonly_database_url(url: &str, config_path: &Path) -> Result<String> {
 }
 
 fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
-    if model.trim().is_empty() || model.starts_with('@') {
+    if model.trim().is_empty()
+        || model.starts_with('@')
+        || bitrouter_sdk::config::presets::is_reserved(model)
+    {
         anyhow::bail!("{tier} model must be a non-empty model id, not a preset");
     }
     Ok(())
@@ -2893,6 +2898,30 @@ certificates:
                 .is_some_and(|message| message.contains("selected tier 'strong'"))
         );
         Ok(())
+    }
+
+    /// A tier may not target the reserved namespace. `bitrouter/auto` resolves
+    /// back through the very policy whose tier names it, so accepting it would
+    /// sign a self-referential lock. The `@`-only guard used to let it through
+    /// because the public spelling carries neither an `@` nor a colon.
+    #[test]
+    fn tier_target_cannot_reference_the_reserved_namespace() {
+        let mut policy = definition();
+        policy
+            .tiers
+            .insert("strong".into(), "bitrouter/auto".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("auto".into(), policy)]),
+            certificates: BTreeMap::new(),
+        };
+
+        let error = validate_document(&lock).unwrap_err().to_string();
+        assert!(
+            error.contains("cannot reference another preset"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

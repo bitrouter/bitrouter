@@ -123,10 +123,14 @@ The target environment still needs a compatible `bitrouter.yaml`, provider
 credentials, and referenced models. "Ship one lock" means ship one **policy
 artifact**, not one complete server deployment artifact.
 
-Preset selection keeps the previously agreed virtual-model syntax. `@auto` is
-the default preset and variants such as `@auto:cost` select a named policy
-objective. The lock stores canonical preset names without the leading `@`;
-request parsing and preset resolution remain configuration concerns.
+Preset selection keeps the generic `@preset[:variant]` syntax for compatibility,
+but the stable public model is `bitrouter/auto`; variants such as
+`bitrouter/auto:cost` select a named policy objective. The whole `bitrouter/`
+model namespace is reserved and resolved before provider lookup: unknown slugs
+and the `bitrouter:auto` colon spelling are 400 errors, and `bitrouter/auto`
+requires the `auto` preset to be bound to a policy. The lock stores canonical
+preset names without the leading `@`; request parsing and preset resolution
+remain configuration concerns.
 
 ## 5. Source-of-truth boundaries
 
@@ -629,7 +633,7 @@ The implementation plan must include:
    lock-only selector while retaining readable v1 locks.
 2. **Done:** require adaptive users with non-empty legacy state to publish a v2
    migration candidate.
-3. **Done:** publish the `@auto` router template as v2.
+3. **Done:** publish the router template, now exposed as `bitrouter/auto`, as v2.
 4. **Done:** add immutable Eval Exchange contracts, admission, snapshots, CLI,
    authenticated REST, and the legacy reward adapter.
 5. **Done:** add tenant isolation, subject+result snapshot commitments, explicit

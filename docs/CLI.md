@@ -425,7 +425,7 @@ workflow. `setup` creates `bitrouter.optimize.yaml`,
 overwriting existing files. With omitted workflow flags, interactive setup
 discovers project-owned eval/benchmark package scripts and executable
 entrypoints, selects a unique candidate automatically, and prompts when more
-than one is plausible. It reuses an existing `@auto` strong/economy ladder;
+than one is plausible. It reuses an existing `bitrouter/auto` strong/economy ladder;
 otherwise a TTY asks for both routes. Non-interactive ambiguity fails before
 any file mutation and reports the exact flags to supply. The workflow is launched without shell parsing;
 user argv boundaries are preserved after any catalog-owned routing prefix for

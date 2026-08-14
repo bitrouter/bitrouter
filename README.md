@@ -44,11 +44,11 @@ presets:
     policy: auto
 ```
 
-The v3 lock behind `@auto` contains the tier targets, canonical `agent_trace`
+The v3 lock behind `bitrouter/auto` contains the tier targets, canonical `agent_trace`
 routes, capability guardrails, and a decision certificate for every explicit
 route. A target may be a scalar model or an exact `(model, effort)` pair;
-`@auto:cost` selects the cost variant when one is defined, while explicit
-physical model IDs remain passthrough.
+`bitrouter/auto:cost` selects the cost variant when one is defined, while
+explicit physical model IDs remain passthrough.
 
 Against that spec BitRouter provides the control plane for an **act → observe → evaluate → compile** cycle:
 
@@ -194,7 +194,7 @@ BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localh
 
 ## Workflow templates
 
-Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a conservative `@auto` / `@auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
+Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
 
 ## Models & providers
 

@@ -1463,7 +1463,7 @@
           "default": null
         },
         "alias": {
-          "description": "Alias slug (defaults to `bitrouter/fusion`).",
+          "description": "Alias slug (defaults to `bitrouter/fusion`). Custom aliases cannot use\n`@preset`, `bitrouter:`, or the reserved `bitrouter/` namespace.",
           "type": [
             "string",
             "null"

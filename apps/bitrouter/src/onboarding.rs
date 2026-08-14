@@ -1042,7 +1042,7 @@ fn resolve_onboarding_route(
     }
     if !interactive {
         anyhow::bail!(
-            "no {label} route exists in @auto; pass --optimize-{label} with a provider-qualified model"
+            "no {label} route exists in bitrouter/auto; pass --optimize-{label} with a provider-qualified model"
         );
     }
     let route = prompt_line(&format!("  {label} route (provider:model): "))?;

@@ -93,8 +93,14 @@ active policy. `publish` is a separate explicit action and rejects stale or
 mismatched lineage. Run the loop again after publication to optimize another
 eligible route key.
 
-The stable public model is `@auto`. Internal policy and preset keys remain
-`auto`; do not document or send `bitrouter/auto` as an alias.
+The stable public model is `bitrouter/auto`. Internal policy and preset keys
+remain `auto`, and the generic `@auto` preset form still resolves to the same
+policy — document and send `bitrouter/auto`.
+
+The whole `bitrouter/` namespace is reserved and resolved before any provider
+lookup, so an unrecognised slug is a `400`, not a `404`. Sending
+`bitrouter/auto` before a policy is bound reports the missing binding and names
+`bitrouter optimize setup`; it does not fall back to a default route.
 
 Profiles:
 
@@ -115,8 +121,8 @@ currently Unix-only.
 
 The controlled two-tier experiment does not yet preserve a signed
 `progress_guard`. Setup checks every active policy before writing any
-optimization file and asks the user to use an unguarded `@auto` lineage rather
-than silently changing guard semantics.
+optimization file and asks the user to use an unguarded `bitrouter/auto` lineage
+rather than silently changing guard semantics.
 
 ## Failure interpretation
 
