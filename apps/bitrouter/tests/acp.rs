@@ -1158,3 +1158,90 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
     }
     fixture.shutdown().await;
 }
+
+// ── Test 5: `chat` on a pipe ─────────────────────────────────────────────────
+
+/// `bitrouter chat` renders for a person; a redirect has none. Spawn it with
+/// stdout on a pipe, feed it one prompt, and assert the transcript arrives as
+/// plain text — **no ESC byte anywhere**.
+///
+/// This is the property, not a proxy for it: the interactive path's live row,
+/// cursor moves, and raw-mode switches are all ESC sequences, so a single
+/// `0x1b` in this output would mean the terminal path ran against a file.
+///
+/// Driven as a subprocess because that is the only way to get a pipe on
+/// stdout: in-process, the test harness's own capture decides what
+/// `is_terminal()` reports.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_on_a_pipe_is_plain_text() {
+    use std::time::Duration;
+
+    use tokio::io::AsyncWriteExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("bitrouter.yaml");
+    std::fs::write(&config_path, SERVE_CONFIG_YAML).expect("write config");
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let binary = workspace_root
+        .join("target")
+        .join(profile)
+        .join("bitrouter");
+    if !binary.exists() {
+        eprintln!(
+            "chat_on_a_pipe_is_plain_text: binary not found at {}; skipping",
+            binary.display()
+        );
+        return;
+    }
+
+    let stderr_path = dir.path().join("chat.stderr");
+    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
+    let mut child = tokio::process::Command::new(&binary)
+        .args([
+            "chat",
+            "stub",
+            "--direct",
+            "--config",
+            config_path.to_str().expect("config path utf8"),
+        ])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(stderr_file)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn bitrouter chat");
+
+    let mut child_stdin = child.stdin.take().expect("child stdin");
+    child_stdin
+        .write_all(b"hello\n")
+        .await
+        .expect("write the prompt");
+    // Closing stdin is this path's Ctrl-D: the session ends and the process
+    // exits, which is also what makes the test terminate.
+    drop(child_stdin);
+
+    let finished = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
+        .await
+        .expect("chat must exit once stdin closes")
+        .expect("chat output");
+    let stdout = String::from_utf8_lossy(&finished.stdout).to_string();
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+
+    assert!(
+        !finished.stdout.contains(&0x1b),
+        "a redirected stdout must carry no escape sequences; got {:?}\nstderr:\n{stderr}",
+        stdout
+    );
+    assert!(
+        stdout.contains("hi"),
+        "the agent's reply must still reach a pipe; got {stdout:?}\nstderr:\n{stderr}"
+    );
+}

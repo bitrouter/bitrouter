@@ -684,22 +684,22 @@ pub fn remember_session_log(path: std::path::PathBuf) {
 /// every session to serve the rare one that fails. An unreadable log is
 /// reported as unreadable rather than skipped — "there is no log" is the kind
 /// of thing a user needs told, not hidden.
-fn commit_log_tail(
-    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
-) -> Result<()> {
+fn session_log_tail() -> Vec<ratatui::text::Line<'static>> {
     let Some(path) = SESSION_LOG.get() else {
-        return Ok(());
+        return Vec::new();
     };
     let log = match std::fs::read_to_string(path) {
         Ok(log) => log,
         Err(e) => format!("(could not read the session log: {e})"),
     };
-    view.commit(&bitrouter_tui::log_tail::render(
-        path,
-        &log,
-        bitrouter_tui::log_tail::TAIL_LINES,
-    ))
-    .context("committing the session log tail")
+    bitrouter_tui::log_tail::render(path, &log, bitrouter_tui::log_tail::TAIL_LINES)
+}
+
+fn commit_log_tail(
+    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> Result<()> {
+    view.commit(&session_log_tail())
+        .context("committing the session log tail")
 }
 
 /// Run one ACP session interactively in the caller's terminal.
@@ -712,6 +712,8 @@ fn commit_log_tail(
 /// belongs to `bitrouter-tui`, which cannot depend on this crate and so is
 /// handed only what ACP carries.
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
+    use std::io::IsTerminal as _;
+
     let SpawnContext {
         source,
         mut config,
@@ -735,6 +737,19 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     match &routed.via {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
         None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
+    }
+
+    // A pipe cannot be drawn on. Everything below this point — the live row,
+    // the modals, raw mode — assumes a screen with a cursor on it, and writing
+    // those escapes into a file or a `| grep` would corrupt the very output
+    // the redirect exists to capture. So a redirected stdout gets the session
+    // as plain text instead, which is the one thing a pipe *can* use.
+    if !std::io::stdout().is_terminal() {
+        let ended = chat_plain(session).await;
+        if let Some(exporter) = exporter {
+            exporter.shutdown();
+        }
+        return ended;
     }
 
     // The picker exists only when this session can actually be rerouted, which
@@ -964,6 +979,123 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         exporter.shutdown();
     }
     Ok(())
+}
+
+/// A rendered line as plain text: the spans concatenated, every style
+/// dropped.
+///
+/// The styles are the whole difference between the two paths. A `Line` is
+/// only escape sequences once a backend writes it; written this way it never
+/// becomes any.
+fn plain_text(line: &ratatui::text::Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn write_plain(
+    out: &mut impl std::io::Write,
+    lines: &[ratatui::text::Line<'static>],
+) -> Result<()> {
+    for line in lines {
+        // `writeln!` rather than `println!`: a closed pipe makes `println!`
+        // panic, and `bitrouter chat … | head` closes the pipe as a matter of
+        // course.
+        writeln!(out, "{}", plain_text(line)).context("writing the session to stdout")?;
+    }
+    Ok(())
+}
+
+/// The same session, for a stdout that is not a terminal.
+///
+/// Deliberately not a second renderer: it is the same `Transcript`, printed
+/// without a backend. What it drops is everything that needs a screen — the
+/// live row, the cost figure that replaces itself, the picker, raw mode — and
+/// what it keeps is the transcript, which is the part a pipe can use.
+///
+/// A permission request is denied rather than asked, because there is nobody
+/// to ask: the terminal that would carry the question is the one that isn't
+/// there. Denying is the same answer this path gives an unanswerable prompt
+/// anywhere else, and it is never mistaken for consent.
+async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> {
+    use std::io::Write as _;
+
+    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
+    use futures::FutureExt as _;
+    use tokio::io::AsyncBufReadExt as _;
+
+    let mut out = std::io::stdout();
+    let mut transcript = bitrouter_tui::transcript::Transcript::default();
+    let mut updates = session.raw_updates();
+    let mut permissions = session.permissions();
+    // The only reader of stdin on this path, and it takes no raw mode — the
+    // one that does (`chat::input::Stdin`) needs a terminal, which is exactly
+    // what is missing here.
+    let mut prompts = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+
+    let ended = loop {
+        let Some(line) = prompts.next_line().await.context("reading stdin")? else {
+            break Ok(());
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.trim() == "/route" {
+            writeln!(out, "/route needs a terminal").context("writing to stdout")?;
+            continue;
+        }
+        if let Err(e) = writeln!(out, "> {line}").context("writing the prompt") {
+            break Err(e);
+        }
+
+        let turn = session.prompt(&line);
+        tokio::pin!(turn);
+        let outcome = loop {
+            tokio::select! {
+                update = updates.next() => if let Some(update) = update {
+                    write_plain(&mut out, &transcript.apply(update))?;
+                },
+                request = permissions.next() => if let Some(request) = request {
+                    let prompt = bitrouter_tui::permission::Prompt::new(
+                        request.tool_call.fields.title.clone(),
+                        request.tool_call.tool_call_id.0.to_string(),
+                        request.options.clone(),
+                    );
+                    request.resolve(match prompt.deny() {
+                        Some(id) => RequestPermissionOutcome::Selected(
+                            SelectedPermissionOutcome::new(id),
+                        ),
+                        None => RequestPermissionOutcome::Cancelled,
+                    });
+                    writeln!(out, "  permission denied: no terminal to ask on")
+                        .context("writing the permission decision")?;
+                },
+                result = &mut turn => break result,
+            }
+        };
+        // Whatever the agent emitted between its last update and the turn
+        // resolving, then the trailing chunks the turn's end is what closes.
+        while let Some(Some(update)) = updates.next().now_or_never() {
+            write_plain(&mut out, &transcript.apply(update))?;
+        }
+        write_plain(&mut out, &transcript.flush())?;
+        match outcome {
+            Ok(response) => {
+                writeln!(out, "[{:?}]", response.stop_reason).context("writing the stop reason")?
+            }
+            Err(e) => {
+                writeln!(out, "turn failed: {e}").context("writing the failure")?;
+                write_plain(&mut out, &session_log_tail())?;
+            }
+        }
+    };
+
+    let shutdown = session.shutdown().await;
+    if shutdown.is_err() {
+        write_plain(&mut out, &session_log_tail())?;
+    }
+    ended.and(shutdown.context("shutting down chat session"))
 }
 
 /// Draw the provider picker and, on a selection, actually change the route.

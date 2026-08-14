@@ -124,7 +124,7 @@ renderer and are worth having even if §19.1 goes the other way.
   - Verify: `cargo nextest run -p bitrouter 2>&1 | tail -5`
   - Commit: `fix(chat): restore the terminal on panic and signals`
 
-- [ ] **1.3 Refuse or degrade on a non-TTY**
+- [x] **1.3 Refuse or degrade on a non-TTY**
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: gate `chat` on `std::io::stdout().is_terminal()`. When false, fall back
