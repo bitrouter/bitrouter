@@ -223,7 +223,7 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter login openai-codex`"
+                     run `bitrouter providers login openai-codex`"
                 ),
             })?;
         let token = stored
@@ -684,6 +684,7 @@ mod tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,

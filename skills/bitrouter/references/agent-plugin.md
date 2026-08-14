@@ -12,9 +12,9 @@ harness** — skills and MCP. Hooks are deliberately **not** here: they're the
 least portable plugin component (Grok hooks are block-only, Antigravity has a
 different event catalog + output schema, and even `SessionStart` output only
 surfaces on some harnesses), so anchoring the plugin on a hook would fragment
-the exact thing BitRouter exists to unify. Ambient/live/per-turn cost belongs
-to BitRouter's own manager surface (`spawn` HUD, then the TUI/GUI cost-HUD),
-which is harness-agnostic by construction. See [[agent-plugins-design]] §5.4.
+the exact thing BitRouter exists to unify. Cost reporting is therefore the
+launcher's job, not the plugin's: `bitrouter launch` prints a session spend
+summary when the harness exits, which is harness-agnostic by construction.
 
 | Component | Claude Code | Codex |
 |---|---|---|
@@ -23,7 +23,7 @@ which is harness-agnostic by construction. See [[agent-plugins-design]] §5.4.
 
 Two cost signals ride alongside but are **not plugin components** — they're
 `bitrouter` CLI behaviors that exist independent of the plugin: the MCP
-tool-result **cost footer** (part of `mcp serve`), and the **`spawn` exit
+tool-result **cost footer** (part of `mcp serve`), and the **launch exit
 spend summary** (printed by `bitrouter launch` on any harness it wraps).
 
 ## Install
@@ -55,22 +55,25 @@ offload subtasks to cheap models right away.
 
 ## Reading the cost surface
 
-Cost shows up **on-demand and at the spawn boundary** (no ambient hook):
+Cost shows up **on-demand and at the launch boundary** (no ambient hook):
 
 - **Every origin-MCP `complete` / `status` call:** a cost footer appended to
   the tool result (spend today + request count).
-- **Every `spawn` exit:** a one-line session spend summary.
+- **Every `bitrouter launch` exit:** a one-line session spend summary
+  (`launch: session spend $… (N requests) · today $…`), printed after the
+  harness exits.
 
 Notes:
 
-- **Live / per-turn / ambient cost is not in the plugin** — no monitor, no
-  session hook. That's intentional: hooks don't port across harnesses (§5.4),
-  so live cost is the manager surface's job (`spawn` HUD → TUI/GUI).
+- **Live / per-turn / ambient cost exists nowhere today** — not in the
+  plugin (no monitor, no session hook, because hooks don't port across
+  harnesses) and not in the launcher, which reports spend **once, on exit**.
+  Don't promise a running cost display.
 - v1 reports **spend**, not savings — the counterfactual "vs frontier list
-  price" line lands together with the `bitrouter usage` pricing plumbing.
-  Don't promise savings percentages yet.
+  price" line lands together with the `bitrouter cloud usage` pricing
+  plumbing. Don't promise savings percentages yet.
 - All figures are **estimates** from the configured pricing table
-  (`estimated_charge_micro_usd`), HUD-grade, not invoice-grade.
+  (`estimated_charge_micro_usd`) — indicative, not invoice-grade.
 
 ## Troubleshooting
 

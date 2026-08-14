@@ -497,12 +497,11 @@ against the tree:
 
 | Claim | Reality |
 |---|---|
-| Only the TUI consumes it | Two consumers: `tui/mod.rs` (3 sites) **and** [`main.rs:2071`](../apps/bitrouter/src/main.rs#L2071), inside `if backend == Some(McpBackend::Fleet)` — the fleet backend handing gateway servers to spawned ACP subagents |
-| The orchestrator is being dissolved | [#749] and #748 are still **open**; nothing has moved |
+| Its only consumer is being dissolved | It never was the only one, and the surviving consumer is `bitrouter launch`: since #749 removed the control tower, `spawn.rs` builds the gateway servers and hands them to `Harness::launch_overlay`, which injects them into every harness that has a mechanism (claude, codex, opencode, hermes) |
 | "The HTTP surface exists before the stdio one goes" | It does not. `InstalledSkillCatalog` is wired only into the stdio `--backend skills` path; `assemble.rs` never references it, and the aggregate `/mcp` proxies configured upstreams only — **there is no HTTP path to the daemon's own installed skills** |
 
 Removing the injection today would therefore be a straight capability loss for
-both TUI-launched harnesses and ACP subagents, with nothing to replace it.
+launched harnesses, with nothing to replace it.
 
 Retirement would first require making the daemon serve its own installed skills
 through the aggregate — a reserved in-process member — which needs a new
@@ -511,8 +510,9 @@ daemon serving itself has none. That is real work in service of removing
 something that currently functions correctly. Not worth it; the stdio
 subprocess is a clean way to serve origin content.
 
-**If you revisit this:** the trigger is not #749 landing. It is the daemon
-gaining its own skills surface over HTTP. Until then, leave `gateways.rs` alone.
+**If you revisit this:** #749 has landed and the conclusion is unchanged. The
+trigger is the daemon gaining its own skills surface over HTTP. Until then,
+leave `gateways.rs` alone.
 
 ---
 
@@ -531,8 +531,9 @@ Decided against per spec §12 — these are closed decisions, not a backlog.
   that fixing it also requires re-keying `RmcpExecutor`'s connection pool, which
   today keys by server name alone.
 - **Signed or attested skills.**
-- **Deprecating `bitrouter skills add`** — **frozen, not removed** (D5). It
-  stays working and supported; stop adding surface to it.
+- **Package-manager surface for `bitrouter skills`** — **removed** (D5).
+  `skills list` and `skills init` remain; external skill installers populate
+  the filesystem.
 
 ## Acceptance
 

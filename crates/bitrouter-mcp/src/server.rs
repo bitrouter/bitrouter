@@ -1,10 +1,10 @@
-//! `BitrouterMcp` — the rmcp origin server handler. One handler assembles two
+//! `BitrouterMcp` — the rmcp origin server handler. One handler assembles its
 //! profiles from named `#[tool_router]` blocks: a **public** profile
-//! (`complete`/`list_models`/`status`, HTTP-safe) and the **orchestrator**
-//! profile (the union of completion + fleet + cost, stdio-only). The
+//! (`complete`/`list_models`/`status`, HTTP-safe), the stdio **router**
+//! profile (that plus `route_preview`), and the **skills** origin profile. The
 //! [`Builder`] merges only the routers whose capability is wired, so an
-//! unwired capability's tools are never registered — a public client can't so
-//! much as see `spawn_subagent`.
+//! unwired capability's tools are never registered — a public HTTP client
+//! can't so much as see `route_preview`.
 
 use std::sync::Arc;
 
@@ -19,10 +19,6 @@ use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
-use crate::capabilities::cost::CostQuery;
-use crate::capabilities::escalation::EscalationState;
-use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
-use crate::capabilities::human::{HumanBridge, HumanHandleArgs, NotifyArgs};
 use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
 use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
 use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
@@ -75,15 +71,6 @@ fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolRes
     }
 }
 
-/// [`json_tool_result`]'s sibling for capability results that are already
-/// plain text (the diff).
-fn text_tool_result(result: Result<String, ToolError>) -> CallToolResult {
-    match result {
-        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
-        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
-    }
-}
-
 /// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
 /// plus `footer` when given, `Err`→error text. The one shaping path for the
 /// three completion tools; the footer choice stays explicit at each call site
@@ -116,8 +103,6 @@ fn serialize_tool_result<T: serde::Serialize>(
 #[derive(Clone, Default)]
 struct Caps {
     backend: Option<Arc<dyn Backend>>,
-    fleet: Option<Arc<dyn Fleet>>,
-    cost: Option<Arc<dyn CostQuery>>,
     routing: Option<Arc<dyn RoutingQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
     /// The SEP-2640 skills surface (`skills/list` / `skills/get` plus
@@ -125,15 +110,6 @@ struct Caps {
     /// JSON-RPC methods and resources — so it stays a plain field rather than
     /// a [`CapSpec`] entry.
     skill_catalog: Option<Arc<dyn SkillCatalog>>,
-    human: Option<Arc<dyn HumanBridge>>,
-    /// The live-subagent cap the app enforces, sourced from the app (not
-    /// hardcoded here) so the instruction string can't drift from the real
-    /// `MAX_CONCURRENT_SUBAGENTS`.
-    subagent_cap: Option<usize>,
-    /// Shared, connection-scoped escalation seam (capability-gated Tasks
-    /// elicitation). Populated at the first fleet tool call with the client's
-    /// capability + the server→client peer; the same `Arc` is held app-side.
-    escalation: Option<Arc<EscalationState>>,
 }
 
 /// One tool-contributing capability: whether it's wired, the tool router it
@@ -145,14 +121,13 @@ struct Caps {
 struct CapSpec {
     wired: fn(&Caps) -> bool,
     router: fn() -> ToolRouter<BitrouterMcp>,
-    /// The instruction fragment. Takes [`Caps`] because the fleet fragment
-    /// interpolates the app-sourced subagent cap.
+    /// The instruction fragment describing this capability's tools.
     instructions: fn(&Caps) -> String,
 }
 
 /// The tool-contributing capabilities, in registration + instruction order.
-/// State-only capabilities (`subagent_cap`, `escalation`, the transport-side
-/// cost footer) contribute no router and stay plain fields.
+/// State-only capabilities (the transport-side cost footer, the SEP-2640 skill
+/// catalog) contribute no router and stay plain fields.
 const CAPABILITIES: &[CapSpec] = &[
     CapSpec {
         wired: |caps| caps.backend.is_some(),
@@ -162,16 +137,6 @@ const CAPABILITIES: &[CapSpec] = &[
              models, `complete` to run a completion, `status` for health/credits."
                 .to_string()
         },
-    },
-    CapSpec {
-        wired: |caps| caps.fleet.is_some(),
-        router: BitrouterMcp::fleet_router,
-        instructions: fleet_instructions,
-    },
-    CapSpec {
-        wired: |caps| caps.cost.is_some(),
-        router: BitrouterMcp::cost_router,
-        instructions: |_| "Use `fleet_cost` to keep spend visible mid-session.".to_string(),
     },
     CapSpec {
         wired: |caps| caps.routing.is_some(),
@@ -186,41 +151,12 @@ const CAPABILITIES: &[CapSpec] = &[
         wired: |caps| caps.skills.is_some(),
         router: BitrouterMcp::skills_router,
         instructions: |_| {
-            "`skills_search` / `skills_get` browse installed skills to hand one to a \
-             subagent."
-                .to_string()
-        },
-    },
-    CapSpec {
-        wired: |caps| caps.human.is_some(),
-        router: BitrouterMcp::human_router,
-        instructions: |_| {
-            "Reach the supervising human with `notify_human` (a one-line notice), \
-             `request_attach` (ask them to drive a subagent), or `request_review` \
-             (flag work for their review queue)."
+            "`skills_search` / `skills_get` browse installed skills and fetch one's \
+             full body."
                 .to_string()
         },
     },
 ];
-
-/// The fleet instruction fragment, a named fn because it interpolates the
-/// subagent cap. The cap value is sourced from the app (`Caps::subagent_cap`)
-/// so this guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`;
-/// without one the guidance stays generic rather than inventing a number.
-fn fleet_instructions(caps: &Caps) -> String {
-    let cap = match caps.subagent_cap {
-        Some(cap) => format!("a {cap}-subagent cap"),
-        None => "the concurrency cap".to_string(),
-    };
-    format!(
-        "Fleet: spawn and manage worktree-isolated ACP subagents. `spawn_subagent` \
-         blocks and returns a summary; review with `subagent_diff`; \
-         `apply_subagent`/`merge_subagent` are human-gated unless the bridge was \
-         started with --allow-writes. Subagents don't spawn subagents (delegation \
-         depth 1), and a spawn is rejected past {cap} — integrate or close one \
-         before fanning out further."
-    )
-}
 
 #[derive(Clone)]
 pub struct BitrouterMcp {
@@ -325,178 +261,7 @@ impl BitrouterMcp {
     }
 }
 
-// ── the orchestrator profile's fleet slice (guarded on `self.fleet`) ──
-#[tool_router(router = fleet_router)]
-impl BitrouterMcp {
-    #[tool(
-        description = "Spawn a worktree-isolated ACP subagent and send it the task. Returns \
-                       immediately with {handle, state:\"working\"} — the turn runs in the \
-                       background. Poll subagent_status(handle) for the reply, stop_reason, and \
-                       diff stat (and result/schema_ok under result_schema); state becomes \
-                       \"completed\" when the turn ends. Do NOT re-spawn if a call seems slow — \
-                       the subagent is already running, a second spawn just duplicates it. \
-                       Subagents don't spawn subagents — keep delegation depth 1.",
-        annotations(
-            read_only_hint = false,
-            // Additive: a fresh worktree + branch; the base tree is untouched.
-            // Open-world: it launches an autonomous agent that acts on its own.
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn spawn_subagent(
-        &self,
-        Parameters(args): Parameters<SpawnArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        // Capture the client's escalation capability + the server→client peer
-        // for the (capability-gated) Tasks elicitation seam. No-op unless the
-        // fleet backend wired an escalation state.
-        self.record_escalation(&ctx);
-        Ok(json_tool_result(self.fleet()?.spawn(args).await))
-    }
-
-    #[tool(
-        description = "Send a follow-up prompt to a subagent whose previous turn has finished \
-                       (poll subagent_status until its state isn't \"working\"). Returns \
-                       immediately with {handle, state:\"working\"}; poll subagent_status(handle) \
-                       for the reply and diff. Refused while the subagent is still working.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn prompt_subagent(
-        &self,
-        Parameters(args): Parameters<PromptArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        self.record_escalation(&ctx);
-        Ok(json_tool_result(self.fleet()?.prompt(args).await))
-    }
-
-    #[tool(
-        description = "Fleet snapshot (or one subagent with handle): agent, state, worktree, \
-                       branch, diff stat. This is the poll surface for spawn_subagent / \
-                       prompt_subagent — once a subagent's state is \"completed\" its entry also \
-                       carries the turn's reply, stop_reason, and result/schema_ok.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn subagent_status(
-        &self,
-        Parameters(args): Parameters<StatusArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(
-            self.fleet()?.status(args.handle.as_deref()).await,
-        ))
-    }
-
-    #[tool(
-        description = "The subagent's full diff against its spawn base (committed + uncommitted \
-                       work in its worktree).",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn subagent_diff(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(text_tool_result(self.fleet()?.diff(&args.handle).await))
-    }
-
-    #[tool(
-        description = "Apply the subagent's diff onto the base repository working tree, \
-                       UNCOMMITTED (the human writes the commit). Human-gated: requires the \
-                       bridge to have been started with --allow-writes.",
-        annotations(
-            read_only_hint = false,
-            // Destructive: overwrites files in the base working tree, which can
-            // clobber uncommitted local work.
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn apply_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.fleet()?.apply(&args.handle).await))
-    }
-
-    #[tool(
-        description = "Merge the subagent's branch into the base repository, keeping history. \
-                       Requires the subagent to have committed its work (clean worktree). \
-                       Serialized: one integration at a time. Human-gated: requires \
-                       --allow-writes.",
-        annotations(
-            read_only_hint = false,
-            // Destructive: mutates the base repository's refs and history.
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn merge_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.fleet()?.merge(&args.handle).await))
-    }
-
-    #[tool(
-        description = "Shut the subagent down. Its worktree is RETAINED (cleanup is gated on \
-                       merged-or-discarded, never automatic).",
-        annotations(
-            read_only_hint = false,
-            // Non-destructive by design: the work product (worktree + branch)
-            // is retained; only the live session ends. Idempotent: a second
-            // close of the same handle changes nothing further.
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn close_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.fleet()?.close(&args.handle).await))
-    }
-}
-
-// ── the orchestrator profile's cost slice (guarded on `self.cost`) ──
-#[tool_router(router = cost_router)]
-impl BitrouterMcp {
-    #[tool(
-        description = "BitRouter spend snapshot from the local metering database (machine-wide, \
-                       not scoped to one session): today's spend and request count plus all-time \
-                       totals. Keeps in-session model arbitrage cost-visible.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn fleet_cost(&self) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.cost()?.snapshot().await))
-    }
-}
-
-// ── the orchestrator profile's routing slice (guarded on `self.routing`) ──
+// ── the router profile's routing slice (guarded on `self.routing`) ──
 #[tool_router(router = routing_router)]
 impl BitrouterMcp {
     #[tool(
@@ -517,7 +282,7 @@ impl BitrouterMcp {
     }
 }
 
-// ── the orchestrator profile's skills slice (guarded on `self.skills`) ──
+// ── the skills profile's slice (guarded on `self.skills`) ──
 #[tool_router(router = skills_router)]
 impl BitrouterMcp {
     #[tool(
@@ -553,64 +318,6 @@ impl BitrouterMcp {
     }
 }
 
-// ── the orchestrator profile's human-bridge slice (guarded on `self.human`) ──
-#[tool_router(router = human_router)]
-impl BitrouterMcp {
-    #[tool(
-        description = "Send the supervising human a one-line notice in the TUI.",
-        annotations(
-            read_only_hint = false,
-            // Additive: posts a notice; repeating it posts another (not
-            // idempotent). Closed-world: delivery rides the local TUI socket.
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn notify_human(
-        &self,
-        Parameters(args): Parameters<NotifyArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.human()?.notify(&args.message).await))
-    }
-
-    #[tool(
-        description = "Ask the human to attach to a subagent's pane to drive it directly.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn request_attach(
-        &self,
-        Parameters(args): Parameters<HumanHandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(
-            self.human()?.request_attach(&args.handle).await,
-        ))
-    }
-
-    #[tool(
-        description = "Flag a subagent's work for the human's review queue.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn request_review(
-        &self,
-        Parameters(args): Parameters<HumanHandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(
-            self.human()?.request_review(&args.handle).await,
-        ))
-    }
-}
-
 /// The typed accessor for a capability port: the port, or a wired-capability
 /// error (unreachable in practice — each capability's router is merged only
 /// when its port is `Some`, so a routed tool call implies a wired port).
@@ -640,37 +347,9 @@ impl BitrouterMcp {
     }
 
     port_accessor!(backend, dyn Backend, "completion backend");
-    port_accessor!(fleet, dyn Fleet, "fleet capability");
-    port_accessor!(cost, dyn CostQuery, "cost capability");
     port_accessor!(routing, dyn RoutingQuery, "routing capability");
     port_accessor!(skills, dyn SkillsQuery, "skills capability");
     port_accessor!(skill_catalog, dyn SkillCatalog, "skills catalog");
-    port_accessor!(human, dyn HumanBridge, "human bridge");
-
-    /// Record the connecting client's escalation capability + capture the
-    /// server→client peer for the capability-gated Tasks elicitation seam.
-    /// Reads the capabilities the client declared at `initialize` (available on
-    /// the recorded peer handshake info). A no-op when no escalation state is
-    /// wired (public profile) or before the peer info is recorded.
-    ///
-    /// Reading `peer_info` — rather than `ctx.client_capabilities()`, which
-    /// would also see the per-request `_meta` capabilities of a `2026-07-28`
-    /// client — is deliberate, and must stay that way. Escalation delivers its
-    /// question as a server→client `elicitation/create`, and `2026-07-28`
-    /// removed server-initiated requests entirely in favour of MRTR (SEP-2322):
-    /// on a stateless connection there is no channel to ask on. Detecting the
-    /// capability there would route a gated permission into a round-trip that
-    /// cannot be answered, and our fail-safe would turn that into `Deny` —
-    /// strictly worse than the HumanBridge prompt the no-op leaves in place.
-    /// Making this seam work on the modern lifecycle means rebuilding it as an
-    /// MRTR `InputRequiredResult`, not widening the capability read.
-    fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
-        if let Some(escalation) = &self.caps.escalation
-            && let Some(info) = ctx.peer.peer_info()
-        {
-            escalation.record(&info.capabilities, ctx.peer.clone());
-        }
-    }
 
     /// The extra content item for a successful result, when a footer is
     /// attached and has something to say.
@@ -681,9 +360,9 @@ impl BitrouterMcp {
 
     /// Server instructions, composed by walking [`CAPABILITIES`] — the same
     /// table `build()` merges routers from, so a client is told about exactly
-    /// the tools it can call (the public profile gets only the completion
-    /// base; the orchestrator profile adds the fleet / cost / tier-2 guidance,
-    /// including the human-gating of apply/merge).
+    /// the tools it can call (the public HTTP profile gets only the completion
+    /// base; the stdio router profile adds the `route_preview` guidance, and
+    /// the skills origin server its own).
     fn instructions(&self) -> String {
         let mut s = String::new();
         for spec in CAPABILITIES {
@@ -719,18 +398,6 @@ impl Builder {
         self
     }
 
-    /// Wire the fleet capability (spawn/manage subagents).
-    pub fn fleet(mut self, fleet: Arc<dyn Fleet>) -> Self {
-        self.caps.fleet = Some(fleet);
-        self
-    }
-
-    /// Wire the cost capability (the `fleet_cost` tool).
-    pub fn cost(mut self, cost: Arc<dyn CostQuery>) -> Self {
-        self.caps.cost = Some(cost);
-        self
-    }
-
     /// Wire the routing-introspection capability (the `route_preview` tool).
     pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
         self.caps.routing = Some(routing);
@@ -751,31 +418,6 @@ impl Builder {
     /// hosts will consume. Wiring both is the intended configuration.
     pub fn skill_catalog(mut self, catalog: Arc<dyn SkillCatalog>) -> Self {
         self.caps.skill_catalog = Some(catalog);
-        self
-    }
-
-    /// Wire the human-escalation capability (`notify_human`/`request_attach`/
-    /// `request_review`).
-    pub fn human(mut self, human: Arc<dyn HumanBridge>) -> Self {
-        self.caps.human = Some(human);
-        self
-    }
-
-    /// The live-subagent cap the app enforces. Sourced here (rather than
-    /// hardcoded in the crate) so the server instructions quote the real
-    /// `MAX_CONCURRENT_SUBAGENTS` and can't drift from it.
-    pub fn subagent_cap(mut self, cap: usize) -> Self {
-        self.caps.subagent_cap = Some(cap);
-        self
-    }
-
-    /// Share the escalation seam's connection-scoped state with the handler.
-    /// The handler populates it (client capability + peer) at the first fleet
-    /// tool call; the app holds the same `Arc` to query it from the permission
-    /// path. Capability-gated: default behavior is unchanged when no client
-    /// declares the Tasks/elicitation capability.
-    pub fn escalation(mut self, escalation: Arc<EscalationState>) -> Self {
-        self.caps.escalation = Some(escalation);
         self
     }
 
@@ -1068,24 +710,22 @@ async fn require_bearer(
 /// Build the `/mcp-control` axum router for `backend`, optionally gated by the
 /// pre-auth bearer middleware. HTTP is the public profile: completion only.
 ///
-/// That coupling is a crate-level invariant, deliberately: the orchestrator
-/// tools are semantically bound to one process and one repo (spawned
-/// subagents, the in-process fleet registry, connection-scoped escalation, a
-/// machine-wide metering DB), so no HTTP profile may carry them. Should a
-/// non-child client (e.g. a GUI orchestrator) ever need the *read-only*
-/// introspection surface without a stdio pipe, this is the single function to
-/// change — take a handler factory, keep the profile strictly loopback and
-/// incompatible with the cloud backend, and prefer modeling that read-only
-/// data as MCP resources over widening the tool surface.
+/// That coupling is a crate-level invariant, deliberately: the remaining
+/// non-completion tools are semantically bound to one machine (`route_preview`
+/// resolves against the serving host's own config and control socket;
+/// `skills_search`/`skills_get` read its installed-skills root), so no
+/// multi-tenant HTTP profile may carry them. Should a remote client ever need
+/// that *read-only* introspection surface without a stdio pipe, this is the
+/// single function to change — take a handler factory, keep the profile
+/// strictly loopback and incompatible with the cloud backend, and prefer
+/// modeling that read-only data as MCP resources over widening the tool
+/// surface.
 ///
-/// That invariant is now load-bearing for a second reason. Under SEP-2567 a
-/// peer negotiating `2026-07-28` is **always served statelessly**, regardless
-/// of `StreamableHttpServerConfig::legacy_session_mode` — each request gets a
-/// fresh handler from the factory below, so nothing connection-scoped
-/// survives between requests. The orchestrator tools are exactly the
-/// connection-scoped ones (`EscalationState` captures the live server→client
-/// peer at the first fleet call), and they stay correct only because stdio
-/// sessions are long-lived. Adding a stateful tool to this HTTP profile would
+/// The invariant is load-bearing for a second reason. Under SEP-2567 a peer
+/// negotiating `2026-07-28` is **always served statelessly**, regardless of
+/// `StreamableHttpServerConfig::legacy_session_mode` — each request gets a
+/// fresh handler from the factory below, so nothing connection-scoped survives
+/// between requests. Adding a stateful tool to this HTTP profile would
 /// therefore break under draft-version clients even though it works today
 /// against `2025-11-25`.
 fn build_http_router(
@@ -1364,42 +1004,6 @@ mod tests {
         }
     }
 
-    /// A fleet port that never touches the substrate — canned JSON so the
-    /// profile/routing assertions run without spawning anything.
-    struct StubFleet;
-    #[async_trait::async_trait]
-    impl Fleet for StubFleet {
-        async fn spawn(&self, _: SpawnArgs) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"handle": "stub"}))
-        }
-        async fn prompt(&self, _: PromptArgs) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"handle": "stub"}))
-        }
-        async fn status(&self, _: Option<&str>) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"fleet": []}))
-        }
-        async fn diff(&self, _: &str) -> Result<String, ToolError> {
-            Ok("(no changes)".into())
-        }
-        async fn apply(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"applied": true}))
-        }
-        async fn merge(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"merged": "b"}))
-        }
-        async fn close(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"closed": true}))
-        }
-    }
-
-    struct StubCost;
-    #[async_trait::async_trait]
-    impl CostQuery for StubCost {
-        async fn snapshot(&self) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"today": {"spend_micro_usd": 0, "requests": 0}}))
-        }
-    }
-
     struct StubRouting;
     #[async_trait::async_trait]
     impl RoutingQuery for StubRouting {
@@ -1486,20 +1090,6 @@ mod tests {
         }
     }
 
-    struct StubHuman;
-    #[async_trait::async_trait]
-    impl HumanBridge for StubHuman {
-        async fn notify(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"delivered": true}))
-        }
-        async fn request_attach(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"delivered": true}))
-        }
-        async fn request_review(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"delivered": true}))
-        }
-    }
-
     fn tool_names(server: &BitrouterMcp) -> Vec<String> {
         let mut names: Vec<String> = server
             .tool_router
@@ -1568,14 +1158,14 @@ mod tests {
     }
 
     #[test]
-    fn public_profile_never_exposes_fleet_tools() {
+    fn public_profile_never_exposes_the_host_bound_tools() {
         // The safety boundary: a completion-only client must not even see
-        // the mutating fleet tools.
+        // the tools that resolve against the serving machine.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .build();
         let names = tool_names(&server);
-        for hidden in ["spawn_subagent", "merge_subagent", "fleet_cost"] {
+        for hidden in ["route_preview", "skills_search", "skills_get"] {
             assert!(
                 !names.contains(&hidden.to_string()),
                 "public profile must not advertise `{hidden}`: {names:?}"
@@ -1584,66 +1174,47 @@ mod tests {
     }
 
     #[test]
-    fn fleet_capability_adds_the_seven_fleet_tools() {
+    fn routing_capability_adds_route_preview() {
         let public = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .build();
-        let with_fleet = BitrouterMcp::builder()
+        let with_routing = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
-            .fleet(Arc::new(StubFleet))
+            .routing(Arc::new(StubRouting))
             .build();
-        assert_eq!(tool_names(&public).len() + 7, tool_names(&with_fleet).len());
-        for tool in [
-            "spawn_subagent",
-            "prompt_subagent",
-            "subagent_status",
-            "subagent_diff",
-            "apply_subagent",
-            "merge_subagent",
-            "close_subagent",
-        ] {
-            assert!(
-                tool_names(&with_fleet).contains(&tool.to_string()),
-                "fleet profile advertises `{tool}`"
-            );
-        }
+        assert_eq!(
+            tool_names(&public).len() + 1,
+            tool_names(&with_routing).len()
+        );
+        assert!(tool_names(&with_routing).contains(&"route_preview".to_string()));
     }
 
     #[test]
-    fn cost_capability_adds_fleet_cost() {
-        let with_cost = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .cost(Arc::new(StubCost))
-            .build();
-        assert!(tool_names(&with_cost).contains(&"fleet_cost".to_string()));
-    }
-
-    #[test]
-    fn orchestrator_profile_is_the_union() {
-        // What the TUI injects: completion + fleet + cost = 3 + 7 + 1.
+    fn router_profile_is_completion_plus_route_preview() {
+        // What `bitrouter mcp serve --transport stdio --backend local` wires.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
-            .fleet(Arc::new(StubFleet))
-            .cost(Arc::new(StubCost))
+            .routing(Arc::new(StubRouting))
             .build();
-        assert_eq!(tool_names(&server).len(), 11);
+        assert_eq!(
+            tool_names(&server),
+            ["complete", "list_models", "route_preview", "status"]
+        );
     }
 
     #[test]
     fn annotations_classify_the_tool_surface() {
         // The full surface: every tool declares explicit annotations, the
-        // read-only set is exactly the introspection tools, and the two
-        // human-gated integration tools are the only destructive ones.
+        // read-only set is exactly the introspection tools, and `complete` —
+        // the only tool that reaches an upstream LLM — is the only open-world
+        // one. Nothing left on this surface is destructive.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
-            .fleet(Arc::new(StubFleet))
-            .cost(Arc::new(StubCost))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))
-            .human(Arc::new(StubHuman))
             .build();
         let tools = server.tool_router.list_all();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 6);
         for tool in &tools {
             assert!(
                 tool.annotations.is_some(),
@@ -1663,146 +1234,48 @@ mod tests {
         assert_eq!(
             with_hint(|a| a.read_only_hint),
             [
-                "fleet_cost",
                 "list_models",
                 "route_preview",
                 "skills_get",
                 "skills_search",
                 "status",
-                "subagent_diff",
-                "subagent_status",
             ],
             "the read-only set is exactly the introspection tools"
         );
-        assert_eq!(
-            with_hint(|a| a.destructive_hint),
-            ["apply_subagent", "merge_subagent"],
-            "only the human-gated integration tools are destructive"
+        assert!(
+            with_hint(|a| a.destructive_hint).is_empty(),
+            "nothing on the router/skills surface is destructive"
         );
         assert_eq!(
             with_hint(|a| a.open_world_hint),
-            ["complete", "prompt_subagent", "spawn_subagent"],
-            "open-world = reaches upstream LLMs or launches autonomous agents"
+            ["complete"],
+            "open-world = reaches upstream LLMs"
         );
     }
 
     #[test]
     fn instructions_reflect_the_wired_capabilities() {
-        // The public profile advertises only the completion base — no fleet or
-        // cost guidance a completion-only client couldn't act on.
+        // The public profile advertises only the completion base — no guidance
+        // for tools a completion-only client couldn't call.
         let public = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .build()
             .instructions();
         assert!(public.contains("list_models"));
-        assert!(
-            !public.contains("spawn_subagent"),
-            "no fleet guidance: {public}"
-        );
-        assert!(!public.contains("fleet_cost"), "no cost guidance: {public}");
-
-        // The orchestrator profile restores the fleet guidance (spawn/review,
-        // human-gated apply/merge, the cap) plus the cost tool. The cap value
-        // is sourced from the app, so the instruction quotes exactly what was
-        // passed (no cross-crate magic number).
-        let orchestrator = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .fleet(Arc::new(StubFleet))
-            .cost(Arc::new(StubCost))
-            .subagent_cap(4)
-            .build()
-            .instructions();
-        assert!(orchestrator.contains("spawn_subagent"));
-        assert!(orchestrator.contains("human-gated"));
-        assert!(orchestrator.contains("fleet_cost"));
-        assert!(
-            orchestrator.contains("4-subagent cap"),
-            "cap is sourced from the app, not hardcoded: {orchestrator}"
-        );
-
-        // Without a cap value the fleet guidance stays generic — no invented
-        // number that could drift from the enforced cap.
-        let uncapped = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .fleet(Arc::new(StubFleet))
-            .build()
-            .instructions();
-        assert!(uncapped.contains("the concurrency cap"), "{uncapped}");
-        assert!(
-            !uncapped.contains("6-subagent"),
-            "no hardcoded 6: {uncapped}"
-        );
-    }
-
-    #[test]
-    fn tier2_capabilities_add_their_tools() {
-        let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .routing(Arc::new(StubRouting))
-            .skills(Arc::new(StubSkills))
-            .human(Arc::new(StubHuman))
-            .build();
-        let names = tool_names(&server);
-        for tool in [
-            "route_preview",
-            "skills_search",
-            "skills_get",
-            "notify_human",
-            "request_attach",
-            "request_review",
-        ] {
-            assert!(
-                names.contains(&tool.to_string()),
-                "tier-2 profile advertises `{tool}`: {names:?}"
-            );
-        }
-        // completion (3) + routing (1) + skills (2) + human (3) = 9.
-        assert_eq!(names.len(), 9);
-    }
-
-    #[test]
-    fn public_profile_excludes_tier2_tools() {
-        // The safety boundary extends to the tier-2 introspection / escalation
-        // tools: a completion-only client must not see them.
-        let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .build();
-        let names = tool_names(&server);
-        for hidden in [
-            "route_preview",
-            "skills_search",
-            "skills_get",
-            "notify_human",
-            "request_attach",
-            "request_review",
-        ] {
-            assert!(
-                !names.contains(&hidden.to_string()),
-                "public profile must not advertise `{hidden}`: {names:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn tier2_instructions_are_gated_on_wiring() {
-        let public = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .build()
-            .instructions();
-        for absent in ["route_preview", "skills_search", "notify_human"] {
+        for absent in ["route_preview", "skills_search"] {
             assert!(
                 !public.contains(absent),
                 "public omits `{absent}`: {public}"
             );
         }
+
         let wired = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))
-            .human(Arc::new(StubHuman))
             .build()
             .instructions();
-        for present in ["route_preview", "skills_search", "notify_human"] {
+        for present in ["list_models", "route_preview", "skills_search"] {
             assert!(
                 wired.contains(present),
                 "wired mentions `{present}`: {wired}"

@@ -1,6 +1,6 @@
 //! `bitrouter acp` subcommands — headless ACP session surface.
 //!
-//! Three entry points:
+//! Two entry points:
 //!
 //! - [`serve`] — launch a session and expose it as a vanilla ACP Agent over
 //!   **stdio** until the manager disconnects. Used by GUIs and orchestrating
@@ -10,9 +10,6 @@
 //!   stream each event as a self-describing **NDJSON** line to `out`. Exits
 //!   after the prompt resolves (or immediately after submission when `no_wait`
 //!   is true).
-//!
-//! - [`sessions`] — list the durable session records under the current repo's
-//!   `.bitrouter/sessions/`, newest first.
 //!
 //! ## NDJSON format
 //!
@@ -46,10 +43,9 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use bitrouter_substrate::engine::LaunchOptions;
-use bitrouter_substrate::telemetry::RequestCompleted;
-use bitrouter_substrate::translate::SessionUpdateKind;
-use bitrouter_substrate::worktree::WorktreeSpec;
+use bitrouter_sdk::acp::engine::LaunchOptions;
+use bitrouter_sdk::acp::telemetry::RequestCompleted;
+use bitrouter_sdk::acp::translate::SessionUpdateKind;
 
 use crate::paths::ConfigSource;
 
@@ -81,7 +77,7 @@ pub struct SpawnContext<'a> {
     pub config: Config,
     /// The agent id to launch (catalog id or configured entry).
     pub agent_id: &'a str,
-    /// Session options (worktree, turn timeout).
+    /// Session options (turn timeout).
     pub options: LaunchOptions,
     /// The routing decision (via-daemon by default, or `--direct`).
     pub routing: RoutingOptions,
@@ -169,8 +165,8 @@ impl RoutingError {
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
 /// unroutable harness — each warned to stderr). Fails fast — before the
-/// caller creates any worktree or record — on an unreachable
-/// daemon or a missing required credential.
+/// caller spawns any agent process — on an unreachable daemon or a missing
+/// required credential.
 pub async fn apply_routing(
     source: &ConfigSource,
     config: &mut Config,
@@ -231,7 +227,7 @@ pub async fn apply_routing(
     if !harness.env_args_routable() {
         eprintln!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
-             (the `bitrouter tui` orchestrator facet does); launching direct",
+             (`bitrouter launch` does); launching direct",
             harness.id
         );
         warn_model_dropped("the harness routes only in the interactive facet");
@@ -399,7 +395,7 @@ pub async fn spawn_check(
                     "agent",
                     SpawnCheckStatus::Fail,
                     format!(
-                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter tui --agent {}`",
+                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter launch --agent {}`",
                         h.interactive_binary.unwrap_or(agent_id)
                     ),
                 ));
@@ -534,8 +530,7 @@ pub async fn spawn_check(
 /// **stdio** until the manager disconnects.
 ///
 /// Config is taken by value (already loaded by the caller); `options` carries
-/// the worktree spec and per-turn timeout resolved from the CLI flags (see
-/// [`launch_options`]).
+/// the per-turn timeout resolved from the CLI flags (see [`launch_options`]).
 pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let SpawnContext {
         source,
@@ -548,17 +543,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // opted out. Fail fast to stderr — before speaking any ACP — so a manager
     // handles "child failed to start" rather than a mid-session provider error.
     if let Err(e) = apply_routing(source, &mut config, agent_id, &routing).await {
-        eprintln!("spawn: {}\n  hint: {}", e.message(), e.hint());
+        eprintln!("error: {}\n  hint: {}", e.message(), e.hint());
         std::process::exit(1);
     }
     let catalog = catalog_from_config(&config)?;
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
+    let cwd = std::env::current_dir().context("resolving current directory")?;
     // Deferred open: the upstream `session/new` runs when the manager sends
     // its own `session/new`, so the manager's cwd + mcpServers are relayed.
-    let session = bitrouter_substrate::engine::Session::launch_deferred(
+    let session = bitrouter_sdk::acp::engine::Session::launch_deferred(
         &catalog,
         agent_id,
-        base_repo.clone(),
+        cwd.clone(),
         options,
     )
     .await
@@ -566,11 +561,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let exporter = attach_observability(&config, agent_id, &session).await;
     let session = Arc::new(session);
 
-    let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
+    let served = bitrouter_sdk::acp::down::serve(Arc::clone(&session)).await;
 
-    // No manager left: shut the session down deliberately so the worktree
-    // policy is honored (same semantics as `prompt`). Once serving ends, the
-    // forwarding tasks have released their clones, so we are the sole owner.
+    // No manager left: shut the session down deliberately so the agent child
+    // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
+    // tasks have released their clones, so we are the sole owner.
     match Arc::try_unwrap(session) {
         Ok(session) => session
             .shutdown()
@@ -598,7 +593,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
 /// persistent session should use `bitrouter acp serve` instead.
 ///
-/// `contract` is the optional `--result-schema` contract (TUI_SPEC §4): its
+/// `contract` is the optional `--result-schema` contract: its
 /// instruction rides the prompt, and the terminal `result` line gains
 /// `result`/`schema_ok` (+ `raw` on failure) fields.
 pub async fn prompt<W>(
@@ -619,7 +614,7 @@ where
         routing,
     } = ctx;
     // Route by default; fail fast with a single structured NDJSON `error`
-    // line BEFORE any session side effect (no worktree/record).
+    // line BEFORE any session side effect (no agent process spawned).
     let via = match apply_routing(source, &mut config, agent_id, &routing).await {
         Ok(via) => via,
         Err(e) => {
@@ -630,14 +625,13 @@ where
     };
 
     let catalog = catalog_from_config(&config)?;
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session =
-        bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, options)
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
 
-    // First line: correlate this session's record with the cost/metering the
+    // First line: correlate this session with the cost/metering the
     // orchestrator later queries. `via` is null when running direct.
     write_ndjson_line(
         out,
@@ -699,7 +693,7 @@ where
 /// early-return in the `no_wait` branch above doesn't borrow `session` past its
 /// drop point.
 async fn prompt_wait<W>(
-    session: bitrouter_substrate::engine::Session,
+    session: bitrouter_sdk::acp::engine::Session,
     text: &str,
     contract: Option<crate::result_contract::ResultContract>,
     out: &mut W,
@@ -771,7 +765,7 @@ where
 /// Drive one prompt turn: stream its updates to `out` (accumulating message
 /// text when `capture`), and return the typed response plus the reply text.
 async fn run_turn<W>(
-    session: &bitrouter_substrate::engine::Session,
+    session: &bitrouter_sdk::acp::engine::Session,
     updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
     text: &str,
     capture: bool,
@@ -837,87 +831,6 @@ where
     write_ndjson_line(out, update).await
 }
 
-// ── sessions ──────────────────────────────────────────────────────────────────
-
-/// List the session records under the current repo's `.bitrouter/sessions/`,
-/// newest first: short record id, agent, status, age, and worktree.
-///
-/// A record left `running` by a substrate process that died without shutting
-/// down is shown as `dead` (its pid no longer exists) rather than trusted.
-pub async fn sessions<W>(out: &mut W) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    use bitrouter_substrate::record::{RecordStatus, RecordStore, now_unix};
-
-    let base = std::env::current_dir().context("resolving current directory")?;
-    let store = RecordStore::new(&base);
-    let mut records = store.list().await?;
-    if records.is_empty() {
-        out.write_all(b"no sessions recorded under .bitrouter/sessions\n")
-            .await
-            .context("writing output")?;
-        return Ok(());
-    }
-    records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
-
-    let now = now_unix();
-    let mut buf = String::from("RECORD    AGENT             STATUS   AGE      WORKTREE\n");
-    for r in records {
-        let status = match r.status {
-            RecordStatus::Exited => "exited",
-            RecordStatus::Running if pid_alive(r.pid) => "running",
-            RecordStatus::Running => "dead",
-        };
-        let short_id: String = r.record_id.chars().take(8).collect();
-        let worktree = r
-            .worktree
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "-".to_string());
-        buf.push_str(&format!(
-            "{short_id:<9} {agent:<17} {status:<8} {age:<8} {worktree}\n",
-            agent = r.agent_id,
-            age = format_age(now.saturating_sub(r.started_at)),
-        ));
-    }
-    out.write_all(buf.as_bytes())
-        .await
-        .context("writing output")
-}
-
-/// Whether `pid` is a live process. Used to demote a stale `running` record
-/// (left behind by a killed substrate) to `dead` in the listing.
-fn pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        // `kill -0` probes existence without signalling. EPERM (owned by
-        // another user) exits non-zero, which conservatively reads as dead —
-        // acceptable, since substrate sessions run as the invoking user.
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true
-    }
-}
-
-/// Render an age in seconds as a compact human unit (`42s`, `7m`, `3h`, `2d`).
-fn format_age(secs: u64) -> String {
-    match secs {
-        0..=59 => format!("{secs}s"),
-        60..=3599 => format!("{}m", secs / 60),
-        3600..=86_399 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86_400),
-    }
-}
-
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Attach observability to a session when the observe config opts telemetry
@@ -928,7 +841,7 @@ fn format_age(secs: u64) -> String {
 async fn attach_observability(
     config: &Config,
     agent_id: &str,
-    session: &bitrouter_substrate::engine::Session,
+    session: &bitrouter_sdk::acp::engine::Session,
 ) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
     let exporter = crate::assemble::build_otel_exporter_standalone(config).await;
     let recorder = exporter.as_ref().map(|exporter| {
@@ -962,7 +875,7 @@ async fn attach_observability(
     if let Some(recorder) = recorder {
         let mut updates = session.updates();
         tokio::spawn(async move {
-            use bitrouter_substrate::translate::ToolStatus;
+            use bitrouter_sdk::acp::translate::ToolStatus;
             while let Some(update) = updates.next().await {
                 match update {
                     SessionUpdateKind::ToolCall {
@@ -1009,20 +922,9 @@ fn drain_telemetry_record(r: RequestCompleted) {
 }
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
-/// `--worktree`/`--rm-worktree` (retention is the default — removal destroys
-/// the agent's uncommitted work, so it is strictly opt-in) and
 /// `--turn-timeout <secs>`.
-pub fn launch_options(
-    worktree: Option<&str>,
-    rm_worktree: bool,
-    turn_timeout_secs: Option<u64>,
-) -> LaunchOptions {
+pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     LaunchOptions {
-        worktree: worktree.map(|name| WorktreeSpec {
-            name: name.to_string(),
-            branch: None,
-            remove_on_shutdown: rm_worktree,
-        }),
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
         ..Default::default()
     }

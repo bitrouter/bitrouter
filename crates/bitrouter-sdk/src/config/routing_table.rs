@@ -131,6 +131,9 @@ fn build_targets(
         chat_compatibility.and_then(|compatibility| compatibility.supports_store);
     let chat_supports_stream_options =
         chat_compatibility.and_then(|compatibility| compatibility.supports_stream_options);
+    let reasoning_effort = provider
+        .model_config(model_id)
+        .and_then(|model| model.reasoning_effort.clone());
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
@@ -145,6 +148,7 @@ fn build_targets(
             chat_token_limit_field,
             chat_supports_store,
             chat_supports_stream_options,
+            reasoning_effort: reasoning_effort.clone(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -185,6 +189,7 @@ fn build_targets(
                 chat_token_limit_field,
                 chat_supports_store,
                 chat_supports_stream_options,
+                reasoning_effort: reasoning_effort.clone(),
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,

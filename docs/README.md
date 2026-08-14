@@ -8,8 +8,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
-  in-flight work (TUI, spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP).
+  in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
+  skills over MCP, the observability TUI).
+- [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) — how `launch --tui` is
+  verified across the eight harnesses, and the manual pass to fill in.
 
 ## Where product docs live
 

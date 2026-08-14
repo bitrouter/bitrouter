@@ -73,23 +73,35 @@ async fn collect_exported_trace_spans(
     spans
 }
 
-/// Wait until the collector has received at least one OTLP POST.
-async fn wait_for_otlp(collector: &MockServer) {
+/// Poll until the collector has received a SERVER span, or the budget
+/// expires. Reports whether it arrived rather than panicking, so the caller
+/// can force a final flush and let the real assertion produce the diagnostic.
+///
+/// Waiting for *any* export is not enough, and was the cause of an
+/// intermittent macOS CI failure: the `route` and `chat` spans close while the
+/// request is still in flight and batch out first, but the tower-http SERVER
+/// span only closes when the response future completes on the server task —
+/// which races with the client-side read returning here. The old code took the
+/// first export as its cue and shut the pipeline down, so on an unlucky
+/// interleaving the SERVER span's batch never went out and the span was lost
+/// rather than late.
+///
+/// Polling for the span we actually assert on removes the race instead of
+/// widening a sleep: the batch processor is configured at `flush_ms: 100`
+/// below, so a closed span appears within a tick.
+async fn server_span_exported(collector: &MockServer) -> bool {
+    use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;
     for _ in 0..(ASYNC_WAIT_BUDGET_MS / POLL_INTERVAL_MS) {
-        let n = collector
-            .received_requests()
+        if collect_exported_trace_spans(collector)
             .await
-            .map(|r| r.len())
-            .unwrap_or(0);
-        if n >= 1 {
-            return;
+            .iter()
+            .any(|s| s.kind == ProtoKind::Server as i32)
+        {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
-    panic!(
-        "OTLP collector never received an export within {}ms",
-        ASYNC_WAIT_BUDGET_MS
-    );
+    false
 }
 
 /// Minimal OpenAI-style SSE response: text delta + finish chunk with
@@ -160,7 +172,16 @@ plugins:
       endpoint: {otlp}
       traces:
         batch:
-          flush_ms: 100
+          # Deliberately hostile. At 1ms the batch processor exports while the
+          # request is still in flight, so the `route` and `chat` spans reach
+          # the collector before the tower-http SERVER span has closed — the
+          # exact interleaving that made this test fail intermittently on
+          # macOS CI and pass everywhere else.
+          #
+          # Holding the race open on every run turns a rare remote failure into
+          # a deterministic local one: with the old "wait for any export, then
+          # shut down" logic this configuration fails 12 times out of 12.
+          flush_ms: 1
       metrics:
         enabled: false
 "#,
@@ -209,8 +230,17 @@ plugins:
     drop(server);
 
     // ── flush + decode ──
-    wait_for_otlp(&otlp_collector).await;
+    // Let the batch processor export the SERVER span on its own schedule…
+    let exported = server_span_exported(&otlp_collector).await;
+    // …then force the final flush regardless, so the assertions below see
+    // every span the run produced.
     assembled.observe.shutdown().await;
+    // If the wait timed out, the span may have closed inside the final batch
+    // interval and only reached the collector via that forced flush. One more
+    // window, so a genuine failure is distinguishable from a slow runner.
+    if !exported {
+        let _ = server_span_exported(&otlp_collector).await;
+    }
 
     let spans = collect_exported_trace_spans(&otlp_collector).await;
     assert!(

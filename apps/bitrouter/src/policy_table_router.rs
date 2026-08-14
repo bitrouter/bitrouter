@@ -23,20 +23,26 @@
 //! The policy table is purely declarative and never mutated at runtime; it is
 //! the kind of thing an operator keeps under version control.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
-use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
-use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
+use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
+use bitrouter_sdk::language_model::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
-use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
+use crate::continuation::ContinuationAdjustment;
+use crate::eval::settlement::{
+    EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
+};
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
+use crate::workflow_state::predictive::{
+    NextActionClass, NextStepRole, PredictiveEvidence, is_predictive_reason_code,
+};
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +51,7 @@ pub enum PolicyDecisionReason {
     ToolGuardrail,
     ProgressGuard,
     ProgressGuardToolGuardrail,
+    ContinuationPin,
     NoMatch,
 }
 
@@ -55,6 +62,7 @@ impl PolicyDecisionReason {
             Self::ToolGuardrail => "tool_guardrail",
             Self::ProgressGuard => "progress_guard",
             Self::ProgressGuardToolGuardrail => "progress_guard_tool_guardrail",
+            Self::ContinuationPin => "continuation_pin",
             Self::NoMatch => "no_match",
         }
     }
@@ -71,14 +79,28 @@ pub struct PolicyDecision {
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
     pub route_projection: String,
+    pub observed_route_projection: String,
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
     pub harness_id: HarnessId,
     pub workflow_identity: WorkflowIdentity,
+    pub input_effort: Option<ReasoningEffort>,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
+    pub static_effort: Option<ReasoningEffort>,
     pub selected_tier: Option<String>,
     pub selected_model: Option<String>,
+    pub selected_effort: Option<ReasoningEffort>,
+    pub continuation_proposed_tier: Option<String>,
+    pub continuation_proposed_model: Option<String>,
+    pub continuation_proposed_effort: Option<ReasoningEffort>,
+    pub continuation_adjustment: Option<String>,
+    pub predicted_role: Option<String>,
+    pub predicted_action: Option<String>,
+    pub prediction_confidence_ppm: Option<u32>,
+    pub predictor_contract_digest: Option<String>,
+    pub prediction_confidence_kind: Option<String>,
+    pub prediction_reason_codes: Vec<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
     pub request_qualified: bool,
@@ -112,7 +134,7 @@ impl PolicyDecision {
 /// guardrails. Learned-state databases never participate in this hot path.
 pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
-    tiers: HashMap<String, String>,
+    tiers: HashMap<String, PolicyModelTarget>,
     /// Request fingerprint → tier name.
     fingerprints: HashMap<String, String>,
     /// Tier for a fingerprint absent from `fingerprints`.
@@ -140,21 +162,25 @@ impl PolicyTable {
         }))
     }
 
-    /// Resolve a v2 workflow key, then its exact v1 compatibility projection,
-    /// then the default. The returned key is the key that actually selected
-    /// the tier, except that defaults deliberately retain the v2 learning key.
+    /// Resolve the predictive key, then observed v2 and v1 compatibility
+    /// projections, then the default. The returned key is the key that actually
+    /// selected the tier, except that defaults retain the predictive key.
     fn tier_for_workflow<'table, 'key>(
         &'table self,
-        primary: &'key str,
-        compatibility_v1: &'key str,
+        predictive: &'key str,
+        observed_v2: &'key str,
+        observed_v1: &'key str,
     ) -> Option<(&'table str, &'key str)> {
-        if let Some(tier) = self.fingerprints.get(primary) {
-            return Some((tier.as_str(), primary));
+        if let Some(tier) = self.fingerprints.get(predictive) {
+            return Some((tier.as_str(), predictive));
         }
-        if let Some(tier) = self.fingerprints.get(compatibility_v1) {
-            return Some((tier.as_str(), compatibility_v1));
+        if let Some(tier) = self.fingerprints.get(observed_v2) {
+            return Some((tier.as_str(), observed_v2));
         }
-        self.default_tier.as_deref().map(|tier| (tier, primary))
+        if let Some(tier) = self.fingerprints.get(observed_v1) {
+            return Some((tier.as_str(), observed_v1));
+        }
+        self.default_tier.as_deref().map(|tier| (tier, predictive))
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -169,7 +195,38 @@ impl PolicyTable {
 
     /// The model id a tier routes to.
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
-        self.tiers.get(tier).map(String::as_str)
+        self.target_of_tier(tier).map(PolicyModelTarget::model)
+    }
+
+    /// The policy-owned effort override for a tier, when the target is
+    /// structured. Scalar targets intentionally preserve caller effort.
+    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
+        self.target_of_tier(tier)
+            .and_then(PolicyModelTarget::effort)
+    }
+
+    /// The complete model/effort target selected by a tier.
+    pub(crate) fn target_of_tier(&self, tier: &str) -> Option<&PolicyModelTarget> {
+        self.tiers.get(tier)
+    }
+
+    fn stable_tier_of_target(&self, model: &str, effort: Option<ReasoningEffort>) -> Option<&str> {
+        self.tiers
+            .iter()
+            .filter_map(|(tier, candidate)| {
+                (candidate.model() == model && candidate.effort() == effort)
+                    .then_some(tier.as_str())
+            })
+            .min()
+            .or_else(|| {
+                self.tiers
+                    .iter()
+                    .filter_map(|(tier, candidate)| {
+                        (candidate.model() == model && candidate.effort().is_none())
+                            .then_some(tier.as_str())
+                    })
+                    .min()
+            })
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -301,23 +358,6 @@ impl PolicyTableRouter {
         self
     }
 
-    pub(crate) fn with_eval_metadata(
-        mut self,
-        policy: impl Into<String>,
-        policy_digest: impl Into<String>,
-        route_baselines: HashMap<String, String>,
-        default_baseline: Option<String>,
-    ) -> Self {
-        self.eval_observer = Some(EvalDecisionObserver {
-            pending: None,
-            policy: policy.into(),
-            policy_digest: policy_digest.into(),
-            route_baselines,
-            default_baseline,
-        });
-        self
-    }
-
     pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
         self.progress_guard = guard;
         self
@@ -352,6 +392,26 @@ impl PolicyTableRouter {
 
     pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
         self.table.tool_safe_tiers.iter().cloned().collect()
+    }
+
+    pub(crate) fn effective_tier_efforts(
+        &self,
+        inherited: Option<ReasoningEffort>,
+    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
+        self.table
+            .tiers
+            .iter()
+            .filter_map(|(tier, target)| {
+                target
+                    .effort()
+                    .or(inherited)
+                    .map(|effort| (tier.clone(), effort))
+            })
+            .collect()
+    }
+
+    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
+        self.table.effort_of_tier(tier)
     }
 
     fn ledger_key(&self, request_key: &str) -> String {
@@ -389,18 +449,39 @@ impl PolicyTableRouter {
         };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
+        let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key: primary_request_key.clone(),
             route_projection: primary_request_key.clone(),
+            observed_route_projection: observed_route_projection.clone(),
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
             workflow_identity: online.ir.identity.clone(),
+            input_effort: prompt.params.reasoning_effort,
             static_tier: None,
             static_model: None,
+            static_effort: None,
             selected_tier: None,
             selected_model: None,
+            selected_effort: None,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_proposed_effort: None,
+            continuation_adjustment: None,
+            predicted_role: Some(
+                prediction_role_name(online.predictive.next_step_role).to_string(),
+            ),
+            predicted_action: Some(
+                prediction_action_name(online.predictive.next_action_class).to_string(),
+            ),
+            prediction_confidence_ppm: Some(prediction_confidence_ppm(
+                online.predictive.confidence,
+            )),
+            predictor_contract_digest: Some(online.predictive.predictor_contract_digest.clone()),
+            prediction_confidence_kind: Some(online.predictive.confidence_kind.clone()),
+            prediction_reason_codes: prediction_reason_codes(&online.predictive.evidence),
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
             request_qualified: false,
@@ -422,10 +503,11 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some((raw_static_tier, matched_request_key)) = self
-            .table
-            .tier_for_workflow(&primary_request_key, online.compatibility_routing_key_v1())
-        else {
+        let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
+            &primary_request_key,
+            &observed_route_projection,
+            online.compatibility_routing_key_v1(),
+        ) else {
             return decision;
         };
         decision.request_key = matched_request_key.to_string();
@@ -434,6 +516,10 @@ impl PolicyTableRouter {
             .table
             .model_of_tier(raw_static_tier)
             .map(ToString::to_string);
+        decision.static_effort = self
+            .table
+            .effort_of_tier(raw_static_tier)
+            .or(decision.input_effort);
         let (selected_tier, static_clamped) = if apply_tool_floor {
             self.table.guardrail_with_status(raw_static_tier, prompt)
         } else {
@@ -450,6 +536,10 @@ impl PolicyTableRouter {
             .table
             .model_of_tier(selected_tier)
             .map(ToString::to_string);
+        decision.selected_effort = self
+            .table
+            .effort_of_tier(selected_tier)
+            .or(decision.input_effort);
         if decision.selected_model.is_none() {
             decision.reason = PolicyDecisionReason::NoMatch;
         }
@@ -458,16 +548,22 @@ impl PolicyTableRouter {
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
         let input_model = prompt.model.clone();
+        let input_effort = prompt.params.reasoning_effort;
         let decision = self.decision_for(prompt, headers);
-        let selected = self.record_decision(input_model, decision, headers, None);
-        let Some(model) = selected else {
+        let selected =
+            self.record_decision(input_model, input_effort, decision, headers, None, None);
+        let Some(target) = selected else {
             return false;
         };
-        if prompt.model == model {
-            return false;
+        let mut changed = prompt.model != target.model();
+        prompt.model = target.model().to_string();
+        if let Some(effort) = target.effort() {
+            changed |= prompt.params.reasoning_effort != Some(effort);
+            prompt.params.reasoning_effort = Some(effort);
+            prompt.params.reasoning_effort_source =
+                bitrouter_sdk::language_model::types::ReasoningEffortSource::Policy;
         }
-        prompt.model = model;
-        true
+        changed
     }
 
     /// Select a model for a preset that explicitly owns this policy. Unlike the
@@ -500,6 +596,9 @@ impl PolicyTableRouter {
         decision.selected_model = selected_tier
             .and_then(|tier| self.table.model_of_tier(tier))
             .map(ToOwned::to_owned);
+        decision.selected_effort = selected_tier
+            .and_then(|tier| self.table.effort_of_tier(tier))
+            .or(decision.input_effort);
         decision.reason = match (guard_applied, tool_floor_applied) {
             (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
             (true, false) => PolicyDecisionReason::ProgressGuard,
@@ -511,31 +610,87 @@ impl PolicyTableRouter {
         };
     }
 
+    pub(crate) fn apply_continuation_adjustment(
+        &self,
+        decision: &mut PolicyDecision,
+        adjustment: &ContinuationAdjustment,
+    ) -> bitrouter_sdk::Result<()> {
+        decision.continuation_proposed_tier = decision.selected_tier.clone();
+        decision.continuation_proposed_model = decision.selected_model.clone();
+        decision.continuation_proposed_effort = decision.selected_effort;
+        match adjustment {
+            ContinuationAdjustment::Pin {
+                effective_model,
+                effective_effort,
+                effort_authoritative,
+            } => {
+                let pinned_effort = effort_authoritative
+                    .then_some(*effective_effort)
+                    .unwrap_or(decision.input_effort);
+                let selected_tier = self
+                    .table
+                    .stable_tier_of_target(effective_model, pinned_effort)
+                    .ok_or_else(|| {
+                        bitrouter_sdk::BitrouterError::bad_request(
+                            "provider continuation model is unavailable in the active policy",
+                        )
+                    })?;
+                decision.selected_tier = Some(selected_tier.to_owned());
+                decision.selected_model = Some(effective_model.clone());
+                decision.selected_effort = pinned_effort;
+                decision.continuation_adjustment = Some("pin".to_owned());
+                decision.reason = PolicyDecisionReason::ContinuationPin;
+                decision.pinned = true;
+            }
+            ContinuationAdjustment::Detach => {
+                decision.continuation_adjustment = Some("detach".to_owned());
+            }
+            ContinuationAdjustment::RejectLegacy => {
+                decision.continuation_adjustment = Some("reject_legacy".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn record_bound_policy_decision(
         &self,
         request_id: &str,
+        invocation: &EvalInvocation,
         input_model: String,
+        input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
-    ) -> Option<String> {
-        self.record_decision(input_model, decision, headers, Some(request_id))
+    ) -> Option<PolicyModelTarget> {
+        self.record_decision(
+            input_model,
+            input_effort,
+            decision,
+            headers,
+            Some(request_id),
+            Some(invocation),
+        )
     }
 
     fn record_decision(
         &self,
         input_model: String,
+        input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
         request_id_override: Option<&str>,
-    ) -> Option<String> {
+        invocation: Option<&EvalInvocation>,
+    ) -> Option<PolicyModelTarget> {
         let baseline_tier = self.eval_baseline_tier(&decision);
-        let request_id = request_id_override.or_else(|| {
-            headers
-                .get("x-bitrouter-request-id")
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
+        let baseline_effort = baseline_tier
+            .as_deref()
+            .and_then(|tier| self.table.effort_of_tier(tier))
+            .or(input_effort);
+        let ingress_request_id = headers
+            .get("x-bitrouter-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let request_id = request_id_override.or(ingress_request_id);
         let request_id_for_log = request_id.unwrap_or("-");
         tracing::info!(
             request_id = request_id_for_log,
@@ -547,10 +702,17 @@ impl PolicyTableRouter {
             trace_agent_role = decision.workflow_identity.role.as_str(),
             trace_context_epoch = decision.workflow_identity.context_epoch,
             trace_session_fingerprint = %decision.workflow_identity.fingerprint,
+            input_effort = ?decision.input_effort,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
+            static_effort = ?decision.static_effort,
             selected_tier = ?decision.selected_tier,
             selected_model = ?decision.selected_model,
+            selected_effort = ?decision.selected_effort,
+            continuation_proposed_tier = ?decision.continuation_proposed_tier,
+            continuation_proposed_model = ?decision.continuation_proposed_model,
+            continuation_proposed_effort = ?decision.continuation_proposed_effort,
+            continuation_adjustment = ?decision.continuation_adjustment,
             trajectory_episode_id = ?decision.trajectory_episode_id,
             trajectory_sequence = ?decision.trajectory_sequence,
             trajectory_completeness = ?decision.trajectory_completeness,
@@ -566,29 +728,58 @@ impl PolicyTableRouter {
             trialed = decision.trialed,
             "policy routing decision"
         );
-        if let (Some(observer), Some(request_id), Some(selected_tier)) = (
+        if let (Some(observer), Some(invocation), Some(request_id), Some(selected_tier)) = (
             &self.eval_observer,
+            invocation,
             request_id,
             decision.selected_tier.as_deref(),
         ) && let Some(pending) = &observer.pending
         {
-            pending.insert(PendingEvalDecision {
-                request_id: request_id.to_string(),
-                decision_id: format!("{request_id}:{}", observer.policy),
-                policy: observer.policy.clone(),
-                policy_digest: observer.policy_digest.clone(),
-                request_key: decision.request_key.clone(),
-                selected_tier: selected_tier.to_string(),
-                baseline_tier: baseline_tier.clone(),
-                preset: Some(observer.policy.clone()),
-                holdout: false,
-            });
+            pending.insert(
+                invocation,
+                PendingEvalDecision {
+                    request_id: request_id.to_string(),
+                    decision_id: format!("{request_id}:{}", observer.policy),
+                    policy: observer.policy.clone(),
+                    policy_digest: observer.policy_digest.clone(),
+                    request_key: decision.request_key.clone(),
+                    selected_tier: selected_tier.to_string(),
+                    selected_effort: decision.selected_effort,
+                    baseline_tier: baseline_tier.clone(),
+                    baseline_effort,
+                    preset: Some(observer.policy.clone()),
+                    holdout: false,
+                    continuation_proposed_tier: bounded_continuation_label(
+                        decision.continuation_proposed_tier.as_deref(),
+                        128,
+                    ),
+                    continuation_proposed_model: bounded_continuation_label(
+                        decision.continuation_proposed_model.as_deref(),
+                        512,
+                    ),
+                    continuation_proposed_effort: decision.continuation_proposed_effort,
+                    continuation_adjustment: bounded_continuation_label(
+                        decision.continuation_adjustment.as_deref(),
+                        32,
+                    ),
+                    predicted_role: decision.predicted_role.clone(),
+                    predicted_action: decision.predicted_action.clone(),
+                    prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                    predictor_contract_digest: decision.predictor_contract_digest.clone(),
+                    prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
+                    observation: None,
+                    observed_at: chrono::Utc::now().to_rfc3339(),
+                },
+            );
         }
         if let Some(recorder) = &self.decision_recorder {
             let record = PolicyDecisionRecord {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
+                ingress_request_id_sha256: ingress_request_id
+                    .map(crate::workflow_state::decision::ingress_request_id_sha256),
                 input_model,
+                input_effort,
                 key_strategy: key_strategy_name().to_string(),
                 request_key: decision.request_key.clone(),
                 ledger_key: self
@@ -602,13 +793,27 @@ impl PolicyTableRouter {
                     .map(|item| item.policy_digest.clone()),
                 preset_variant: self.eval_observer.as_ref().map(|item| item.policy.clone()),
                 baseline_tier,
+                baseline_effort,
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
                 workflow_identity: decision.workflow_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
+                static_effort: decision.static_effort,
                 selected_tier: decision.selected_tier.clone(),
                 selected_model: decision.selected_model.clone(),
+                selected_effort: decision.selected_effort,
+                continuation_proposed_tier: decision.continuation_proposed_tier.clone(),
+                continuation_proposed_model: decision.continuation_proposed_model.clone(),
+                continuation_proposed_effort: decision.continuation_proposed_effort,
+                continuation_adjustment: decision.continuation_adjustment.clone(),
+                predicted_role: decision.predicted_role.clone(),
+                predicted_action: decision.predicted_action.clone(),
+                prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                predictor_contract_digest: decision.predictor_contract_digest.clone(),
+                prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
+                prediction_reason_codes: decision.prediction_reason_codes.clone(),
+                observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
                 trajectory_sequence: decision.trajectory_sequence,
                 trajectory_completeness: decision
@@ -635,12 +840,78 @@ impl PolicyTableRouter {
                 tracing::warn!(%error, "policy decision recorder failed");
             }
         }
-        decision.selected_model
+        let selected_model = decision.selected_model.as_deref()?;
+        let selected_tier = decision.selected_tier.as_deref()?;
+        let configured = self
+            .table
+            .target_of_tier(selected_tier)
+            .filter(|target| target.model() == selected_model)
+            .cloned()?;
+        if decision.continuation_adjustment.as_deref() == Some("pin")
+            && configured.effort().is_none()
+            && let Some(effort) = decision.selected_effort
+        {
+            return Some(PolicyModelTarget::ModelEffort {
+                model: selected_model.to_owned(),
+                effort,
+            });
+        }
+        Some(configured)
     }
 }
 
 fn key_strategy_name() -> &'static str {
     "agent_trace"
+}
+
+const MAX_PREDICTION_REASON_CODES: usize = 8;
+const PREDICTION_CONFIDENCE_PPM_MAX: u32 = 1_000_000;
+
+fn prediction_role_name(role: NextStepRole) -> &'static str {
+    match role {
+        NextStepRole::Orchestrate => "orchestrate",
+        NextStepRole::Implement => "implement",
+        NextStepRole::Mechanical => "mechanical",
+        NextStepRole::Verify => "verify",
+        NextStepRole::Finalize => "finalize",
+        NextStepRole::Unknown => "unknown",
+    }
+}
+
+fn prediction_action_name(action: NextActionClass) -> &'static str {
+    match action {
+        NextActionClass::ReasonOrPlan => "reason_or_plan",
+        NextActionClass::InspectOrRead => "inspect_or_read",
+        NextActionClass::Mutate => "mutate",
+        NextActionClass::ExecuteOrTest => "execute_or_test",
+        NextActionClass::WaitOrPoll => "wait_or_poll",
+        NextActionClass::AnswerOrSummarize => "answer_or_summarize",
+        NextActionClass::Unknown => "unknown",
+    }
+}
+
+fn prediction_confidence_ppm(confidence: f32) -> u32 {
+    let scaled = f64::from(confidence) * f64::from(PREDICTION_CONFIDENCE_PPM_MAX);
+    if scaled.is_nan() || scaled <= 0.0 {
+        return 0;
+    }
+    if scaled >= f64::from(PREDICTION_CONFIDENCE_PPM_MAX) {
+        return PREDICTION_CONFIDENCE_PPM_MAX;
+    }
+    let rounded = scaled.round() as u64;
+    u32::try_from(rounded).unwrap_or(PREDICTION_CONFIDENCE_PPM_MAX)
+}
+
+fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .map(|item| item.code.as_str())
+        .filter(|code| is_predictive_reason_code(code))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_PREDICTION_REASON_CODES)
+        .map(ToString::to_string)
+        .collect()
 }
 
 impl PromptTransform for PolicyTableRouter {
@@ -698,7 +969,9 @@ mod tests {
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::config::PolicyKeyStrategy;
-    use bitrouter_sdk::language_model::types::{GenerationParams, Message, ProviderMetadata, Tool};
+    use bitrouter_sdk::language_model::types::{
+        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
+    };
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -726,8 +999,11 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                ("cheap".to_string(), "vendor/cheap".to_string()),
-                ("flagship".to_string(), "vendor/flagship".to_string()),
+                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
+                (
+                    "flagship".to_string(),
+                    PolicyModelTarget::from("vendor/flagship"),
+                ),
             ]),
             fingerprints: HashMap::from([
                 (
@@ -750,8 +1026,14 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                ("economy".to_string(), "vendor/economy".to_string()),
-                ("strong".to_string(), "vendor/strong".to_string()),
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
             ]),
             fingerprints: HashMap::from([
                 (
@@ -919,6 +1201,7 @@ mod tests {
             HeaderValue::from_str(raw_request_id)?,
         );
         let decision = router.candidate_for_guarded_policy(&request_prompt, &headers);
+        let invocation = EvalInvocation::new("owner-a");
         let captured = Arc::new(Mutex::new(Vec::new()));
         let sink = captured.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -930,7 +1213,9 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             router.record_bound_policy_decision(
                 &opaque_request_id,
+                &invocation,
                 "inbound".into(),
+                None,
                 decision,
                 &headers,
             );
@@ -1030,7 +1315,7 @@ mod tests {
         // left as-is.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
+            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "cheap".to_string(),
@@ -1091,6 +1376,25 @@ mod tests {
         );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
+        assert_eq!(records[0].predicted_role.as_deref(), Some("unknown"));
+        assert_eq!(records[0].predicted_action.as_deref(), Some("unknown"));
+        assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
+        assert_eq!(
+            records[0].predictor_contract_digest.as_deref(),
+            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+        );
+        assert_eq!(
+            records[0].prediction_confidence_kind.as_deref(),
+            Some("heuristic_margin")
+        );
+        assert_eq!(
+            records[0].prediction_reason_codes,
+            vec!["history_truncated"]
+        );
+        assert_eq!(
+            records[0].observed_route_projection.as_deref(),
+            Some("agent_trace/v2|tool_followup|normal")
+        );
         assert_eq!(records[0].reason, "static_table");
         assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
         assert_eq!(
@@ -1116,6 +1420,62 @@ mod tests {
     }
 
     #[test]
+    fn prediction_confidence_ppm_clamps_a_literal_edge_case_table() {
+        let cases = [
+            (f32::NAN, 0),
+            (f32::INFINITY, 1_000_000),
+            (f32::NEG_INFINITY, 0),
+            (-0.25, 0),
+            (0.0, 0),
+            (0.9, 900_000),
+            (1.1, 1_000_000),
+        ];
+
+        for (confidence, expected) in cases {
+            assert_eq!(prediction_confidence_ppm(confidence), expected);
+        }
+    }
+
+    #[test]
+    fn prediction_reason_codes_allow_only_predictor_categories_in_sorted_capped_order() {
+        let evidence = [
+            "test_succeeded",
+            "action_failed_once",
+            "customer_secret",
+            "read_result_available",
+            "opening_broad_goal",
+            "mutation_requested",
+            "score_margin_low",
+            "verification_requested",
+            "narrow_poll_requested",
+            "concrete_mutation_requested",
+            "mutation_requested",
+            "",
+        ]
+        .into_iter()
+        .map(|code| PredictiveEvidence {
+            code: code.to_string(),
+            weight: 1,
+            confidence: 0.9,
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            prediction_reason_codes(&evidence),
+            vec![
+                "action_failed_once",
+                "concrete_mutation_requested",
+                "mutation_requested",
+                "narrow_poll_requested",
+                "opening_broad_goal",
+                "read_result_available",
+                "score_margin_low",
+                "test_succeeded",
+            ]
+        );
+    }
+
+    #[test]
     fn explicit_economy_route_uses_strong_baseline_for_pending_eval_decision() {
         let table = PolicyTable::from_config(&comparator_config()).expect("configured");
         let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
@@ -1133,10 +1493,25 @@ mod tests {
         );
         let mut routed = prompt("inbound");
         routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        let invocation = EvalInvocation::new("local");
+        let decision = router.decision_for_bound_policy(&routed, &headers);
 
-        assert!(router.route_prompt(&mut routed, &headers));
+        let selected = router.record_bound_policy_decision(
+            "request-1",
+            &invocation,
+            routed.model.clone(),
+            routed.params.reasoning_effort,
+            decision,
+            &headers,
+        );
+        assert_eq!(
+            selected.as_ref().map(PolicyModelTarget::model),
+            Some("vendor/economy")
+        );
 
-        let decision = pending.get("request-1").expect("pending eval decision");
+        let decision = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
         assert_eq!(decision.policy, "auto:cost");
         assert_eq!(decision.selected_tier, "economy");
         assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
@@ -1146,9 +1521,10 @@ mod tests {
     #[test]
     fn certificate_baseline_overrides_policy_default_in_eval_outputs() {
         let mut table_config = comparator_config();
-        table_config
-            .tiers
-            .insert("reference".to_string(), "vendor/reference".to_string());
+        table_config.tiers.insert(
+            "reference".to_string(),
+            PolicyModelTarget::from("vendor/reference"),
+        );
         let table = PolicyTable::from_config(&table_config).expect("configured");
         let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
         let path = temp_path("certificate-baseline-decisions.jsonl");
@@ -1172,15 +1548,42 @@ mod tests {
         );
         let mut routed = prompt("inbound");
         routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        let invocation = EvalInvocation::new("local");
+        let decision = router.decision_for_bound_policy(&routed, &headers);
 
-        assert!(router.route_prompt(&mut routed, &headers));
-        assert_eq!(routed.model, "vendor/economy");
+        let selected = router.record_bound_policy_decision(
+            "trajectory-request-opaque",
+            &invocation,
+            routed.model.clone(),
+            routed.params.reasoning_effort,
+            decision,
+            &headers,
+        );
+        assert_eq!(
+            selected.as_ref().map(PolicyModelTarget::model),
+            Some("vendor/economy")
+        );
 
-        let pending_decision = pending.get("request-2").expect("pending eval decision");
+        let pending_decision = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
         assert_eq!(pending_decision.selected_tier, "economy");
         assert_eq!(pending_decision.baseline_tier.as_deref(), Some("reference"));
         let records = PolicyDecisionRecord::load_jsonl(&path).expect("decision record");
         assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].request_id.as_deref(),
+            Some("trajectory-request-opaque")
+        );
+        assert_eq!(
+            records[0].ingress_request_id_sha256.as_deref(),
+            Some(crate::workflow_state::decision::ingress_request_id_sha256("request-2").as_str())
+        );
+        assert!(
+            !serde_json::to_string(&records[0])
+                .expect("decision record serializes")
+                .contains("request-2")
+        );
         assert_eq!(records[0].static_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].selected_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].baseline_tier.as_deref(), Some("reference"));
@@ -1234,7 +1637,10 @@ mod tests {
         // routes to it, and the second pass skips it as an explicit route.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("flagship".to_string(), "vendor:exact".to_string())]),
+            tiers: HashMap::from([(
+                "flagship".to_string(),
+                PolicyModelTarget::from("vendor:exact"),
+            )]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "flagship".to_string(),
@@ -1254,14 +1660,177 @@ mod tests {
     }
 
     #[test]
+    fn same_model_compound_target_overrides_caller_effort() -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([(
+                "strong".to_string(),
+                PolicyModelTarget::ModelEffort {
+                    model: "vendor/same".to_string(),
+                    effort: ReasoningEffort::High,
+                },
+            )]),
+            default_tier: Some("strong".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("vendor/same");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+
+        assert!(router.apply(&mut prompt), "effort-only route is a mutation");
+        assert_eq!(prompt.model, "vendor/same");
+        assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_target_records_caller_effort_as_the_effective_static_treatment() -> anyhow::Result<()>
+    {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("strong".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("strong".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+
+        let decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.input_effort, Some(ReasoningEffort::Low));
+        assert_eq!(decision.static_effort, Some(ReasoningEffort::Low));
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::Low));
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_continuation_pins_same_model_compound_target() -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([
+                (
+                    "low".to_string(),
+                    PolicyModelTarget::ModelEffort {
+                        model: "vendor/same".to_string(),
+                        effort: ReasoningEffort::Low,
+                    },
+                ),
+                (
+                    "high".to_string(),
+                    PolicyModelTarget::ModelEffort {
+                        model: "vendor/same".to_string(),
+                        effort: ReasoningEffort::High,
+                    },
+                ),
+            ]),
+            default_tier: Some("low".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let prompt = prompt("@auto");
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: Some(ReasoningEffort::High),
+                effort_authoritative: true,
+            },
+        )?;
+
+        assert_eq!(decision.continuation_proposed_tier.as_deref(), Some("low"));
+        assert_eq!(
+            decision.continuation_proposed_effort,
+            Some(ReasoningEffort::Low)
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("high"));
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_continuation_effort_is_applied_through_a_scalar_compatibility_tier()
+    -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("compat".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: Some(ReasoningEffort::High),
+                effort_authoritative: true,
+            },
+        )?;
+
+        let target = router
+            .record_decision(
+                "@auto".to_owned(),
+                Some(ReasoningEffort::Low),
+                decision,
+                &HeaderMap::new(),
+                None,
+                None,
+            )
+            .ok_or_else(|| anyhow::anyhow!("continuation target missing"))?;
+        assert_eq!(target.model(), "vendor/same");
+        assert_eq!(target.effort(), Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_continuation_does_not_reinterpret_missing_effort_as_provider_default()
+    -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("compat".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: None,
+                effort_authoritative: false,
+            },
+        )?;
+
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
     fn disabled_guardrail_lets_a_tool_request_route_cheap() {
         // With no `tool_use_tier`, the guardrail is off: a tool-carrying request
         // routes by fingerprint like any other (here `after_read_file` → cheap).
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([
-                ("cheap".to_string(), "vendor/cheap".to_string()),
-                ("flagship".to_string(), "vendor/flagship".to_string()),
+                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
+                (
+                    "flagship".to_string(),
+                    PolicyModelTarget::from("vendor/flagship"),
+                ),
             ]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|tool_followup|normal".to_string(),
@@ -1300,6 +1869,25 @@ mod tests {
     /// A read step prompt — fingerprints to `after_read_file` (→ cheap statically).
     fn read_step() -> Vec<Message> {
         vec![user("fix the bug"), assistant_calls("read_file")]
+    }
+
+    fn completed_read_step() -> Vec<Message> {
+        vec![
+            user("fix the bug"),
+            assistant_calls("read_file"),
+            Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult {
+                    call_id: "call_read_file".to_string(),
+                    tool_name: None,
+                    output: ToolResultOutput::Text {
+                        value: "source contents".to_string(),
+                    },
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
+                }],
+            },
+        ]
     }
 
     fn route_with_headers(
@@ -1348,11 +1936,55 @@ mod tests {
     fn v1_policy_routes_remain_active_as_compatibility_fallbacks() {
         let router = router();
         let mut prompt = prompt("inbound");
-        prompt.messages = read_step();
+        prompt.messages = completed_read_step();
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
         assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn predictive_route_wins_before_observed_compatibility_routes() {
+        let mut cfg = config();
+        cfg.fingerprints.insert(
+            "agent_trace/v2|tool_followup|normal".to_string(),
+            "flagship".to_string(),
+        );
+        cfg.fingerprints.insert(
+            "agent_route/v1|implement|normal".to_string(),
+            "cheap".to_string(),
+        );
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_read_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(decision.route_projection, "agent_route/v1|implement|normal");
+        assert_eq!(
+            decision.observed_route_projection,
+            "agent_trace/v2|tool_followup|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn broad_opening_routes_on_predictive_orchestrate_role() {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.fingerprints.insert(
+            "agent_route/v1|orchestrate|normal".to_string(),
+            "cheap".to_string(),
+        );
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Design the architecture and plan the implementation")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
@@ -1374,7 +2006,7 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_route_records_the_v2_learning_key() {
+    fn default_policy_route_records_the_predictive_learning_key() {
         let mut cfg = config();
         cfg.fingerprints.clear();
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
@@ -1382,7 +2014,7 @@ mod tests {
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
@@ -1398,6 +2030,170 @@ mod tests {
         assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
+    }
+
+    #[test]
+    fn continuation_pin_records_the_predictive_proposal_and_serving_adjustment() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+
+        let applied = router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/flagship".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        );
+
+        assert!(applied.is_ok());
+        assert_eq!(
+            decision.continuation_proposed_tier.as_deref(),
+            Some("cheap")
+        );
+        assert_eq!(
+            decision.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(decision.continuation_adjustment.as_deref(), Some("pin"));
+        assert_eq!(decision.reason, PolicyDecisionReason::ContinuationPin);
+        assert!(decision.pinned);
+    }
+
+    #[test]
+    fn continuation_detach_records_adjustment_without_rewriting_prediction() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+
+        let applied =
+            router.apply_continuation_adjustment(&mut decision, &ContinuationAdjustment::Detach);
+
+        assert!(applied.is_ok());
+        assert_eq!(
+            decision.continuation_proposed_model,
+            decision.selected_model
+        );
+        assert_eq!(decision.continuation_adjustment.as_deref(), Some("detach"));
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(!decision.pinned);
+    }
+
+    #[test]
+    fn legacy_rejection_preserves_proposal_in_pending_eval_audit() {
+        let table = PolicyTable::from_config(&config()).expect("configured");
+        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let router = PolicyTableRouter::new(table).with_eval_observer(
+            pending.clone(),
+            "auto:cost",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            HashMap::new(),
+            Some("flagship".to_owned()),
+        );
+        let mut p = prompt("@auto");
+        p.messages = read_step();
+        let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
+        router
+            .apply_continuation_adjustment(&mut decision, &ContinuationAdjustment::RejectLegacy)
+            .expect("legacy rejection is auditable");
+        let invocation = EvalInvocation::new("local");
+
+        router.record_bound_policy_decision(
+            "request-legacy",
+            &invocation,
+            p.model,
+            p.params.reasoning_effort,
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let pending = pending
+            .get(&invocation, "local")
+            .expect("pending eval decision");
+        assert_eq!(pending.continuation_proposed_tier.as_deref(), Some("cheap"));
+        assert_eq!(
+            pending.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(
+            pending.continuation_adjustment.as_deref(),
+            Some("reject_legacy")
+        );
+        assert_eq!(pending.selected_tier, "cheap");
+    }
+
+    #[test]
+    fn continuation_adjustment_and_proposal_are_written_to_jsonl() -> anyhow::Result<()> {
+        let path = temp_path("continuation-adjustment-decisions.jsonl");
+        let table = PolicyTable::from_config(&config())
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone())?;
+        let router = PolicyTableRouter::new(table).with_decision_recorder(recorder);
+        let mut p = prompt("@auto");
+        p.messages = read_step();
+        let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/flagship".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        )?;
+
+        router.record_bound_policy_decision(
+            "request-continuation",
+            &EvalInvocation::new("owner"),
+            "@auto".to_owned(),
+            None,
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let records = PolicyDecisionRecord::load_jsonl(&path)?;
+        let record = records
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("continuation decision missing"))?;
+        assert_eq!(record.continuation_proposed_tier.as_deref(), Some("cheap"));
+        assert_eq!(
+            record.continuation_proposed_model.as_deref(),
+            Some("vendor/cheap")
+        );
+        assert_eq!(record.continuation_adjustment.as_deref(), Some("pin"));
+        assert_eq!(record.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(record.reason, "continuation_pin");
+        assert!(record.pinned);
+        Ok(())
+    }
+
+    #[test]
+    fn continuation_pin_fails_closed_when_the_active_lock_removed_its_model() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        let mut decision = router.decision_for(&p, &HeaderMap::new());
+        let original_selected = decision.selected_model.clone();
+
+        let error = router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "retired-provider:retired-model".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        );
+
+        assert!(matches!(
+            error,
+            Err(bitrouter_sdk::BitrouterError::BadRequest { ref message })
+                if message.contains("unavailable in the active policy")
+        ));
+        assert_eq!(decision.selected_model, original_selected);
     }
 
     #[test]
@@ -1434,7 +2230,7 @@ mod tests {
     fn decision_reason_no_match() {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
+            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "cheap".to_string(),

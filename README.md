@@ -44,10 +44,11 @@ presets:
     policy: auto
 ```
 
-The v2 lock behind `bitrouter/auto` contains the tier models, canonical
-`agent_trace` routes, capability guardrails, and a decision certificate for
-every explicit route. `bitrouter/auto:cost` selects the cost variant when one is
-defined; explicit physical model IDs remain passthrough.
+The v3 lock behind `bitrouter/auto` contains the tier targets, canonical `agent_trace`
+routes, capability guardrails, and a decision certificate for every explicit
+route. A target may be a scalar model or an exact `(model, effort)` pair;
+`bitrouter/auto:cost` selects the cost variant when one is defined, while
+explicit physical model IDs remain passthrough.
 
 Against that spec BitRouter provides the control plane for an **act → observe → evaluate → compile** cycle:
 
@@ -66,7 +67,7 @@ Today **cost** is the validated objective: on Terminal-Bench 2.1, `gpt-5.5` with
 | --- | --- | --- | --- |
 | `gpt-5.5` | **−32.8%**¹ | coming soon | coming soon |
 | `gpt-5.6` | coming soon | coming soon | coming soon |
-| `claude-opus-4.8` | coming soon | coming soon | coming soon |
+| `claude-opus-5` | coming soon | coming soon | coming soon |
 | `claude-sonnet-5` | coming soon | coming soon | coming soon |
 | `claude-fable-5` | coming soon | coming soon | coming soon |
 
@@ -153,9 +154,12 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
+bitrouter status --watch                # live request stream + spend
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
-bitrouter cloud keys / usage / billing  # manage your cloud account
+bitrouter cloud keys list               # manage API keys
+bitrouter cloud usage                   # inspect spend and tokens
+bitrouter cloud billing balance         # check credits
 bitrouter cloud api /v1/models          # call Cloud APIs directly
 ```
 
@@ -190,7 +194,7 @@ BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localh
 
 ## Workflow templates
 
-Ready-made **policy specs** for common agentic workflows — a starting point that routes well out of the box, before you tune it for your own loop. **Coming soon** in [`templates/`](templates/).
+Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
 
 ## Models & providers
 
@@ -198,9 +202,9 @@ BitRouter routes to a *model*, not a provider. Each family below is served by ma
 
 | Lab      | Latest models                    |
 | -------- | -------------------------------- |
-| DeepSeek | DeepSeek V4 Pro / Flash          |
-| Alibaba  | Qwen3.7 Max / Plus               |
-| Moonshot | Kimi K2.7 Code / K2.6            |
+| DeepSeek | DeepSeek V4 Flash 0731 / V4 Pro  |
+| Alibaba  | Qwen3.8 Max / Qwen3.7 Max        |
+| Moonshot | Kimi K3 / K2.7 Code              |
 | Z.ai     | GLM-5.2 / 5.1                    |
 | MiniMax  | MiniMax M3 / M2.7                |
 | Xiaomi   | MiMo V2.5 Pro / V2.5             |
@@ -210,18 +214,38 @@ Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your 
 
 ## Harness integrations
 
-Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. The following harnesses are tested and supported:
+Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For the four harnesses below, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI with its traffic already pointed at the daemon, and never edits the harness's config files.
 
-| Harness        | Status | Notes                                                                                       |
-| -------------- | ------ | ------------------------------------------------------------------------------------------- |
-| Claude Code    | ✅     | [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway)                           |
-| OpenAI Codex   | ✅     | `bitrouter launch --agent codex` or [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
-| OpenCode       | ✅     | Via [models.dev](https://github.com/anomalyco/models.dev)                                  |
-| Hermes Agent   | ✅     | Native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
-| OpenClaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
-| Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
+| Harness | Launch with | How BitRouter routes it |
+| ------- | ----------- | ----------------------- |
+| Claude Code | `bitrouter launch -a claude` | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
+| OpenAI Codex | `bitrouter launch -a codex` | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
+| OpenCode | `bitrouter launch -a opencode` | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
+| Pi-Agent | `bitrouter launch -a pi` | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
 
-The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+`launch` supports these four because every promise it makes — routing, gateway injection, and the hosted terminal below — has to be re-verified per harness against upstream releases nobody controls. Four is a surface that stays honest.
+
+**Other runtimes still work**, just not through `launch`:
+
+| Runtime | How to use it |
+| ------- | ------------- |
+| Hermes Agent | Run it directly, or use the native [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
+| OpenClaw | Run it directly, or use the native [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw) plugin |
+| Grok CLI | Run it directly on your SuperGrok session — the daemon borrows that session separately as the `supergrok` **provider** |
+| Antigravity | Run it directly on your Google session — borrowed separately as the `google-ai` **provider** |
+
+Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+
+### See what it's costing you
+
+`bitrouter status --watch` is a live view of the router: a newest-first stream of settled requests — the provider that **actually** served, tokens, cost, latency — over today's spend and request rate. It reads the metering store directly, so it works even with the daemon stopped. Piped, it prints one snapshot and exits, so it scripts.
+
+```bash
+bitrouter status --watch          # live
+bitrouter status --watch | less   # one snapshot
+```
+
+`bitrouter launch --tui` puts that same readout on a status row pinned under the harness, so cost is visible without leaving the agent. It is **opt-in**, and worth knowing why: hosting the harness inside BitRouter's terminal moves scrollback from your terminal to BitRouter, so terminal search stops finding agent output. Plain `launch` stays the daily driver.
 
 ## Features
 
@@ -248,7 +272,13 @@ Want a first-party provider integration, or building an open-source agent/harnes
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=bitrouter/bitrouter&type=Date)](https://star-history.com/#bitrouter/bitrouter&Date)
+<a href="https://www.star-history.com/?type=date&repos=bitrouter%2Fbitrouter">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bitrouter/bitrouter&type=date&theme=dark&legend=top-left&sealed_token=x3Lz0HqHPkyoGN8dh_Jdtkc-5lJ4iA_8eOmldMrXMyhVq7WCOxS03oBNGQXOxM962xv1AUhdyLKAtz6d1XK9ZSWUGHHd8HAWjEU44sXlwWT_I7iXPaTfizw7aDpxA-PrsxC3Jd5IN-SWladKBNoK2weKlIKVs9JQax5sbImPT9srpEeKzbYt_VsafBwd" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=bitrouter/bitrouter&type=date&legend=top-left&sealed_token=x3Lz0HqHPkyoGN8dh_Jdtkc-5lJ4iA_8eOmldMrXMyhVq7WCOxS03oBNGQXOxM962xv1AUhdyLKAtz6d1XK9ZSWUGHHd8HAWjEU44sXlwWT_I7iXPaTfizw7aDpxA-PrsxC3Jd5IN-SWladKBNoK2weKlIKVs9JQax5sbImPT9srpEeKzbYt_VsafBwd" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=bitrouter/bitrouter&type=date&legend=top-left&sealed_token=x3Lz0HqHPkyoGN8dh_Jdtkc-5lJ4iA_8eOmldMrXMyhVq7WCOxS03oBNGQXOxM962xv1AUhdyLKAtz6d1XK9ZSWUGHHd8HAWjEU44sXlwWT_I7iXPaTfizw7aDpxA-PrsxC3Jd5IN-SWladKBNoK2weKlIKVs9JQax5sbImPT9srpEeKzbYt_VsafBwd" />
+ </picture>
+</a>
 
 ## License
 

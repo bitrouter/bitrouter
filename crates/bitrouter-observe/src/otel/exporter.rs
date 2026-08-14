@@ -1334,6 +1334,7 @@ mod hop_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,
@@ -2473,6 +2474,7 @@ mod hop_tests {
                     source_protocol: ApiProtocol::Responses,
                     status: "completed".to_string(),
                     usage: None,
+                    response_output_commitment: None,
                 },
             )
             .await;

@@ -9,12 +9,12 @@
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::{
-    GenericPromptExtractor, apply_trajectory_pressure,
+    GenericPromptExtractor, apply_trajectory_pressure, plain_output_reports_failure,
 };
 use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
 use crate::workflow_state::ir::{
-    Evidence, EvidenceLevel, HarnessId, RecoverySignal, RequirementLevel, ToolDensity,
-    WorkflowStateIR, WorkflowStateKind,
+    Evidence, EvidenceLevel, HarnessId, NormalizedActionHistory, NormalizedActionKind,
+    RecoverySignal, RequirementLevel, ToolDensity, WorkflowStateIR, WorkflowStateKind,
 };
 
 const MAX_ACTION_BYTES: usize = 256 * 1024;
@@ -44,6 +44,7 @@ impl WorkflowStateExtractor for Terminus2Extractor {
             raw_body: input.raw_body,
             prompt: input.prompt,
         });
+        ir.normalized_action_history = normalized_action_history(input.prompt);
         let Some(action) = latest_assistant_action(input.prompt) else {
             return ir;
         };
@@ -278,18 +279,89 @@ fn latest_assistant_action(prompt: &Prompt) -> Option<ParsedAction> {
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
-        .and_then(|message| {
-            message
-                .content
-                .iter()
-                .rev()
-                .find_map(|content| match content {
-                    Content::Text { text, .. } => {
-                        parse_json_action(text).or_else(|| parse_xml_action(text))
-                    }
-                    _ => None,
-                })
+        .and_then(parse_assistant_action)
+}
+
+fn parse_assistant_action(
+    message: &bitrouter_sdk::language_model::types::Message,
+) -> Option<ParsedAction> {
+    message
+        .content
+        .iter()
+        .rev()
+        .find_map(|content| match content {
+            Content::Text { text, .. } => {
+                parse_json_action(text).or_else(|| parse_xml_action(text))
+            }
+            _ => None,
         })
+}
+
+fn normalized_action_history(prompt: &Prompt) -> Option<NormalizedActionHistory> {
+    const MAX_SIGNALS: u8 = 3;
+    let mut history = NormalizedActionHistory {
+        last_action: None,
+        last_failed: false,
+        failure_count: 0,
+        mutation_count: 0,
+        complete: true,
+    };
+    let mut action_seen = false;
+
+    for (index, message) in prompt.messages.iter().enumerate() {
+        if message.role != Role::Assistant {
+            continue;
+        }
+        let Some(action) = parse_assistant_action(message) else {
+            continue;
+        };
+        action_seen = true;
+        let normalized_action = if action.task_complete && action.commands.is_empty() {
+            NormalizedActionKind::Other
+        } else {
+            match classify_commands(&action.commands) {
+                CommandIntent::Test => NormalizedActionKind::Test,
+                CommandIntent::Edit => NormalizedActionKind::Mutate,
+                CommandIntent::Review => NormalizedActionKind::Read,
+                CommandIntent::Other => NormalizedActionKind::Other,
+            }
+        };
+        if normalized_action == NormalizedActionKind::Mutate {
+            history.mutation_count = history.mutation_count.saturating_add(1).min(MAX_SIGNALS);
+        }
+        history.last_action = Some(normalized_action);
+        history.last_failed = false;
+
+        let result = prompt.messages[index + 1..]
+            .iter()
+            .take_while(|candidate| candidate.role != Role::Assistant)
+            .find(|candidate| candidate.role == Role::User)
+            .and_then(plain_message_text);
+        let Some(result) = result else {
+            history.complete = false;
+            continue;
+        };
+        let failed = plain_output_reports_failure(&result);
+        if failed {
+            history.failure_count = history.failure_count.saturating_add(1).min(MAX_SIGNALS);
+        }
+        history.last_failed = failed;
+    }
+
+    action_seen.then_some(history)
+}
+
+fn plain_message_text(message: &bitrouter_sdk::language_model::types::Message) -> Option<String> {
+    let text = message
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            Content::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 fn parse_json_action(text: &str) -> Option<ParsedAction> {

@@ -8,8 +8,21 @@ use anyhow::Result;
 use portable_pty::{CommandBuilder, PtySize};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::tui::event::Incoming;
-use crate::tui::term::{AlacrittyBackend, Osc52Scanner, TerminalBackend};
+use super::term::{AlacrittyBackend, Osc52Scanner, TerminalBackend};
+
+/// What the PTY reader thread reports to the host loop.
+///
+/// Replaces the orchestrator's `Incoming`, which carried pane-routing and ACP
+/// variants this host has no use for. `PtyExited` gained the child's status:
+/// `launch` promises the shell sees the agent's exit code, and the old enum
+/// could not carry one.
+#[derive(Debug)]
+pub enum HostEvent {
+    /// Bytes read from the child.
+    Output(Vec<u8>),
+    /// The child was reaped. Carries its exit code, when it had one.
+    Exited(Option<i32>),
+}
 
 /// What to run on the PTY: command line, env overlay, working directory.
 #[derive(Clone, Copy)]
@@ -27,21 +40,35 @@ pub struct PtyPane {
     pub backend: Box<dyn TerminalBackend>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
     scanner: Osc52Scanner,
     size: (u16, u16),
+    /// Set by the reaper thread once `wait` returns.
+    reaped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for PtyPane {
+    /// A hosted child must not outlive its host.
+    ///
+    /// The loop kills explicitly on the signal path, but every other exit —
+    /// a draw error, an input-stream error, stdin EOF — used to drop the pane
+    /// with the child still running, leaving it alive until process teardown
+    /// closed the master. A harness that ignores SIGHUP would keep running,
+    /// possibly mid-request against a paid API.
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 impl PtyPane {
     /// Spawn the launch's `command args…` on a fresh PTY (cwd + env overlay
     /// applied) and start the reader thread that pumps output as
-    /// [`Incoming::PtyOutput`], ending with [`Incoming::PtyExited`].
+    /// [`HostEvent::Output`], ending with [`HostEvent::Exited`].
     pub fn spawn(
-        record_id: &str,
         launch: &PtyLaunch<'_>,
         cols: u16,
         rows: u16,
-        tx: UnboundedSender<Incoming>,
+        tx: UnboundedSender<HostEvent>,
     ) -> Result<Self> {
         let PtyLaunch {
             command,
@@ -70,11 +97,26 @@ impl PtyPane {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| anyhow::anyhow!("spawning '{command}' on the pty: {e}"))?;
         drop(pair.slave);
+
+        // Reaping runs on its own thread and owns the `Child`; the pane keeps
+        // only a killer. Two reasons this is not folded into the reader
+        // thread's EOF: a child can close its output and linger, so EOF is not
+        // exit — and `wait` is the only place the exit code exists to be
+        // captured at all, which `launch` promises to propagate.
+        let killer = child.clone_killer();
+        let exit_tx = tx.clone();
+        let reaped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reaped_flag = std::sync::Arc::clone(&reaped);
+        std::thread::spawn(move || {
+            let status = child.wait().ok().map(|status| status.exit_code() as i32);
+            reaped_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = exit_tx.send(HostEvent::Exited(status));
+        });
 
         let mut reader = pair
             .master
@@ -87,35 +129,28 @@ impl PtyPane {
 
         // Reader thread: blocking reads → loop channel. Ends (EOF/error) when
         // the child exits or the master is dropped at teardown.
-        let rid = record_id.to_string();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match std::io::Read::read(&mut reader, &mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if tx
-                            .send(Incoming::PtyOutput {
-                                record_id: rid.clone(),
-                                bytes: buf[..n].to_vec(),
-                            })
-                            .is_err()
-                        {
+                        if tx.send(HostEvent::Output(buf[..n].to_vec())).is_err() {
                             break;
                         }
                     }
                 }
             }
-            let _ = tx.send(Incoming::PtyExited { record_id: rid });
         });
 
         Ok(Self {
             backend: Box::new(AlacrittyBackend::new(cols, rows)),
             master: pair.master,
             writer,
-            child,
+            killer,
             scanner: Osc52Scanner::default(),
             size: (cols, rows),
+            reaped,
         })
     }
 
@@ -155,9 +190,13 @@ impl PtyPane {
         });
     }
 
-    /// Kill the child (teardown).
+    /// Kill the child (teardown). No-op once the reaper has reported an exit —
+    /// signalling a reaped pid can reach an unrelated process after reuse.
     pub fn kill(&mut self) {
-        let _ = self.child.kill();
+        if self.reaped.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.killer.kill();
     }
 }
 
@@ -166,23 +205,36 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc::unbounded_channel;
 
+    /// Read the grid as plain text.
+    fn grid_text(pane: &PtyPane) -> String {
+        pane.backend
+            .lines(true)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
     /// Drive a real PTY child end to end: spawn, read output through the
-    /// channel, feed the emulator, see the text in the grid.
+    /// channel, feed the emulator, see the text in the grid — and get the
+    /// child's exit code back.
     #[tokio::test]
-    async fn pty_child_output_reaches_the_grid() {
+    async fn a_child_renders_into_the_grid_and_reports_its_exit_code() {
         let (tx, mut rx) = unbounded_channel();
         let cwd = std::env::temp_dir();
         let args = [
             "-c".to_string(),
-            "printf 'PTY_E2E_MARKER'; sleep 0.1".to_string(),
+            "printf 'PTY_E2E_MARKER'; exit 7".to_string(),
         ];
-        let env = [("BITROUTER_TEST_VAR".to_string(), "1".to_string())];
         let mut pane = PtyPane::spawn(
-            "orchestrator",
             &PtyLaunch {
                 command: "sh",
                 args: &args,
-                env: &env,
+                env: &[],
                 cwd: &cwd,
             },
             40,
@@ -191,37 +243,37 @@ mod tests {
         )
         .expect("spawn pty child");
 
-        let mut exited = false;
+        // Drain until every sender is gone, **not** until `Exited` arrives.
+        // The reaper and the reader are separate threads, so a fast-exiting
+        // child can deliver its status before its output — stopping at
+        // `Exited` observes an empty grid, which is exactly the race that
+        // broke this on Linux while passing on macOS.
+        let mut code = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !exited && std::time::Instant::now() < deadline {
-            let Ok(Some(incoming)) =
-                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
-            else {
+        loop {
+            if std::time::Instant::now() >= deadline {
                 break;
-            };
-            match incoming {
-                Incoming::PtyOutput { bytes, .. } => {
+            }
+            match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(HostEvent::Output(bytes))) => {
                     pane.feed(&bytes);
                 }
-                Incoming::PtyExited { .. } => exited = true,
-                _ => {}
+                Ok(Some(HostEvent::Exited(status))) => code = Some(status),
+                // Channel closed: reader and reaper have both finished.
+                Ok(None) => break,
+                Err(_) => break,
             }
         }
-        assert!(exited, "child exit reaches the loop");
-        let text: String = pane
-            .backend
-            .lines(true)
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect();
-        assert!(
-            text.contains("PTY_E2E_MARKER"),
-            "child output rendered in the grid: {text:?}"
+
+        let text = grid_text(&pane);
+        assert!(text.contains("PTY_E2E_MARKER"), "rendered: {text:?}");
+        // The restored `pty.rs` could not do this: `PtyExited` carried no
+        // status and the child was never reaped, so `launch --tui` had no exit
+        // code to propagate.
+        assert_eq!(
+            code,
+            Some(Some(7)),
+            "the child's exit code reaches the host"
         );
         pane.kill();
     }
@@ -232,7 +284,6 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let cwd = std::env::temp_dir();
         let mut pane = PtyPane::spawn(
-            "orchestrator",
             &PtyLaunch {
                 command: "cat",
                 args: &[],
@@ -249,17 +300,58 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut seen = String::new();
         while std::time::Instant::now() < deadline && !seen.contains("round-trip") {
-            let Ok(Some(incoming)) =
+            let Ok(Some(event)) =
                 tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
             else {
                 break;
             };
-            if let Incoming::PtyOutput { bytes, .. } = incoming {
+            if let HostEvent::Output(bytes) = event {
                 seen.push_str(&String::from_utf8_lossy(&bytes));
                 pane.feed(&bytes);
             }
         }
         assert!(seen.contains("round-trip"), "echoed: {seen:?}");
+        pane.kill();
+    }
+
+    /// A child that closes its output but keeps running must not be reported
+    /// as exited — EOF is not exit, and treating it as one would tear down a
+    /// live session.
+    #[tokio::test]
+    async fn closing_output_is_not_the_same_as_exiting() {
+        let (tx, mut rx) = unbounded_channel();
+        let cwd = std::env::temp_dir();
+        let args = ["-c".to_string(), "exec 1>&-; sleep 0.6; exit 3".to_string()];
+        let mut pane = PtyPane::spawn(
+            &PtyLaunch {
+                command: "sh",
+                args: &args,
+                env: &[],
+                cwd: &cwd,
+            },
+            40,
+            5,
+            tx,
+        )
+        .expect("spawn pty child");
+
+        let started = std::time::Instant::now();
+        let mut code = None;
+        while code.is_none() && started.elapsed() < std::time::Duration::from_secs(10) {
+            let Ok(Some(event)) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
+            else {
+                break;
+            };
+            if let HostEvent::Exited(status) = event {
+                code = Some(status);
+            }
+        }
+        assert_eq!(code, Some(Some(3)), "the real exit status, not the EOF");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(400),
+            "exit was reported at EOF instead of at wait()"
+        );
         pane.kill();
     }
 }

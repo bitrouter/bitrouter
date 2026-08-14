@@ -185,6 +185,13 @@ enum Command {
     },
     /// Report a running daemon's status (pid, listen address, model count).
     /// Prints `running: no` when no daemon is reachable.
+    ///
+    /// With `--watch`, becomes a live view of what the router is doing: a
+    /// stream of settled requests (model, the provider that actually served,
+    /// tokens, cost, latency) with a spend rollup. Read-only apart from `r`
+    /// (reload) and `e` (open `bitrouter.yaml` in `$EDITOR`); press `?` for
+    /// keys. Redirected or piped, `--watch` prints one snapshot and exits, so
+    /// it stays scriptable.
     Status {
         /// Path to `bitrouter.yaml` (used to locate the control socket).
         #[arg(short, long)]
@@ -192,6 +199,9 @@ enum Command {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
+        /// Watch live instead of printing one status line.
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
@@ -285,9 +295,15 @@ enum Command {
         /// Provider-qualified strong route for optimization onboarding.
         #[arg(long)]
         optimize_strong: Option<String>,
+        /// Policy-owned effort for the optimization strong route.
+        #[arg(long, requires = "optimize_strong")]
+        optimize_strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Provider-qualified economy route for optimization onboarding.
         #[arg(long)]
         optimize_economy: Option<String>,
+        /// Policy-owned effort for the optimization economy route.
+        #[arg(long, requires = "optimize_economy")]
+        optimize_economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Frozen normalized-showback price override. Repeat for unpriced
         /// subscription routes.
         #[arg(long = "optimize-normalized-price")]
@@ -370,23 +386,37 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness (Claude Code or Codex) as an interactive
-    /// native-TUI child, with its API base URL pointed at the local BitRouter
-    /// daemon — no agent config files are touched. The human drives the
-    /// harness's own TUI directly; this is the *main orchestrator* surface (use
-    /// `bitrouter spawn` for headless ACP sub-agents). Follows `cargo run`'s
-    /// separator convention: bitrouter options come before `--`, everything
-    /// after `--` is forwarded to the agent verbatim, e.g.
-    /// `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
+    /// Launch a coding-agent harness as an interactive native-TUI child, with
+    /// its API base URL pointed at the local BitRouter daemon. The human drives
+    /// the harness's own TUI directly (use `bitrouter spawn` for headless ACP
+    /// sub-agents). Follows `cargo run`'s separator convention: bitrouter
+    /// options come before `--`, everything after `--` is forwarded to the
+    /// agent verbatim, e.g. `bitrouter launch -a codex -- --search`.
+    ///
+    /// Harnesses that route by env/args (claude, codex) are launched without
+    /// touching any config file. Those that can only be routed by config
+    /// (opencode, pi) get one synthesized under `.bitrouter/launch/` — your
+    /// own agent config is still never modified.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bitrouter init`). A missing agent binary is offered
-    /// for install via its official native installer.
+    /// default written by `bitrouter init`). A missing `claude` / `codex`
+    /// binary is offered for install via its official native installer; other
+    /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch.
-        #[arg(short, long, value_enum)]
-        agent: bitrouter::spawn::SpawnAgent,
+        /// Which agent harness to launch: `claude`, `codex`, `opencode`, or
+        /// `pi` (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also
+        /// resolve). `hermes`, `openclaw`, `grok`, and `agy` are no longer
+        /// launch-supported — run them directly or via `bitrouter spawn`.
+        #[arg(short, long, value_name = "ID")]
+        agent: String,
+        /// Pin the harness's model to a daemon-routable id (e.g. the explicit
+        /// `provider/model` form). Applied through whatever mechanism the
+        /// harness has — a model env var, a `-c model=` override, the
+        /// synthesized config's default, or the harness's own flag for the
+        /// own-auth clients (grok, agy).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
         /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
         /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
         /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
@@ -411,21 +441,32 @@ enum Command {
         /// without launching the agent.
         #[arg(long)]
         check: bool,
+        /// Host the harness inside BitRouter's terminal, with a persistent
+        /// status row underneath showing model, provider, tokens, and spend.
+        ///
+        /// Opt-in, and not the recommended daily driver: hosting moves
+        /// scrollback from your terminal to BitRouter, so terminal search and
+        /// selection no longer see the agent's output. Drop the flag to go
+        /// back to launching the harness directly.
+        #[arg(long, conflicts_with = "check")]
+        tui: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
-    /// Spawn an ACP-compatible harness as a headless *sub-agent*, routed
-    /// through the BitRouter daemon by default. Pick a mode: `-p "<text>"`
-    /// streams one prompt as NDJSON then exits; `--serve` speaks ACP over
-    /// stdio for a GUI/manager; `--check` preflights the route. Pass `--direct`
-    /// to bypass daemon routing. (For an interactive native TUI use
-    /// `bitrouter launch`.)
+    /// Spawn an ACP-compatible harness as a headless *sub-agent*. Routing is
+    /// attempted by default when the harness supports headless redirection;
+    /// config-synthesis-only catalog agents warn and run direct. Pick a mode:
+    /// `-p "<text>"` streams one prompt as NDJSON then exits; `--serve`
+    /// speaks ACP over stdio for a GUI/manager; `--check` preflights the route.
+    /// Pass `--direct` to bypass daemon routing. (For an interactive native TUI
+    /// use `bitrouter launch`.)
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `pi-acp`) or a configured `agents:` entry. A
-        /// catalog id needs no config entry.
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
+        /// configured `agents:` entry. A catalog id needs no config entry; run
+        /// `--check` to see whether it will route or run direct in headless mode.
         agent: Option<String>,
         /// Send one prompt, stream NDJSON to stdout, then exit.
         #[arg(short = 'p', long, value_name = "TEXT")]
@@ -437,7 +478,8 @@ enum Command {
         #[arg(long, conflicts_with_all = ["prompt", "serve"])]
         check: bool,
         /// Do NOT route through the daemon — let the harness use its own
-        /// provider auth. Routing is on by default.
+        /// provider auth. Routing is attempted by default when the harness
+        /// supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Pin the harness's model (via its model env var / `-c model=`).
@@ -449,13 +491,6 @@ enum Command {
         /// Never auto-start a local daemon when none is running — fail fast.
         #[arg(long)]
         no_start: bool,
-        /// Provision (or reuse) a git worktree for the session.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends (only one this session
-        /// created). Off by default — removal discards uncommitted work.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
@@ -489,14 +524,14 @@ enum Command {
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
-    /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
-    /// billing, policies, and BYOK. Start with `cloud login`.
+    /// Manage your BitRouter Cloud account — sign in/out, namespaces, keys,
+    /// usage, requests, billing, policies, budgets, presets, and BYOK. Start
+    /// with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
     },
-    /// Install and manage Claude Code skills from GitHub, a git URL, or a
-    /// BitRouter registry.
+    /// Inspect installed Agent Skills and scaffold a local `SKILL.md`.
     Skills {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,
@@ -544,36 +579,6 @@ enum Command {
     Acp {
         #[command(subcommand)]
         cmd: AcpCmd,
-    },
-    /// Launch the composite multi-agent TUI: a left rail (roster sorted by
-    /// who needs you, radar strip, decision + review queues) beside the
-    /// primary pane. `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
-    /// hosts that harness's REAL native TUI in a PTY pane (the orchestrator —
-    /// keys pass through; `Ctrl-Space` is the one manager leader; `Ctrl-C`
-    /// interrupts the agent, not the TUI) with the fleet MCP bridge injected
-    /// where the harness supports MCP (pi/openclaw/grok/agy have no
-    /// mechanism). grok and agy
-    /// launch with their own subscription auth (the daemon borrows those
-    /// same sessions as providers). A configured `agents:` id instead
-    /// renders that ACP agent from typed events. `Ctrl-Space n` spawns
-    /// worktree-isolated ACP subagents either way.
-    #[cfg(feature = "tui")]
-    Tui {
-        /// The primary agent: a native harness (`claude`, `codex`,
-        /// `opencode`, `pi`, `grok`, `agy`/`antigravity`) hosted in a PTY
-        /// as the orchestrator, or a configured `agents:` entry rendered
-        /// from ACP events.
-        #[arg(short, long)]
-        agent: String,
-        /// Optional git worktree name for the first session (ACP agents only).
-        #[arg(short, long)]
-        worktree: Option<String>,
-        /// Pin the orchestrator's model (a daemon-routable id, e.g.
-        /// `anthropic/claude-sonnet-5` or the explicit `provider:model`
-        /// form). Defaults to the harness's own configuration (claude,
-        /// codex) or the daemon's first advertised model (opencode, pi).
-        #[arg(short, long)]
-        model: Option<String>,
     },
 }
 
@@ -769,8 +774,7 @@ enum McpAction {
         /// `stdio` (local daemon) or `http` (cloud).
         #[arg(long, value_enum, default_value_t = McpTransport::Stdio)]
         transport: McpTransport,
-        /// `local`, `cloud`, `fleet`, or `skills`. Defaults: stdio→local,
-        /// http→cloud.
+        /// `local`, `cloud`, or `skills`. Defaults: stdio→local, http→cloud.
         #[arg(long, value_enum)]
         backend: Option<McpBackend>,
         /// Local daemon root.
@@ -785,16 +789,6 @@ enum McpAction {
         /// HTTP bind address.
         #[arg(long, default_value = "127.0.0.1:4357")]
         bind: String,
-        /// (fleet backend only) Grant the orchestrator write autonomy:
-        /// apply_subagent/merge_subagent may integrate into the base repo.
-        /// Off by default — writes are human-gated.
-        #[arg(long)]
-        allow_writes: bool,
-        /// (fleet backend only) Spend ceiling in USD. spawn_subagent/
-        /// prompt_subagent refuse once today's machine-wide spend reaches it.
-        /// Unset = unlimited.
-        #[arg(long)]
-        budget_usd: Option<f64>,
     },
     /// Write/print the client config block.
     Install {
@@ -853,12 +847,9 @@ enum McpBackend {
     Local,
     /// BitRouter Cloud at `api.bitrouter.ai`.
     Cloud,
-    /// The fleet bridge: tools that spawn/manage worktree-isolated ACP
-    /// subagents for an orchestrating harness (TUI_SPEC §4). Stdio only.
-    Fleet,
     /// The origin AgentSkills server: `skills_search`/`skills_get` over the
     /// installed-skills root (the `bitrouter_skills` gateway server every
-    /// TUI-launched harness gets). Stdio only.
+    /// launched harness gets). Stdio only.
     Skills,
 }
 
@@ -1010,9 +1001,15 @@ enum PolicyAction {
         /// Strong base model. Inferred from an existing preset when omitted.
         #[arg(long)]
         strong: Option<String>,
+        /// Exact reasoning effort owned by the strong target.
+        #[arg(long, requires = "strong")]
+        strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Economy model explored as a replacement.
         #[arg(long)]
         economy: String,
+        /// Exact reasoning effort owned by the economy target.
+        #[arg(long)]
+        economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -1047,7 +1044,7 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Compile a deterministic v2 candidate without changing the active lock.
+    /// Compile a deterministic v3 candidate without changing the active lock.
     Compile {
         /// Candidate output path.
         #[arg(long, value_name = "FILE")]
@@ -1166,9 +1163,15 @@ struct OptimizeSetupArgs {
     /// Provider-qualified strong route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     strong: Option<String>,
+    /// Policy-owned effort for the strong route.
+    #[arg(long, requires = "strong")]
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Provider-qualified economy route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     economy: Option<String>,
+    /// Policy-owned effort for the economy route.
+    #[arg(long, requires = "economy")]
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Frozen normalized-showback price as
     /// provider:model=uncached,cache_read,cache_write,output. Repeat for
     /// subscription or otherwise unpriced routes.
@@ -1379,25 +1382,20 @@ enum AcpCmd {
     /// manager disconnects. Intended for GUIs and orchestrating agents that
     /// speak ACP directly.
     Serve {
-        /// Agent id — must exist under `agents:` in the config.
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// will route or run direct.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists). When
-        /// omitted the session runs in the current directory.
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
         /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is on by default.
+        /// the harness use its own provider auth. Routing is attempted by
+        /// default when the harness supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Override the gateway base URL (else derived from `server.listen`).
@@ -1421,18 +1419,13 @@ enum AcpCmd {
     /// a `type` field (e.g. `message_chunk`, `tool_call`). The final line has
     /// `type: result` with a `stop_reason` field.
     Prompt {
-        /// Agent id — must exist under `agents:` in the config.
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// will route or run direct.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to provision inside the repo before
-        /// launching (created, or reused when it already exists).
-        #[arg(long)]
-        worktree: Option<String>,
-        /// Remove the worktree when the session ends. Off by default: the
-        /// worktree holds the agent's work, and removal discards anything
-        /// uncommitted. Only a worktree created by this session is removed.
-        #[arg(long, requires = "worktree")]
-        rm_worktree: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1442,7 +1435,8 @@ enum AcpCmd {
         #[arg(long)]
         no_wait: bool,
         /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is on by default.
+        /// the harness use its own provider auth. Routing is attempted by
+        /// default when the harness supports headless redirection.
         #[arg(long)]
         direct: bool,
         /// Override the gateway base URL (else derived from `server.listen`).
@@ -1462,10 +1456,6 @@ enum AcpCmd {
         /// The prompt text to send.
         text: String,
     },
-    /// List the session records under the current repo's
-    /// `.bitrouter/sessions/`, newest first. A `running` record whose process
-    /// no longer exists is shown as `dead`.
-    Sessions,
 }
 
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -1592,8 +1582,15 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&reload(&socket).await?)?;
             Ok(())
         }
-        Command::Status { config, socket } => {
+        Command::Status {
+            config,
+            socket,
+            watch,
+        } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            if watch {
+                return watch_status(config.as_deref(), &socket).await;
+            }
             output.emit(&status(&socket).await?)?;
             Ok(())
         }
@@ -1628,14 +1625,18 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_workflow_input,
             optimize_success,
             optimize_strong,
+            optimize_strong_effort,
             optimize_economy,
+            optimize_economy_effort,
             optimize_normalized_prices,
             optimize_preference,
         } => {
             let optimization = if optimize
                 || optimize_workflow_command.is_some()
                 || optimize_strong.is_some()
+                || optimize_strong_effort.is_some()
                 || optimize_economy.is_some()
+                || optimize_economy_effort.is_some()
                 || optimize_success.is_some()
                 || !optimize_workflow_input.is_empty()
                 || !optimize_normalized_prices.is_empty()
@@ -1649,7 +1650,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workflow_inputs: optimize_workflow_input,
                     success_contract: optimize_success,
                     strong: optimize_strong,
+                    strong_effort: optimize_strong_effort,
                     economy: optimize_economy,
+                    economy_effort: optimize_economy_effort,
                     normalized_price_overrides: optimize_normalized_prices,
                     preference: optimize_preference.into(),
                 })
@@ -1705,22 +1708,25 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
             agent,
+            model,
             config,
             base_url,
             no_install,
             no_start,
             check,
+            tui,
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
-                agent,
+                agent: bitrouter::spawn::resolve_launch_agent(&agent)?,
+                model,
                 agent_args,
                 base_url,
                 no_install,
                 no_start,
                 check,
             };
-            run_launch(config.as_deref(), opts, output).await
+            run_launch(config.as_deref(), opts, tui, output).await
         }
         Command::Spawn {
             agent,
@@ -1731,8 +1737,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             model,
             base_url,
             no_start,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             result_schema,
@@ -1762,14 +1766,15 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     legacy.spec().id
                 );
                 let opts = bitrouter::spawn::SpawnOptions {
-                    agent: legacy,
+                    agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
+                    model: model.clone(),
                     agent_args,
                     base_url,
                     no_install,
                     no_start,
                     check,
                 };
-                return run_launch(config.as_deref(), opts, output).await;
+                return run_launch(config.as_deref(), opts, false, output).await;
             }
 
             let Some(agent) = agent else {
@@ -1797,11 +1802,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     std::process::exit(report.exit_code());
                 }
             } else if serve {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
                     config: cfg,
@@ -1811,11 +1812,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 };
                 bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
-                let options = bitrouter::acp_cli::launch_options(
-                    worktree.as_deref(),
-                    rm_worktree,
-                    turn_timeout,
-                );
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
                 // A malformed schema fails fast, before any session side effect.
                 let contract = result_schema
                     .as_deref()
@@ -1842,12 +1839,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
-        #[cfg(feature = "tui")]
-        Command::Tui {
-            agent,
-            worktree,
-            model,
-        } => bitrouter::tui::run(&agent, worktree.as_deref(), model.as_deref()).await,
         Command::Update {
             check,
             tag,
@@ -2318,95 +2309,6 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
     }
 }
 
-/// `CostQuery` over the local metering database — backs the orchestrator
-/// profile's `fleet_cost` tool. Reuses the same read-side query as
-/// [`LocalCostFooter`] (today's spend) and adds an all-time total, so the
-/// orchestrator can weigh spend against progress mid-session. No substrate.
-struct MeteringCost {
-    source: bitrouter::paths::ConfigSource,
-    /// The `--budget-usd` ceiling in micro-USD, surfaced as `budget_usd` /
-    /// `remaining_usd` so the orchestrator can self-pace. `None` = unlimited.
-    budget_micro_usd: Option<u64>,
-}
-
-impl MeteringCost {
-    fn new(source: bitrouter::paths::ConfigSource, budget_micro_usd: Option<u64>) -> Self {
-        Self {
-            source,
-            budget_micro_usd,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
-    async fn snapshot(&self) -> Result<serde_json::Value, bitrouter_mcp::error::ToolError> {
-        use bitrouter::metering::store::TimeWindow;
-        let store = bitrouter::metering::reader::open_readonly(&self.source)
-            .await
-            .ok_or_else(|| {
-                bitrouter_mcp::error::ToolError::new(
-                    "metering database unavailable (no requests recorded yet)",
-                )
-            })?;
-        let today = store.spend_summary(TimeWindow::Today).await.map_err(|e| {
-            bitrouter_mcp::error::ToolError::new(format!("reading today's spend: {e}"))
-        })?;
-        // All-time: a Custom window from the epoch (spend_summary filters on
-        // `created_at >= start`, so an epoch start counts every settled row).
-        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now);
-        let total = store
-            .spend_summary(TimeWindow::Custom {
-                start: epoch,
-                end: chrono::Utc::now(),
-            })
-            .await
-            .map_err(|e| {
-                bitrouter_mcp::error::ToolError::new(format!("reading total spend: {e}"))
-            })?;
-        let mut snapshot = serde_json::json!({
-            "today": {
-                "spend_micro_usd": today.spend_micro_usd,
-                "spend_usd": bitrouter::metering::fmt_usd(today.spend_micro_usd),
-                "requests": today.requests,
-            },
-            "total": {
-                "spend_micro_usd": total.spend_micro_usd,
-                "spend_usd": bitrouter::metering::fmt_usd(total.spend_micro_usd),
-                "requests": total.requests,
-            },
-        });
-        // Surface the spend ceiling (TUI_SPEC §5) so the orchestrator can
-        // self-pace. Enforced against the same `today` figure in `SubstrateFleet`.
-        if let Some(ceiling) = self.budget_micro_usd {
-            let remaining = ceiling.saturating_sub(today.spend_micro_usd);
-            snapshot["budget"] = serde_json::json!({
-                "budget_micro_usd": ceiling,
-                "budget_usd": bitrouter::metering::fmt_usd(ceiling),
-                "remaining_micro_usd": remaining,
-                "remaining_usd": bitrouter::metering::fmt_usd(remaining),
-                "over_budget": today.spend_micro_usd >= ceiling,
-                "note": "ceiling applies to today's machine-wide spend; spawn/prompt refuse once reached",
-            });
-        }
-        Ok(snapshot)
-    }
-}
-
-/// The fleet-only `mcp serve` flags that were set on a non-fleet backend, so
-/// the caller can print an "ignored" note for each (mirroring `--allow-writes`).
-/// Returned rather than printed inline so the applicability rule is unit-testable.
-fn non_fleet_flag_notes(allow_writes: bool, budget_usd: Option<f64>) -> Vec<&'static str> {
-    let mut notes = Vec::new();
-    if allow_writes {
-        notes.push("--allow-writes");
-    }
-    if budget_usd.is_some() {
-        notes.push("--budget-usd");
-    }
-    notes
-}
-
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -2416,130 +2318,13 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             cloud_url,
             token,
             bind,
-            allow_writes,
-            budget_usd,
         } => {
-            // The fleet bridge is a different server (subagent tools over the
-            // substrate), not a completion backend — and stdio-only: its
-            // tools mutate (spawn processes, write the repo), so they must
-            // inherit the orchestrator's process identity rather than ride
-            // the unauthenticated HTTP→local path.
-            if backend == Some(McpBackend::Fleet) {
-                if matches!(transport, McpTransport::Http) {
-                    anyhow::bail!(
-                        "the fleet backend is stdio-only (its tools mutate; HTTP has no local auth story yet)"
-                    );
-                }
-                let source = bitrouter::paths::resolve_config(None)?;
-                let cfg = bitrouter::paths::load_config(&source).await?;
-                let catalog = bitrouter_sdk::acp::ConfigAcpRoutingTable::from_configs(
-                    cfg.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
-                )
-                .context("building acp catalog from config.agents")?;
-                let base_repo = std::env::current_dir().context("resolving current directory")?;
-                // Resolve the daemon control socket so `route_preview` prefers
-                // the live daemon (subscription providers, reloads) and only
-                // falls back to static config when it's unreachable — the same
-                // order `bitrouter route` uses. Best-effort: an unresolved
-                // socket just means config-only resolution.
-                let route_socket = resolve_client_socket_from(&source, None).await.ok();
-                let routing = std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(
-                    &cfg,
-                    route_socket,
-                ));
-                // Spend circuit breaker (TUI_SPEC §5). The ceiling is enforced
-                // (in `SubstrateFleet`) and displayed (in `fleet_cost`) against
-                // the same figure — today's machine-wide spend — so both agree.
-                let budget_micro_usd = budget_usd
-                    .map(bitrouter::fleet_mcp::budget_usd_to_micro)
-                    .transpose()?;
-                let budget = budget_micro_usd.map(|micro| {
-                    bitrouter::fleet_mcp::BudgetCeiling::new(
-                        micro,
-                        std::sync::Arc::new(bitrouter::fleet_mcp::MeteringSpend::new(
-                            source.clone(),
-                        )),
-                    )
-                });
-                // Capability-gated Tasks elicitation seam (PR-3 B2): one shared
-                // state, populated handler-side at the first fleet tool call
-                // (client capability + peer) and read app-side from the
-                // permission path. Off for every client that hasn't declared
-                // the capability — default escalation behavior is unchanged.
-                let escalation = bitrouter_mcp::capabilities::escalation::EscalationState::new();
-                // Gateway descriptors for every spawned subagent's
-                // `session/new`: the aggregate MCP endpoint (when enabled)
-                // and the skills origin server — the same pair the
-                // orchestrator gets via config synthesis.
-                let auth = bitrouter::harness::resolve_gateway_auth(
-                    std::env::var(bitrouter::harness::BITROUTER_API_KEY_ENV).ok(),
-                    false,
-                )
-                .unwrap_or_else(|| bitrouter::harness::PLACEHOLDER_API_KEY.to_string());
-                let aggregate_route = cfg
-                    .mcp
-                    .aggregate
-                    .enabled
-                    .then(|| cfg.mcp.aggregate.route.clone());
-                let subagent_mcp: Vec<_> = bitrouter::gateways::gateway_servers(
-                    &local_url,
-                    &auth,
-                    aggregate_route.as_deref(),
-                )
-                .iter()
-                .map(bitrouter::gateways::to_acp)
-                .collect();
-                // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
-                // ports (the human bridge rides the same fleet socket).
-                let fleet = std::sync::Arc::new(
-                    bitrouter::fleet_mcp::SubstrateFleet::connect(
-                        catalog,
-                        base_repo,
-                        cfg.worktrees.clone(),
-                        allow_writes,
-                        budget,
-                        Some(escalation.clone()),
-                        subagent_mcp,
-                    )
-                    .await,
-                );
-                // The orchestrator profile is the union — completion + fleet +
-                // cost + the tier-2 introspection/escalation ports, stdio-only.
-                // Completion routes to the same local daemon the TUI runs; cost
-                // reads the shared metering database; routing reads the config;
-                // the human bridge rides the fleet socket. Skills are NOT wired
-                // here: they ship as the separate `bitrouter_skills` server
-                // (`--backend skills`) every harness gets, so wiring them into
-                // this bridge too would list the tools twice.
-                let server = bitrouter_mcp::server::BitrouterMcp::builder()
-                    .completion_local(&local_url)
-                    .fleet(fleet.clone())
-                    .human(fleet)
-                    .cost(std::sync::Arc::new(MeteringCost::new(
-                        source,
-                        budget_micro_usd,
-                    )))
-                    .routing(routing)
-                    // Source the cap value from the app so the instructions
-                    // quote the real cap (no cross-crate magic number).
-                    .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
-                    // Share the escalation state so the handler can record the
-                    // client capability + peer for the (gated) elicitation seam.
-                    .escalation(escalation)
-                    .build();
-                // No `complete`/`status` cost footer here (unlike the public
-                // stdio path): the orchestrator profile carries the richer
-                // `fleet_cost` tool, so the per-result footer would be
-                // redundant. Intentional asymmetry.
-                return bitrouter_mcp::server::serve_stdio(server, None).await;
-            }
-            for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
-                eprintln!("note: {flag} only applies to --backend fleet; ignored");
-            }
             // The skills backend is the origin AgentSkills server over the
             // installed-skills root — the `bitrouter_skills` gateway server
-            // harnesses launch as a subprocess. Stdio-only, mirroring the
-            // fleet bridge's transport posture.
+            // harnesses launch as a subprocess. Stdio-only: it serves the
+            // caller's own installed-skills tree, so it must inherit the
+            // launching process's identity rather than ride an
+            // unauthenticated HTTP listener.
             //
             // Two surfaces over the same root, deliberately: the
             // `skills_search` / `skills_get` *tools*, which any MCP client can
@@ -2564,13 +2349,13 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 return bitrouter_mcp::server::serve_stdio(server, None).await;
             }
             let transport = bitrouter_mcp::Transport::from(transport);
-            // Fleet and skills were handled and returned above. Local/Cloud
-            // map straight across; an unset backend takes the transport
-            // default (stdio→local, http→cloud).
+            // Skills was handled and returned above. Local/Cloud map straight
+            // across; an unset backend takes the transport default
+            // (stdio→local, http→cloud).
             let backend = match backend {
                 Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
                 Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
-                Some(McpBackend::Fleet) | Some(McpBackend::Skills) | None => match transport {
+                Some(McpBackend::Skills) | None => match transport {
                     bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
                     bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
                 },
@@ -2583,16 +2368,42 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             }
             // The spend footer only makes sense where the local metering
             // database *is* the caller's spend: stdio → local daemon.
+            let local_stdio = matches!(
+                (transport, backend),
+                (
+                    bitrouter_mcp::Transport::Stdio,
+                    bitrouter_mcp::BackendKind::Local
+                )
+            );
+            let source = local_stdio
+                .then(|| bitrouter::paths::resolve_config(None).ok())
+                .flatten();
             let cost_footer: Option<std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>> =
-                match (transport, backend) {
-                    (bitrouter_mcp::Transport::Stdio, bitrouter_mcp::BackendKind::Local) => {
-                        bitrouter::paths::resolve_config(None).ok().map(|source| {
-                            std::sync::Arc::new(LocalCostFooter { source })
-                                as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
-                        })
+                source.clone().map(|source| {
+                    std::sync::Arc::new(LocalCostFooter { source })
+                        as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
+                });
+            // `route_preview` reads this machine's routing table, so it rides
+            // the same pairing as the spend footer: stdio → local daemon. It
+            // prefers the live daemon's view (subscription providers, reloads)
+            // and falls back to static config when the control socket is
+            // unreachable — the same order `bitrouter route` uses. Best-effort
+            // throughout: an unreadable config just means no `route_preview`
+            // tool, never a failed `mcp serve`.
+            let routing: Option<
+                std::sync::Arc<dyn bitrouter_mcp::capabilities::routing::RoutingQuery>,
+            > = match source {
+                Some(source) => match bitrouter::paths::load_config(&source).await {
+                    Ok(cfg) => {
+                        let socket = resolve_client_socket_from(&source, None).await.ok();
+                        Some(std::sync::Arc::new(
+                            bitrouter::routing_preview::RoutingPreview::new(&cfg, socket),
+                        ))
                     }
-                    _ => None,
-                };
+                    Err(_) => None,
+                },
+                None => None,
+            };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -2601,6 +2412,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 cloud_token,
                 bind,
                 cost_footer,
+                routing,
             })
             .await
         }
@@ -3398,6 +3210,25 @@ async fn status(socket: &Path) -> Result<StatusReport> {
     Ok(report)
 }
 
+/// `bitrouter status --watch` — the live view.
+///
+/// A non-terminal stdout gets one plain-text snapshot instead of a refusal:
+/// piping this is how people will script against it, and the whole point of
+/// the flag is that it reports rather than gatekeeps.
+async fn watch_status(config: Option<&Path>, socket: &Path) -> Result<()> {
+    use std::io::IsTerminal;
+    let source = bitrouter::paths::resolve_config(config)?;
+    let window = bitrouter::metering::store::TimeWindow::Today;
+    if !std::io::stdout().is_terminal() {
+        print!(
+            "{}",
+            bitrouter::tui::oneshot_text(&source, socket, window).await
+        );
+        return Ok(());
+    }
+    bitrouter::tui::run_watch(&source, socket, window).await
+}
+
 async fn route(
     model: &str,
     source: &bitrouter::paths::ConfigSource,
@@ -3512,17 +3343,37 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             name,
             preset,
             strong,
+            strong_effort,
             economy,
+            economy_effort,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::policy_lock::initialize_files(
+            let source_raw = tokio::fs::read_to_string(config_path).await?;
+            let source_config = bitrouter_sdk::config::parse(&source_raw)?;
+            if let Some(strong_model) = strong.as_deref() {
+                bitrouter::optimization::setup::validate_routable_effort(
+                    &source_config,
+                    strong_model,
+                    strong_effort,
+                )
+                .await?;
+            }
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &economy,
+                economy_effort,
+            )
+            .await?;
+            let update = bitrouter::policy_lock::initialize_files_with_efforts(
                 config_path,
                 &name,
                 &preset,
                 strong.as_deref(),
+                strong_effort,
                 &economy,
+                economy_effort,
             )
             .await?;
             output.emit(
@@ -3827,12 +3678,22 @@ fn select_guided_workflow(
 fn select_optimization_route(
     label: &str,
     requested: Option<String>,
-    existing: Option<String>,
-) -> Result<String> {
+    requested_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    existing: Option<bitrouter::optimization::setup::ExistingTierRoute>,
+) -> Result<(
+    String,
+    Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+)> {
     use std::io::IsTerminal;
 
-    if let Some(route) = requested.or(existing) {
-        return Ok(route);
+    if let Some(route) = requested {
+        return Ok((route, requested_effort));
+    }
+    if let Some(existing) = existing {
+        if requested_effort.is_some() && requested_effort != existing.effort {
+            anyhow::bail!("--{label}-effort requires an explicit --{label} route");
+        }
+        return Ok((existing.model, existing.effort));
     }
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
@@ -3843,7 +3704,7 @@ fn select_optimization_route(
     if route.trim().is_empty() {
         anyhow::bail!("{label} route is required");
     }
-    Ok(route)
+    Ok((route, requested_effort))
 }
 
 fn resolve_adaptive_publication_consent(
@@ -3880,7 +3741,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 policy,
                 preset,
                 strong,
+                strong_effort,
                 economy,
+                economy_effort,
                 normalized_price_overrides,
                 preference,
                 evaluator_agent,
@@ -3921,8 +3784,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let (existing_strong, existing_economy) =
                 bitrouter::optimization::setup::existing_tier_routes(&source_config_path, &policy)
                     .await?;
-            let strong = select_optimization_route("strong", strong, existing_strong)?;
-            let economy = select_optimization_route("economy", economy, existing_economy)?;
+            let (strong, strong_effort) =
+                select_optimization_route("strong", strong, strong_effort, existing_strong)?;
+            let (economy, economy_effort) =
+                select_optimization_route("economy", economy, economy_effort, existing_economy)?;
             let operation_path = setup_paths.operation_lock_target();
             let _operation_lock =
                 bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
@@ -3944,7 +3809,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     policy,
                     preset,
                     strong,
+                    strong_effort,
                     economy,
+                    economy_effort,
                     normalized_price_overrides,
                     preference,
                     evaluator_agent,
@@ -3957,6 +3824,8 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 bitrouter::optimization::EvaluatorRoute::Cloud => "cloud",
                 bitrouter::optimization::EvaluatorRoute::Direct => "direct",
             };
+            let strong_target = outcome.intent.strong_target().to_string();
+            let economy_target = outcome.intent.economy_target().to_string();
             output.emit(&OptimizationSetupReport {
                 action: "optimize.setup",
                 model: "bitrouter/auto",
@@ -3964,8 +3833,8 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 lock: outcome.paths.lock.display().to_string(),
                 contract: outcome.contract_path.display().to_string(),
                 workflow: outcome.intent.workflow.command.clone(),
-                strong: outcome.intent.strong,
-                economy: outcome.intent.economy,
+                strong: strong_target,
+                economy: economy_target,
                 evaluator: format!(
                     "{} ({}, {evaluator_route})",
                     outcome.lock.evaluator.agent, outcome.lock.evaluator.model
@@ -4010,9 +3879,21 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 &loaded.intent.strong,
             )
             .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.strong,
+                loaded.intent.strong_effort,
+            )
+            .await?;
             bitrouter::optimization::setup::validate_routable_model(
                 &source_config,
                 &loaded.intent.economy,
+            )
+            .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.economy,
+                loaded.intent.economy_effort,
             )
             .await?;
             let policy_path = bitrouter::policy_lock::resolve_path(
@@ -5383,6 +5264,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
 async fn run_launch(
     config: Option<&std::path::Path>,
     opts: bitrouter::spawn::SpawnOptions,
+    tui: bool,
     output: &bitrouter::output::Output,
 ) -> Result<()> {
     let source = bitrouter::paths::resolve_config(config)?;
@@ -5395,6 +5277,30 @@ async fn run_launch(
         } else {
             std::process::exit(report.exit_code());
         }
+    } else if tui {
+        // Hosting needs a real screen to attach to, and every failure here
+        // names the escape hatch: the flag is the only thing between the user
+        // and a working launch.
+        use std::io::IsTerminal;
+        if !std::io::stdout().is_terminal() {
+            anyhow::bail!(
+                "`--tui` needs a terminal to draw in (stdout is redirected). Run \
+                 `bitrouter launch` without `--tui`."
+            );
+        }
+        // A `cfg!(unix)` *runtime* check would not do: `exec_hosted` only
+        // exists under the same gate, so the call has to disappear at compile
+        // time or Windows fails to build.
+        #[cfg(not(unix))]
+        {
+            let _ = (&source, &cfg, opts);
+            anyhow::bail!("`--tui` is unix-only today. Run `bitrouter launch` without `--tui`.");
+        }
+        #[cfg(unix)]
+        {
+            let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
+            bitrouter::spawn::exec_hosted(prepared).await
+        }
     } else {
         bitrouter::spawn::run(&source, &cfg, opts).await
     }
@@ -5406,8 +5312,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
     match cmd {
         AcpCmd::Serve {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             direct,
             base_url,
@@ -5417,8 +5321,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -5436,8 +5339,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         }
         AcpCmd::Prompt {
             agent,
-            worktree,
-            rm_worktree,
             turn_timeout,
             no_wait,
             direct,
@@ -5449,8 +5350,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options =
-                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -5466,10 +5366,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 routing,
             };
             bitrouter::acp_cli::prompt(ctx, &text, no_wait, None, &mut stdout).await
-        }
-        AcpCmd::Sessions => {
-            let mut stdout = tokio::io::stdout();
-            bitrouter::acp_cli::sessions(&mut stdout).await
         }
     }
 }
@@ -6360,45 +6256,28 @@ mod tests {
     }
 
     #[test]
-    fn fleet_only_flags_are_noted_ignored_off_fleet() {
-        // On a non-fleet backend, `--allow-writes` / `--budget-usd` are
-        // politely ignored (a note is printed for each), never enforced.
-        assert!(non_fleet_flag_notes(false, None).is_empty());
-        assert_eq!(non_fleet_flag_notes(true, None), ["--allow-writes"]);
-        assert_eq!(non_fleet_flag_notes(false, Some(10.0)), ["--budget-usd"]);
-        assert_eq!(
-            non_fleet_flag_notes(true, Some(10.0)),
-            ["--allow-writes", "--budget-usd"]
-        );
-    }
-
-    #[test]
-    fn budget_usd_flag_parses_for_fleet_serve() {
+    fn mcp_serve_backends_are_local_cloud_and_skills() {
         use clap::Parser;
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "mcp",
-            "serve",
-            "--backend",
-            "fleet",
-            "--budget-usd",
-            "12.5",
-        ])
-        .expect("parse");
-        match cli.command {
-            Some(Command::Mcp {
-                action:
-                    McpAction::Serve {
-                        backend,
-                        budget_usd,
-                        ..
-                    },
-            }) => {
-                assert_eq!(backend, Some(McpBackend::Fleet));
-                assert_eq!(budget_usd, Some(12.5));
+        for (flag, expected) in [
+            ("local", McpBackend::Local),
+            ("cloud", McpBackend::Cloud),
+            ("skills", McpBackend::Skills),
+        ] {
+            let cli = Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", flag])
+                .expect("parse");
+            match cli.command {
+                Some(Command::Mcp {
+                    action: McpAction::Serve { backend, .. },
+                }) => assert_eq!(backend, Some(expected)),
+                _ => panic!("expected `mcp serve --backend {flag}` to parse"),
             }
-            _ => panic!("expected `mcp serve` to parse with --budget-usd"),
         }
+        // The orchestrator's fleet bridge is gone; its backend name no longer
+        // parses.
+        assert!(
+            Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", "fleet"]).is_err(),
+            "the fleet backend must no longer be accepted"
+        );
     }
 
     #[test]
@@ -6585,8 +6464,14 @@ mod tests {
             "terminal-bench",
             "--preset",
             "coding",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--strong-effort",
+            "high",
             "--economy",
-            "moonshotai/kimi-k2.7-code",
+            "openai-codex:gpt-5.6-sol",
+            "--economy-effort",
+            "low",
             "--config",
             "team/bitrouter.yaml",
         ])
@@ -6598,14 +6483,24 @@ mod tests {
                         name,
                         preset,
                         strong,
+                        strong_effort,
                         economy,
+                        economy_effort,
                         config,
                     },
             }) => {
                 assert_eq!(name, "terminal-bench");
                 assert_eq!(preset, "coding");
-                assert_eq!(strong, None);
-                assert_eq!(economy, "moonshotai/kimi-k2.7-code");
+                assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(economy, "openai-codex:gpt-5.6-sol");
+                assert_eq!(
+                    economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
                 assert_eq!(config, Some(PathBuf::from("team/bitrouter.yaml")));
             }
             _ => panic!("expected policy init"),
@@ -6758,11 +6653,59 @@ mod tests {
         match parsed.command {
             Some(Command::Init {
                 optimize_strong,
+                optimize_strong_effort,
                 optimize_economy,
+                optimize_economy_effort,
                 ..
             }) => {
                 assert!(optimize_strong.is_none());
+                assert!(optimize_strong_effort.is_none());
                 assert!(optimize_economy.is_none());
+                assert!(optimize_economy_effort.is_none());
+            }
+            _ => anyhow::bail!("expected init command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn init_optimization_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let parsed = Cli::try_parse_from([
+            "bitrouter",
+            "init",
+            "--optimize",
+            "--optimize-strong",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-strong-effort",
+            "high",
+            "--optimize-economy",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-economy-effort",
+            "low",
+        ])?;
+        match parsed.command {
+            Some(Command::Init {
+                optimize_strong,
+                optimize_strong_effort,
+                optimize_economy,
+                optimize_economy_effort,
+                ..
+            }) => {
+                assert_eq!(optimize_strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    optimize_strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(
+                    optimize_economy.as_deref(),
+                    Some("openai-codex:gpt-5.6-sol")
+                );
+                assert_eq!(
+                    optimize_economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
             }
             _ => anyhow::bail!("expected init command"),
         }
@@ -6807,7 +6750,7 @@ mod tests {
         let artifact = candidate
             .artifact
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("default v2 policy has no artifact"))?;
+            .ok_or_else(|| anyhow::anyhow!("default compiled policy has no artifact"))?;
         artifact.parent_digest = Some(parent_digest.clone());
         artifact.source_snapshot_time_unix_ms = 1;
         let history = bitrouter::policy_lock::default_history_dir(&policy_path);

@@ -21,6 +21,10 @@ pub mod m20240101_000010_create_eval_exchange;
 pub mod m20240101_000011_scope_eval_exchange;
 pub mod m20240101_000012_create_trajectory_ledger;
 pub mod m20240101_000013_create_continuation_registry;
+// 000014 is deliberately skipped: it was `add_continuation_publication_state`,
+// withdrawn before release and folded into 000013. Leaving the slot burned
+// keeps the sequence unambiguous for anyone reading git history.
+pub mod m20240101_000015_add_metering_launch_id;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -45,6 +49,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000011_scope_eval_exchange::Migration),
             Box::new(m20240101_000012_create_trajectory_ledger::Migration),
             Box::new(m20240101_000013_create_continuation_registry::Migration),
+            Box::new(m20240101_000015_add_metering_launch_id::Migration),
         ]
     }
 }
@@ -197,10 +202,21 @@ mod tests {
     async fn final_migrator_ends_with_the_authenticated_continuation_schema() -> anyhow::Result<()>
     {
         let migrations = Migrator::migrations();
-        assert_eq!(
-            migrations.last().map(|migration| migration.name()),
-            Some("m20240101_000013_create_continuation_registry"),
+        // The guard is about one specific withdrawn migration, not about the
+        // sequence never growing again: `add_continuation_publication_state`
+        // was folded into 000013 before release and must never reappear.
+        // Asserting on its *name* keeps that promise while leaving the schema
+        // free to move forward.
+        assert!(
+            !migrations.iter().any(|migration| migration.name()
+                == "m20240101_000014_add_continuation_publication_state"),
             "the unpublished state-only 014 migration must not survive in the final sequence"
+        );
+        assert!(
+            migrations.iter().any(
+                |migration| migration.name() == "m20240101_000013_create_continuation_registry"
+            ),
+            "the continuation registry migration carries that folded-in state"
         );
 
         let db = crate::db::connect("sqlite::memory:").await?;

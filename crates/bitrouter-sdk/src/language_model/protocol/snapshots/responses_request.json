@@ -4,6 +4,10 @@
   "description": "Responses request body\n(<https://platform.openai.com/docs/api-reference/responses/create>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.\n\n`input` stays `serde_json::Value` on purpose — the Responses API accepts\neither a plain string or a heterogeneous item array (Codex multi-turn,\n#454-3), and the deeper walk happens in `parse_input` (private). Mirrors\nhow Anthropic's `system` / `content` are typed.",
   "type": "object",
   "properties": {
+    "model": {
+      "type": "string",
+      "default": ""
+    },
     "input": true,
     "instructions": {
       "type": [
@@ -12,31 +16,52 @@
       ],
       "default": null
     },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResponsesTool"
+      }
+    },
+    "temperature": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double",
+      "default": null
+    },
     "max_output_tokens": {
       "type": [
         "integer",
         "null"
       ],
       "format": "uint32",
-      "default": null,
-      "minimum": 0
-    },
-    "model": {
-      "type": "string",
-      "default": ""
-    },
-    "parallel_tool_calls": {
-      "description": "Whether the model may issue tool calls in parallel.",
-      "type": [
-        "boolean",
-        "null"
-      ],
+      "minimum": 0,
       "default": null
     },
     "reasoning": {
       "anyOf": [
         {
           "$ref": "#/$defs/ResponsesReasoningConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "text": {
+      "description": "Output `text` config — `format` is the structured-output constraint\n(`json_schema` is promoted to the canonical slot; `text` / `json_object`\npass through). Sibling keys (e.g. `verbosity`) survive via `extra`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResponsesText"
         },
         {
           "type": "null"
@@ -55,37 +80,12 @@
       ],
       "default": null
     },
-    "temperature": {
+    "parallel_tool_calls": {
+      "description": "Whether the model may issue tool calls in parallel.",
       "type": [
-        "number",
+        "boolean",
         "null"
       ],
-      "format": "double",
-      "default": null
-    },
-    "text": {
-      "description": "Output `text` config — `format` is the structured-output constraint\n(`json_schema` is promoted to the canonical slot; `text` / `json_object`\npass through). Sibling keys (e.g. `verbosity`) survive via `extra`.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ResponsesText"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "tools": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ResponsesTool"
-      }
-    },
-    "top_p": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double",
       "default": null
     }
   },
@@ -93,18 +93,100 @@
     "input"
   ],
   "$defs": {
-    "ResponsesReasoningConfig": {
-      "description": "`reasoning` knob on [`ResponsesRequest`] — only `effort` is read; other\nfields (`summary`, …) round-trip via no slot today (matching v0 behavior).",
+    "ResponsesTool": {
+      "description": "One element of [`ResponsesRequest`]'s `tools` array.\n\nResponses uses one flat array for both kinds of tool:\n- a **function** tool — `{type:\"function\", name, description?, parameters, strict?}`;\n- a **provider-defined** server tool — `{type:\"web_search_preview\"|…, …config}`\n  (`code_interpreter`, `file_search`, `image_generation`, `computer_use_preview`).\n\n`kind` (`type`) discriminates the two; for a server tool the configuration\nkeys ride in `extra` so they are preserved verbatim into the canonical\n`Tool::ProviderDefined.args`.\n<https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>",
       "type": "object",
       "properties": {
-        "effort": {
+        "type": {
           "type": [
             "string",
             "null"
           ],
           "default": null
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "parameters": {
+          "default": null
+        },
+        "strict": {
+          "description": "OpenAI strict-mode flag (V3 `strict`) on a function tool. Captured so it\nis not lost across the canonical boundary.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
         }
       }
+    },
+    "ResponsesReasoningConfig": {
+      "description": "`reasoning` knob on [`ResponsesRequest`]. `effort` is promoted to the\ncanonical slot; sibling fields such as `summary` round-trip via `extra`.",
+      "type": "object",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
     },
     "ResponsesText": {
       "description": "Responses `text` config. `format` constrains output shape; sibling keys\n(e.g. `verbosity`) pass through via `extra`.",
@@ -156,6 +238,10 @@
           "description": "JSON constrained to a schema.",
           "type": "object",
           "properties": {
+            "name": {
+              "description": "Schema name (OpenAI requires it).",
+              "type": "string"
+            },
             "description": {
               "description": "Optional schema description — extra LLM guidance OpenAI passes to the\nmodel. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/api-reference/responses/create>",
               "type": [
@@ -163,19 +249,15 @@
                 "null"
               ]
             },
-            "name": {
-              "description": "Schema name (OpenAI requires it).",
-              "type": "string"
-            },
-            "schema": {
-              "description": "The JSON Schema."
-            },
             "strict": {
               "description": "Strict-mode flag.",
               "type": [
                 "boolean",
                 "null"
               ]
+            },
+            "schema": {
+              "description": "The JSON Schema."
             },
             "type": {
               "type": "string",
@@ -189,44 +271,6 @@
           ]
         }
       ]
-    },
-    "ResponsesTool": {
-      "description": "One element of [`ResponsesRequest`]'s `tools` array.\n\nResponses uses one flat array for both kinds of tool:\n- a **function** tool — `{type:\"function\", name, description?, parameters, strict?}`;\n- a **provider-defined** server tool — `{type:\"web_search_preview\"|…, …config}`\n  (`code_interpreter`, `file_search`, `image_generation`, `computer_use_preview`).\n\n`kind` (`type`) discriminates the two; for a server tool the configuration\nkeys ride in `extra` so they are preserved verbatim into the canonical\n`Tool::ProviderDefined.args`.\n<https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>",
-      "type": "object",
-      "properties": {
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "parameters": {
-          "default": null
-        },
-        "strict": {
-          "description": "OpenAI strict-mode flag (V3 `strict`) on a function tool. Captured so it\nis not lost across the canonical boundary.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "type": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      }
     }
   }
 }

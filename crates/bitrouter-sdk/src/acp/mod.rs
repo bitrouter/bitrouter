@@ -1,8 +1,11 @@
 //! The `acp` protocol module — Agent Client Protocol / A2A agent routing.
 //!
-//! v1.0: **pure routing, no settlement**. The ACP
-//! pipeline has only `PreRequestHook` / `RouteHook` / `ExecutionHook` — no
-//! settlement stage.
+//! The ACP pipeline is `PreRequestHook` → `RouteHook` → `ExecutionHook`,
+//! followed by the [`settlement`] seam: an always-run recorder list handed
+//! **turn facts only** (agent, stop reason, latency, context-window
+//! occupancy). Unlike `language_model`'s settlement stage it does not run on
+//! failure — ACP routing has no failure settlement — and it carries no reward
+//! or scoring semantics; those belong to the consumer.
 //!
 //! these hook traits are **independent** of both
 //! `language_model`'s and `mcp`'s — protocol isolation is enforced at compile
@@ -17,12 +20,18 @@
 //!
 //! ## Feature-gated components
 //!
-//! The `Pipeline`, `Builder`, hook traits, and request/response types are
-//! always available — they have no external dependencies. The
-//! [`config_routing::ConfigAcpRoutingTable`] lives behind the `acp` feature
-//! and provides the config-driven routing table the binary registers at
-//! startup. Typed health-checking (initialize-only) is provided by
-//! `bitrouter-substrate::up::health_check`.
+//! [`AcpTarget`], the [`RoutingTable`] trait, and the
+//! [`transport::AcpTransport`] enum are always available — they have no
+//! external dependencies, so a consumer can wire ACP routing without pulling
+//! the ACP SDK in.
+//!
+//! Everything else rides the `acp` feature: the [`Pipeline`], the hook traits,
+//! the typed request/response payloads, [`config_routing::ConfigAcpRoutingTable`],
+//! and the **live thin proxy** — [`up`] (the agent child + ACP client role),
+//! [`engine`] (one session wired to the pipeline), and [`down`] (the session
+//! re-exposed as a vanilla ACP agent). This mirrors how
+//! [`crate::mcp::rmcp_executor`] rides the `mcp` feature. Typed
+//! health-checking (initialize-only) is [`up::health_check`].
 
 #[cfg(feature = "acp")]
 use std::sync::Arc;
@@ -43,6 +52,34 @@ pub mod transport;
 
 #[cfg(feature = "acp")]
 pub mod config_routing;
+
+#[cfg(feature = "acp")]
+pub mod settlement;
+
+#[cfg(feature = "acp")]
+pub mod translate;
+
+// ── the live thin proxy (feature = "acp") ───────────────────────────────────
+// One session, one agent: `up` speaks the ACP client role to the agent child,
+// `engine` wires it to this module's `Pipeline`, and `down` re-exposes the
+// result as a vanilla ACP agent. The direct analogue of
+// [`crate::mcp::rmcp_executor`] for the ACP protocol.
+#[cfg(feature = "acp")]
+pub mod down;
+#[cfg(feature = "acp")]
+pub mod engine;
+#[cfg(feature = "acp")]
+pub mod executor;
+#[cfg(feature = "acp")]
+pub mod permissions;
+#[cfg(feature = "acp")]
+pub mod session;
+#[cfg(feature = "acp")]
+pub mod telemetry;
+#[cfg(feature = "acp")]
+pub mod turn;
+#[cfg(feature = "acp")]
+pub mod up;
 
 pub use transport::{AcpAgentConfig, AcpTransport};
 
@@ -203,12 +240,18 @@ impl AcpContext {
     }
 }
 
-/// The `acp` pure-routing pipeline: PreRequest → Route → Execute. No settlement.
+/// The `acp` routing pipeline: PreRequest → Route → Execute, then the
+/// turn-facts settlement seam.
 #[cfg(feature = "acp")]
 pub struct Pipeline {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     route_hooks: Vec<Arc<dyn RouteHook>>,
     execution_hooks: Vec<Arc<dyn ExecutionHook>>,
+    settlement_recorders: Vec<Arc<dyn settlement::AcpSettlementRecorder>>,
+    /// The upstream connection's latest-`UsageUpdate` slot, when the caller
+    /// supplied one. Read after execution to fill
+    /// [`AcpSettlementContext::cost_facts`](settlement::AcpSettlementContext::cost_facts).
+    context_usage: Option<telemetry::SharedContextUsage>,
     routing_table: Arc<dyn RoutingTable>,
     executor: Arc<dyn Executor>,
 }
@@ -239,7 +282,35 @@ impl Pipeline {
         for hook in &self.execution_hooks {
             hook.on_success(&ctx, &response).await?;
         }
+        self.settle(&ctx, &response).await?;
         Ok(response)
+    }
+
+    /// Build this turn's facts and hand them to every registered recorder.
+    /// Skips the work entirely when nothing is registered, so a pure-routing
+    /// deployment pays nothing for the seam.
+    async fn settle(&self, ctx: &AcpContext, response: &AcpResponse) -> Result<()> {
+        if self.settlement_recorders.is_empty() {
+            return Ok(());
+        }
+        let facts = settlement::AcpSettlementContext {
+            turn_id: response.request_id.clone(),
+            agent: ctx.request().agent.clone(),
+            stop_reason: format!("{:?}", response.result.stop_reason),
+            latency_ms: u64::try_from(ctx.started_at().elapsed().as_millis()).unwrap_or(u64::MAX),
+            cost_facts: self
+                .context_usage
+                .as_ref()
+                .and_then(|slot| slot.lock().ok().and_then(|usage| *usage))
+                .map(|usage| settlement::AcpCostFacts {
+                    context_used: usage.used,
+                    context_size: usage.size,
+                }),
+        };
+        for recorder in &self.settlement_recorders {
+            recorder.record(&facts).await?;
+        }
+        Ok(())
     }
 }
 
@@ -250,6 +321,8 @@ pub struct PipelineBuilder {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     route_hooks: Vec<Arc<dyn RouteHook>>,
     execution_hooks: Vec<Arc<dyn ExecutionHook>>,
+    settlement_recorders: Vec<Arc<dyn settlement::AcpSettlementRecorder>>,
+    context_usage: Option<telemetry::SharedContextUsage>,
     routing_table: Option<Arc<dyn RoutingTable>>,
     executor: Option<Arc<dyn Executor>>,
 }
@@ -291,6 +364,26 @@ impl PipelineBuilder {
         self
     }
 
+    /// Register an [`AcpSettlementRecorder`](settlement::AcpSettlementRecorder)
+    /// into the always-run list: it receives one turn-facts context after every
+    /// successful turn.
+    pub fn settlement_recorder(
+        &mut self,
+        recorder: Arc<dyn settlement::AcpSettlementRecorder>,
+    ) -> &mut Self {
+        self.settlement_recorders.push(recorder);
+        self
+    }
+
+    /// Supply the upstream connection's latest-`UsageUpdate` slot so settlement
+    /// facts can carry
+    /// [`AcpCostFacts`](settlement::AcpCostFacts). Without it `cost_facts` is
+    /// always `None` — the pipeline never invents usage it did not observe.
+    pub fn context_usage(&mut self, usage: telemetry::SharedContextUsage) -> &mut Self {
+        self.context_usage = Some(usage);
+        self
+    }
+
     /// Whether this builder has anything registered. The `App` reads this to
     /// decide whether to build an `acp::Pipeline`.
     pub fn is_configured(&self) -> bool {
@@ -303,6 +396,8 @@ impl PipelineBuilder {
             pre_request_hooks: self.pre_request_hooks,
             route_hooks: self.route_hooks,
             execution_hooks: self.execution_hooks,
+            settlement_recorders: self.settlement_recorders,
+            context_usage: self.context_usage,
             routing_table: self
                 .routing_table
                 .ok_or_else(|| BitrouterError::internal("acp pipeline: routing_table required"))?,

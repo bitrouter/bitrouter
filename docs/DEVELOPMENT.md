@@ -8,13 +8,12 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, config loading, and the axum HTTP server |
+| `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, the ACP thin proxy (`acp` feature), config loading, and the axum HTTP server |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
-| `crates/bitrouter-substrate`     | crate   | Per-session agent engine — hosts the ACP downstream server (`down`) and session translation                               |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
-| `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI/TUI binary — turns a `Config` into a running `App` and owns the management commands |
+| `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
 
@@ -26,10 +25,10 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
-| **ACP**                   | `crates/bitrouter-substrate` (`down` / `translate`); subcommand glue in `apps/bitrouter/src/acp_cli.rs`   | `bitrouter acp serve`    |
-| **CLI / TUI**             | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
+| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`, `down` / `engine` / `up`); subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
+| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
 
-The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate, ACP rides inside `bitrouter-substrate`, the API rides inside the SDK, and only the CLI/TUI lives in the binary itself.
+The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate while both ACP and the API ride inside the SDK, and only the CLI lives in the binary itself.
 
 ### Dependency Logic
 
@@ -46,7 +45,7 @@ The layering is strictly one-directional — every library crate points down at 
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
 3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and keep their default builds lean. Guardrails never pulls the axum HTTP stack; observe pulls axum/tower-http (for the inbound `TraceLayer`) only under its opt-in `otel-*` features. The `feature-isolation` CI job enforces this.
-4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI/TUI shell over that library.
+4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### SDK feature flags
 
@@ -116,7 +115,20 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ## CLI Surface
 
-`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `providers` / `agents` / `acp` / `spawn` / `cloud` / `skills` / `mcp` / `update`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
+`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `eval` / `optimize` / `trajectory` / `providers` / `agents` / `launch` / `spawn` / `cloud` / `skills` / `mcp` / `workflow-state` / `update` / `acp`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. `launch` runs a harness as an interactive native TUI; `spawn` (and its `acp serve|prompt` aliases) runs one as a headless ACP sub-agent. See `apps/bitrouter/src/main.rs`.
+
+### Observability surfaces (`apps/bitrouter/src/tui/`)
+
+Two surfaces share one renderer and one data layer:
+
+- `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
+- `bitrouter launch --tui` — the same readout on a status row pinned under a harness hosted in a VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`).
+
+The emulator exists because harnesses differ on whether they take the alternate screen, and an alt-screen app clobbers a `DECSTBM`-reserved line — so guaranteeing the row means owning the screen. That cost is why `--tui` is opt-in: scrollback moves from the user's terminal to BitRouter.
+
+`spawn::prepare` builds the child once; `exec_inherited` and `exec_hosted` differ only in how it is run, which is what makes "identical env and args" structural rather than a test promise. Terminal-identity env may differ, bounded by `HOSTED_ENV_SET` / `HOSTED_ENV_MAY_ADD` / `HOSTED_ENV_UNSET`.
+
+Verification is layered — input conformance against `cat -v`, replay of recorded harness output, and a manual pass for what needs hands. See [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md), which also states what the automated layers structurally cannot catch.
 
 ## Where To Extend The System
 

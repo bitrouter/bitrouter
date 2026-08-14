@@ -81,13 +81,6 @@ pub struct Config {
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bitrouter agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
-    /// Worktree isolation settings for fleet-managed subagents
-    /// (`bitrouter tui` spawns). All fields default — `worktrees:` is
-    /// optional in `bitrouter.yaml`.
-    pub worktrees: WorktreesConfig,
-    /// `bitrouter tui` settings. All fields default — `tui:` is optional
-    /// in `bitrouter.yaml`.
-    pub tui: TuiConfig,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's
@@ -125,8 +118,6 @@ impl Default for Config {
             mcp_servers: HashMap::new(),
             server_tools: Default::default(),
             agents: HashMap::new(),
-            worktrees: WorktreesConfig::default(),
-            tui: TuiConfig::default(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
@@ -225,57 +216,6 @@ pub enum EvalAuthorityKind {
     Generic,
 }
 
-/// `bitrouter tui` settings.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct TuiConfig {
-    /// The one-shot leader key that opens the TUI's which-key menu
-    /// (TUI_SPEC_V3 §3). `ctrl-<key>` form, where `<key>` is a single
-    /// character or `space` — e.g. `ctrl-space` (the default), `ctrl-]`,
-    /// `ctrl-\`. Unset or unparseable falls back to `ctrl-space`.
-    pub leader: Option<String>,
-}
-
-/// Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct WorktreesConfig {
-    /// Shell command run inside each **newly created** worktree before its
-    /// agent launches — the bootstrap hook for untracked files a worktree
-    /// doesn't carry (copy `.env`, install deps). It executes code: the TUI
-    /// shows it for human approval on first use each session. The hook runs
-    /// with cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,
-    /// and the subagent's allocated `PORT`.
-    pub bootstrap: Option<String>,
-    /// Port pool for per-subagent `PORT` allocation, so N dev servers don't
-    /// collide. Defaults to 3100–3199.
-    pub ports: PortPoolConfig,
-    /// Verification checks (shell commands, run in the subagent's worktree)
-    /// that must pass before its finished turn is "ready to review". A
-    /// failing check loops back to the subagent, not the human. Empty by
-    /// default.
-    pub checks: Vec<String>,
-}
-
-/// An inclusive port range fleet-managed subagents draw their `PORT` from.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct PortPoolConfig {
-    /// First port in the pool (inclusive).
-    pub from: u16,
-    /// Last port in the pool (inclusive).
-    pub to: u16,
-}
-
-impl Default for PortPoolConfig {
-    fn default() -> Self {
-        Self {
-            from: 3100,
-            to: 3199,
-        }
-    }
-}
-
 /// Current routing-policy artifact configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -356,6 +296,65 @@ impl Default for RegistryConfig {
     }
 }
 
+/// A policy-owned routing target.
+///
+/// The scalar form keeps the historical model-only syntax. The structured
+/// form makes reasoning effort part of the target identity, so two tiers may
+/// intentionally route to the same model at different supported effort levels.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum PolicyModelTarget {
+    /// Backward-compatible model-only target.
+    Model(String),
+    /// Explicit compound model and reasoning-effort target.
+    ModelEffort {
+        /// Canonical or provider-qualified model id.
+        model: String,
+        /// Exact effort value owned by this policy target.
+        effort: crate::language_model::types::ReasoningEffort,
+    },
+}
+
+impl PolicyModelTarget {
+    /// Model id selected by this target.
+    pub fn model(&self) -> &str {
+        match self {
+            Self::Model(model) | Self::ModelEffort { model, .. } => model,
+        }
+    }
+
+    /// Policy-owned reasoning effort, when explicitly configured.
+    pub fn effort(&self) -> Option<crate::language_model::types::ReasoningEffort> {
+        match self {
+            Self::Model(_) => None,
+            Self::ModelEffort { effort, .. } => Some(*effort),
+        }
+    }
+}
+
+impl From<String> for PolicyModelTarget {
+    fn from(model: String) -> Self {
+        Self::Model(model)
+    }
+}
+
+impl From<&str> for PolicyModelTarget {
+    fn from(model: &str) -> Self {
+        Self::Model(model.to_string())
+    }
+}
+
+impl std::fmt::Display for PolicyModelTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Model(model) => formatter.write_str(model),
+            Self::ModelEffort { model, effort } => write!(formatter, "{model}@{effort}"),
+        }
+    }
+}
+
 /// Config-driven per-request model routing — the top-level `policy_table:` block
 /// in `bitrouter.yaml`.
 ///
@@ -379,7 +378,7 @@ pub struct PolicyTableConfig {
     /// canonical id (resolved via the cascade/registry) or an explicit
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
-    pub tiers: HashMap<String, String>,
+    pub tiers: HashMap<String, PolicyModelTarget>,
     /// Canonical agent trace projection key → tier name. A key absent from this
     /// map falls back to [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
@@ -407,7 +406,7 @@ pub struct PolicyTableConfig {
 #[serde(default)]
 struct PolicyTableConfigInput {
     key_strategy: PolicyKeyStrategy,
-    tiers: HashMap<String, String>,
+    tiers: HashMap<String, PolicyModelTarget>,
     fingerprints: HashMap<String, String>,
     default_tier: Option<String>,
     tool_use_tier: Option<String>,
@@ -1229,6 +1228,10 @@ pub struct ProviderModel {
     /// exception requires a positive declaration.
     #[serde(default)]
     pub capabilities: Vec<crate::language_model::types::Capability>,
+    /// Positively verified qualitative effort levels for this exact route.
+    /// Absence means unknown, not unsupported.
+    #[serde(default)]
+    pub reasoning_effort: Option<crate::language_model::types::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -1524,6 +1527,25 @@ where
     // Validated post-`resolve_derivations` so an inherited `api_base` is
     // checked against the *effective* value.
     for (id, provider) in &config.providers {
+        for model in &provider.models {
+            if let Some(reasoning_effort) = &model.reasoning_effort {
+                if !model
+                    .capabilities
+                    .contains(&crate::language_model::types::Capability::Reasoning)
+                {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{id}' model '{}' reasoning_effort requires the reasoning capability",
+                        model.id
+                    )));
+                }
+                reasoning_effort.validate().map_err(|error| {
+                    BitrouterError::bad_request(format!(
+                        "provider '{id}' model '{}' has invalid {error}",
+                        model.id
+                    ))
+                })?;
+            }
+        }
         if !provider.api_base.is_empty() {
             crate::url_validator::validate_upstream_url(&provider.api_base).map_err(|e| {
                 BitrouterError::bad_request(format!("provider '{id}' api_base rejected: {e}"))
@@ -1816,6 +1838,7 @@ pub async fn discover_models(config: &mut Config) {
                         rate_limits: None,
                         pricing: None,
                         capabilities: Vec::new(),
+                        reasoning_effort: None,
                         compatibility: ModelCompatibility::default(),
                     })
                     .collect();

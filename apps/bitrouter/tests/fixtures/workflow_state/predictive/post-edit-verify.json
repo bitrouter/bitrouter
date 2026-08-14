@@ -1,0 +1,45 @@
+{
+  "id": "predictive-post-edit-verify-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "headers": {},
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Correct src/parser.rs and verify the parser acceptance tests."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "edit-1",
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "arguments": "{\"file_path\":\"src/parser.rs\",\"replacement\":\"update parser branch\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "edit-1",
+        "content": "Patch applied successfully."
+      }
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "edit",
+    "baseline_fingerprint": "after_Edit",
+    "confidence_min": 0.7,
+    "prediction": {
+      "next_step_role": "verify",
+      "next_action_class": "execute_or_test",
+      "route_risk": "normal"
+    }
+  }
+}

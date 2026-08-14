@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
+use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -297,6 +298,7 @@ fn models_dev_plan_for_provider(
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
+            reasoning_effort: None,
             deprecation_date: None,
         });
     }
@@ -350,6 +352,7 @@ fn v1_models_plan_for_provider(
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
+            reasoning_effort: None,
             deprecation_date: None,
         });
     }
@@ -881,6 +884,13 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
                         .context("serializing capabilities")?,
                 );
             }
+            if let Some(reasoning_effort) = &model.reasoning_effort {
+                obj.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::to_value(reasoning_effort)
+                        .context("serializing reasoning_effort")?,
+                );
+            }
             if let Some(rate_limits) = rate_limits {
                 obj.insert(
                     "rate_limits".to_string(),
@@ -1267,6 +1277,20 @@ fn validate_provider<'a>(
         }
         if let Some(pricing) = &model.pricing {
             validate_pricing(pricing, &file, &model.id, issues);
+        }
+        if let Some(reasoning_effort) = &model.reasoning_effort {
+            if !model.capabilities.contains(&Capability::Reasoning) {
+                issues.push(format!(
+                    "{file}: model '{}' reasoning_effort requires the reasoning capability",
+                    model.id
+                ));
+            }
+            if let Err(error) = reasoning_effort.validate() {
+                issues.push(format!(
+                    "{file}: model '{}' has invalid reasoning_effort: {error}",
+                    model.id
+                ));
+            }
         }
         if let Some(date) = &model.deprecation_date
             && !valid_yyyy_mm_dd(date)
@@ -1955,6 +1979,8 @@ struct ProviderModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     capabilities: Vec<Capability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     deprecation_date: Option<String>,
 }
 
@@ -2500,6 +2526,28 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn canonical_model_cannot_use_the_reserved_bitrouter_namespace() {
+        let root = test_root("reserved-canonical-model");
+        write(
+            &root,
+            "registry/models/bitrouter.yaml",
+            r#"
+- id: bitrouter/physical-model
+  name: "BitRouter: Physical Model"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("reserved catalog model must fail");
+        assert!(
+            err.to_string().contains("reserved 'bitrouter/' namespace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn build_artifacts_emits_required_config_and_omits_unset_api_base() {
         let root = test_root("required-config");
         write(
@@ -2534,6 +2582,10 @@ required_config:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    capabilities: [reasoning]
+    reasoning_effort:
+      levels: [low, medium, high]
+      default: high
     pricing:
       input_tokens:
         no_cache: 1.0
@@ -2549,6 +2601,10 @@ status: active
 
         assert_eq!(provider["required_config"], json!(["api_key", "base_url"]));
         assert_eq!(provider["metadata"]["datacenters"], json!(["US", "EU"]));
+        assert_eq!(
+            provider["models"][0]["reasoning_effort"],
+            json!({ "levels": ["low", "medium", "high"], "default": "high" })
+        );
         assert_eq!(
             provider["protocol_endpoints"],
             json!({ "messages": "https://api.acme.test/anthropic" })
@@ -2633,6 +2689,7 @@ auto_sync:
             rate_limits: None,
             compatibility: None,
             capabilities: Vec::new(),
+            reasoning_effort: None,
             deprecation_date: None,
         };
 
@@ -3167,6 +3224,58 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn provider_declared_model_cannot_use_the_reserved_bitrouter_namespace() {
+        let root = test_root("reserved-provider-model");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  - id: bitrouter/provider-only
+    provider_model_id: provider-only
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("reserved provider model must fail");
+        assert!(
+            err.to_string().contains("reserved 'bitrouter/' namespace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn provider_rejects_duplicate_provider_model_ids() {
         let root = test_root("duplicate-provider-model-id");
         write(
@@ -3304,6 +3413,115 @@ api_base: https://api.acme.test/v1
             (None, None),
             2.95,
         );
+    }
+
+    #[test]
+    fn checked_in_registry_pins_the_official_effort_matrix() -> Result<()> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let loaded = load_registry(&root)?;
+        validate_loaded(&loaded)?;
+        let cases: &[(&str, &str, &[&str], &str)] = &[
+            (
+                "openai",
+                "openai/gpt-5.6-sol",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+                "medium",
+            ),
+            (
+                "openai",
+                "openai/gpt-5.5",
+                &["none", "low", "medium", "high", "xhigh"],
+                "medium",
+            ),
+            (
+                "openai-codex",
+                "openai/gpt-5.4",
+                &["none", "low", "medium", "high", "xhigh"],
+                "none",
+            ),
+            (
+                "anthropic",
+                "anthropic/claude-opus-4.8",
+                &["low", "medium", "high", "xhigh", "max"],
+                "high",
+            ),
+            (
+                "claude-code",
+                "anthropic/claude-opus-4.6",
+                &["low", "medium", "high", "max"],
+                "high",
+            ),
+            (
+                "google",
+                "google/gemini-3.1-pro-preview",
+                &["low", "medium", "high"],
+                "high",
+            ),
+            (
+                "google",
+                "google/gemini-3.5-flash",
+                &["minimal", "low", "medium", "high"],
+                "medium",
+            ),
+            (
+                "bitrouter",
+                "openai/gpt-5.6-sol",
+                &["none", "low", "medium", "high", "xhigh", "max"],
+                "medium",
+            ),
+        ];
+
+        for (provider_name, model_id, expected_levels, expected_default) in cases {
+            let provider = loaded
+                .providers
+                .iter()
+                .find(|provider| provider.data.name == *provider_name)
+                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
+            let model = provider
+                .data
+                .models
+                .iter()
+                .find(|model| model.id == *model_id)
+                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
+            let effort = model.reasoning_effort.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("missing effort matrix for {provider_name}:{model_id}")
+            })?;
+            let actual_levels = effort
+                .levels
+                .iter()
+                .map(|value| value.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_levels, *expected_levels,
+                "{provider_name}:{model_id}"
+            );
+            assert_eq!(
+                effort.default.map(|value| value.as_str()),
+                Some(*expected_default),
+                "{provider_name}:{model_id}"
+            );
+        }
+        for (provider_name, model_id) in [
+            ("anthropic", "anthropic/claude-sonnet-4.5"),
+            ("google", "google/gemini-3.1-flash-lite-preview"),
+        ] {
+            let provider = loaded
+                .providers
+                .iter()
+                .find(|provider| provider.data.name == provider_name)
+                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
+            let model = provider
+                .data
+                .models
+                .iter()
+                .find(|model| model.id == model_id)
+                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
+            assert!(
+                model.reasoning_effort.is_none(),
+                "unverified route must not advertise effort support: {provider_name}:{model_id}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

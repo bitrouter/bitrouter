@@ -92,6 +92,13 @@ fn reserved_preset(slug: &str) -> Result<&'static str> {
     }
 }
 
+fn missing_reserved_binding(preset: &str) -> BitrouterError {
+    BitrouterError::bad_request(format!(
+        "'{RESERVED_NAMESPACE}{preset}' needs a preset named '{preset}' bound to a routing \
+         policy; run `bitrouter optimize setup`"
+    ))
+}
+
 /// The result of Stage-0 resolution.
 #[derive(Debug, Clone)]
 pub struct PresetResolution {
@@ -138,6 +145,17 @@ pub fn resolve_presets(
     presets: &HashMap<String, PresetConfig>,
     variants: &HashMap<String, VariantConfig>,
 ) -> Result<PresetResolution> {
+    // Reject a reserved colon spelling before variant parsing. Otherwise a
+    // configured variant with the same name (for example `auto`) could consume
+    // the suffix and disguise `bitrouter:auto` as the bare model `bitrouter`.
+    if let Some(slug) = raw_model.strip_prefix("bitrouter:")
+        && reserved_slug(slug).is_some()
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "'{raw_model}' is not a provider route; use '{RESERVED_NAMESPACE}{slug}'"
+        )));
+    }
+
     // 1. Split off a trailing `:variant` — but only if it is a *known* variant.
     let (head, variant_name) = match raw_model.rsplit_once(':') {
         Some((left, right)) if variants.contains_key(right) => (left, Some(right)),
@@ -168,16 +186,19 @@ pub fn resolve_presets(
     //    preset the operator has to have configured, so its miss reports the
     //    missing binding rather than an unknown name the caller never typed.
     let preset: Option<&PresetConfig> = match preset_name {
-        Some(name) => Some(presets.get(name).ok_or_else(|| {
-            if reserved {
-                BitrouterError::bad_request(format!(
-                    "'{RESERVED_NAMESPACE}{name}' needs a preset named '{name}' bound to a \
-                     routing policy; run `bitrouter optimize setup`"
-                ))
-            } else {
-                BitrouterError::bad_request(format!("unknown preset '@{name}'"))
+        Some(name) => {
+            let preset = presets.get(name).ok_or_else(|| {
+                if reserved {
+                    missing_reserved_binding(name)
+                } else {
+                    BitrouterError::bad_request(format!("unknown preset '@{name}'"))
+                }
+            })?;
+            if reserved && preset.policy.is_none() {
+                return Err(missing_reserved_binding(name));
             }
-        })?),
+            Some(preset)
+        }
         None => None,
     };
 
@@ -372,6 +393,33 @@ mod tests {
     }
 
     #[test]
+    fn reserved_auto_slug_rejects_an_existing_preset_without_a_policy_binding() {
+        let mut unbound = presets();
+        unbound.insert(
+            "auto".to_string(),
+            PresetConfig {
+                model: Some("openai-codex:gpt-5.6-sol".to_string()),
+                policy: None,
+                system_prompt: None,
+                params: serde_json::Map::new(),
+                routing: RoutingConfig::default(),
+            },
+        );
+
+        let result = resolve_presets(AUTO_SLUG, &unbound, &variants());
+        assert_eq!(
+            result.as_ref().map(|_| ()).map_err(|err| err.status()),
+            Err(400)
+        );
+        assert!(
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.to_string().contains("bitrouter optimize setup"))
+        );
+    }
+
+    #[test]
     fn unknown_reserved_slug_is_400_not_a_provider_lookup() {
         let err = resolve_presets("bitrouter/nonexistent", &presets(), &variants()).unwrap_err();
         assert_eq!(err.status(), 400);
@@ -394,6 +442,29 @@ mod tests {
         let err = resolve_presets("bitrouter:auto", &presets_with_auto(), &variants()).unwrap_err();
         assert_eq!(err.status(), 400);
         assert!(err.to_string().contains("bitrouter/auto"));
+    }
+
+    #[test]
+    fn reserved_colon_form_cannot_be_shadowed_by_an_auto_variant() {
+        let mut shadowing_variants = variants();
+        shadowing_variants.insert(
+            "auto".to_string(),
+            VariantConfig {
+                routing: RoutingConfig::default(),
+            },
+        );
+
+        let result = resolve_presets("bitrouter:auto", &presets_with_auto(), &shadowing_variants);
+        assert_eq!(
+            result.as_ref().map(|_| ()).map_err(|err| err.status()),
+            Err(400)
+        );
+        assert!(
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.to_string().contains("bitrouter/auto"))
+        );
     }
 
     #[test]

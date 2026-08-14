@@ -37,9 +37,54 @@ pub async fn connect(url: &str) -> Result<DatabaseConnection> {
     if is_sqlite_memory(url) {
         opts.min_connections(1).max_connections(1);
     }
-    Database::connect(opts)
+    let db = Database::connect(opts)
         .await
-        .map_err(|e| BitrouterError::internal(format!("connecting to database {url}: {e}")))
+        .map_err(|e| BitrouterError::internal(format!("connecting to database {url}: {e}")))?;
+    if wants_wal(url) {
+        enable_wal(&db).await;
+    }
+    Ok(db)
+}
+
+/// Whether this URL names a writable SQLite **file** — the only kind of
+/// connection that can, or should, set the journal mode.
+///
+/// Server backends have no such pragma; `:memory:` has no readers to protect;
+/// and a `mode=ro` connection cannot make the change at all (see
+/// [`enable_wal`]).
+fn wants_wal(url: &str) -> bool {
+    url.starts_with("sqlite:") && !url.contains(":memory:") && !url.contains("mode=ro")
+}
+
+/// Put a SQLite file into WAL journaling, best-effort.
+///
+/// sqlx deliberately leaves `journal_mode` alone, so the store otherwise runs
+/// on a rollback journal — where a reader's SHARED lock blocks the writer.
+/// That is fine while only the daemon touches the file, and stops being fine
+/// the moment a second process polls it (the live view does, once a second).
+///
+/// Three properties make this the writer's job and nobody else's:
+///
+/// - WAL is a **permanent property of the file**, so it only has to be set
+///   once, and it survives for every later reader.
+/// - Switching into it takes an exclusive lock that `sqlite3_busy_timeout`
+///   cannot wait on, so it must happen at open time, before traffic.
+/// - A read-only connection cannot perform the switch at all.
+///
+/// Best-effort by design: a database another process currently holds should
+/// degrade to the old contention behaviour, never fail the daemon's start.
+async fn enable_wal(db: &DatabaseConnection) {
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        return;
+    }
+    let stmt = Statement::from_string(DatabaseBackend::Sqlite, "PRAGMA journal_mode=WAL;");
+    if let Err(e) = db.execute(stmt).await {
+        tracing::debug!(
+            error = %e,
+            "could not enable SQLite WAL journaling; readers may contend with writes"
+        );
+    }
 }
 
 /// Apply every pending migration in [`migration::Migrator`]. Idempotent —
@@ -136,6 +181,45 @@ mod tests {
             "postgres://u:p@host/db"
         );
         assert_eq!(normalize_url("mysql://u:p@host/db"), "mysql://u:p@host/db");
+    }
+
+    #[test]
+    fn only_writable_sqlite_files_take_the_wal_pragma() {
+        // The daemon's own store: the one connection that can and should
+        // switch the journal mode.
+        assert!(wants_wal("sqlite://./bitrouter.db"));
+        assert!(wants_wal("sqlite://./bitrouter.db?mode=rwc"));
+        // The live view's reader pins mode=ro and physically cannot make the
+        // switch — asking it to would log a failure once a second.
+        assert!(!wants_wal("sqlite://./bitrouter.db?mode=ro"));
+        // No readers to protect / no such pragma.
+        assert!(!wants_wal("sqlite::memory:"));
+        assert!(!wants_wal("postgres://u:p@host/db"));
+        assert!(!wants_wal("mysql://u:p@host/db"));
+    }
+
+    #[tokio::test]
+    async fn connecting_to_a_sqlite_file_leaves_it_in_wal_mode() {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.db");
+        let url = format!("sqlite://{}", path.display());
+
+        let db = connect(&url).await.expect("connect");
+        let mode = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA journal_mode;",
+            ))
+            .await
+            .expect("pragma query")
+            .expect("one row");
+        let mode: String = mode.try_get_by_index(0).expect("journal_mode column");
+        assert_eq!(
+            mode.to_lowercase(),
+            "wal",
+            "a second process polling this file must not block the daemon's writes"
+        );
     }
 
     #[test]

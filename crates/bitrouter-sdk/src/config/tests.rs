@@ -1,7 +1,156 @@
 //! Config parsing + `${VAR}` substitution tests.
 
 use super::*;
-use crate::language_model::types::ApiProtocol;
+use crate::language_model::types::{ApiProtocol, ReasoningEffort};
+
+#[test]
+fn policy_table_accepts_scalar_and_model_effort_targets() -> crate::Result<()> {
+    let config = parse_with(
+        r#"
+inherit_defaults: false
+policy_table:
+  tiers:
+    strong:
+      model: openai-codex:gpt-5.6-sol
+      effort: high
+    economy: openai-codex:gpt-5.6-sol
+  default_tier: strong
+"#,
+        |_| None,
+    )?;
+
+    let strong = config
+        .policy_table
+        .tiers
+        .get("strong")
+        .ok_or_else(|| BitrouterError::internal("strong tier was not parsed"))?;
+    assert_eq!(strong.model(), "openai-codex:gpt-5.6-sol");
+    assert_eq!(strong.effort(), Some(ReasoningEffort::High));
+
+    let economy = config
+        .policy_table
+        .tiers
+        .get("economy")
+        .ok_or_else(|| BitrouterError::internal("economy tier was not parsed"))?;
+    assert_eq!(economy.model(), "openai-codex:gpt-5.6-sol");
+    assert_eq!(economy.effort(), None);
+    Ok(())
+}
+
+#[test]
+fn policy_table_rejects_unknown_compound_target_fields() -> crate::Result<()> {
+    let error = parse_with(
+        r#"
+inherit_defaults: false
+policy_table:
+  tiers:
+    strong:
+      model: openai-codex:gpt-5.6-sol
+      effort: high
+      typo: ignored-would-be-unsafe
+  default_tier: strong
+"#,
+        |_| None,
+    )
+    .err()
+    .ok_or_else(|| BitrouterError::internal("unknown target field was accepted"))?;
+    assert!(error.to_string().contains("did not match any variant"));
+    Ok(())
+}
+
+#[test]
+fn provider_model_declares_an_exact_reasoning_effort_subset() -> crate::Result<()> {
+    let config = parse_with(
+        r#"
+inherit_defaults: false
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: test
+    models:
+      - id: openai/gpt-test
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low, medium, high]
+          default: high
+"#,
+        |_| None,
+    )?;
+    let model = config.providers["openai"]
+        .models
+        .first()
+        .ok_or_else(|| BitrouterError::internal("parsed provider has no model"))?;
+    let effort = model
+        .reasoning_effort
+        .as_ref()
+        .ok_or_else(|| BitrouterError::internal("model lost reasoning_effort"))?;
+    assert_eq!(
+        effort.levels,
+        vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ]
+    );
+    assert_eq!(effort.default, Some(ReasoningEffort::High));
+    Ok(())
+}
+
+#[test]
+fn provider_model_rejects_a_reasoning_effort_default_outside_its_levels() -> crate::Result<()> {
+    let error = parse_with(
+        r#"
+inherit_defaults: false
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: test
+    models:
+      - id: openai/gpt-test
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low, medium]
+          default: high
+"#,
+        |_| None,
+    )
+    .err()
+    .ok_or_else(|| BitrouterError::internal("invalid model effort config was accepted"))?;
+    assert!(
+        error
+            .to_string()
+            .contains("reasoning_effort.default 'high' must be listed in levels"),
+        "got: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_model_rejects_malformed_reasoning_effort_capabilities() -> crate::Result<()> {
+    for (model_yaml, expected) in [
+        (
+            "capabilities: [reasoning]\n        reasoning_effort:\n          levels: []",
+            "reasoning_effort.levels must not be empty",
+        ),
+        (
+            "capabilities: [reasoning]\n        reasoning_effort:\n          levels: [low, low]",
+            "reasoning_effort.levels contains duplicate 'low'",
+        ),
+        (
+            "reasoning_effort:\n          levels: [low, high]",
+            "reasoning_effort requires the reasoning capability",
+        ),
+    ] {
+        let yaml = format!(
+            "inherit_defaults: false\nproviders:\n  test:\n    api_base: https://api.example.com/v1\n    api_key: test\n    models:\n      - id: acme/model\n        {model_yaml}\n"
+        );
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("invalid effort capability was accepted"))?;
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
+    Ok(())
+}
 
 #[test]
 fn defaults_are_sane() {
@@ -924,7 +1073,11 @@ fn policy_table_keeps_ignoring_unrelated_unknown_fields() {
 
     assert_eq!(config.policy_table.default_tier.as_deref(), Some("strong"));
     assert_eq!(
-        config.policy_table.tiers.get("strong").map(String::as_str),
+        config
+            .policy_table
+            .tiers
+            .get("strong")
+            .map(PolicyModelTarget::model),
         Some("vendor:strong")
     );
 }
@@ -961,7 +1114,10 @@ policy_table:
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
     assert_eq!(
-        cfg.policy_table.tiers.get("cheap").map(String::as_str),
+        cfg.policy_table
+            .tiers
+            .get("cheap")
+            .map(PolicyModelTarget::model),
         Some("vendor/cheap")
     );
     assert_eq!(

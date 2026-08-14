@@ -20,7 +20,8 @@ use crate::policy_lock::{
     QualitySummary, RouteOwner, semantic_digest, validate_document,
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::workflow_state::ir::WorkflowStateKind;
+use crate::workflow_state::predictive::{CanonicalPolicyProjection, NextStepRole};
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
 
@@ -202,7 +203,7 @@ struct RouteEvidence<'a> {
     semantic_tasks: BTreeSet<&'a str>,
 }
 
-/// Compile a deterministic v2 candidate without mutating the active lock.
+/// Compile a deterministic v3 candidate without mutating the active lock.
 pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
     compile_candidate_with_quality(input, &PromotionQualityCriteria::quality_first())
 }
@@ -215,6 +216,9 @@ pub fn compile_candidate_with_quality(
 ) -> Result<CompileResult> {
     validate_document(input.current)?;
     quality.validate()?;
+    if let Some(eval) = input.eval {
+        validate_eval_effort_treatments(input.current, eval)?;
+    }
     let legacy_evidence_root = input.legacy.semantic_digest()?;
     let evidence_root = match input.eval {
         Some(eval) => canonical_digest(&(
@@ -276,7 +280,9 @@ pub fn compile_candidate_with_quality(
         let policy_eval = eval_routes
             .iter()
             .filter_map(|((eval_policy, request_key), route)| {
-                (eval_policy == policy_name).then_some((request_key.clone(), route))
+                (eval_policy == policy_name
+                    && CanonicalPolicyProjection::parse_key(request_key).is_some())
+                .then_some((request_key.clone(), route))
             })
             .collect::<BTreeMap<_, _>>();
         let mut request_keys = policy.routes.keys().cloned().collect::<BTreeSet<_>>();
@@ -552,6 +558,54 @@ pub fn compile_candidate_with_quality(
     })
 }
 
+/// Refuse to compile structured policy targets from evidence that does not
+/// identify the exact effort treatment. Scalar targets intentionally remain
+/// compatible with caller-owned effort, including legacy Eval v1 records.
+fn validate_eval_effort_treatments(
+    current: &PolicyLock,
+    eval: &EvalEvidenceSnapshot,
+) -> Result<()> {
+    for record in &eval.records {
+        for decision in &record.subject.decisions {
+            let Some(policy) = current.policies.get(&decision.policy) else {
+                continue;
+            };
+            if let Some(expected) = policy
+                .tiers
+                .get(&decision.selected_tier)
+                .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                && decision.selected_effort != Some(expected)
+            {
+                anyhow::bail!(
+                    "eval result '{}' attributes tier '{}:{}' to effort {:?}, expected '{}'",
+                    record.result_id,
+                    decision.policy,
+                    decision.selected_tier,
+                    decision.selected_effort,
+                    expected
+                );
+            }
+            if let Some(baseline_tier) = decision.baseline_tier.as_deref()
+                && let Some(expected) = policy
+                    .tiers
+                    .get(baseline_tier)
+                    .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                && decision.baseline_effort != Some(expected)
+            {
+                anyhow::bail!(
+                    "eval result '{}' attributes baseline tier '{}:{}' to effort {:?}, expected '{}'",
+                    record.result_id,
+                    decision.policy,
+                    baseline_tier,
+                    decision.baseline_effort,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn source_snapshot_time(input: &CompileInput<'_>) -> Result<i64> {
     let eval_time = match input.eval {
         Some(eval) => chrono::DateTime::parse_from_rfc3339(&eval.frozen_at)
@@ -704,7 +758,7 @@ fn route_evidence<'a>(
 
 fn legacy_request_key(policy_name: &str, fingerprint: &str) -> Option<String> {
     let (namespace, request_key) = fingerprint.split_once('\0')?;
-    (namespace == policy_name && RouteProjection::parse_key(request_key).is_some())
+    (namespace == policy_name && CanonicalPolicyProjection::parse_key(request_key).is_some())
         .then(|| request_key.to_string())
 }
 
@@ -715,7 +769,7 @@ fn route_owner(
     prior_certificate: Option<&PolicyCertificate>,
     evidence: Option<&RouteEvidence<'_>>,
 ) -> RouteOwner {
-    if current.is_v2() {
+    if current.is_compiled() {
         return prior_certificate
             .map(|certificate| certificate.owner)
             .unwrap_or(RouteOwner::Compiler);
@@ -743,8 +797,7 @@ fn pin_is_active(pin: &LegacyPin, cooldown_secs: u64, snapshot_time_unix_ms: i64
 }
 
 fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
-    let opening = RouteProjection::parse_key(request_key)
-        .is_some_and(|projection| projection.state_kind == WorkflowStateKind::Opening);
+    let opening = is_opening_like(request_key);
     if opening {
         policy
             .adequacy
@@ -756,9 +809,20 @@ fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
 }
 
 fn positive_route_is_allowed(policy: &PolicyDefinition, request_key: &str) -> bool {
-    RouteProjection::parse_key(request_key).is_some_and(|projection| {
-        projection.state_kind != WorkflowStateKind::Opening || policy.adequacy.explore_opening
-    })
+    CanonicalPolicyProjection::parse_key(request_key)
+        .is_some_and(|_| !is_opening_like(request_key) || policy.adequacy.explore_opening)
+}
+
+fn is_opening_like(request_key: &str) -> bool {
+    match CanonicalPolicyProjection::parse_key(request_key) {
+        Some(CanonicalPolicyProjection::Observed(projection)) => {
+            projection.state_kind == WorkflowStateKind::Opening
+        }
+        Some(CanonicalPolicyProjection::Predictive(projection)) => {
+            projection.next_step_role == NextStepRole::Orchestrate
+        }
+        None => false,
+    }
 }
 
 fn route_evidence_digest(
@@ -794,7 +858,8 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bitrouter_sdk::config::AdequacyConfig;
+    use bitrouter_sdk::config::{AdequacyConfig, PolicyModelTarget};
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
 
     use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
     use crate::adequacy::store::AdequacyStore;
@@ -929,6 +994,90 @@ mod tests {
         assert!(super::PromotionQualityCriteria::custom(0, 1_000_001).is_err());
     }
 
+    #[test]
+    fn structured_targets_require_exact_effort_attribution() -> anyhow::Result<()> {
+        let mut current = v1(None);
+        let policy = current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?;
+        policy.tiers.insert(
+            "strong".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "openai:gpt-5.6".into(),
+                effort: ReasoningEffort::High,
+            },
+        );
+        policy.tiers.insert(
+            "economy".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "openai:gpt-5.6".into(),
+                effort: ReasoningEffort::Low,
+            },
+        );
+        let mut eval = EvalEvidenceSnapshot {
+            evidence_root: "evidence-root".into(),
+            frozen_at: "2026-08-10T00:00:00Z".into(),
+            records: vec![EvalEvidenceRecord {
+                result_id: "result-effort".into(),
+                content_digest: "content-effort".into(),
+                subject: EvalSubject {
+                    schema_version: 1,
+                    eval_id: "eval-effort".into(),
+                    scope: EvalScope::Task,
+                    subject_id: "task-effort".into(),
+                    policy_digest: "policy-digest".into(),
+                    preset: Some("auto".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: vec![EvalDecisionRef {
+                        decision_id: "decision-effort".into(),
+                        policy: "auto".into(),
+                        request_key: EDIT_KEY.into(),
+                        selected_tier: "economy".into(),
+                        selected_effort: None,
+                        baseline_tier: Some("strong".into()),
+                        baseline_effort: Some(ReasoningEffort::High),
+                        policy_digest: "policy-digest".into(),
+                    }],
+                    requested_dimensions: BTreeSet::new(),
+                    evidence: Vec::new(),
+                    evidence_digest: "evidence-digest".into(),
+                    observed_at: "2026-08-10T00:00:00Z".into(),
+                },
+                result: EvaluationResult {
+                    schema_version: 1,
+                    eval_id: "eval-effort".into(),
+                    evidence_digest: "evidence-digest".into(),
+                    evaluator: EvaluatorIdentity {
+                        authority_id: "authority".into(),
+                        evaluator_id: "evaluator".into(),
+                        kind: EvaluatorKind::TaskNative,
+                        version: "1".into(),
+                        config_digest: "config-digest".into(),
+                    },
+                    verdict: EvalVerdict::Pass,
+                    metrics: BTreeMap::new(),
+                    hard_violations: Vec::new(),
+                    confidence_ppm: Some(1_000_000),
+                    evidence_refs: Vec::new(),
+                    decision_credit: BTreeMap::new(),
+                    idempotency_key: "idempotency-effort".into(),
+                    submitted_at: "2026-08-10T00:00:01Z".into(),
+                },
+            }],
+        };
+
+        let error = super::validate_eval_effort_treatments(&current, &eval)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("missing effort attribution must fail"))?;
+        assert!(error.to_string().contains("expected 'low'"));
+
+        eval.records[0].subject.decisions[0].selected_effort = Some(ReasoningEffort::Low);
+        super::validate_eval_effort_treatments(&current, &eval)?;
+        Ok(())
+    }
+
     fn snapshot(positive: bool, pinned_at_unix: Option<i64>) -> super::LegacyAdequacySnapshot {
         let fingerprint = format!("auto\0{EDIT_KEY}");
         super::LegacyAdequacySnapshot {
@@ -1061,6 +1210,7 @@ mod tests {
 
     #[test]
     fn admitted_negative_evidence_demotes_pretrained_economy_route() -> anyhow::Result<()> {
+        const TEMPLATE_ECONOMY_KEY: &str = "agent_route/v1|verify|normal";
         let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router/policy-lock.yaml");
@@ -1081,9 +1231,11 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-pretrained-demotion".into(),
                 policy: "auto".into(),
-                request_key: EDIT_KEY.into(),
+                request_key: TEMPLATE_ECONOMY_KEY.into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1136,11 +1288,11 @@ mod tests {
         })?;
 
         assert_eq!(
-            compiled.document.policies["auto"].routes[EDIT_KEY],
+            compiled.document.policies["auto"].routes[TEMPLATE_ECONOMY_KEY],
             "strong"
         );
         assert!(compiled.conflicts.is_empty());
-        let certificate = &compiled.document.certificates["auto"][EDIT_KEY];
+        let certificate = &compiled.document.certificates["auto"][TEMPLATE_ECONOMY_KEY];
         assert_eq!(certificate.owner, RouteOwner::Compiler);
         assert_eq!(certificate.source, CertificateSource::TaskNative);
         assert_eq!(certificate.verdict, PromotionVerdict::Demote);
@@ -1220,6 +1372,70 @@ mod tests {
     }
 
     #[test]
+    fn predictive_orchestrate_guardrail_blocks_positive_legacy_promotion() -> anyhow::Result<()> {
+        let opening_key = "agent_route/v1|orchestrate|normal";
+        let fingerprint = format!("auto\0{opening_key}");
+        let mut current = v1(None);
+        current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?
+            .adequacy
+            .min_semantic_successes_for_opening = 1;
+        let evidence = super::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_100_000,
+            pins: Vec::new(),
+            exploration: vec![PersistedExplorationState {
+                fingerprint: fingerprint.clone(),
+                observed: 8,
+                adequate_trials: 4,
+                locked: true,
+            }],
+            semantic_successes: vec![PersistedSemanticSuccess {
+                evidence_id: format!("{fingerprint}\ntask-a"),
+                fingerprint,
+                task_id: "task-a".into(),
+            }],
+            reliability_events: Vec::new(),
+        };
+
+        let result = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &evidence,
+            eval: None,
+            proposed_progress_guards: None,
+        })?;
+
+        assert!(
+            !result.document.policies["auto"]
+                .routes
+                .contains_key(opening_key)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_evidence_accepts_only_canonical_observed_and_predictive_keys() {
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v1|implement|normal").as_deref(),
+            Some("agent_route/v1|implement|normal")
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_trace/v2|edit|normal").as_deref(),
+            Some("agent_trace/v2|edit|normal")
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v2|implement|normal"),
+            None
+        );
+        assert_eq!(
+            super::legacy_request_key("auto", "auto\0agent_route/v1|developer|normal"),
+            None
+        );
+    }
+
+    #[test]
     fn admitted_generic_eval_promotes_a_qualified_candidate() -> anyhow::Result<()> {
         let evidence = Vec::new();
         let evidence_digest = evidence_digest(&evidence)?;
@@ -1238,7 +1454,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: EDIT_KEY.into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1347,7 +1565,9 @@ mod tests {
                         policy: "auto".into(),
                         request_key: EDIT_KEY.into(),
                         selected_tier: tier.into(),
+                        selected_effort: None,
                         baseline_tier: Some("strong".into()),
+                        baseline_effort: None,
                         policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
                     }],
                     requested_dimensions: BTreeSet::from([

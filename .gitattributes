@@ -11,6 +11,13 @@
 # Windows runners regardless of the user's `core.autocrlf` setting.
 *.json text eol=lf
 
+# Terminal fixtures (`apps/bitrouter/src/tui/fixtures/*.vt`) are raw PTY byte
+# streams replayed verbatim through the VT emulator. They are not text: a CR
+# is a meaningful control byte, so `text=auto` normalising CRLF -> LF would
+# silently change what the fidelity-matrix tests actually assert. `binary`
+# (= `-text -diff`) disables both normalisation and diffing.
+*.vt       binary
+
 # Source files: LF everywhere. Avoids accidental CRLF creeping into the
 # repo via a Windows contributor's editor, which would otherwise confuse
 # rustfmt and a handful of macro span diagnostics.

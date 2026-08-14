@@ -22,7 +22,8 @@
 //!   of the PTY stream so the host loop can re-emit them verbatim to the
 //!   outer terminal (the tmux `allow-passthrough` pattern), capped so a
 //!   malicious child can't balloon memory.
-//! - **Resize recovery**: [`PtyPane::resize`] resizes the emulator and the
+//! - **Resize recovery**: [`PtyPane::resize`](super::pty::PtyPane::resize)
+//!   resizes the emulator and the
 //!   PTY (delivering `SIGWINCH`) whenever the pane rect changes.
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -191,6 +192,22 @@ impl TerminalBackend for AlacrittyBackend {
                 continue;
             }
             let cell = &indexed.cell;
+            // A wide glyph (CJK, emoji) occupies two grid columns: the glyph
+            // itself plus a `WIDE_CHAR_SPACER` holding a space. Emitting the
+            // spacer as its own span renders three display columns for a
+            // two-column glyph, shifting the rest of the line right — and the
+            // ASCII `--help` fixtures never catch it. The spacer is the
+            // glyph's second half, so the terminal draws it; we must not.
+            if cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
+            {
+                // Zero-width, not skipped: the matrix is pre-filled with
+                // spaces, so `continue` would leave a real space here and the
+                // glyph would still render three columns wide.
+                cells[row][col] = Span::raw("");
+                continue;
+            }
             let mut style = if no_color {
                 Style::default()
             } else {
@@ -220,7 +237,12 @@ impl TerminalBackend for AlacrittyBackend {
             {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            cells[row][col] = Span::styled(cell.c.to_string(), style);
+            // Combining marks live beside the base character rather than in
+            // their own cell; dropping them silently mangles accented and
+            // Indic text.
+            let mut text = String::from(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
+            cells[row][col] = Span::styled(text, style);
         }
         cells.into_iter().map(TuiLine::from).collect()
     }
@@ -963,5 +985,220 @@ mod tests {
         // Scanner recovers for the next sequence.
         let ok = b"\x1b]52;c;YQ==\x07";
         assert_eq!(sc.scan(ok), vec![ok.to_vec()]);
+    }
+}
+
+/// Fixture replay — the automated tier of the fidelity matrix.
+///
+/// See `fixtures/README.md`. These pin the emulator behaviours the hosted mode
+/// depends on, so a change to this file that breaks alt-screen tracking or
+/// colour handling fails in CI rather than in a user's terminal.
+#[cfg(test)]
+mod fixture_replay {
+    use super::*;
+
+    /// Feed a fixture into a fresh emulator and return it.
+    fn replay(name: &str, cols: u16, rows: u16) -> AlacrittyBackend {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/tui/fixtures")
+            .join(name);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("reading fixture {}: {e}", path.display()));
+        let mut backend = AlacrittyBackend::new(cols, rows);
+        // Fed in small chunks: a real PTY delivers arbitrary splits, and an
+        // escape sequence cut across a read boundary is a classic emulator
+        // bug that whole-buffer feeding would never surface.
+        for chunk in bytes.chunks(7) {
+            backend.feed(chunk);
+        }
+        backend
+    }
+
+    fn text(backend: &AlacrittyBackend, no_color: bool) -> String {
+        backend
+            .lines(no_color)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn colors_render_and_no_color_strips_them() {
+        let backend = replay("main_screen_colors.vt", 80, 6);
+        let rendered = text(&backend, false);
+        assert!(rendered.contains("plain"), "{rendered}");
+        assert!(rendered.contains("truecolor"), "{rendered}");
+
+        let styled = backend
+            .lines(false)
+            .iter()
+            .flat_map(|line| line.spans.clone())
+            .any(|span| span.style.fg.is_some());
+        assert!(styled, "a truecolor terminal must get colour");
+
+        let styled = backend
+            .lines(true)
+            .iter()
+            .flat_map(|line| line.spans.clone())
+            .any(|span| span.style.fg.is_some());
+        assert!(!styled, "NO_COLOR must strip every foreground colour");
+        // Same characters either way — NO_COLOR changes style, never content.
+        assert_eq!(text(&backend, true), rendered);
+    }
+
+    #[test]
+    fn alt_screen_entry_and_exit_are_tracked() {
+        // This is the behaviour that forces the emulator to exist at all: an
+        // alt-screen app owns the whole display, so a DECSTBM-reserved status
+        // line cannot survive one.
+        let mut backend = AlacrittyBackend::new(40, 6);
+        backend.feed(b"\x1b[?1049h");
+        assert!(backend.alt_screen(), "entry sets alt-screen");
+        backend.feed(b"\x1b[?1049l");
+        assert!(!backend.alt_screen(), "exit clears it");
+
+        let replayed = replay("alt_screen_app.vt", 40, 6);
+        assert!(
+            !replayed.alt_screen(),
+            "the fixture leaves the alternate screen before it ends"
+        );
+    }
+
+    #[test]
+    fn mouse_reporting_is_negotiated_by_the_inner_app() {
+        // Drives the host's wheel branch: forward to the child when it asked
+        // for the mouse, page our own scrollback when it did not.
+        let idle = AlacrittyBackend::new(40, 6);
+        assert!(!idle.mouse_enabled(), "nothing tracks the mouse by default");
+
+        let backend = replay("mouse_reporting.vt", 40, 6);
+        assert!(backend.mouse_enabled(), "DECSET 1000/1006 enables tracking");
+        assert!(
+            backend
+                .encode_mouse(
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    3,
+                    4,
+                    crossterm::event::KeyModifiers::NONE,
+                )
+                .is_some(),
+            "a tracking app must receive the click"
+        );
+    }
+
+    /// Every `harness-*.vt` recording, replayed and sanity-checked.
+    ///
+    /// Directory-driven on purpose: dropping a new recording in
+    /// `fixtures/` covers it with no code change, which is what keeps the
+    /// refresh cost low enough that people actually re-record after a
+    /// harness release.
+    ///
+    /// The assertions are deliberately *loose*. Harness output legitimately
+    /// changes between releases, so pinning content would make this a
+    /// tripwire for upstream edits rather than for our regressions. What must
+    /// hold for any real terminal stream is that the emulator consumed it
+    /// completely: no escape byte survives into rendered cell text, nothing
+    /// vanishes entirely, and the grid stays within its own bounds.
+    #[test]
+    fn real_harness_recordings_render_without_leaking_control_bytes() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/fixtures");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("fixtures dir").flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !name.starts_with("harness-") || !name.ends_with(".vt") {
+                continue;
+            }
+            checked += 1;
+
+            let bytes = std::fs::read(&path).expect("read fixture");
+            let mut backend = AlacrittyBackend::new(100, 30);
+            for chunk in bytes.chunks(13) {
+                backend.feed(chunk);
+            }
+            let lines = backend.lines(false);
+
+            // An ESC or a C0 control in *rendered text* means the parser
+            // dropped out of a sequence and printed its bytes — the visible
+            // symptom of a garbled pane.
+            for (row, line) in lines.iter().enumerate() {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert!(
+                    !text
+                        .chars()
+                        .any(|c| c == '\u{1b}' || (c.is_control() && c != '\t')),
+                    "{name}: row {row} leaked a control byte into rendered text: {text:?}"
+                );
+            }
+            assert_eq!(lines.len(), 30, "{name}: grid must keep its row count");
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.spans.iter().any(|s| !s.content.trim().is_empty())),
+                "{name}: a real harness stream must render something"
+            );
+        }
+        assert!(
+            checked >= 4,
+            "expected a recording per launch-supported harness, found {checked} — \
+             see fixtures/README.md for how to record one"
+        );
+    }
+
+    #[test]
+    fn a_wide_glyph_occupies_two_columns_not_three() {
+        // A CJK glyph is stored as the character plus a WIDE_CHAR_SPACER. If
+        // the spacer is emitted as its own span the line renders one column
+        // too wide *per glyph*, shifting everything after it — box-drawing UIs
+        // tear and line tails fall off the pane. The `--help` fixtures are
+        // pure ASCII and cannot catch this.
+        let backend = replay("wide_chars.vt", 20, 4);
+        let first = &backend.lines(true)[0];
+        let text: String = first.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // The bug's signature is a stray space between the two glyphs — the
+        // spacer cell rendered as content.
+        assert!(
+            text.starts_with("ASCII|你好|end"),
+            "wide glyphs must be contiguous; rendered: {text:?}"
+        );
+        // Display width, not char count: a wide glyph is two columns and its
+        // spacer contributes none, so the row still measures `cols`.
+        let width: usize = text
+            .chars()
+            .map(|c| {
+                if ('\u{1100}'..='\u{9fff}').contains(&c) {
+                    2
+                } else {
+                    1
+                }
+            })
+            .sum();
+        assert_eq!(width, 20, "row must stay exactly cols wide: {text:?}");
+    }
+
+    #[test]
+    fn bracketed_paste_is_only_wrapped_when_the_app_asked() {
+        let plain = AlacrittyBackend::new(40, 6);
+        assert_eq!(
+            plain.encode_paste("a\nb"),
+            b"a\nb",
+            "no wrapping pre-DECSET"
+        );
+
+        let backend = replay("bracketed_paste.vt", 40, 6);
+        let wrapped = backend.encode_paste("a\nb");
+        assert!(wrapped.starts_with(b"\x1b[200~"), "paste start marker");
+        assert!(wrapped.ends_with(b"\x1b[201~"), "paste end marker");
     }
 }

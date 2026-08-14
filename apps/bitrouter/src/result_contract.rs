@@ -1,5 +1,5 @@
-//! The optional machine-consumable result contract for headless subagents
-//! (TUI_SPEC §4, goose's `response.json_schema` model): the caller supplies a
+//! The optional machine-consumable result contract for headless sub-agents
+//! (goose's `response.json_schema` model): the caller supplies a
 //! JSON Schema, the schema text rides the subagent's prompt, and the reply's
 //! final fenced ```json block is extracted and validated. On invalid output
 //! the driver sends **one** repair re-prompt, then reports `schema_ok: false`

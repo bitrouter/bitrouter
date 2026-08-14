@@ -16,6 +16,9 @@ rate_limits:
 models:
   - id: anthropic/claude-opus-4.8
     provider_model_id: claude-opus-4-8
+    reasoning_effort: &claude_full_effort
+      levels: [low, medium, high, xhigh, max]
+      default: high
     pricing:
       input_tokens:
         no_cache: 5
@@ -29,6 +32,7 @@ models:
       - tools
   - id: anthropic/claude-opus-4.7
     provider_model_id: claude-opus-4-7
+    reasoning_effort: *claude_full_effort
     pricing:
       input_tokens:
         no_cache: 5
@@ -42,6 +46,9 @@ models:
       - tools
   - id: anthropic/claude-opus-4.6
     provider_model_id: claude-opus-4-6
+    reasoning_effort: &claude_max_effort
+      levels: [low, medium, high, max]
+      default: high
     pricing:
       input_tokens:
         no_cache: 5
@@ -55,6 +62,7 @@ models:
       - tools
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
+    reasoning_effort: *claude_full_effort
     # Introductory pricing through 2026-08-31; rises to $3/$15 after.
     pricing:
       input_tokens:
@@ -70,6 +78,7 @@ models:
       - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
+    reasoning_effort: *claude_max_effort
     pricing:
       input_tokens:
         no_cache: 3
@@ -97,6 +106,7 @@ models:
       - tools
   - id: anthropic/claude-fable-5
     provider_model_id: claude-fable-5
+    reasoning_effort: *claude_full_effort
     pricing:
       input_tokens:
         no_cache: 10
@@ -104,6 +114,9 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+    capabilities:
+      - reasoning
+  # Official tool-use docs: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
   - id: anthropic/claude-haiku-4.5
     provider_model_id: claude-haiku-4-5
     pricing:
@@ -113,8 +126,10 @@ models:
         cache_write: 1.25
       output_tokens:
         text: 5
+    capabilities: [tools]
   - id: anthropic/claude-opus-5
     provider_model_id: claude-opus-5
+    reasoning_effort: *claude_full_effort
     pricing:
       input_tokens:
         no_cache: 5
@@ -122,6 +137,8 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
+    capabilities:
+      - reasoning
 status: active
 weight: 1
 submitted_at: 2026-05-25

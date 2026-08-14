@@ -109,7 +109,7 @@ pub async fn check(config: &Config) -> Vec<CheckRow> {
     for (id, cfg) in sorted {
         let outcome = match &cfg.transport {
             AcpTransport::Stdio { command, args, env } => {
-                bitrouter_substrate::up::health_check(command, args, env).await
+                bitrouter_sdk::acp::up::health_check(command, args, env).await
             }
         };
         out.push(CheckRow {
@@ -164,7 +164,7 @@ pub fn install(id: &str) -> Result<String, String> {
         .ok_or_else(|| format!("'{id}' is not in the bundled catalog. Run `bitrouter agents list` (or `--remote` for the ACP registry) to see the available ids."))?;
     let command = agent.acp_command.ok_or_else(|| {
         format!(
-            "'{id}' is interactive-only (no ACP adapter to install) — drive it with `bitrouter tui --agent {}`",
+            "'{id}' is interactive-only (no ACP adapter to install) — drive it with `bitrouter launch --agent {}`",
             agent.interactive_binary.unwrap_or(id)
         )
     })?;
