@@ -353,7 +353,7 @@ left the old stack intact.
   - Verify: `rg -n 'Ctrl-L|raw mode' docs/CLI.md skills/bitrouter/references/cli.md`
   - Commit: `docs: lockstep the chat renderer surface`
 
-- [ ] **4.7 Phase 4 gate**
+- [x] **4.7 Phase 4 gate**
   - Depends on: 4.1–4.6
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15 && cargo clippy --all-features 2>&1 | tail -5 && cargo fmt -- --check`
   - Commit: — (tick only)
@@ -392,7 +392,7 @@ Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 
 ## F. Progress
 
-Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☑ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☑ · Phase 4 ☑
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
