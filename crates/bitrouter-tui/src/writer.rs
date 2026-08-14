@@ -181,11 +181,32 @@ impl<B: Backend + SyncSink> Writer<B> {
         if resized {
             self.width = width;
             self.height = height;
-            self.anchor = 0;
-            self.viewport_top = next.len().saturating_sub(usize::from(height));
+            // The anchor *survives* a resize. The rows above it are not ours —
+            // they are whatever the shell left on screen — and a document that
+            // still fits below it must not be redrawn at row 0, which would
+            // paint the transcript a second time and overwrite those rows.
+            // Growth is what spends the anchor, a row at a time, in `scroll`.
+            //
+            // It is only clamped, because a terminal that just became shorter
+            // than the anchor would otherwise leave `capacity` at zero, and a
+            // viewport with no room is a viewport that never draws again.
+            self.anchor = self.anchor.min(height.saturating_sub(1));
+            self.viewport_top = next.len().saturating_sub(self.capacity());
         }
         // A document that shrank has rows on screen that are no longer in it.
         let shrank = next.len() < self.prev.len();
+        if shrank {
+            // It may also have shrunk clean past the top of the viewport — a
+            // notice being cleared can take more rows than the screen holds.
+            // Left alone, `viewport_top` would sit beyond the last row the
+            // document still has, every later frame would compute an empty
+            // paint range, and the writer would never draw anything again.
+            // Not even `Ctrl-L` would recover it: `invalidate` clears `prev`,
+            // which is not what is stranded.
+            self.viewport_top = self
+                .viewport_top
+                .min(next.len().saturating_sub(self.capacity()));
+        }
 
         let changed = if resized || shrank {
             // Repaint everything still on screen rather than trusting a diff
@@ -748,6 +769,94 @@ mod tests {
         assert!(
             !painted.iter().any(|row| row == "three" || row == "four"),
             "the old tail survived: {painted:?}"
+        );
+        Ok(())
+    }
+
+    /// The wedge. A document that shrinks by more than a screenful leaves
+    /// `viewport_top` past its own last row, after which every frame computes
+    /// an empty paint range and the writer stops drawing **for good** — not
+    /// even `Ctrl-L` recovers it, because `invalidate` clears `prev`, which is
+    /// not what is stranded. Clearing the `/commands` notice is this shape.
+    #[test]
+    fn a_shrink_past_the_screen_keeps_the_writer_painting() -> io::Result<()> {
+        let mut writer = writer(20, 4);
+        let long: Vec<String> = (0..12).map(|n| format!("row {n}")).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        writer.frame(&document(&long))?;
+        assert_eq!(writer.viewport_top, 8, "the document scrolled");
+
+        writer.frame(&document(&["a", "b", "c", "d", "e"]))?;
+        assert_eq!(
+            screen(&writer),
+            ["b", "c", "d", "e"],
+            "the shorter document, not the tail of the one it replaced"
+        );
+
+        // And it still paints afterwards, which is what the wedge took away.
+        writer.frame(&document(&["a", "b", "c", "d", "e", "f"]))?;
+        assert_eq!(screen(&writer), ["c", "d", "e", "f"]);
+        Ok(())
+    }
+
+    /// The boundary the wedge hides behind: shrinking by *exactly* one
+    /// screenful cleared the screen and painted nothing back into it.
+    #[test]
+    fn a_shrink_of_exactly_one_screen_still_shows_the_document() -> io::Result<()> {
+        let mut writer = writer(20, 4);
+        let long: Vec<String> = (0..12).map(|n| format!("row {n}")).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        writer.frame(&document(&long))?;
+
+        writer.frame(&document(&["p", "q", "r", "s", "t", "u", "v", "w"]))?;
+        assert_eq!(screen(&writer), ["t", "u", "v", "w"]);
+        Ok(())
+    }
+
+    /// A resize must not redraw the document over the rows above it. The
+    /// session starts where the cursor was and everything above that belongs
+    /// to the shell; repainting at row 0 both destroys those rows and shows
+    /// the transcript twice.
+    #[test]
+    fn a_resize_keeps_the_document_below_the_anchor() -> io::Result<()> {
+        let mut backend = TestBackend::new(18, 6);
+        backend.set_cursor_position(Position::new(0, 2))?;
+        let mut writer = Writer::new(backend)?;
+        writer.frame(&document(&["alpha", "beta", "gamma"]))?;
+        assert_eq!(screen(&writer)[2..5], ["alpha", "beta", "gamma"]);
+
+        writer.backend.resize(16, 6);
+        writer.frame(&document(&["alpha", "beta", "gamma"]))?;
+
+        let painted = screen(&writer);
+        assert!(
+            painted[0].is_empty() && painted[1].is_empty(),
+            "the rows above the anchor are not ours to paint: {painted:?}"
+        );
+        assert_eq!(painted[2..5], ["alpha", "beta", "gamma"]);
+        Ok(())
+    }
+
+    /// A terminal that becomes shorter than the anchor still needs somewhere
+    /// to draw: an anchor below the last row leaves zero capacity, which is
+    /// the same dead end as a stranded viewport by another route.
+    #[test]
+    fn a_terminal_shorter_than_the_anchor_still_draws() -> io::Result<()> {
+        let mut backend = TestBackend::new(20, 6);
+        backend.set_cursor_position(Position::new(0, 4))?;
+        let mut writer = Writer::new(backend)?;
+        writer.frame(&document(&["one"]))?;
+
+        writer.backend.resize(20, 2);
+        writer.frame(&document(&["one", "two"]))?;
+        assert!(
+            writer.capacity() > 0,
+            "an anchor past the last row leaves nothing to draw into"
+        );
+        assert!(
+            screen(&writer).iter().any(|row| row == "two"),
+            "{:?}",
+            screen(&writer)
         );
         Ok(())
     }
