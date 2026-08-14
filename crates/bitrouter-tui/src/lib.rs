@@ -40,6 +40,7 @@ pub mod render;
 pub mod transcript;
 pub mod viewport;
 pub mod wrap;
+pub mod writer;
 
 use agent_client_protocol_schema::v1::AgentCapabilities;
 

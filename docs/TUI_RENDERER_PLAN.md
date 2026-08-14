@@ -202,7 +202,7 @@ no user-visible behaviour changes.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -15`
   - Commit: `feat(tui): hunked diffs and capped tool output`
 
-- [ ] **2.5 The differential writer**
+- [x] **2.5 The differential writer**
   - Depends on: 2.4
   - Files: `crates/bitrouter-tui/src/writer.rs`
   - Do: spec §4.1 in full — the two index spaces, the eight frame steps, the
