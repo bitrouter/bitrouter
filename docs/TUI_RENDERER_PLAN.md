@@ -268,7 +268,7 @@ left the old stack intact.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -10`
   - Commit: `refactor(tui): delete the append-only renderer`
 
-- [ ] **3.3 Phase 3 gate**
+- [x] **3.3 Phase 3 gate**
   - Depends on: 3.1, 3.2
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15 && cargo clippy --all-features 2>&1 | tail -5 && cargo fmt -- --check`
   - Commit: — (tick only)
@@ -384,7 +384,7 @@ Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 
 ## F. Progress
 
-Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☐ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☑ · Phase 3 ☑ · Phase 4 ☐
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
