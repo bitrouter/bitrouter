@@ -91,7 +91,15 @@ jobs:
           --build-jobs 2
 
   test-ubuntu-bitrouter:
-    name: test (ubuntu-latest, bitrouter lib and bin)
+    name: test (ubuntu-latest, bitrouter ${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: lib
+            flags: --lib
+          - target: bin
+            flags: --bin bitrouter
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -100,9 +108,12 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/ci-target
-        run: >-
-          cargo nextest run -p bitrouter --all-features --lib --bins
-          --build-jobs 1
+          TEST_TARGET_FLAGS: ${{ matrix.flags }}
+        shell: bash
+        run: |
+          read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
+          cargo nextest run -p bitrouter --all-features --build-jobs 1 \
+            "${target_flags[@]}"
 
   test-ubuntu-integration:
     name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
