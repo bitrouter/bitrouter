@@ -54,7 +54,7 @@ jobs:
           BITROUTER_API_KEY: ${{ secrets.BITROUTER_API_KEY }}
         run: |
           cargo run -p dist-helper -- registry agentic-prompt > target/registry-agentic-sync.md
-          if ! grep -q '^- `' target/registry-agentic-sync.md; then
+          if grep -Fqx '(No `auto_sync.feed: agentic` providers are configured.)' target/registry-agentic-sync.md; then
             echo "no agentic registry providers configured"
             exit 0
           fi
