@@ -788,8 +788,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
     let (cost_tx, mut cost_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut updates = session.raw_updates();
+    // Shared with the turn loop, which flushes it when a turn settles. The
+    // pump cannot do that itself: it reads `session/update`, and in ACP v1 a
+    // turn ends on the `session/prompt` *response*, which never appears on
+    // that stream.
+    let transcript = std::sync::Arc::new(std::sync::Mutex::new(
+        bitrouter_tui::transcript::Transcript::default(),
+    ));
+    let pump_transcript = std::sync::Arc::clone(&transcript);
     let pump = tokio::spawn(async move {
-        let mut transcript = bitrouter_tui::transcript::Transcript::default();
         while let Some(update) = updates.next().await {
             // Cost is a live figure, not a transcript entry: it belongs in the
             // status row where it can be replaced, not in scrollback where
@@ -800,16 +807,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             {
                 return;
             }
-            for line in transcript.apply(update) {
+            let rendered = match pump_transcript.lock() {
+                Ok(mut transcript) => transcript.apply(update),
+                // A poisoned lock costs this update, not the session.
+                Err(poisoned) => poisoned.into_inner().apply(update),
+            };
+            for line in rendered {
                 if rendered_tx.send(line).is_err() {
                     return;
                 }
-            }
-        }
-        // Whatever was still streaming when the agent went away.
-        for line in transcript.flush() {
-            if rendered_tx.send(line).is_err() {
-                return;
             }
         }
     });
@@ -870,6 +876,17 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         while let Ok(line) = rendered_rx.try_recv() {
             view.commit(&[line])
                 .context("committing a trailing update")?;
+        }
+        // Then end the turn's streaming: chunks buffer until something ends
+        // them, and a turn that is a plain answer ends with nothing but
+        // message chunks. Without this the reply is never drawn.
+        let trailing = match transcript.lock() {
+            Ok(mut transcript) => transcript.flush(),
+            Err(poisoned) => poisoned.into_inner().flush(),
+        };
+        for line in trailing {
+            view.commit(&[line])
+                .context("committing the turn's final lines")?;
         }
         match outcome {
             Ok(response) => view.commit(&[ratatui::text::Line::from(format!(

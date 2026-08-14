@@ -54,8 +54,13 @@ impl Transcript {
     pub fn apply(&mut self, update: SessionUpdate) -> Vec<Line<'static>> {
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
+                // Symmetric with the thought arm below: each voice ends the
+                // other. Without this a message resumed after a thought would
+                // buffer behind it, and `flush` — which emits message before
+                // thought — would then print them in the wrong order.
+                let lines = self.flush_thought();
                 self.message.push_str(&block_text(&chunk.content));
-                Vec::new()
+                lines
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 // A thought interrupts a message: they are different voices
@@ -103,8 +108,18 @@ impl Transcript {
         }
     }
 
-    /// Emit anything still buffered — called when the turn ends, so a final
-    /// message with no trailing update is not lost.
+    /// Emit anything still buffered.
+    ///
+    /// **Must be called at the end of every turn**, not only when the session
+    /// ends. Chunks accumulate until something ends them, and in ACP v1 the
+    /// turn's end arrives on the `session/prompt` response — not as an update
+    /// — so this buffer has no way to learn about it on its own. An agent
+    /// whose turn is a plain answer sends message chunks and nothing else;
+    /// leave those buffered and the reply is never drawn at all.
+    ///
+    /// Because each voice now flushes the other, at most one of the two is
+    /// ever non-empty here, so the message-before-thought order below cannot
+    /// reorder a real transcript.
     pub fn flush(&mut self) -> Vec<Line<'static>> {
         let mut lines = self.flush_message();
         lines.extend(self.flush_thought());
@@ -278,6 +293,63 @@ mod tests {
                 .is_empty(),
             "an update with no changed field renders nothing"
         );
+    }
+
+    /// Interleaved voices must survive in the order they arrived.
+    ///
+    /// Found by driving a real session in tmux, not by these tests: the two
+    /// arms were asymmetric — a thought ended a message but a message did not
+    /// end a thought — so a message resumed after a thought queued behind it
+    /// and `flush`, which emits message before thought, printed them
+    /// backwards. Worse, with nothing after it to force a flush, the tail was
+    /// dropped outright.
+    #[test]
+    fn interleaved_voices_keep_their_order_and_nothing_is_lost() {
+        let mut transcript = Transcript::default();
+        let mut rendered: Vec<String> = Vec::new();
+        let mut collect = |lines: Vec<Line<'static>>| {
+            for line in lines {
+                rendered.push(
+                    line.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>(),
+                );
+            }
+        };
+
+        collect(transcript.apply(SessionUpdate::AgentMessageChunk(chunk("first"))));
+        collect(transcript.apply(SessionUpdate::AgentThoughtChunk(chunk("middle"))));
+        collect(transcript.apply(SessionUpdate::AgentMessageChunk(chunk("last"))));
+        // The turn ends here — exactly what the driver must do.
+        collect(transcript.flush());
+
+        let joined: Vec<&str> = rendered.iter().map(String::as_str).collect();
+        assert_eq!(
+            joined,
+            vec!["first", "· middle", "last"],
+            "every voice, in arrival order"
+        );
+    }
+
+    /// The commonest turn there is: the agent answers and stops. Nothing else
+    /// arrives to force a flush, so if the driver does not flush at the end of
+    /// the turn the reply is never drawn — which is precisely what shipped.
+    #[test]
+    fn a_plain_answer_is_drawn_when_the_turn_ends() {
+        let mut transcript = Transcript::default();
+        assert!(
+            transcript
+                .apply(SessionUpdate::AgentMessageChunk(chunk("The answer is 42.")))
+                .is_empty(),
+            "a chunk alone completes no line — the turn's end is what does"
+        );
+        let lines = transcript.flush();
+        let text: String = lines
+            .first()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .unwrap_or_default();
+        assert_eq!(text, "The answer is 42.");
     }
 
     /// Every status maps to its own glyph. A pending call that looked like a
