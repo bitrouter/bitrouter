@@ -722,10 +722,10 @@ struct View {
     /// it, and absent when the session is direct.
     route: Option<String>,
     /// The most recent thing the client itself has to say — a stop reason, a
-    /// route change, a failed turn. One row, replaced rather than accumulated:
-    /// it is about the last thing that happened, and the session log is where
-    /// the history lives.
-    notice: Option<ratatui::text::Line<'static>>,
+    /// route change, a failed turn, the agent's command list. Replaced rather
+    /// than accumulated: it is about the last thing that happened, and the
+    /// session log is where the history lives.
+    notice: Vec<ratatui::text::Line<'static>>,
     /// A row owned by an open modal. Today only the provider picker.
     modal: Option<ratatui::text::Line<'static>>,
     /// The line being typed. Raw mode means nothing is echoed unless the
@@ -746,7 +746,7 @@ impl View {
             cache: bitrouter_tui::writer::Cache::default(),
             registry: bitrouter_tui::render::Registry::default(),
             route,
-            notice: None,
+            notice: Vec::new(),
             modal: None,
             input: String::new(),
         })
@@ -773,17 +773,16 @@ impl View {
         if let Some(route) = &self.route {
             status.push(Span::raw(format!(" · via {route}")));
         }
-        if let Some(mode) = journal.mode() {
-            status.push(Span::raw(format!(" · {mode}")));
-        }
-        if let Some(title) = journal.title() {
-            status.push(Span::raw(format!(" · {title}")));
-        }
+        // Mode, configuration and title are the session's own state, so they
+        // are rendered from the protocol by the crate that owns the protocol.
+        status.extend(bitrouter_tui::render::session::state(
+            journal.mode(),
+            journal.config(),
+            journal.title(),
+        ));
 
         let mut rows = vec![Line::from(status)];
-        if let Some(notice) = &self.notice {
-            rows.push(notice.clone());
-        }
+        rows.extend(self.notice.iter().cloned());
         // A question waiting on a person outranks anything else down here.
         if let Some(prompt) = journal.pending_permission() {
             rows.push(prompt.render());
@@ -966,17 +965,25 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         // The last turn's word stands until this one starts, so a stop reason
         // is readable for as long as the reader is deciding what to say next
         // rather than for the one frame between them.
-        view.notice = None;
+        view.notice.clear();
+        // A line of exactly `/commands` lists what the agent itself offers.
+        // Ours are hardcoded; the agent's arrive on `AvailableCommandsUpdate`
+        // and were invisible until now.
+        if line.trim() == "/commands" {
+            view.notice = bitrouter_tui::render::session::commands(journal(&shared).commands());
+            view.paint(&shared)?;
+            continue;
+        }
         // A line of exactly `/route` opens the picker. Only offered when the
         // session can honour it — see `can_reroute`.
         if line.trim() == "/route" {
             if routable {
                 pick_provider(&mut view, &shared, &mut stdin, &providers).await?;
             } else {
-                view.notice = Some(ratatui::text::Line::from(
+                view.notice = vec![ratatui::text::Line::from(
                     "this session cannot be rerouted (running direct, or its credential is \
                      its own and cannot be attributed)",
-                ));
+                )];
                 view.paint(&shared)?;
             }
             continue;
@@ -1057,7 +1064,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         // resolving is already in the journal; draining the signals is what
         // makes the frame below include it.
         while dirty_rx.try_recv().is_ok() {}
-        view.notice = Some(match outcome {
+        view.notice = vec![match outcome {
             // Dropping the turn future stops this side waiting; the agent is
             // told to stop by `session/cancel`, which is a later task. Saying
             // "abandoned" rather than "cancelled" is the honest difference.
@@ -1072,7 +1079,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 abnormal = true;
                 ratatui::text::Line::from(format!("turn failed: {e}"))
             }
-        });
+        }];
         // A settled turn is immediate: it is the moment the reader is waiting
         // for, not streaming noise.
         schedule.wake(
@@ -1272,9 +1279,9 @@ async fn pick_provider(
 
     let listed = providers.list().await;
     let Some(picker) = crate::chat::picker::Picker::open(true, &listed) else {
-        view.notice = Some(ratatui::text::Line::from(
+        view.notice = vec![ratatui::text::Line::from(
             "no routable providers to choose between",
-        ));
+        )];
         view.paint(shared)?;
         return Ok(());
     };
@@ -1312,7 +1319,7 @@ async fn pick_provider(
 
     view.modal = None;
     let Some(id) = chosen else {
-        view.notice = Some(ratatui::text::Line::from("route unchanged"));
+        view.notice = vec![ratatui::text::Line::from("route unchanged")];
         view.paint(shared)?;
         return Ok(());
     };
@@ -1332,13 +1339,13 @@ async fn pick_provider(
                 .find(|p| p.current.is_some())
                 .map(|p| p.provider_id.0.to_string())
                 .unwrap_or_else(|| "unchanged".to_string());
-            view.notice = Some(ratatui::text::Line::from(format!("route: {in_force}")));
+            view.notice = vec![ratatui::text::Line::from(format!("route: {in_force}"))];
             // The footer names the route for the rest of the session, not just
             // for this frame.
             view.route = Some(in_force);
         }
         Err(e) => {
-            view.notice = Some(ratatui::text::Line::from(format!("route unchanged: {e}")));
+            view.notice = vec![ratatui::text::Line::from(format!("route unchanged: {e}"))];
         }
     }
     view.paint(shared)
@@ -1415,11 +1422,11 @@ async fn answer_permission(
     // Answered: the question stops being asked, and what was decided is said
     // once rather than left on screen as though it were still open.
     journal(shared).set_pending_permission(None);
-    view.notice = Some(ratatui::text::Line::from(if chosen {
+    view.notice = vec![ratatui::text::Line::from(if chosen {
         "permission answered"
     } else {
         "permission denied"
-    }));
+    })];
     view.paint(shared)
 }
 

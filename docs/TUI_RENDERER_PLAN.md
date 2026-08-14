@@ -303,7 +303,7 @@ left the old stack intact.
   - Verify: `cargo nextest run --all-features picker 2>&1 | tail -10`
   - Commit: `refactor(tui): move the provider picker to the app`
 
-- [ ] **4.3 Render the five forwarded variants**
+- [x] **4.3 Render the five forwarded variants**
   - Depends on: 3.3
   - Files: `crates/bitrouter-tui/src/journal.rs`, `crates/bitrouter-tui/src/render/`
   - Do: spec §9 — `AvailableCommandsUpdate`, `Plan`, `CurrentModeUpdate`,

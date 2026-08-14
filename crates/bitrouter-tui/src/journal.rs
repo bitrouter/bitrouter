@@ -87,6 +87,10 @@ pub enum EntryId {
     Message(MessageId),
     /// A tool call.
     Tool(ToolCallId),
+    /// The agent's plan. There is at most one, and a later `Plan` replaces it
+    /// where it stands rather than appending a second — an agent ticking its
+    /// way down a plan would otherwise leave one copy per step.
+    Plan,
 }
 
 /// A document entry, borrowed for rendering.
@@ -96,6 +100,8 @@ pub enum Entry<'a> {
     Message(&'a Message),
     /// A tool call, as the protocol has it after every patch so far.
     Tool(&'a ToolCall),
+    /// The agent's plan.
+    Plan(&'a Plan),
 }
 
 /// A document entry with the two things a render cache needs alongside it.
@@ -174,7 +180,16 @@ impl Journal {
             // session's own state, replaced wholesale by whatever arrived last.
             // None of them can reorder the transcript, so none of them closes a
             // run.
-            SessionUpdate::Plan(plan) => self.plan = Some(plan),
+            // A plan is a document entry: it is something the agent said, in
+            // the order it said it, and it belongs where it was said rather
+            // than in a footer that outlives the turn.
+            SessionUpdate::Plan(plan) => {
+                if self.plan.is_none() {
+                    self.order.push(EntryId::Plan);
+                }
+                self.plan = Some(plan);
+                self.touch(EntryId::Plan);
+            }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
             }
@@ -220,6 +235,7 @@ impl Journal {
             let entry = match id {
                 EntryId::Message(message) => self.messages.get(message).map(Entry::Message)?,
                 EntryId::Tool(tool) => self.tools.get(tool).map(Entry::Tool)?,
+                EntryId::Plan => self.plan.as_ref().map(Entry::Plan)?,
             };
             Some(Item {
                 id: id.clone(),
@@ -430,7 +446,7 @@ mod tests {
     fn tool(journal: &Journal) -> Option<&ToolCall> {
         journal.entries().find_map(|item| match item.entry {
             Entry::Tool(call) => Some(call),
-            Entry::Message(_) => None,
+            Entry::Message(_) | Entry::Plan(_) => None,
         })
     }
 
@@ -440,7 +456,7 @@ mod tests {
             .entries()
             .filter_map(|item| match item.entry {
                 Entry::Message(message) => Some(message),
-                Entry::Tool(_) => None,
+                Entry::Tool(_) | Entry::Plan(_) => None,
             })
             .collect()
     }
@@ -456,6 +472,7 @@ mod tests {
                     message.text.clone(),
                 ),
                 Entry::Tool(call) => ("tool".to_string(), call.title.clone()),
+                Entry::Plan(plan) => ("plan".to_string(), format!("{} steps", plan.entries.len())),
             })
             .collect()
     }
@@ -812,8 +829,12 @@ mod tests {
         assert_eq!(journal.title(), Some("renamed"));
         assert_eq!(journal.usage().map(|u| u.used), Some(150));
 
-        // And none of them took a place in the transcript.
-        assert!(document(&journal).is_empty());
+        // Of these, only the plan takes a place in the transcript: it is
+        // something the agent said, at a point in the conversation.
+        assert_eq!(
+            document(&journal),
+            vec![("plan".to_string(), "1 steps".to_string())]
+        );
     }
 
     /// A title the agent did not mention is not a title it cleared. The

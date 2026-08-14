@@ -497,6 +497,7 @@ impl Cache {
                     Entry::Tool(call) => {
                         registry.render(&ToolContext::new(call, size.width, size.height))
                     }
+                    Entry::Plan(plan) => render::session::plan(plan),
                 };
                 self.rows.insert(
                     item.id.clone(),
