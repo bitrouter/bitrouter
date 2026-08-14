@@ -24,6 +24,15 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt as _;
 
+/// Why the line is being echoed.
+pub enum Echo<'a> {
+    /// The line changed and the screen should show it.
+    Changed(&'a str),
+    /// The user asked for the whole screen back (Ctrl-L). The line is
+    /// unchanged; what is stale is the terminal.
+    Redraw(&'a str),
+}
+
 /// How a prompt read ended.
 pub enum Prompt {
     /// A submitted line, already known to be non-blank.
@@ -89,19 +98,20 @@ impl Stdin {
     /// the caller's loop free of a "not really a prompt" case.
     pub async fn read_line<E>(&mut self, mut echo: E) -> anyhow::Result<Prompt>
     where
-        E: FnMut(&str) -> anyhow::Result<()>,
+        E: FnMut(Echo<'_>) -> anyhow::Result<()>,
     {
         let mut buffer = String::new();
-        echo(&buffer)?;
+        echo(Echo::Changed(&buffer))?;
         while let Some(event) = self.next_event().await {
             match event {
                 Event::Key(key) => match edit(&mut buffer, key) {
                     Edit::Ignored => {}
-                    Edit::Changed => echo(&buffer)?,
+                    Edit::Changed => echo(Echo::Changed(&buffer))?,
+                    Edit::Redrawn => echo(Echo::Redraw(&buffer))?,
                     Edit::Submitted => {
                         if buffer.trim().is_empty() {
                             buffer.clear();
-                            echo(&buffer)?;
+                            echo(Echo::Changed(&buffer))?;
                         } else {
                             return Ok(Prompt::Line(buffer));
                         }
@@ -113,7 +123,7 @@ impl Stdin {
                 // its newline submits half of it.
                 Event::Paste(text) => {
                     buffer.push_str(&flatten(&text));
-                    echo(&buffer)?;
+                    echo(Echo::Changed(&buffer))?;
                 }
                 _ => {}
             }
@@ -129,19 +139,38 @@ impl Drop for Stdin {
     }
 }
 
-/// Is this event the interrupt — Ctrl-C?
+/// Does this event cancel a running turn — Ctrl-C, or `Esc`?
 ///
 /// In raw mode the terminal no longer sends SIGINT, so every consumer that
 /// wants to be interruptible has to recognise the key itself. One predicate,
 /// so they all agree on what it looks like.
-pub fn is_interrupt(event: &Event) -> bool {
+///
+/// `Esc` belongs here only when no modal is open: a modal owns the key stream
+/// while it runs, so by the time an event reaches the turn loop there is
+/// nothing else for `Esc` to close.
+pub fn is_cancel(event: &Event) -> bool {
+    press(event).is_some_and(|key| {
+        key.code == KeyCode::Esc
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+    })
+}
+
+/// Is this Ctrl-L — redraw the screen?
+///
+/// The renderer paints against its own model of the terminal and never asks
+/// the terminal what it holds, so it cannot notice when something else writes
+/// there. This is how a person tells it.
+pub fn is_redraw(event: &Event) -> bool {
+    press(event).is_some_and(|key| {
+        key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l')
+    })
+}
+
+/// The key event behind a press, if this event is one.
+fn press(event: &Event) -> Option<&KeyEvent> {
     match event {
-        Event::Key(key) => {
-            key.kind == KeyEventKind::Press
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.code == KeyCode::Char('c')
-        }
-        _ => false,
+        Event::Key(key) if key.kind == KeyEventKind::Press => Some(key),
+        _ => None,
     }
 }
 
@@ -149,6 +178,8 @@ pub fn is_interrupt(event: &Event) -> bool {
 enum Edit {
     Ignored,
     Changed,
+    /// The buffer is unchanged; the screen is what needs redoing.
+    Redrawn,
     Submitted,
     Ended,
 }
@@ -166,6 +197,8 @@ fn edit(buffer: &mut String, key: KeyEvent) -> Edit {
         // does not clear the line first: the session is idle either way, and
         // one meaning per key beats two.
         KeyCode::Char('c' | 'd') if ctrl => Edit::Ended,
+        // The screen, not the line: the buffer is untouched.
+        KeyCode::Char('l') if ctrl => Edit::Redrawn,
         KeyCode::Char('w') if ctrl => {
             delete_word(buffer);
             Edit::Changed
@@ -289,11 +322,31 @@ mod tests {
         assert_eq!(flatten("first\nsecond\r\nthird"), "first second  third");
     }
 
+    /// Both keys the binding table gives to turn-cancel, and nothing else.
     #[test]
-    fn interrupt_is_ctrl_c_and_nothing_else() {
-        assert!(is_interrupt(&Event::Key(ctrl('c'))));
-        assert!(!is_interrupt(&Event::Key(ctrl('d'))));
-        assert!(!is_interrupt(&Event::Key(press(KeyCode::Char('c')))));
-        assert!(!is_interrupt(&Event::Paste("c".to_string())));
+    fn cancel_is_ctrl_c_or_escape() {
+        assert!(is_cancel(&Event::Key(ctrl('c'))));
+        assert!(is_cancel(&Event::Key(press(KeyCode::Esc))));
+        assert!(
+            !is_cancel(&Event::Key(ctrl('d'))),
+            "Ctrl-D ends the session"
+        );
+        assert!(!is_cancel(&Event::Key(press(KeyCode::Char('c')))));
+        assert!(!is_cancel(&Event::Paste("c".to_string())));
+    }
+
+    #[test]
+    fn redraw_is_ctrl_l_and_nothing_else() {
+        assert!(is_redraw(&Event::Key(ctrl('l'))));
+        assert!(!is_redraw(&Event::Key(press(KeyCode::Char('l')))));
+        assert!(!is_redraw(&Event::Key(ctrl('c'))));
+    }
+
+    /// Ctrl-L asks for the screen, not for a change to the line.
+    #[test]
+    fn ctrl_l_leaves_the_line_alone() {
+        let mut buffer = String::from("half typed");
+        assert!(matches!(edit(&mut buffer, ctrl('l')), Edit::Redrawn));
+        assert_eq!(buffer, "half typed");
     }
 }

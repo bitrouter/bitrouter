@@ -314,7 +314,7 @@ left the old stack intact.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -15`
   - Commit: `feat(tui): render plans, commands, modes and config`
 
-- [ ] **4.4 Key bindings and turn cancellation**
+- [x] **4.4 Key bindings and turn cancellation**
   - Depends on: 4.3
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: wire spec §9's table. `Esc` is consumed by the innermost open modal and

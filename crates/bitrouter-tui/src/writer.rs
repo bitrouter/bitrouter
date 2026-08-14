@@ -212,6 +212,17 @@ impl<B: Backend + SyncSink> Writer<B> {
         self.backend.flush()
     }
 
+    /// Forget what is on screen, so the next frame repaints all of it.
+    ///
+    /// The writer paints against its own model and never asks the terminal
+    /// what it holds, so it cannot notice when something *else* writes there —
+    /// a stray log line, a background job, a notification. Every row below that
+    /// write is then one line off and stays that way. `Ctrl-L` is how a person
+    /// says so, and this is what it does.
+    pub fn invalidate(&mut self) {
+        self.prev.clear();
+    }
+
     /// Leave the cursor below the document, and nothing else.
     ///
     /// Every committed row stays exactly where it is — teardown removes

@@ -811,6 +811,17 @@ impl View {
         self.writer.frame(&document).context("painting a frame")
     }
 
+    /// Repaint everything on screen, whatever the writer believes is there.
+    ///
+    /// For when something else has written to this terminal: the writer paints
+    /// against its own model and never asks the terminal what it holds, so a
+    /// stray line leaves every row below it one off. `Ctrl-L` is how a person
+    /// says so.
+    fn redraw(&mut self, shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>) -> Result<()> {
+        self.writer.invalidate();
+        self.paint(shared)
+    }
+
     /// Leave the cursor below the document. Nothing rendered is removed.
     fn finish(&mut self) -> Result<()> {
         self.writer.finish().context("closing the view")
@@ -949,9 +960,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         view.paint(&shared)?;
         let read = tokio::select! {
             // Raw mode means nothing is echoed unless the footer echoes it.
-            read = stdin.read_line(|typed| {
-                view.input = typed.to_string();
-                view.paint(&shared)
+            read = stdin.read_line(|echo| match echo {
+                crate::chat::input::Echo::Changed(typed) => {
+                    view.input = typed.to_string();
+                    view.paint(&shared)
+                }
+                crate::chat::input::Echo::Redraw(typed) => {
+                    view.input = typed.to_string();
+                    view.redraw(&shared)
+                }
             }) => read?,
             // A signal at an idle prompt ends the session the same way Ctrl-D
             // does — through teardown, not around it.
@@ -1009,7 +1026,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         // and one of those arms holds `stdin` — which is exactly what
         // answering a permission needs.
         let mut requested = None;
-        let mut interrupted = false;
+        let mut cancelled = false;
+        let mut redraw = false;
         let outcome = loop {
             let mut paint = false;
             tokio::select! {
@@ -1034,41 +1052,72 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     None => continue,
                 },
                 event = stdin.next_event() => match event {
-                    // Ctrl-C during a turn is a cancel, not an exit: the
-                    // session survives it and the next prompt is drawn.
-                    Some(event) => interrupted = crate::chat::input::is_interrupt(&event),
+                    // Ctrl-C and `Esc` during a turn are a cancel, not an
+                    // exit: the session survives it and the next prompt is
+                    // drawn. No modal can be open here — one would own the key
+                    // stream while it ran — so `Esc` has nothing else to close.
+                    Some(event) => {
+                        cancelled = crate::chat::input::is_cancel(&event);
+                        redraw = crate::chat::input::is_redraw(&event);
+                    }
                     // The terminal went away. Nothing can answer the rest of
                     // this turn, so stop waiting on it.
-                    None => interrupted = true,
+                    None => cancelled = true,
                 },
                 result = &mut turn => break Some(result),
                 // Mid-turn, a signal still leaves by the front door: the agent
                 // is shut down and the terminal restored on the way out.
                 () = shutdown.recv() => break 'session,
             }
-            if paint {
+            if std::mem::take(&mut redraw) {
+                view.redraw(&shared)?;
+                schedule.wake(
+                    bitrouter_tui::writer::Trigger::Key,
+                    std::time::Instant::now(),
+                );
+            } else if paint {
                 view.paint(&shared)?;
             }
             if let Some(request) = requested.take() {
-                answer_permission(&mut view, &shared, &mut stdin, request).await?;
-                schedule.wake(
-                    bitrouter_tui::writer::Trigger::Permission,
-                    std::time::Instant::now(),
-                );
+                if cancelled {
+                    // Cancelling with a question outstanding answers it — the
+                    // one thing it must never do is leave it to be answered by
+                    // a keystroke meant for something else.
+                    deny(request);
+                } else {
+                    answer_permission(&mut view, &shared, &mut stdin, request).await?;
+                    schedule.wake(
+                        bitrouter_tui::writer::Trigger::Permission,
+                        std::time::Instant::now(),
+                    );
+                }
             }
-            if interrupted {
+            if cancelled {
                 break None;
             }
         };
+        if outcome.is_none() {
+            // Tell the agent, not merely ourselves: dropping the turn future
+            // stops this side waiting and leaves the agent working.
+            let told = session.cancel().await;
+            // And leave no question hanging. A permission the agent asked
+            // after the cancel has nobody to answer it, and an unanswered
+            // question must resolve to deny — never to consent, and never by
+            // sitting there until a later keystroke picks an option.
+            while let Ok(request) = permission_rx.try_recv() {
+                deny(request);
+            }
+            journal(&shared).set_pending_permission(None);
+            if let Err(e) = told {
+                tracing::warn!(error = %e, "cancelling the turn");
+            }
+        }
         // Whatever the pump applied between its last signal and the turn
         // resolving is already in the journal; draining the signals is what
         // makes the frame below include it.
         while dirty_rx.try_recv().is_ok() {}
         view.notice = vec![match outcome {
-            // Dropping the turn future stops this side waiting; the agent is
-            // told to stop by `session/cancel`, which is a later task. Saying
-            // "abandoned" rather than "cancelled" is the honest difference.
-            None => ratatui::text::Line::from("[turn abandoned]"),
+            None => ratatui::text::Line::from("[turn cancelled]"),
             Some(Ok(response)) => {
                 ratatui::text::Line::from(format!("[{:?}]", response.stop_reason))
             }
@@ -1108,6 +1157,37 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         exporter.shutdown();
     }
     Ok(())
+}
+
+/// Answer a permission nobody is going to answer.
+///
+/// A turn can be cancelled with a question outstanding, and a cancelled turn
+/// must never resolve to consent. This is the same `Prompt::deny()` path an
+/// `Esc` at the prompt takes, so there is exactly one rule for "no answer" and
+/// it is the safe one.
+fn deny(request: bitrouter_sdk::acp::up::PendingPermission) {
+    let prompt = bitrouter_tui::permission::Prompt::new(
+        request.tool_call.fields.title.clone(),
+        request.tool_call.tool_call_id.0.to_string(),
+        request.options.clone(),
+    );
+    request.resolve(unanswered(&prompt));
+}
+
+/// What an unanswered permission resolves to.
+///
+/// An explicit reject when the agent offered one, so it hears a decision it
+/// understands. Otherwise **cancelled** — never a selection, because the only
+/// options left would be ones that say yes.
+fn unanswered(
+    prompt: &bitrouter_tui::permission::Prompt,
+) -> agent_client_protocol::schema::v1::RequestPermissionOutcome {
+    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
+
+    match prompt.deny() {
+        Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
+        None => RequestPermissionOutcome::Cancelled,
+    }
 }
 
 /// The user's own prompt, as the update the agent would have sent for it.
@@ -1378,12 +1458,7 @@ async fn answer_permission(
     journal(shared).set_pending_permission(Some(prompt.clone()));
     view.paint(shared)?;
 
-    let deny = || match prompt.deny() {
-        Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-        // The agent offered no way to say no; cancelling is the honest answer
-        // and is never mistaken for consent.
-        None => RequestPermissionOutcome::Cancelled,
-    };
+    let deny = || unanswered(&prompt);
 
     // Keys come from the session's one stdin owner. It already holds raw mode
     // for the whole session, so there is no mode to take here and none to
@@ -2095,6 +2170,74 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
 pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
     ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
         .context("building acp routing table from config")
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use agent_client_protocol::schema::v1::{
+        PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
+    };
+
+    use super::*;
+
+    fn prompt(options: Vec<PermissionOption>) -> bitrouter_tui::permission::Prompt {
+        bitrouter_tui::permission::Prompt::new(Some("Write src/main.rs".to_string()), "t1", options)
+    }
+
+    fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
+        PermissionOption::new(
+            PermissionOptionId::new(id.to_string()),
+            id.to_string(),
+            kind,
+        )
+    }
+
+    /// The rule a cancelled turn depends on: a question nobody answered
+    /// resolves to the agent's own reject option.
+    ///
+    /// Cancelling is not consenting. A turn can be cancelled with a permission
+    /// outstanding — `Esc` or Ctrl-C while the agent is asking — and the
+    /// cancel path answers it here rather than leaving it for whichever key
+    /// happens to arrive next.
+    #[test]
+    fn an_unanswered_permission_takes_the_reject_option() {
+        let offered = prompt(vec![
+            option("allow", PermissionOptionKind::AllowOnce),
+            option("allow-always", PermissionOptionKind::AllowAlways),
+            option("reject", PermissionOptionKind::RejectOnce),
+        ]);
+        let chosen = match unanswered(&offered) {
+            RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.0.to_string()),
+            // `Cancelled`, or a variant added after this build — either way,
+            // not a selection.
+            _ => None,
+        };
+        assert_eq!(
+            chosen.as_deref(),
+            Some("reject"),
+            "the reject option, not the first one offered"
+        );
+    }
+
+    /// And when the agent offered no way to say no, the answer is **cancelled**
+    /// — never one of the options, because every option left says yes.
+    #[test]
+    fn an_unanswered_permission_never_resolves_to_consent() {
+        let only_yes = prompt(vec![
+            option("allow", PermissionOptionKind::AllowOnce),
+            option("allow-always", PermissionOptionKind::AllowAlways),
+        ]);
+        assert!(
+            matches!(unanswered(&only_yes), RequestPermissionOutcome::Cancelled),
+            "an unanswerable question must not become an allow"
+        );
+
+        // Nor when the agent offered nothing at all.
+        assert!(matches!(
+            unanswered(&prompt(Vec::new())),
+            RequestPermissionOutcome::Cancelled
+        ));
+    }
 }
 
 #[cfg(test)]
