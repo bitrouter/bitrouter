@@ -94,10 +94,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Cleared: passed in 3m41s, so the subprocess tests are not it.
           - part: acp-subprocess
             filter: "binary(acp)"
-          - part: everything-else
-            filter: "not binary(acp)"
+          # The remaining half, split so the next run names a package rather
+          # than a hemisphere.
+          - part: app-lib
+            filter: "not binary(acp) and package(bitrouter) and kind(lib)"
+          - part: app-integration
+            filter: "not binary(acp) and package(bitrouter) and kind(test)"
+          - part: sdk
+            filter: "package(bitrouter-sdk)"
+          - part: other-crates
+            filter: "not package(bitrouter) and not package(bitrouter-sdk)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
