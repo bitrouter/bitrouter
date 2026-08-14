@@ -294,7 +294,7 @@ left the old stack intact.
   - Verify: `cargo nextest run --all-features cost 2>&1 | tail -10`
   - Commit: `refactor(tui): move the cost surface to the app`
 
-- [ ] **4.2 Move `picker.rs` to the app, whole**
+- [x] **4.2 Move `picker.rs` to the app, whole**
   - Depends on: 4.1
   - Files: `crates/bitrouter-tui/src/picker.rs` → `apps/bitrouter/src/chat/picker.rs`
   - Do: move it as plain app code with **no registry entry** — it is not a

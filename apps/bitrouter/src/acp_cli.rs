@@ -1271,7 +1271,7 @@ async fn pick_provider(
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
     let listed = providers.list().await;
-    let Some(picker) = bitrouter_tui::picker::Picker::open(true, &listed) else {
+    let Some(picker) = crate::chat::picker::Picker::open(true, &listed) else {
         view.notice = Some(ratatui::text::Line::from(
             "no routable providers to choose between",
         ));
