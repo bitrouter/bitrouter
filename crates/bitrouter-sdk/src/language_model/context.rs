@@ -460,6 +460,29 @@ impl PipelineContext {
         self.model = model.into();
     }
 
+    /// Apply a policy-owned reasoning effort to the canonical request.
+    pub fn set_policy_reasoning_effort(
+        &mut self,
+        effort: crate::language_model::types::ReasoningEffort,
+    ) {
+        self.set_policy_reasoning_effort_override(Some(effort));
+    }
+
+    /// Apply a policy-owned reasoning-effort override to the canonical request.
+    ///
+    /// `None` is meaningful: a continuation pinned to the provider/model default
+    /// must clear an effort supplied by the follow-up caller rather than inherit
+    /// it. The source marker preserves that policy ownership for downstream
+    /// evidence and wire translation.
+    pub fn set_policy_reasoning_effort_override(
+        &mut self,
+        effort: Option<crate::language_model::types::ReasoningEffort>,
+    ) {
+        self.prompt.params.reasoning_effort = effort;
+        self.prompt.params.reasoning_effort_source =
+            crate::language_model::types::ReasoningEffortSource::Policy;
+    }
+
     /// Apply preset prompt-body overrides. `system_prompt`, when
     /// present, replaces the prompt's system; `params` is shallow-merged into
     /// the prompt's supplemental params so provider-specific knobs survive
@@ -687,6 +710,7 @@ impl PipelineContext {
             caller: self.caller.clone(),
             target,
             effective_model: self.model.clone(),
+            effective_effort: self.prompt.params.reasoning_effort,
             causal_prefix_commitment,
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: execution.and_then(|result| result.result.response_id.clone()),
@@ -731,6 +755,7 @@ impl PipelineContext {
             caller: self.caller.clone(),
             target,
             model_id,
+            reasoning_effort: self.prompt.params.reasoning_effort,
             provider_id,
             account_label,
             prompt_tokens: usage.prompt_tokens,
@@ -1001,7 +1026,7 @@ mod tests {
     use super::*;
     use crate::config::PromptOverrides;
     use crate::language_model::stream::{StreamOutcome, StreamProcessor};
-    use crate::language_model::types::StreamPart;
+    use crate::language_model::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
     use crate::language_model::{Message, PipelineRequest, Role};
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
@@ -1118,6 +1143,22 @@ mod tests {
         assert!(ctx.prompt().system.is_none());
         assert!(ctx.prompt().params.extra.is_empty());
         assert!(ctx.prompt().params.supplemental_extra.is_empty());
+    }
+
+    #[test]
+    fn policy_default_effort_clears_a_caller_effort() {
+        let mut prompt = empty_prompt();
+        prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        prompt.params.reasoning_effort_source = ReasoningEffortSource::Caller;
+        let mut ctx = ctx_from_prompt(prompt);
+
+        ctx.set_policy_reasoning_effort_override(None);
+
+        assert_eq!(ctx.prompt().params.reasoning_effort, None);
+        assert_eq!(
+            ctx.prompt().params.reasoning_effort_source,
+            ReasoningEffortSource::Policy
+        );
     }
 
     #[test]

@@ -32,6 +32,10 @@ bitrouter init --yes --write-config --use-detected --harness codex \
   --optimize-workflow-arg --suite \
   --optimize-workflow-arg smoke.jsonl \
   --optimize-workflow-input .venv \
+  --optimize-strong openai-codex:gpt-5.6-sol \
+  --optimize-strong-effort high \
+  --optimize-economy openai-codex:gpt-5.6-sol \
+  --optimize-economy-effort low \
   --optimize-success 'The eval command exits successfully and reports its required checks.'
 ```
 
@@ -55,6 +59,16 @@ to `bitrouter:deepseek/deepseek-v4-flash-0731` (BitRouter Cloud OAuth). Both
 routes execute through the private daemon. The intent pins the subscription's
 normalized API-equivalent price schedule; this is showback for comparison, not
 a claim of marginal cash spend.
+
+Strong/economy targets may also use the same supported model at different
+effort levels. Pass `--strong-effort` and `--economy-effort` with one of
+`none|minimal|low|medium|high|xhigh|max`; setup validates the exact
+provider/model matrix before writing the lineage. When both tiers name the same
+model, both flags are required and must be distinct. Explicit policy effort
+owns the request and overrides caller effort, while a scalar legacy target
+preserves caller effort. The daemon translates the canonical value to each
+provider's native request shape; it never bypasses BitRouter or launches a
+direct model call for an effort variant.
 
 ## Evolve one route at a time
 

@@ -505,6 +505,8 @@ mod tests {
                         policy_name: "coding".into(),
                         request_key: "agent_trace/v2|opening|normal".into(),
                         baseline_tier: Some("strong".into()),
+                        baseline_effort: None,
+                        tier_efforts: Default::default(),
                         preset: Some("coding".into()),
                         projection: RouteProjection::parse_key("agent_trace/v2|opening|normal")
                             .ok_or_else(|| anyhow::anyhow!("invalid fixture projection"))?,

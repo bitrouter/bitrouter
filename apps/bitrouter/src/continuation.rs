@@ -56,11 +56,12 @@ const RECONCILIATION_DRAIN_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
-const CONTINUATION_PAYLOAD_VERSION: u8 = 3;
+const CONTINUATION_PAYLOAD_VERSION: u8 = 4;
 #[cfg(test)]
 const CONTINUATION_PAYLOAD_V1_PREFIX: &str = "bitrouter-continuation-payload-v1:";
 const CONTINUATION_PAYLOAD_V2_MAGIC: &[u8] = b"\xffbitrouter-continuation-payload-v2\0";
 const CONTINUATION_PAYLOAD_V3_MAGIC: &[u8] = b"\xffbitrouter-continuation-payload-v3\0";
+const CONTINUATION_PAYLOAD_V4_MAGIC: &[u8] = b"\xffbitrouter-continuation-payload-v4\0";
 const MAX_EFFECTIVE_MODEL_BYTES: usize = 512;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +69,8 @@ struct ContinuationPayload {
     version: u8,
     provider_response_id: String,
     effective_model: Option<String>,
+    #[serde(default)]
+    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     #[serde(default)]
     assistant_turn_commitment: Option<String>,
     #[serde(default)]
@@ -78,6 +81,7 @@ impl ContinuationPayload {
     fn current(
         provider_response_id: &str,
         effective_model: &str,
+        effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         causal_prefix_commitment: Option<&CausalPrefixCommitment>,
     ) -> Result<Self> {
         validate_effective_model(effective_model)?;
@@ -85,6 +89,7 @@ impl ContinuationPayload {
             version: CONTINUATION_PAYLOAD_VERSION,
             provider_response_id: provider_response_id.to_owned(),
             effective_model: Some(effective_model.to_owned()),
+            effective_effort,
             assistant_turn_commitment: None,
             causal_prefix_commitment: causal_prefix_commitment
                 .map(CausalPrefixCommitment::as_str)
@@ -97,6 +102,7 @@ impl ContinuationPayload {
             version: 0,
             provider_response_id,
             effective_model: None,
+            effective_effort: None,
             assistant_turn_commitment: None,
             causal_prefix_commitment: None,
         }
@@ -110,6 +116,7 @@ impl std::fmt::Debug for ContinuationPayload {
             .field("version", &self.version)
             .field("provider_response_id", &"<redacted>")
             .field("effective_model", &self.effective_model)
+            .field("effective_effort", &self.effective_effort)
             .field("assistant_turn_commitment", &"<redacted>")
             .field("causal_prefix_commitment", &"<redacted>")
             .finish()
@@ -246,6 +253,12 @@ pub enum ContinuationResolution {
 pub struct ResolvedContinuation {
     pub provider_response_id: String,
     pub effective_model: Option<String>,
+    pub effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    /// Whether the sealed payload authoritatively captured an effort value,
+    /// including an explicit provider-default (`None`) treatment. Legacy v3
+    /// payloads predate effort pinning and must not be reinterpreted as that
+    /// provider-default treatment.
+    pub effort_authoritative: bool,
     pub causal_prefix_commitment: Option<CausalPrefixCommitment>,
     target_fingerprint: String,
     key: ContinuationKey,
@@ -257,6 +270,8 @@ impl std::fmt::Debug for ResolvedContinuation {
             .debug_struct("ResolvedContinuation")
             .field("provider_response_id", &"<redacted>")
             .field("effective_model", &self.effective_model)
+            .field("effective_effort", &self.effective_effort)
+            .field("effort_authoritative", &self.effort_authoritative)
             .field("causal_prefix_commitment", &"<redacted>")
             .field("target_fingerprint", &"<redacted>")
             .field("key", &self.key)
@@ -445,6 +460,7 @@ struct PendingBindAttempt {
 struct ContinuationBinding<'a> {
     provider_response_id: &'a str,
     effective_model: &'a str,
+    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     causal_prefix_commitment: Option<&'a CausalPrefixCommitment>,
     target: &'a RoutingTarget,
     credential_authority: &'a ContinuationAuthority,
@@ -1483,6 +1499,7 @@ impl ContinuationRegistry {
                 ContinuationBinding {
                     provider_response_id,
                     effective_model: &effective_model,
+                    effective_effort: None,
                     causal_prefix_commitment: None,
                     target,
                     credential_authority,
@@ -1642,13 +1659,14 @@ impl ContinuationRegistry {
         let payload = ContinuationPayload::current(
             binding.provider_response_id,
             binding.effective_model,
+            binding.effective_effort,
             binding.causal_prefix_commitment,
         )
         .map_err(OwnershipFailure::lost_or_foreign)?;
         let serialized = serde_json::to_vec(&payload)
             .context("serializing continuation payload")
             .map_err(OwnershipFailure::lost_or_foreign)?;
-        let mut plaintext = CONTINUATION_PAYLOAD_V3_MAGIC.to_vec();
+        let mut plaintext = CONTINUATION_PAYLOAD_V4_MAGIC.to_vec();
         plaintext.extend_from_slice(&serialized);
         let created_at = timestamp(now);
         let expires_at = timestamp(
@@ -1828,6 +1846,8 @@ impl ContinuationRegistry {
             return Ok(ContinuationResolution::Active(ResolvedContinuation {
                 provider_response_id: payload.provider_response_id,
                 effective_model: payload.effective_model,
+                effective_effort: payload.effective_effort,
+                effort_authoritative: payload.version >= 4,
                 causal_prefix_commitment: payload
                     .causal_prefix_commitment
                     .as_deref()
@@ -1975,9 +1995,28 @@ pub struct ContinuationRuntime {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContinuationAdjustment {
-    Pin { effective_model: String },
+    Pin {
+        effective_model: String,
+        effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+        effort_authoritative: bool,
+    },
     Detach,
     RejectLegacy,
+}
+
+impl ContinuationAdjustment {
+    pub(crate) fn pinned_effort_override(
+        &self,
+    ) -> Option<Option<bitrouter_sdk::language_model::types::ReasoningEffort>> {
+        match self {
+            Self::Pin {
+                effective_effort,
+                effort_authoritative,
+                ..
+            } => effort_authoritative.then_some(*effective_effort),
+            Self::Detach | Self::RejectLegacy => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2102,7 +2141,11 @@ impl PreRequestHook for ContinuationRuntime {
                             CausalPrefixPlan::extend(commitment, 0)
                         });
                     ctx.insert_extension(Arc::new(causal_plan));
-                    Some(ContinuationAdjustment::Pin { effective_model })
+                    Some(ContinuationAdjustment::Pin {
+                        effective_model,
+                        effective_effort: active.effective_effort,
+                        effort_authoritative: active.effort_authoritative,
+                    })
                 }
             }
         };
@@ -2297,6 +2340,7 @@ impl ContinuationRuntime {
                 ContinuationBinding {
                     provider_response_id,
                     effective_model: &ctx.effective_model,
+                    effective_effort: ctx.effective_effort,
                     causal_prefix_commitment: ctx.causal_prefix_commitment.as_ref(),
                     target,
                     credential_authority: &credential_authority,
@@ -2527,7 +2571,14 @@ fn decrypt_payload(
     row: &continuation_entity::Model,
 ) -> Result<ContinuationPayload> {
     let plaintext = decrypt_row(key, row)?;
-    let payload = if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V3_MAGIC) {
+    let payload = if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V4_MAGIC) {
+        let payload: ContinuationPayload =
+            serde_json::from_slice(serialized).context("continuation v4 payload is invalid")?;
+        if payload.version != 4 {
+            anyhow::bail!("unsupported continuation v4 payload version");
+        }
+        payload
+    } else if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V3_MAGIC) {
         let payload: ContinuationPayload =
             serde_json::from_slice(serialized).context("continuation v3 payload is invalid")?;
         if payload.version != 3 {
@@ -2660,6 +2711,38 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn continuation_pin_distinguishes_provider_default_from_no_override() {
+        let provider_default = ContinuationAdjustment::Pin {
+            effective_model: "openai:gpt-5.4".into(),
+            effective_effort: None,
+            effort_authoritative: true,
+        };
+        let high = ContinuationAdjustment::Pin {
+            effective_model: "openai:gpt-5.4".into(),
+            effective_effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
+            effort_authoritative: true,
+        };
+        let legacy = ContinuationAdjustment::Pin {
+            effective_model: "openai:gpt-5.4".into(),
+            effective_effort: None,
+            effort_authoritative: false,
+        };
+
+        assert_eq!(provider_default.pinned_effort_override(), Some(None));
+        assert_eq!(
+            high.pinned_effort_override(),
+            Some(Some(
+                bitrouter_sdk::language_model::types::ReasoningEffort::High
+            ))
+        );
+        assert_eq!(
+            ContinuationAdjustment::Detach.pinned_effort_override(),
+            None
+        );
+        assert_eq!(legacy.pinned_effort_override(), None);
+    }
+
     fn target(api_key: &str) -> RoutingTarget {
         RoutingTarget {
             provider_name: "openai".into(),
@@ -2670,6 +2753,7 @@ mod tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: Some("primary".into()),
             api_key_override: None,
             api_base_override: None,
@@ -2689,6 +2773,8 @@ mod tests {
         let resolved = ResolvedContinuation {
             provider_response_id: "provider-debug-private-sentinel".into(),
             effective_model: Some("provider:model".into()),
+            effective_effort: None,
+            effort_authoritative: true,
             causal_prefix_commitment: None,
             target_fingerprint: "fingerprint-debug-private-sentinel".into(),
             key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
@@ -2756,6 +2842,7 @@ mod tests {
         let payload = ContinuationPayload::current(
             "provider-debug-private-sentinel",
             "openai:gpt-5",
+            None,
             Some(&commitment),
         )?;
         let debug = format!("{payload:?}");
@@ -3025,10 +3112,10 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("sealed continuation row missing"))?;
         let envelope = decrypt_row(&ContinuationKey::from_bytes([7; 32])?, &sealed)?;
-        assert!(envelope.starts_with(CONTINUATION_PAYLOAD_V3_MAGIC));
+        assert!(envelope.starts_with(CONTINUATION_PAYLOAD_V4_MAGIC));
         assert!(
             String::from_utf8(envelope).is_err(),
-            "v3 envelope must not collide with any legacy UTF-8 response id"
+            "v4 envelope must not collide with any legacy UTF-8 response id"
         );
 
         let reloaded = ContinuationRegistry::new(
@@ -4014,6 +4101,7 @@ mod tests {
             caller: CallerContext::new("key", "owner"),
             target: Some(target("credential")),
             effective_model: "openai:gpt-5".into(),
+            effective_effort: None,
             causal_prefix_commitment: None,
             inbound_protocol: Some(ApiProtocol::Responses),
             response_id: Some(provider_response_id.into()),
