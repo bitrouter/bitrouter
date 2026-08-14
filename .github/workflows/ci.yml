@@ -114,13 +114,22 @@ jobs:
           # most between Linux and macOS.
           - part: app-bin
             filter: "package(bitrouter) and kind(bin)"
+          # The decisive one. All six partitions above pass, covering all 2503
+          # tests, yet the combined run hangs — so no test is bad on its own
+          # and the suspect is contention between tests running *concurrently*
+          # over something machine-global (a port, a socket path, a pidfile).
+          # Partitioning hides that by putting the contenders on separate
+          # runners. If the whole suite passes serially, that is confirmed.
+          - part: combined-serial
+            filter: "all()"
+            threads: "1"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --all-features -E '${{ matrix.filter }}' --profile ci
-        timeout-minutes: 8
+      - run: cargo nextest run --workspace --all-features -E '${{ matrix.filter }}' --profile ci ${{ matrix.threads && format('--test-threads {0}', matrix.threads) || '' }}
+        timeout-minutes: 15
 
   feature-isolation:
     name: feature-isolation
