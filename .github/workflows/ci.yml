@@ -138,19 +138,25 @@ jobs:
       matrix:
         include:
           - shard: interfaces
+            test_threads: num-cpus
             targets: >-
               --test acp --test cloud_api --test daemon --test e2e
               --test full_stack
           - shard: observability
+            test_threads: num-cpus
             targets: >-
               --test agent_trace_generalization --test observe_hierarchy
               --test workflow_state_real_agent_e2e
               --test workflow_state_replay
           - shard: optimization
+            test_threads: num-cpus
             targets: >-
               --test eval_exchange_equivalence --test optimization_discovery
               --test optimization_output --test policy_eval_control_plane
           - shard: control-plane
+            # These timing-sensitive trajectory tests share event ordering
+            # state and intermittently regress timestamps when run together.
+            test_threads: "1"
             targets: >-
               --test onboarding --test smithers_reward_loop
               --test terminus_2_workflow_state
@@ -169,9 +175,11 @@ jobs:
         shell: bash
         env:
           TEST_TARGETS: ${{ matrix.targets }}
+          TEST_THREADS: ${{ matrix.test_threads }}
         run: |
           read -r -a test_targets <<< "$TEST_TARGETS"
           cargo nextest run -p bitrouter --all-features --build-jobs 2 \
+            --test-threads "$TEST_THREADS" \
             "${test_targets[@]}"
 
   test-ubuntu:
