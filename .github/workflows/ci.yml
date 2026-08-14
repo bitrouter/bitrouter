@@ -95,6 +95,11 @@ jobs:
       - name: diagnose ubuntu test build
         if: runner.os == 'Linux'
         shell: bash
+        # Keep every other input identical to the previous diagnostic run.
+        # If the runner now reaches the 15-minute deadline, peak compile/link
+        # concurrency was the resource trigger rather than a hung test.
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: |
           snapshot() {
             {
