@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use bitrouter_sdk::language_model::SettlementContext;
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
+use crate::eval::settlement::PredictionObservationSnapshot;
 use crate::metering::MeteringSettlementEvent;
 
 use super::{
@@ -26,6 +27,14 @@ pub(crate) struct TrajectorySettlementRecorder {
     identity_key: CorrelationKey,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrajectorySettlementDisposition {
+    Untracked,
+    AwaitingAuthoritativeMetering,
+    Persisted,
+    AlreadyTerminal,
+}
+
 impl TrajectorySettlementRecorder {
     pub(crate) fn new(
         store: TrajectoryStore,
@@ -39,26 +48,30 @@ impl TrajectorySettlementRecorder {
         }
     }
 
-    /// Returns `true` when the request belongs to the durable trajectory ledger.
-    /// A tracked request without the authoritative metering event is deliberately
-    /// left unsettled; absence is never converted into zero-valued evidence.
-    pub(crate) async fn record_if_tracked(&self, context: &SettlementContext) -> Result<bool> {
+    /// Reports the request's closed settlement ownership state. A tracked request
+    /// without authoritative metering remains unsettled; absence is never
+    /// converted into zero-valued evidence.
+    pub(crate) async fn record_if_tracked(
+        &self,
+        context: &SettlementContext,
+        prediction: Option<&PredictionObservationSnapshot>,
+    ) -> Result<TrajectorySettlementDisposition> {
         let owner_user_id = context.caller.user_id();
         let request_id = self
             .identity_key
             .request_identity(owner_user_id, &context.request_id)?;
         let Some(request) = self.store.request(owner_user_id, &request_id).await? else {
-            return Ok(false);
+            return Ok(TrajectorySettlementDisposition::Untracked);
         };
         if request.status != RequestStatus::Started {
             self.store
                 .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                 .await?;
             self.publisher.kick();
-            return Ok(true);
+            return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
         }
         let Some(metering) = context.get_event::<MeteringSettlementEvent>().cloned() else {
-            return Ok(true);
+            return Ok(TrajectorySettlementDisposition::AwaitingAuthoritativeMetering);
         };
         if metering.request_id != context.request_id {
             anyhow::bail!("metering settlement identity does not match trajectory request")
@@ -67,7 +80,7 @@ impl TrajectorySettlementRecorder {
         let settlement = self
             .store
             .settle_request_from_current_head(&owner, &request_id, |request, events, sequence| {
-                build_settlement(&owner, request, events, sequence, &metering)
+                build_settlement(&owner, request, events, sequence, &metering, prediction)
             })
             .await;
         if let Err(error) = settlement {
@@ -80,12 +93,14 @@ impl TrajectorySettlementRecorder {
                 self.store
                     .validate_reusable_terminal_settlement(owner_user_id, &request_id)
                     .await?;
+                self.publisher.kick();
+                return Ok(TrajectorySettlementDisposition::AlreadyTerminal);
             } else {
                 return Err(error);
             }
         }
         self.publisher.kick();
-        Ok(true)
+        Ok(TrajectorySettlementDisposition::Persisted)
     }
 }
 
@@ -95,6 +110,7 @@ fn build_settlement(
     events: &[TrajectoryEvent],
     sequence: u64,
     metering: &MeteringSettlementEvent,
+    prediction: Option<&PredictionObservationSnapshot>,
 ) -> Result<Settlement> {
     let captured_at = settlement_timestamp(request, events, metering.duration_ms)?;
     let mut structural =
@@ -141,6 +157,9 @@ fn build_settlement(
     }
     if let Some(finish_reason) = &metering.finish_reason {
         categorical.insert("settlement.finish_reason".to_owned(), finish_reason.clone());
+    }
+    if let Some(prediction) = prediction {
+        prediction.write_namespaced(&mut structural, &mut categorical);
     }
     let event_seed = canonical_digest(&(
         owner_user_id,
@@ -238,12 +257,22 @@ mod tests {
     use bitrouter_sdk::event::EventBus;
     use bitrouter_sdk::language_model::{
         ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role,
-        SettlementContext, UsageOrigin,
+        SettlementContext, SettlementRecorder, UsageOrigin,
     };
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-    use super::{TrajectorySettlementRecorder, build_settlement};
-    use crate::eval::{EvalService, admission::SubmissionPrincipal, store::EvalStore};
+    use super::{
+        TrajectorySettlementDisposition, TrajectorySettlementRecorder,
+        build_operational_evaluation, build_settlement,
+    };
+    use crate::eval::{
+        EvalService,
+        admission::SubmissionPrincipal,
+        settlement::{
+            EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+        },
+        store::EvalStore,
+    };
     use crate::metering::MeteringSettlementEvent;
     use crate::output::reports::trajectory::{inspect_report, replay_report};
     use crate::output::{Format, Output};
@@ -254,9 +283,169 @@ mod tests {
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
     use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
     use crate::workflow_state::ir::RouteProjection;
+    use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn recorder_reports_closed_dispositions_and_persists_prediction_observation()
+    -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            EvalStore::new(db),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder =
+            TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key.clone());
+        assert_eq!(
+            recorder
+                .record_if_tracked(&context("untracked"), None)
+                .await?,
+            TrajectorySettlementDisposition::Untracked
+        );
+
+        let stored_request = identity_key.request_identity("owner-a", "external-request")?;
+        begin_guarded(&store, &stored_request, "episode-observed").await?;
+        let mut settlement = context("external-request");
+        assert_eq!(
+            recorder.record_if_tracked(&settlement, None).await?,
+            TrajectorySettlementDisposition::AwaitingAuthoritativeMetering
+        );
+        settlement.emit(metering("external-request"));
+        let observation = pending_decision("external-request").observation_snapshot();
+        assert_eq!(
+            recorder
+                .record_if_tracked(&settlement, Some(&observation))
+                .await?,
+            TrajectorySettlementDisposition::Persisted
+        );
+        assert_eq!(
+            recorder
+                .record_if_tracked(&settlement, Some(&observation))
+                .await?,
+            TrajectorySettlementDisposition::AlreadyTerminal
+        );
+
+        let events = store
+            .events_for_episode("owner-a", "episode-observed")
+            .await?;
+        let terminal = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("terminal event missing"))?;
+        assert_eq!(
+            terminal
+                .evidence
+                .categorical
+                .get("routing.observed_action")
+                .map(String::as_str),
+            Some("mutate")
+        );
+        let evaluation = build_operational_evaluation(&events)?;
+        let evidence = evaluation
+            .subject
+            .evidence
+            .iter()
+            .find(|evidence| evidence.kind == "routing.prediction_observation")
+            .ok_or_else(|| anyhow::anyhow!("prediction observation evidence missing"))?;
+        assert_eq!(
+            evidence
+                .attributes
+                .get("observed_action")
+                .map(String::as_str),
+            Some("mutate")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn eval_recorder_uses_exactly_one_owner_and_preserves_pending_on_storage_failure()
+    -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        let eval_store = EvalStore::new(db.clone());
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let stored_request = identity_key.request_identity("owner-a", "external-request")?;
+        begin_guarded(&store, &stored_request, "episode-observed").await?;
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            10,
+        )?;
+        let trajectory =
+            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+        let pending = PendingEvalDecisionStore::default();
+        let invocation = EvalInvocation::new("owner-a");
+        pending.insert(&invocation, pending_decision("external-request"));
+        let recorder = EvalSettlementRecorder::new(
+            eval_store.clone(),
+            pending.clone(),
+            std::sync::Arc::new(crate::metering::PricingTable::new()),
+        )
+        .with_trajectory(trajectory);
+        let mut missing_metering = context("external-request");
+        missing_metering.emit(invocation.clone());
+
+        recorder.record(&mut missing_metering).await?;
+
+        assert!(pending.peek(&invocation, "owner-a").is_some());
+        assert!(
+            eval_store
+                .list_subjects_for_owner("owner-a")
+                .await?
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .request("owner-a", &stored_request)
+                .await?
+                .map(|request| request.status),
+            Some(RequestStatus::Started)
+        );
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TRIGGER fail_trajectory_outbox BEFORE INSERT ON trajectory_outbox \
+             BEGIN SELECT RAISE(FAIL, 'injected trajectory failure'); END"
+                .to_owned(),
+        ))
+        .await?;
+        let mut metered = context("external-request");
+        metered.emit(invocation.clone());
+        metered.emit(metering("external-request"));
+
+        assert!(recorder.record(&mut metered).await.is_err());
+        assert!(pending.peek(&invocation, "owner-a").is_some());
+        assert_eq!(
+            store
+                .request("owner-a", &stored_request)
+                .await?
+                .map(|request| request.status),
+            Some(RequestStatus::Started)
+        );
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DROP TRIGGER fail_trajectory_outbox".to_owned(),
+        ))
+        .await?;
+
+        recorder.record(&mut metered).await?;
+        publisher.wait_for_idle().await;
+
+        assert!(pending.peek(&invocation, "owner-a").is_none());
+        let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].scope, crate::eval::types::EvalScope::Episode);
+        assert!(
+            eval_store
+                .subject("request:external-request")
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn settlement_and_typed_outbox_survive_restart_and_publish() -> anyhow::Result<()> {
@@ -268,7 +457,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering)
+                    build_settlement("owner-a", request, events, sequence, &metering, None)
                 },
             )
             .await?;
@@ -320,7 +509,7 @@ mod tests {
                 "owner-a",
                 "request-delivery-time",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering)
+                    build_settlement("owner-a", request, events, sequence, &metering, None)
                 },
             )
             .await?;
@@ -365,7 +554,7 @@ mod tests {
                     "owner-a",
                     "request-1",
                     |request, events, sequence| {
-                        build_settlement("owner-a", request, events, sequence, &metering)
+                        build_settlement("owner-a", request, events, sequence, &metering, None)
                     },
                 )
                 .await?;
@@ -377,7 +566,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &conflicting)
+                    build_settlement("owner-a", request, events, sequence, &conflicting, None)
                 },
             )
             .await
@@ -421,7 +610,10 @@ mod tests {
         );
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
-        assert!(recorder.record_if_tracked(&first).await?);
+        assert_eq!(
+            recorder.record_if_tracked(&first, None).await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         publisher.wait_for_idle().await;
         drop(recorder);
         drop(publisher);
@@ -445,7 +637,10 @@ mod tests {
         let mut retry = context("external-request-1");
         retry.emit(routing_failure_metering("external-request-1", 175));
 
-        assert!(restarted_recorder.record_if_tracked(&retry).await?);
+        assert_eq!(
+            restarted_recorder.record_if_tracked(&retry, None).await?,
+            TrajectorySettlementDisposition::AlreadyTerminal
+        );
 
         let events = restarted_store
             .events_for_episode("owner-a", "episode-1")
@@ -485,7 +680,7 @@ mod tests {
         .await?;
 
         let error = recorder
-            .record_if_tracked(&first)
+            .record_if_tracked(&first, None)
             .await
             .expect_err("corrupt terminal event index must fail closed");
         assert!(error.to_string().contains("lost its settlement event"));
@@ -503,7 +698,7 @@ mod tests {
         .await?;
 
         let error = recorder
-            .record_if_tracked(&first)
+            .record_if_tracked(&first, None)
             .await
             .expect_err("status that disagrees with terminal evidence must fail closed");
         assert!(error.to_string().contains("inconsistent settlement event"));
@@ -521,7 +716,7 @@ mod tests {
         .await?;
 
         let error = recorder
-            .record_if_tracked(&first)
+            .record_if_tracked(&first, None)
             .await
             .expect_err("corrupt terminal outbox index must fail closed");
         assert!(error.to_string().contains("lost its outbox"));
@@ -540,7 +735,14 @@ mod tests {
                 "owner-a",
                 &request_id,
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &current_metering)
+                    build_settlement(
+                        "owner-a",
+                        request,
+                        events,
+                        sequence,
+                        &current_metering,
+                        None,
+                    )
                 },
             )
             .await?;
@@ -561,7 +763,14 @@ mod tests {
                 "owner-a",
                 "request-foreign",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &foreign_metering)
+                    build_settlement(
+                        "owner-a",
+                        request,
+                        events,
+                        sequence,
+                        &foreign_metering,
+                        None,
+                    )
                 },
             )
             .await?;
@@ -625,7 +834,7 @@ mod tests {
             .await?
             .len();
 
-        let result = recorder.record_if_tracked(&retry).await;
+        let result = recorder.record_if_tracked(&retry, None).await;
         publisher.wait_for_idle().await;
 
         assert!(
@@ -662,7 +871,12 @@ mod tests {
         )?;
         let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key);
 
-        assert!(recorder.record_if_tracked(&context("request-1")).await?);
+        assert_eq!(
+            recorder
+                .record_if_tracked(&context("request-1"), None)
+                .await?,
+            TrajectorySettlementDisposition::AwaitingAuthoritativeMetering
+        );
         assert_eq!(
             store
                 .request("owner-a", &request_id)
@@ -693,7 +907,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &unknown)
+                    build_settlement("owner-a", request, events, sequence, &unknown, None)
                 },
             )
             .await?;
@@ -755,7 +969,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &unknown)
+                    build_settlement("owner-a", request, events, sequence, &unknown, None)
                 },
             )
             .await?;
@@ -864,7 +1078,12 @@ mod tests {
             TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
         let mut settlement_context = context(SENTINELS[7]);
         settlement_context.emit(metering(SENTINELS[7]));
-        assert!(recorder.record_if_tracked(&settlement_context).await?);
+        assert_eq!(
+            recorder
+                .record_if_tracked(&settlement_context, None)
+                .await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         publisher.wait_for_idle().await;
 
         let mut surfaces = Vec::new();
@@ -958,8 +1177,14 @@ mod tests {
                 "owner-a",
                 "request-poison",
                 |request, events, sequence| {
-                    let mut settlement =
-                        build_settlement("owner-a", request, events, sequence, &poison_metering)?;
+                    let mut settlement = build_settlement(
+                        "owner-a",
+                        request,
+                        events,
+                        sequence,
+                        &poison_metering,
+                        None,
+                    )?;
                     if let Some(outbox) = &mut settlement.outbox {
                         outbox.outbox_id = "aaa-poison".into();
                         outbox.topic = "unsupported.topic".into();
@@ -975,8 +1200,14 @@ mod tests {
                 "owner-a",
                 "request-valid",
                 |request, events, sequence| {
-                    let mut settlement =
-                        build_settlement("owner-a", request, events, sequence, &valid_metering)?;
+                    let mut settlement = build_settlement(
+                        "owner-a",
+                        request,
+                        events,
+                        sequence,
+                        &valid_metering,
+                        None,
+                    )?;
                     if let Some(outbox) = &mut settlement.outbox {
                         outbox.outbox_id = "zzz-valid".into();
                     }
@@ -1016,7 +1247,7 @@ mod tests {
                 "owner-a",
                 "request-1",
                 |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering)
+                    build_settlement("owner-a", request, events, sequence, &metering, None)
                 },
             )
             .await?;
@@ -1089,7 +1320,7 @@ mod tests {
                     "owner-a",
                     &request_id,
                     |request, events, sequence| {
-                        build_settlement("owner-a", request, events, sequence, &metering)
+                        build_settlement("owner-a", request, events, sequence, &metering, None)
                     },
                 )
                 .await?;
@@ -1136,7 +1367,10 @@ mod tests {
         let recorder = TrajectorySettlementRecorder::new(store, publisher, identity_key);
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
-        assert!(recorder.record_if_tracked(&first).await?);
+        assert_eq!(
+            recorder.record_if_tracked(&first, None).await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         Ok((db, recorder, request_id, first))
     }
 
@@ -1309,6 +1543,32 @@ mod tests {
             duration_ms,
             error_code: Some("not_found".into()),
             finish_reason: None,
+        }
+    }
+
+    fn pending_decision(request_id: &str) -> PendingEvalDecision {
+        PendingEvalDecision {
+            request_id: request_id.into(),
+            decision_id: format!("decision-{request_id}"),
+            policy: "auto:cost".into(),
+            policy_digest: POLICY_DIGEST.into(),
+            request_key: "agent_trace/v2|edit|normal".into(),
+            selected_tier: "economy".into(),
+            baseline_tier: Some("strong".into()),
+            preset: Some("auto:cost".into()),
+            holdout: false,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
+            predicted_role: Some("implement".into()),
+            predicted_action: Some("mutate".into()),
+            prediction_confidence_ppm: Some(900_000),
+            predictor_contract_digest: Some(
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            ),
+            prediction_confidence_kind: Some("heuristic_margin".into()),
+            observation: Some(PredictionObservation::new(ObservedActionClass::Mutate)),
+            observed_at: "2026-08-08T00:00:00Z".into(),
         }
     }
 

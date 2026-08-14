@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::metering::pricing::calculate_normalized_charge_micro_usd;
 use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
-use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
+use crate::workflow_state::decision::{
+    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
+};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
@@ -378,6 +380,109 @@ impl CostJoinSummary {
     }
 }
 
+fn validate_trace_decision_identity_join(
+    context: &str,
+    traces: &[CapturedIngressTrace],
+    decisions: &[PolicyDecisionRecord],
+) -> Result<()> {
+    let mut trace_ids = BTreeSet::new();
+    for trace in traces {
+        let request_id = trace.artifact_request_id().ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "{context}: trace {} has no request id for decision join",
+                trace.id
+            ))
+        })?;
+        if !trace_ids.insert(request_id.to_string()) {
+            return Err(BitrouterError::bad_request(format!(
+                "{context}: duplicate trace request id {request_id}"
+            )));
+        }
+    }
+
+    let mut decision_ids = BTreeSet::new();
+    for decision in decisions {
+        let request_id = decision.request_id.as_deref().ok_or_else(|| {
+            BitrouterError::bad_request(format!("{context}: policy decision has no request id"))
+        })?;
+        if !decision_ids.insert(request_id.to_string()) {
+            return Err(BitrouterError::bad_request(format!(
+                "{context}: duplicate policy decision request id {request_id}"
+            )));
+        }
+    }
+
+    if decisions
+        .iter()
+        .any(|decision| decision.ingress_request_id_sha256.as_deref() == Some(""))
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "{context}: policy decision has an empty ingress request commitment"
+        )));
+    }
+    let committed_count = decisions
+        .iter()
+        .filter(|decision| decision.ingress_request_id_sha256.is_some())
+        .count();
+    if committed_count != 0 && committed_count != decisions.len() {
+        return Err(BitrouterError::bad_request(format!(
+            "{context}: policy decisions mix committed and legacy request identities"
+        )));
+    }
+
+    if committed_count == decisions.len() && !decisions.is_empty() {
+        let mut decision_commitments = BTreeSet::new();
+        for decision in decisions {
+            let commitment = decision
+                .ingress_request_id_sha256
+                .as_deref()
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(format!(
+                        "{context}: policy decisions mix committed and legacy request identities"
+                    ))
+                })?;
+            if !decision_commitments.insert(commitment.to_string()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "{context}: duplicate policy decision ingress commitment {commitment}"
+                )));
+            }
+        }
+        let trace_commitments = trace_ids
+            .iter()
+            .map(|request_id| ingress_request_id_sha256(request_id))
+            .collect::<BTreeSet<_>>();
+        if trace_commitments != decision_commitments {
+            let missing_decisions = trace_commitments
+                .difference(&decision_commitments)
+                .cloned()
+                .collect::<Vec<_>>();
+            let unmatched_decisions = decision_commitments
+                .difference(&trace_commitments)
+                .cloned()
+                .collect::<Vec<_>>();
+            return Err(BitrouterError::bad_request(format!(
+                "{context}: trace/decision request commitments differ; missing_decisions={missing_decisions:?}, unmatched_decisions={unmatched_decisions:?}"
+            )));
+        }
+        return Ok(());
+    }
+
+    if trace_ids != decision_ids {
+        let missing_decisions = trace_ids
+            .difference(&decision_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        let unmatched_decisions = decision_ids
+            .difference(&trace_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(BitrouterError::bad_request(format!(
+            "{context}: trace/decision request ids differ; missing_decisions={missing_decisions:?}, unmatched_decisions={unmatched_decisions:?}"
+        )));
+    }
+    Ok(())
+}
+
 impl WorkflowRunArtifact {
     /// Validate the usage side of a benchmark bundle before any artifact files
     /// are written. A non-empty trace set always requires complete, auditable
@@ -452,65 +557,7 @@ impl WorkflowRunArtifact {
         if decisions.is_empty() {
             return Ok(());
         }
-
-        let mut traces_by_request_id = BTreeMap::new();
-        for trace in traces {
-            let request_id = trace.artifact_request_id().ok_or_else(|| {
-                BitrouterError::bad_request(format!(
-                    "benchmark integrity: trace {} has no request id for decision join",
-                    trace.id
-                ))
-            })?;
-            if traces_by_request_id
-                .insert(request_id.to_string(), trace)
-                .is_some()
-            {
-                return Err(BitrouterError::bad_request(format!(
-                    "benchmark integrity: duplicate trace request id {request_id}"
-                )));
-            }
-        }
-
-        let mut decisions_by_request_id = BTreeMap::new();
-        for decision in decisions {
-            let request_id = decision.request_id.as_deref().ok_or_else(|| {
-                BitrouterError::bad_request(
-                    "benchmark integrity: policy decision has no request id",
-                )
-            })?;
-            if decisions_by_request_id
-                .insert(request_id.to_string(), decision)
-                .is_some()
-            {
-                return Err(BitrouterError::bad_request(format!(
-                    "benchmark integrity: duplicate policy decision request id {request_id}"
-                )));
-            }
-        }
-
-        let trace_ids = traces_by_request_id
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let decision_ids = decisions_by_request_id
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if trace_ids != decision_ids {
-            let missing_decisions = trace_ids
-                .difference(&decision_ids)
-                .cloned()
-                .collect::<Vec<_>>();
-            let unmatched_decisions = decision_ids
-                .difference(&trace_ids)
-                .cloned()
-                .collect::<Vec<_>>();
-            return Err(BitrouterError::bad_request(format!(
-                "benchmark integrity: trace/decision request ids differ; missing_decisions={missing_decisions:?}, unmatched_decisions={unmatched_decisions:?}"
-            )));
-        }
-
-        Ok(())
+        validate_trace_decision_identity_join("benchmark integrity", traces, decisions)
     }
 
     /// Validate every benchmark-grade join before an artifact directory is
@@ -552,40 +599,7 @@ impl WorkflowRunArtifact {
     ) -> Result<()> {
         Self::validate_benchmark_integrity(traces, usage)?;
 
-        let trace_ids = traces
-            .iter()
-            .map(|trace| {
-                trace
-                    .artifact_request_id()
-                    .map(ToString::to_string)
-                    .ok_or_else(|| {
-                        BitrouterError::bad_request(format!(
-                            "reward feedback integrity: trace {} has no request id",
-                            trace.id
-                        ))
-                    })
-            })
-            .collect::<Result<BTreeSet<_>>>()?;
-        let decision_ids = decisions
-            .iter()
-            .map(|decision| {
-                decision.request_id.clone().ok_or_else(|| {
-                    BitrouterError::bad_request(
-                        "reward feedback integrity: policy decision has no request id",
-                    )
-                })
-            })
-            .collect::<Result<BTreeSet<_>>>()?;
-        if trace_ids.len() != traces.len() || decision_ids.len() != decisions.len() {
-            return Err(BitrouterError::bad_request(
-                "reward feedback integrity: duplicate request id".to_string(),
-            ));
-        }
-        if trace_ids != decision_ids {
-            return Err(BitrouterError::bad_request(
-                "reward feedback integrity: trace/decision request ids differ".to_string(),
-            ));
-        }
+        validate_trace_decision_identity_join("reward feedback integrity", traces, decisions)?;
         if outcomes.is_empty() {
             return Ok(());
         }

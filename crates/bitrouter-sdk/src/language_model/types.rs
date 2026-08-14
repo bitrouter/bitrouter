@@ -1744,6 +1744,27 @@ pub struct GenerateResult {
     pub provider_metadata: ProviderMetadata,
 }
 
+/// Redacted wrapper for an internal fixed-size semantic commitment carried on a
+/// terminal stream part. The value is lifecycle evidence, not client output.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResponseOutputCommitment(String);
+
+impl ResponseOutputCommitment {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ResponseOutputCommitment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ResponseOutputCommitment(<redacted>)")
+    }
+}
+
 /// One part of a streaming response, in canonical internal form. `StreamHook`
 /// operates on a `Stream<Item = StreamPart>` before outbound protocol
 /// conversion.
@@ -1963,6 +1984,10 @@ pub enum StreamPart {
         /// Final usage, if the provider reported it.
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        /// Bounded commitment derived from the terminal full Responses output.
+        /// It is internal lifecycle evidence and is never rendered to clients.
+        #[serde(skip)]
+        response_output_commitment: Option<ResponseOutputCommitment>,
     },
 }
 

@@ -21,6 +21,7 @@ use crate::language_model::auth::{
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
 use crate::language_model::context::RequireContinuationAuthority;
+use crate::language_model::context::SuppressProviderContinuation;
 use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
@@ -545,6 +546,20 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
+    if ctx.extension::<SuppressProviderContinuation>().is_some() {
+        if target.api_protocol != ApiProtocol::Responses {
+            return Err(BitrouterError::internal(
+                "detached provider continuation requires a Responses target",
+            ));
+        }
+        let Some(object) = body.as_object_mut() else {
+            return Err(BitrouterError::internal(
+                "Responses request body must be an object",
+            ));
+        };
+        object.remove("previous_response_id");
+        return Ok(None);
+    }
     let Some(continuation) = ctx.extension::<ProviderContinuation>() else {
         return Ok(None);
     };
@@ -1908,7 +1923,9 @@ mod beta_forward_tests {
 mod provider_continuation_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::context::{ProviderContinuation, RequireContinuationAuthority};
+    use crate::language_model::context::{
+        ProviderContinuation, RequireContinuationAuthority, SuppressProviderContinuation,
+    };
     use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
 
     fn responses_target(provider: &str) -> RoutingTarget {
@@ -2120,6 +2137,39 @@ mod provider_continuation_tests {
             Ok(_) => panic!("mismatched continuation target was accepted"),
         };
         assert!(error.to_string().contains("target mismatch"));
+    }
+
+    #[test]
+    fn stock_responses_adapter_suppresses_only_the_detached_parent() {
+        let target = responses_target("balanced");
+        let mut ctx = plain_context();
+        ctx.insert_extension(Arc::new(SuppressProviderContinuation));
+        let visible_input = serde_json::json!([
+            {"type": "function_call", "call_id": "call-1", "name": "inspect", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call-1", "output": "ok"}
+        ]);
+        let tools = serde_json::json!([{
+            "type": "function",
+            "name": "inspect",
+            "parameters": {"type": "object"}
+        }]);
+        let mut body = serde_json::json!({
+            "previous_response_id": "brc_public",
+            "input": visible_input,
+            "tools": tools,
+            "parallel_tool_calls": false
+        });
+
+        let result = apply_provider_continuation(&mut body, &target, &ctx);
+
+        assert!(matches!(result, Ok(None)));
+        assert!(body.get("previous_response_id").is_none());
+        assert_eq!(body.get("input"), Some(&visible_input));
+        assert_eq!(body.get("tools"), Some(&tools));
+        assert_eq!(
+            body.get("parallel_tool_calls"),
+            Some(&serde_json::Value::Bool(false))
+        );
     }
 }
 

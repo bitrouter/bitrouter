@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::workflow_state::ir::WorkflowIdentity;
 
@@ -18,6 +19,11 @@ pub struct PolicyDecisionRecord {
     pub captured_at: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Domain-separated commitment to the ingress HTTP request identity.
+    /// Guarded policies keep `request_id` owner-opaque; this commitment lets
+    /// external evidence perform an exact join without persisting the raw ID.
+    #[serde(default)]
+    pub ingress_request_id_sha256: Option<String>,
     pub input_model: String,
     pub key_strategy: String,
     pub request_key: String,
@@ -51,6 +57,26 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub selected_model: Option<String>,
     #[serde(default)]
+    pub continuation_proposed_tier: Option<String>,
+    #[serde(default)]
+    pub continuation_proposed_model: Option<String>,
+    #[serde(default)]
+    pub continuation_adjustment: Option<String>,
+    #[serde(default)]
+    pub predicted_role: Option<String>,
+    #[serde(default)]
+    pub predicted_action: Option<String>,
+    #[serde(default)]
+    pub prediction_confidence_ppm: Option<u32>,
+    #[serde(default)]
+    pub predictor_contract_digest: Option<String>,
+    #[serde(default)]
+    pub prediction_confidence_kind: Option<String>,
+    #[serde(default)]
+    pub prediction_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub observed_route_projection: Option<String>,
+    #[serde(default)]
     pub trajectory_episode_id: Option<String>,
     #[serde(default)]
     pub trajectory_sequence: Option<u64>,
@@ -74,6 +100,13 @@ pub struct PolicyDecisionRecord {
     pub trialed: bool,
 }
 
+pub fn ingress_request_id_sha256(request_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bitrouter.ingress-request-id.v1\0");
+    digest.update(request_id.as_bytes());
+    format!("sha256:{}", hex::encode(digest.finalize()))
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecisionSummary {
     pub total: usize,
@@ -83,6 +116,10 @@ pub struct PolicyDecisionSummary {
     pub trialed_count: usize,
     pub by_selected_tier: BTreeMap<String, usize>,
     pub by_selected_model: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_predicted_role: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_predicted_action: BTreeMap<String, usize>,
     pub static_tier_replaced_count: usize,
     pub static_model_replaced_count: usize,
     pub by_tier_transition: BTreeMap<String, usize>,
@@ -229,6 +266,18 @@ impl PolicyDecisionSummary {
                     .entry(model.to_string())
                     .or_insert(0) += 1;
             }
+            if let Some(role) = record.predicted_role.as_deref() {
+                *summary
+                    .by_predicted_role
+                    .entry(role.to_string())
+                    .or_insert(0) += 1;
+            }
+            if let Some(action) = record.predicted_action.as_deref() {
+                *summary
+                    .by_predicted_action
+                    .entry(action.to_string())
+                    .or_insert(0) += 1;
+            }
             if let (Some(static_model), Some(selected_model)) = (
                 record.static_model.as_deref(),
                 record.selected_model.as_deref(),
@@ -321,6 +370,7 @@ mod tests {
         PolicyDecisionRecord {
             captured_at: None,
             request_id: Some("request-1".to_string()),
+            ingress_request_id_sha256: None,
             input_model: "inbound".to_string(),
             key_strategy: "agent_trace".to_string(),
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
@@ -336,6 +386,16 @@ mod tests {
             static_model: Some("vendor/capable".to_string()),
             selected_tier: Some("cheap".to_string()),
             selected_model: Some("vendor/cheap".to_string()),
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_adjustment: None,
+            predicted_role: None,
+            predicted_action: None,
+            prediction_confidence_ppm: None,
+            predictor_contract_digest: None,
+            prediction_confidence_kind: None,
+            prediction_reason_codes: Vec::new(),
+            observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,
             trajectory_completeness: None,
@@ -372,6 +432,44 @@ mod tests {
     }
 
     #[test]
+    fn decision_record_reads_legacy_jsonl_without_predictive_fields() {
+        let legacy = r#"{
+            "input_model":"inbound",
+            "key_strategy":"agent_trace",
+            "request_key":"agent_trace/v1|tool_followup|normal",
+            "legacy_fingerprint":"after_read_file",
+            "trace_state":"tool_followup",
+            "trace_identity":{"role":"unknown","context_epoch":0,"transition":"none","fingerprint":"","source":"","confidence":"none"},
+            "reason":"static_table",
+            "pinned":false,
+            "locked":false,
+            "trialed":false
+        }"#;
+
+        let parsed: PolicyDecisionRecord = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(parsed.predicted_role, None);
+        assert_eq!(parsed.predicted_action, None);
+        assert_eq!(parsed.prediction_confidence_ppm, None);
+        assert_eq!(parsed.predictor_contract_digest, None);
+        assert_eq!(parsed.prediction_confidence_kind, None);
+        assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
+        assert_eq!(parsed.observed_route_projection, None);
+        assert_eq!(parsed.ingress_request_id_sha256, None);
+    }
+
+    #[test]
+    fn ingress_request_commitment_is_domain_separated_and_does_not_expose_raw_id() {
+        let raw = "br-bench-sensitive-request-id";
+        let digest = ingress_request_id_sha256(raw);
+
+        assert!(digest.starts_with("sha256:"));
+        assert_eq!(digest.len(), 71);
+        assert!(!digest.contains(raw));
+        assert_ne!(digest, ingress_request_id_sha256("other-request-id"));
+    }
+
+    #[test]
     fn summary_emits_by_trace_state_and_reads_legacy_workflow_summary() {
         let summary = PolicyDecisionSummary::from_records(&[record()]);
         assert_eq!(summary.by_workflow_state["tool_followup"], 1);
@@ -385,5 +483,61 @@ mod tests {
         object.insert("by_workflow_state".to_string(), states);
         let parsed: PolicyDecisionSummary = serde_json::from_value(legacy).unwrap();
         assert_eq!(parsed.by_workflow_state["tool_followup"], 1);
+    }
+
+    #[test]
+    fn summary_reads_old_json_without_predictive_dimensions() {
+        let legacy = r#"{
+            "total":1,
+            "routed_count":1,
+            "pinned_count":0,
+            "locked_count":0,
+            "trialed_count":0,
+            "by_selected_tier":{"cheap":1},
+            "by_selected_model":{"vendor/cheap":1},
+            "static_tier_replaced_count":0,
+            "static_model_replaced_count":0,
+            "by_tier_transition":{"cheap->cheap":1},
+            "by_model_transition":{"vendor/cheap->vendor/cheap":1},
+            "replacement_by_reason":{},
+            "by_reason":{"static_table":1},
+            "by_trace_state":{"tool_followup":1},
+            "by_agent_role":{"unknown":1},
+            "by_context_epoch":{"0":1}
+        }"#;
+
+        let parsed: PolicyDecisionSummary = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(parsed.by_predicted_role, BTreeMap::new());
+        assert_eq!(parsed.by_predicted_action, BTreeMap::new());
+    }
+
+    #[test]
+    fn summary_counts_predictions_and_selected_model_exposure() {
+        let mut predicted = record();
+        predicted.predicted_role = Some("implement".to_string());
+        predicted.predicted_action = Some("mutate".to_string());
+        predicted.selected_model = Some("vendor/cheap".to_string());
+
+        let mut unpredicted = record();
+        unpredicted.selected_model = Some("vendor/flagship".to_string());
+
+        let summary = PolicyDecisionSummary::from_records(&[predicted, unpredicted]);
+
+        assert_eq!(
+            summary.by_predicted_role,
+            BTreeMap::from([("implement".to_string(), 1)])
+        );
+        assert_eq!(
+            summary.by_predicted_action,
+            BTreeMap::from([("mutate".to_string(), 1)])
+        );
+        assert_eq!(
+            summary.by_selected_model,
+            BTreeMap::from([
+                ("vendor/cheap".to_string(), 1),
+                ("vendor/flagship".to_string(), 1),
+            ])
+        );
     }
 }

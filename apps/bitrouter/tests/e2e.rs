@@ -287,7 +287,19 @@ async fn workflow_state_policy_routes_by_ir_key() {
     let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
     let tool_followup_key = workflow_key_for(vec![
         Message::text(Role::User, "fix"),
-        assistant_calls_for_policy_key("Bash"),
+        assistant_calls_for_policy_key("read_file"),
+        Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult {
+                call_id: "call_read_file".to_string(),
+                tool_name: None,
+                output: bitrouter_sdk::language_model::types::ToolResultOutput::Text {
+                    value: "source contents".to_string(),
+                },
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        },
     ]);
 
     let yaml = format!(
@@ -359,12 +371,12 @@ policy_table:
                     "role": "assistant",
                     "content": null,
                     "tool_calls": [{
-                        "id": "call_Bash",
+                        "id": "call_read_file",
                         "type": "function",
-                        "function": { "name": "Bash", "arguments": "{}" }
+                        "function": { "name": "read_file", "arguments": "{}" }
                     }]
                 },
-                { "role": "tool", "tool_call_id": "call_Bash", "content": "done" }
+                { "role": "tool", "tool_call_id": "call_read_file", "content": "source contents" }
             ],
         }))
         .await

@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
-  "migration": "This v2 policy adds context and guarded trajectory bands, a bounded recovery window, and a long-context-qualified balanced tier.",
+  "routingStrategy": "predictive_role_risk_v1",
+  "migration": "This v2 policy routes deterministic agent_route/v1 role and risk predictions while retaining observed agent_trace compatibility for older locks.",
+  "toolPolicy": "All three tiers are tool-safe; supplied tools do not clamp the selected predictive route.",
+  "strongMutationObservation": "A strong-model mutation that differs from the predicted action is recorded as a descriptive mismatch, never as an automatic quality verdict.",
   "crossAgentQuality": "unvalidated",
   "strongModel": "openai-codex:gpt-5.6-sol",
   "balancedModel": "bitrouter:moonshotai/kimi-k3",

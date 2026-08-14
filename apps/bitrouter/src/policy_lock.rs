@@ -14,19 +14,24 @@ use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
     TrajectoryConfig, validate_policy_table_config,
 };
-use bitrouter_sdk::language_model::{ModelSelector, PipelineContext};
+use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
-use crate::eval::settlement::PendingEvalDecisionStore;
+use crate::continuation::ContinuationRequestPlan;
+use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
 use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::RouteProjection;
+use crate::workflow_state::predictive::{
+    CanonicalPolicyProjection, PredictorContract, compiled_predictor_contract,
+    compiled_scorecard_digest,
+};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -249,6 +254,10 @@ pub struct PolicyDefinition {
     /// `policy_table:` config has no corresponding field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_guard: Option<ProgressGuardPolicy>,
+    /// Exact deterministic predictor admitted by this signed policy. Required
+    /// whenever a route uses the predictive `agent_route/v1` namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predictor: Option<PredictorContract>,
     pub adequacy: AdequacyConfig,
 }
 
@@ -262,6 +271,7 @@ impl Default for PolicyDefinition {
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
             progress_guard: None,
+            predictor: None,
             adequacy: AdequacyConfig::default(),
         }
     }
@@ -409,9 +419,43 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             }
             validate_progress_guard(name, policy, guard)?;
         }
+        validate_predictor_contract(name, policy, document.lockfile_version)?;
     }
     if document.lockfile_version == POLICY_LOCKFILE_VERSION {
         validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_predictor_contract(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    lockfile_version: u32,
+) -> Result<()> {
+    let uses_predictive_routes = policy
+        .routes
+        .keys()
+        .any(|key| key.starts_with("agent_route/v1|"));
+    if uses_predictive_routes && lockfile_version != POLICY_LOCKFILE_VERSION {
+        anyhow::bail!(
+            "policy '{policy_name}' agent_route/v1 routes require policy lock v{POLICY_LOCKFILE_VERSION} provenance metadata"
+        );
+    }
+    if !uses_predictive_routes && policy.predictor.is_none() {
+        return Ok(());
+    }
+    let expected = compiled_predictor_contract();
+    let Some(actual) = policy.predictor.as_ref() else {
+        anyhow::bail!(
+            "policy '{policy_name}' uses agent_route/v1 but is missing its signed predictor contract (expected {})",
+            compiled_scorecard_digest()
+        );
+    };
+    if actual != &expected {
+        anyhow::bail!(
+            "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
+            compiled_scorecard_digest()
+        );
     }
     Ok(())
 }
@@ -2241,6 +2285,30 @@ pub struct PolicyRuntime {
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
+#[derive(Debug)]
+struct PredictiveSingleTargetDispatch;
+
+/// Prevent a predictive named-policy decision from inheriting the SDK's
+/// generic cross-account fallback chain. Without an authoritative proof that a
+/// failed provider accepted no generation and incurred no charge, a semantic
+/// request may be dispatched to exactly one physical target.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PredictiveSingleTargetRouteHook;
+
+#[async_trait::async_trait]
+impl RouteHook for PredictiveSingleTargetRouteHook {
+    async fn resolve(
+        &self,
+        chain: &mut Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() {
+            chain.truncate(1);
+        }
+        Ok(())
+    }
+}
+
 impl PolicyRuntime {
     pub(crate) async fn new(
         config: &Config,
@@ -2327,22 +2395,13 @@ impl PolicyRuntime {
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
                     .with_progress_guard(definition.progress_guard.clone());
-                router = if definition.progress_guard.is_none() {
-                    router.with_eval_observer(
-                        self.eval_decisions.clone(),
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                } else {
-                    router.with_eval_metadata(
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                };
+                router = router.with_eval_observer(
+                    self.eval_decisions.clone(),
+                    name.clone(),
+                    loaded.digest.clone(),
+                    route_baselines,
+                    definition.default_tier.clone(),
+                );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
                 }
@@ -2401,6 +2460,13 @@ impl ModelSelector for PolicyRuntime {
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
+        let invocation = ctx
+            .extension::<EvalInvocation>()
+            .unwrap_or_else(|| Arc::new(EvalInvocation::new(ctx.caller().user_id())));
+        if !ctx.has_event::<EvalInvocation>() {
+            ctx.emit(invocation.as_ref().clone());
+        }
+        ctx.insert_extension(invocation.clone());
         let guard = router.progress_guard();
         if let (Some(trajectory), Some(guard)) = (&self.trajectory, guard) {
             if ctx.caller().is_anonymous() {
@@ -2420,10 +2486,10 @@ impl ModelSelector for PolicyRuntime {
             })?;
             let input_model = ctx.model().to_string();
             let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
-            let projection =
-                RouteProjection::parse_key(&decision.route_projection).ok_or_else(|| {
+            let projection = RouteProjection::parse_key(&decision.observed_route_projection)
+                .ok_or_else(|| {
                     bitrouter_sdk::BitrouterError::internal(
-                        "named policy produced an invalid canonical route projection",
+                        "named policy produced an invalid observed route projection",
                     )
                 })?;
             let policy_digest = snapshot.digest.as_deref().ok_or_else(|| {
@@ -2506,30 +2572,55 @@ impl ModelSelector for PolicyRuntime {
                 .iter()
                 .map(|clause| clause.clause_id.clone())
                 .collect();
+            if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+                && let Some(adjustment) = plan.adjustment.as_ref()
+            {
+                router.apply_continuation_adjustment(&mut decision, adjustment)?;
+            }
+            let route_projection = decision.route_projection.clone();
             let selected = router.record_bound_policy_decision(
                 &correlated.request_id,
+                invocation.as_ref(),
                 input_model,
                 decision,
                 ctx.headers(),
             );
             if let Some(model) = selected {
                 ctx.set_model(model);
+                mark_predictive_single_target(&route_projection, ctx);
             }
             ctx.insert_extension(Arc::new(correlated));
             return Ok(());
         }
         let input_model = ctx.model().to_string();
-        let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let mut decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+            && let Some(adjustment) = plan.adjustment.as_ref()
+        {
+            router.apply_continuation_adjustment(&mut decision, adjustment)?;
+        }
+        let route_projection = decision.route_projection.clone();
         let selected = router.record_bound_policy_decision(
             ctx.request_id(),
+            invocation.as_ref(),
             input_model,
             decision,
             ctx.headers(),
         );
         if let Some(model) = selected {
             ctx.set_model(model);
+            mark_predictive_single_target(&route_projection, ctx);
         }
         Ok(())
+    }
+}
+
+fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
+    if matches!(
+        CanonicalPolicyProjection::parse_key(route_projection),
+        Some(CanonicalPolicyProjection::Predictive(_))
+    ) {
+        ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }
 
@@ -3611,16 +3702,16 @@ policies:
     }
 
     #[test]
-    fn auto_router_template_lock_is_bound_and_canonical() {
+    fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
-        let config_raw = std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap();
-        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap();
-        let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
-        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw).unwrap();
+        let config_raw = std::fs::read_to_string(template_dir.join("bitrouter.yaml"))?;
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let config = bitrouter_sdk::config::parse(&config_raw)?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
 
-        validate_for_config(&config, &lock).unwrap();
+        validate_for_config(&config, &lock)?;
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert!(!config_raw.contains("writeback:"));
         assert!(!lock_raw.contains("enabled:"));
@@ -3628,32 +3719,110 @@ policies:
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
         assert_eq!(policy.tiers["balanced"], "bitrouter:moonshotai/kimi-k3");
-        assert_eq!(policy.routes["agent_trace/v2|edit|normal"], "economy");
-        assert_eq!(policy.routes["agent_trace/v2|test|normal"], "economy");
         assert_eq!(
-            policy.routes["agent_trace/v2|tool_followup|normal"],
-            "economy"
+            policy.routes,
+            BTreeMap::from([
+                ("agent_route/v1|finalize|context".into(), "balanced".into()),
+                ("agent_route/v1|finalize|guarded".into(), "strong".into()),
+                ("agent_route/v1|finalize|normal".into(), "balanced".into()),
+                ("agent_route/v1|implement|context".into(), "balanced".into()),
+                ("agent_route/v1|implement|guarded".into(), "balanced".into()),
+                ("agent_route/v1|implement|normal".into(), "balanced".into()),
+                (
+                    "agent_route/v1|mechanical|context".into(),
+                    "balanced".into()
+                ),
+                (
+                    "agent_route/v1|mechanical|guarded".into(),
+                    "balanced".into()
+                ),
+                ("agent_route/v1|mechanical|normal".into(), "economy".into()),
+                ("agent_route/v1|orchestrate|context".into(), "strong".into()),
+                ("agent_route/v1|orchestrate|guarded".into(), "strong".into()),
+                ("agent_route/v1|orchestrate|normal".into(), "strong".into()),
+                ("agent_route/v1|verify|context".into(), "balanced".into()),
+                ("agent_route/v1|verify|guarded".into(), "strong".into()),
+                ("agent_route/v1|verify|normal".into(), "economy".into()),
+            ])
         );
-        for key in [
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|context",
-            "agent_trace/v2|edit|context",
-            "agent_trace/v2|test|context",
-            "agent_trace/v2|tool_followup|context",
-        ] {
-            assert_eq!(policy.routes[key], "balanced", "{key}");
-        }
-        assert_eq!(policy.default_tier.as_deref(), Some("strong"));
+        assert_eq!(policy.default_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
+        assert_eq!(
+            policy.predictor.as_ref(),
+            Some(&compiled_predictor_contract())
+        );
+        let guard = policy
+            .progress_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing its progress guard"))?;
+        assert_eq!(guard.escalation_tier, "strong");
+        assert_eq!(guard.protected_tiers, BTreeSet::from(["strong".into()]));
 
-        let rendered = deterministic_yaml(&lock).unwrap();
+        let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
+        Ok(())
     }
 
     #[test]
-    fn auto_router_template_experiments_are_compiler_owned() -> anyhow::Result<()> {
+    fn predictive_routes_require_the_exact_compiled_predictor_contract() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+
+        let mut missing = lock.clone();
+        if let Some(policy) = missing.policies.get_mut("auto") {
+            policy.predictor = None;
+        }
+        let missing_error = validate_document(&missing)
+            .expect_err("predictive routes without a predictor contract must be rejected");
+        assert!(missing_error.to_string().contains("predictor"));
+
+        let mut mismatched = lock;
+        if let Some(policy) = mismatched.policies.get_mut("auto")
+            && let Some(predictor) = &mut policy.predictor
+        {
+            predictor.config_digest = EMPTY_SHA256.to_owned();
+        }
+        let mismatch_error = validate_document(&mismatched)
+            .expect_err("a stale predictor contract must be rejected");
+        assert!(
+            mismatch_error
+                .to_string()
+                .contains(compiled_scorecard_digest())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn predictive_routes_require_v2_artifact_and_certificates() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let mut lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+        lock.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
+        lock.artifact = None;
+        lock.certificates.clear();
+        if let Some(policy) = lock.policies.get_mut("auto") {
+            policy.progress_guard = None;
+        }
+
+        let error = validate_document(&lock)
+            .expect_err("predictive routes must not bypass v2 provenance metadata");
+        assert!(
+            error.to_string().contains("require policy lock v2"),
+            "unexpected validation error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_router_template_routes_have_deterministic_compiler_certificates() -> anyhow::Result<()>
+    {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -3665,13 +3834,67 @@ policies:
             .certificates
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
-        assert_eq!(certificates.len(), 8);
-        for certificate in certificates.values() {
+        let policy = &lock.policies["auto"];
+        assert_eq!(certificates.len(), 15);
+        assert_eq!(
+            certificates.keys().collect::<Vec<_>>(),
+            policy.routes.keys().collect::<Vec<_>>()
+        );
+        let compiler_digest = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .compiler
+            .config_digest;
+        let compiler = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .compiler;
+        let expected_compiler_digest = canonical_template_digest(&(
+            "auto-router-predictive-template-v1",
+            compiler.id.as_str(),
+            compiler.version,
+            "auto",
+            policy,
+        ))?;
+        assert_eq!(compiler_digest, &expected_compiler_digest);
+        let mut route_evidence = BTreeMap::new();
+        for (request_key, certificate) in certificates {
             assert_eq!(certificate.owner, RouteOwner::Compiler);
             assert_eq!(certificate.source, CertificateSource::Mixed);
             assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
+            assert_eq!(certificate.selected_tier, policy.routes[request_key]);
+            assert_eq!(&certificate.compiler_config_digest, compiler_digest);
+            let expected_evidence_digest = canonical_template_digest(&(
+                "auto-router-predictive-route-v1",
+                "auto",
+                request_key,
+                certificate.selected_tier.as_str(),
+            ))?;
+            assert_eq!(certificate.evidence_digest, expected_evidence_digest);
+            route_evidence.insert(request_key, expected_evidence_digest);
         }
+        let evidence_root = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .evidence_root;
+        let expected_evidence_root = canonical_template_digest(&(
+            "auto-router-predictive-evidence-v1",
+            "auto",
+            route_evidence,
+        ))?;
+        assert_eq!(evidence_root, &expected_evidence_root);
+        let rendered = deterministic_yaml(&lock)?;
+        let reparsed: PolicyLock = serde_saphyr::from_str(&rendered)?;
+        assert_eq!(deterministic_yaml(&reparsed)?, rendered);
         Ok(())
+    }
+
+    fn canonical_template_digest<T: Serialize>(value: &T) -> anyhow::Result<String> {
+        let canonical = serde_json::to_vec(value)?;
+        Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
     }
 
     #[test]
