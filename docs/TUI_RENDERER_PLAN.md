@@ -326,7 +326,7 @@ left the old stack intact.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15`
   - Commit: `feat(chat): escape cancels a turn`
 
-- [ ] **4.5 Make the boundary checks pass**
+- [x] **4.5 Make the boundary checks pass**
   - Depends on: 4.1, 4.2
   - Files: `crates/bitrouter-tui/src/log_tail.rs`
   - Do: normalize the one odd fixture path (`log_tail.rs:81`, `:91`) from

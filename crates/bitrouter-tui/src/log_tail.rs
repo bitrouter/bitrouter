@@ -77,18 +77,14 @@ mod tests {
     #[test]
     fn a_failure_shows_the_tail_and_names_the_log() {
         let log = "starting\nconnecting\nagent panicked: index out of bounds";
-        let rendered = text(&render(
-            Path::new("/home/u/.bitrouter/logs/session-1.log"),
-            log,
-            TAIL_LINES,
-        ));
+        let rendered = text(&render(Path::new("/tmp/session-1.log"), log, TAIL_LINES));
 
         assert!(
             rendered.contains("agent panicked: index out of bounds"),
             "the failure itself must be on screen: {rendered:?}"
         );
         assert!(
-            rendered.contains("/home/u/.bitrouter/logs/session-1.log"),
+            rendered.contains("/tmp/session-1.log"),
             "and the path to the rest of it: {rendered:?}"
         );
     }

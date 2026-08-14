@@ -38,3 +38,47 @@
 pub mod cost;
 pub mod input;
 pub mod picker;
+
+#[cfg(test)]
+mod tests {
+    /// The guard §8 asks for, because the move puts rendering back where it
+    /// *could* reach anything.
+    ///
+    /// `cost.rs` and `picker.rs` left `bitrouter-tui` for a reason — they knew
+    /// things ACP does not carry — but the crate boundary that kept them
+    /// honest went with them. What replaces it is this: the chat module may
+    /// read the ACP wire and the terminal, and nothing else. No `Config`, no
+    /// metering store, no control socket.
+    ///
+    /// Checked against the sources themselves rather than by review, so it
+    /// fails the build that breaks it instead of the review that misses it.
+    #[test]
+    fn the_chat_module_reaches_nothing_daemon_wide() {
+        let sources = [
+            ("cost.rs", include_str!("cost.rs")),
+            ("input.rs", include_str!("input.rs")),
+            ("picker.rs", include_str!("picker.rs")),
+        ];
+        // Spelled as paths and type names, so a mention in prose — "the
+        // daemon's total", which `cost.rs` explains at length — is not a
+        // false positive.
+        let forbidden = [
+            "crate::daemon",
+            "crate::metering",
+            "crate::policy",
+            "MeteringStore",
+            "bitrouter_sdk::config",
+            "control_socket",
+            "RouteControl",
+        ];
+        for (name, source) in sources {
+            for reach in forbidden {
+                assert!(
+                    !source.contains(reach),
+                    "{name} reaches `{reach}`; the chat module draws what ACP \
+                     carries and what the terminal is, and nothing else"
+                );
+            }
+        }
+    }
+}
