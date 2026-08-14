@@ -107,6 +107,13 @@ jobs:
             filter: "package(bitrouter-sdk)"
           - part: other-crates
             filter: "not package(bitrouter) and not package(bitrouter-sdk)"
+          # The 35 tests the first partition missed: it split the app crate by
+          # kind(lib)/kind(test) and forgot kind(bin), so no probe ever ran
+          # them while the combined job hung. They are the restart / pid /
+          # signal / endpoint-binding tests — the ones whose semantics differ
+          # most between Linux and macOS.
+          - part: app-bin
+            filter: "package(bitrouter) and kind(bin)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
