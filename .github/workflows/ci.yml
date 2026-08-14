@@ -95,11 +95,6 @@ jobs:
       - name: diagnose ubuntu test build
         if: runner.os == 'Linux'
         shell: bash
-        # Keep every other input identical to the previous diagnostic run.
-        # If the runner now reaches the 15-minute deadline, peak compile/link
-        # concurrency was the resource trigger rather than a hung test.
-        env:
-          CARGO_BUILD_JOBS: "1"
         run: |
           snapshot() {
             {
@@ -115,15 +110,15 @@ jobs:
           }
 
           snapshot
-          while sleep 60; do snapshot; done &
+          while sleep 10; do snapshot; done &
           monitor_pid=$!
           trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 
-          # Previous runs lost the entire job log when the runner disappeared
-          # around 49 minutes. Stop this diagnostic run early enough for the
-          # runner to upload its resource history and identify the constraint.
+          # The runner stopped responding to a 15-minute deadline even with
+          # Cargo compilation serialized. Capture the original workload's
+          # early resource curve and exit before the host becomes unresponsive.
           set +e
-          timeout --signal=INT --kill-after=30s 15m \
+          timeout --signal=INT --kill-after=30s 2m \
             cargo nextest run --workspace --all-features
           nextest_status=$?
           set -e
