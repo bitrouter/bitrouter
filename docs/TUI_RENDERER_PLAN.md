@@ -134,7 +134,7 @@ renderer and are worth having even if §19.1 goes the other way.
   - Verify: `cargo nextest run -p bitrouter 2>&1 | tail -5`
   - Commit: `fix(chat): degrade to plain output when not a tty`
 
-- [ ] **1.4 Phase 1 gate**
+- [x] **1.4 Phase 1 gate**
   - Depends on: 1.1, 1.2, 1.3
   - Do: run the three workspace checks and paste their output.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15 && cargo clippy --all-features 2>&1 | tail -5 && cargo fmt -- --check`
@@ -376,7 +376,7 @@ Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 
 ## F. Progress
 
-Phase 1 ☐ · Phase 2 ☐ · Phase 3 ☐ · Phase 4 ☐
+Phase 1 ☑ · Phase 2 ☐ · Phase 3 ☐ · Phase 4 ☐
 
 Tick a phase when its gate task passes. A phase whose goal cleared but whose
 gate is unticked was **not** finished — re-read §D before trusting it.
