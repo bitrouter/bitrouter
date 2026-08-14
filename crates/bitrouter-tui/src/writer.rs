@@ -428,8 +428,6 @@ pub enum Trigger {
     TurnSettled,
     /// The user pressed a key.
     Key,
-    /// The terminal changed size.
-    Resize,
 }
 
 /// Decides when a frame is worth painting.
@@ -472,7 +470,7 @@ impl Schedule {
                     false
                 }
             }
-            Trigger::Permission | Trigger::TurnSettled | Trigger::Key | Trigger::Resize => {
+            Trigger::Permission | Trigger::TurnSettled | Trigger::Key => {
                 self.paint(now);
                 true
             }
@@ -526,9 +524,7 @@ impl Cache {
             if !fresh {
                 let rows = match item.entry {
                     Entry::Message(message) => render::message(message),
-                    Entry::Tool(call) => {
-                        registry.render(&ToolContext::new(call, size.width, size.height))
-                    }
+                    Entry::Tool(call) => registry.render(&ToolContext::new(call, size.height)),
                     Entry::Plan(plan) => render::session::plan(plan),
                 };
                 self.rows.insert(
@@ -1017,12 +1013,7 @@ mod tests {
     #[test]
     fn the_immediate_triggers_never_wait() {
         let start = Instant::now();
-        for trigger in [
-            Trigger::Permission,
-            Trigger::TurnSettled,
-            Trigger::Key,
-            Trigger::Resize,
-        ] {
+        for trigger in [Trigger::Permission, Trigger::TurnSettled, Trigger::Key] {
             let mut schedule = Schedule::default();
             schedule.wake(Trigger::Update, start);
             assert!(schedule.wake(trigger, start), "{trigger:?} waited");
@@ -1122,15 +1113,12 @@ mod tests {
             journal.apply(chunk(word));
             assert!(!schedule.wake(Trigger::Update, start));
         }
-        assert!(journal.dirty(), "the journal knows it owes a frame");
 
         if schedule.wake(Trigger::Tick, start + Schedule::INTERVAL) {
             let document = cache.document(&journal, &registry, writer.size(), &[]);
             writer.frame(&document)?;
-            journal.painted();
         }
         assert_eq!(screen(&writer)[0], "the answer is 42.");
-        assert!(!journal.dirty(), "and knows it no longer does");
         Ok(())
     }
 

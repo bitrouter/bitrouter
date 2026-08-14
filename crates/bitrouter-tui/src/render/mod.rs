@@ -20,10 +20,12 @@
 //!
 //! # What a renderer is given
 //!
-//! [`ToolContext`] carries the id, kind, status, title, content, and width —
+//! [`ToolContext`] carries the id, kind, status, title, content, and height —
 //! and nothing else. No `expanded` (expand/collapse is deferred), no
 //! `raw_input`, no `locations`: no renderer here reads them, and a field
-//! added before its reader exists is dead code.
+//! added before its reader exists is dead code. Width is absent for that
+//! reason: the writer wraps the finished document itself, so no renderer ever
+//! needed it. Height stays because a diff is capped by it.
 
 pub mod content;
 pub mod diff;
@@ -49,8 +51,6 @@ pub struct ToolContext<'a> {
     pub title: &'a str,
     /// Everything the call has produced so far.
     pub content: &'a [ToolCallContent],
-    /// The terminal width the result will be wrapped to.
-    pub width: u16,
     /// The terminal height, which is what bounds a single diff: one edit must
     /// never occupy more than the screen the rest of the session lives in.
     pub height: u16,
@@ -61,14 +61,13 @@ impl<'a> ToolContext<'a> {
     ///
     /// One place knows which fields a renderer may see, so adding a field to
     /// the protocol does not quietly widen what renderers can reach.
-    pub fn new(call: &'a ToolCall, width: u16, height: u16) -> Self {
+    pub fn new(call: &'a ToolCall, height: u16) -> Self {
         Self {
             id: &call.tool_call_id,
             kind: call.kind,
             status: call.status,
             title: &call.title,
             content: &call.content,
-            width,
             height,
         }
     }
@@ -136,15 +135,20 @@ pub struct Registry {
 }
 
 impl Default for Registry {
-    /// The v1 set: diffs for edits, captured output for commands, reasoning
-    /// for thinking, and [`Generic`] for everything else.
+    /// The v1 set: [`Reasoning`] for thinking, and [`Generic`] for everything
+    /// else.
+    ///
+    /// `Edit` and `Execute` are deliberately *not* registered. Both had a
+    /// renderer of their own whose body was identical to `Generic`'s — a
+    /// header and the call's content — because what makes an edit look like a
+    /// diff is [`diff`] rendering its content, not the renderer that dispatched
+    /// to it. Two names for one behaviour is the dead code this rule forbids;
+    /// they fall through to the fallback and draw exactly what they drew.
     fn default() -> Self {
         let mut registry = Self {
             renderers: HashMap::new(),
             fallback: Box::new(Generic),
         };
-        registry.register(ToolKey::Edit, Box::new(Diffs));
-        registry.register(ToolKey::Execute, Box::new(Output));
         registry.register(ToolKey::Think, Box::new(Reasoning));
         registry
     }
@@ -169,28 +173,6 @@ impl Registry {
 pub struct Generic;
 
 impl ToolRenderer for Generic {
-    fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
-        let mut lines = vec![header(ctx)];
-        lines.extend(content_lines(ctx));
-        lines
-    }
-}
-
-/// `Edit` calls, whose content is what changed on disk.
-pub struct Diffs;
-
-impl ToolRenderer for Diffs {
-    fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
-        let mut lines = vec![header(ctx)];
-        lines.extend(content_lines(ctx));
-        lines
-    }
-}
-
-/// `Execute` calls, whose content is what the command printed.
-pub struct Output;
-
-impl ToolRenderer for Output {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
         lines.extend(content_lines(ctx));
@@ -358,7 +340,7 @@ mod tests {
 
         let searched = call(ToolKind::Search, "grep for it");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&searched, 80, 24))),
+            text(&registry.render(&ToolContext::new(&searched, 24))),
             "searched",
             "a registered key reaches its renderer"
         );
@@ -366,7 +348,7 @@ mod tests {
         // `Fetch` has no renderer registered, so this must reach `Generic` —
         // and `Generic` draws the title, which no spy does.
         let fetched = call(ToolKind::Fetch, "GET https://example.test");
-        let rendered = text(&registry.render(&ToolContext::new(&fetched, 80, 24)));
+        let rendered = text(&registry.render(&ToolContext::new(&fetched, 24)));
         assert!(
             rendered.contains("GET https://example.test"),
             "an unregistered key falls through to the default: {rendered:?}"
@@ -386,7 +368,7 @@ mod tests {
         registry.register(ToolKey::Edit, Box::new(Spy("second")));
         let edit = call(ToolKind::Edit, "Edit src/lib.rs");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&edit, 80, 24))),
+            text(&registry.render(&ToolContext::new(&edit, 24))),
             "second"
         );
     }
@@ -416,15 +398,34 @@ mod tests {
         assert_eq!(keys.len(), 10, "no two kinds share a key");
     }
 
-    /// The v1 set is registered out of the box, so a caller that does nothing
-    /// still gets diffs, output, and reasoning drawn by their own renderers.
+    /// A caller that registers nothing still gets *every* v1 kind drawn — the
+    /// fallback covers each kind without a renderer of its own, so none of
+    /// them renders blank.
+    ///
+    /// This replaced a test that asserted `Edit` and `Execute` were present in
+    /// the registry's map. That assertion held while their renderers were
+    /// byte-identical to the fallback, which is exactly how two renderers that
+    /// drew nothing of their own survived: a test on a `HashMap` key cannot
+    /// see what a renderer draws.
     #[test]
-    fn the_default_registry_covers_the_v1_kinds() {
+    fn every_v1_kind_renders_something() {
         let registry = Registry::default();
-        for kind in [ToolKind::Edit, ToolKind::Execute, ToolKind::Think] {
+        for kind in [
+            ToolKind::Read,
+            ToolKind::Edit,
+            ToolKind::Delete,
+            ToolKind::Move,
+            ToolKind::Search,
+            ToolKind::Execute,
+            ToolKind::Think,
+            ToolKind::Fetch,
+            ToolKind::SwitchMode,
+        ] {
+            let drawn = call(kind, "a title");
+            let rendered = text(&registry.render(&ToolContext::new(&drawn, 24)));
             assert!(
-                registry.renderers.contains_key(&ToolKey::from(kind)),
-                "{kind:?} must have a renderer of its own"
+                rendered.contains("a title"),
+                "{kind:?} rendered nothing: {rendered:?}"
             );
         }
     }
@@ -439,7 +440,7 @@ mod tests {
                     TextContent::new("running 3 tests\ntest result: ok."),
                 )),
             )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&executed, 80, 24)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&executed, 24)));
         assert!(rendered.contains("cargo test"), "{rendered:?}");
         assert!(rendered.contains("running 3 tests"), "{rendered:?}");
         assert!(rendered.contains("test result: ok."), "{rendered:?}");
@@ -451,7 +452,7 @@ mod tests {
         let edited = call(ToolKind::Edit, "Edit src/lib.rs").content(vec![ToolCallContent::Diff(
             Diff::new("src/lib.rs", "let b = 2;").old_text("let a = 1;".to_string()),
         )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 80, 24)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 24)));
         // The name, not the shape: the diff renderer absolutizes, and an
         // absolute path is `D:\...\src\lib.rs` on Windows.
         assert!(rendered.contains("lib.rs"), "{rendered:?}");
@@ -468,7 +469,7 @@ mod tests {
                 ContentBlock::Text(TextContent::new("weighing two designs")),
             )),
         ]);
-        let lines = Registry::default().render(&ToolContext::new(&thinking, 80, 24));
+        let lines = Registry::default().render(&ToolContext::new(&thinking, 24));
         let styles: Vec<Style> = lines
             .iter()
             .skip(1)
@@ -502,7 +503,7 @@ mod tests {
     #[test]
     fn an_untitled_call_is_named_by_its_id() {
         let untitled = ToolCall::new(ToolCallId::new("t-42"), String::new());
-        let rendered = text(&Registry::default().render(&ToolContext::new(&untitled, 80, 24)));
+        let rendered = text(&Registry::default().render(&ToolContext::new(&untitled, 24)));
         assert!(rendered.contains("t-42"), "{rendered:?}");
     }
 }

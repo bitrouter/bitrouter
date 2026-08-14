@@ -310,12 +310,6 @@ pub struct Prepared<'a> {
     /// slot. `None` when the user supplied their own key — spend then falls
     /// back to the unattributed time window.
     pub launch_id: Option<String>,
-    /// The model pinned for this launch, named in the hosted status row.
-    pub model: Option<String>,
-    /// What the gateways delivered, for the hosted row to state while there
-    /// are no metrics yet. `None` for own-auth harnesses, which say their own
-    /// thing.
-    pub capability: Option<String>,
     /// Stamped before the child exists, so the exit summary's window covers
     /// exactly the wrapped session. Nothing between here and the spawn spends.
     pub session_start: chrono::DateTime<chrono::Utc>,
@@ -428,9 +422,6 @@ pub async fn prepare<'a>(
         harness,
         source,
         launch_id: is_launch_token(&token).then(|| token.clone()),
-        model: opts.model.clone(),
-        capability: (!matches!(harness.routing, crate::harness::Routing::OwnAuth))
-            .then(|| capability_summary(harness, &gateways, &Palette::none())),
         // Timestamp the wrapped session so the exit summary can attribute
         // spend to exactly this run of the agent.
         session_start: chrono::Utc::now(),

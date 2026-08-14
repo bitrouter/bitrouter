@@ -801,10 +801,9 @@ impl View {
     /// redundant call costs a render and no output.
     fn paint(&mut self, shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>) -> Result<()> {
         let size = self.writer.size();
-        let mut journal = journal(shared);
+        let journal = journal(shared);
         let footer = self.footer(&journal);
         let document = self.cache.document(&journal, &self.registry, size, &footer);
-        journal.painted();
         // The lock is not held across the write: a frame can take a
         // millisecond, and the pump has updates to apply.
         drop(journal);
@@ -1323,7 +1322,6 @@ async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> 
         let document = cache.document(&journal, &registry, PIPED, &[]);
         write_plain(&mut out, document.get(written..).unwrap_or_default())?;
         written = document.len();
-        journal.painted();
         match outcome {
             Ok(response) => {
                 writeln!(out, "[{:?}]", response.stop_reason).context("writing the stop reason")?

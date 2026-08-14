@@ -366,17 +366,27 @@ redraw for when something writes anyway.
 chunks arrive per token; rendering per chunk would repaint hundreds of times a
 second.
 
-- The journal sets a **dirty flag** and bumps a per-entity revision; it never
-  writes.
+- The journal bumps a **per-entity revision**; it never writes. *As built it
+  does not also carry a dirty flag: the driver owns the one that decides when a
+  frame is due, and a second copy in the journal was written on every update and
+  read by nobody.*
 - The driver renders **at most once per ~30 ms tick**, and only when dirty.
 - **Immediate, bypassing the tick:** a permission request appearing or clearing,
-  a turn settling, a key press, and a resize. These are user-visible latency,
-  not streaming noise.
+  a turn settling, and a key press. These are user-visible latency, not
+  streaming noise. *A resize trigger is specified below but not yet wired — see
+  the note under §5's resize bullet.*
 - **Preemption:** an immediate render cancels any pending tick render and clears
   the dirty flag, so at most one frame is ever in flight.
 - **Resize** is observed as `crossterm::event::Event::Resize` on §13.1's single
   stdin owner — the same mechanism `apps/bitrouter/src/tui/watch.rs:158` already
   uses — and triggers an immediate full redraw.
+
+  > **Not yet wired.** Nothing observes `Event::Resize`, so there is no resize
+  > trigger and the scheduler carries no variant for one. A resize is still
+  > *handled* — `Writer::frame` re-reads the terminal size and re-wraps on every
+  > frame — but only on the next frame something else schedules, so a resize at
+  > an idle prompt is not repainted until the user types. Wiring this is the
+  > remaining work for this bullet.
 
 **Per-entity render cache.** Each journal entity caches its rendered rows keyed
 on `(width, revision)`, invalidated when `apply` touches it. A frame therefore

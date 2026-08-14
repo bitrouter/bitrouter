@@ -136,12 +136,6 @@ pub struct Journal {
     open: Option<(Voice, MessageId)>,
     /// How many ids have been synthesized for chunks that carried none.
     synthesized: usize,
-    /// Something changed since the last frame was painted.
-    ///
-    /// The journal never writes to a terminal. It raises this instead, and a
-    /// scheduler decides when a frame is worth painting — otherwise a streamed
-    /// answer would repaint once per token.
-    dirty: bool,
     /// How many times each entity has been touched.
     ///
     /// A renderer caches an entity's rows against this, so a frame re-renders
@@ -157,11 +151,6 @@ impl Journal {
     /// there is no per-update line list for a caller to mis-order, and no
     /// buffered text for it to forget to flush.
     pub fn apply(&mut self, update: SessionUpdate) {
-        // Every arm below either changes the document or changes the footer,
-        // and both are drawn. The one exception — an update this build does
-        // not understand — is subtracted at the end.
-        let previously_dirty = self.dirty;
-        self.dirty = true;
         match update {
             SessionUpdate::UserMessageChunk(chunk) => self.chunk(Voice::User, chunk),
             SessionUpdate::AgentMessageChunk(chunk) => self.chunk(Voice::Agent, chunk),
@@ -209,8 +198,10 @@ impl Journal {
             // A variant this build does not know about. Ignored rather than
             // guessed at: `SessionUpdate` is `#[non_exhaustive]`, and the
             // unstable plan operations are behind a feature the workspace does
-            // not enable. Nothing changed, so nothing needs repainting.
-            _ => self.dirty = previously_dirty,
+            // not enable. Nothing changed, so no entity is touched and no
+            // revision moves — which is exactly how the writer learns there is
+            // nothing to repaint.
+            _ => {}
         }
     }
 
@@ -220,7 +211,6 @@ impl Journal {
     /// is a request, not an update: it arrives on its own channel and is
     /// resolved by an answer rather than superseded by the next notification.
     pub fn set_pending_permission(&mut self, prompt: Option<Prompt>) {
-        self.dirty = true;
         self.pending_permission = prompt;
     }
 
@@ -243,24 +233,6 @@ impl Journal {
                 entry,
             })
         })
-    }
-
-    /// Has anything changed since [`Journal::painted`] was last called?
-    pub fn dirty(&self) -> bool {
-        self.dirty
-    }
-
-    /// Record that a frame has been painted, clearing the dirty flag.
-    ///
-    /// The journal cannot know when a frame happened — it never writes — so
-    /// the scheduler tells it.
-    pub fn painted(&mut self) {
-        self.dirty = false;
-    }
-
-    /// The agent's plan, if it sent one.
-    pub fn plan(&self) -> Option<&Plan> {
-        self.plan.as_ref()
     }
 
     /// The slash commands the agent offers.
@@ -447,6 +419,14 @@ mod tests {
         journal.entries().find_map(|item| match item.entry {
             Entry::Tool(call) => Some(call),
             Entry::Message(_) | Entry::Plan(_) => None,
+        })
+    }
+
+    /// The plan in the document, if the agent sent one.
+    fn plan_of(journal: &Journal) -> Option<&Plan> {
+        journal.entries().find_map(|item| match item.entry {
+            Entry::Plan(plan) => Some(plan),
+            Entry::Message(_) | Entry::Tool(_) => None,
         })
     }
 
@@ -784,7 +764,7 @@ mod tests {
     #[test]
     fn the_session_s_own_state_is_kept_and_replaced_wholesale() {
         let mut journal = Journal::default();
-        assert!(journal.plan().is_none());
+        assert!(plan_of(&journal).is_none());
         assert!(journal.commands().is_empty());
         assert!(journal.mode().is_none());
         assert!(journal.config().is_empty());
@@ -814,7 +794,7 @@ mod tests {
         ));
         journal.apply(SessionUpdate::UsageUpdate(UsageUpdate::new(100, 200_000)));
 
-        assert_eq!(journal.plan().map(|p| p.entries.len()), Some(1));
+        assert_eq!(plan_of(&journal).map(|p| p.entries.len()), Some(1));
         assert_eq!(journal.commands().len(), 1);
         assert_eq!(journal.mode().map(ToString::to_string), Some("plan".into()));
         assert_eq!(journal.config().len(), 1);
