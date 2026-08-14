@@ -84,8 +84,16 @@ These are spec §19 open questions. Phase 1 does not depend on them; Phase 2 doe
 
 - **§19.1 — is §4 accepted?** If no, this plan is void; the fallback is spec
   §17's first entry (defects 2 and 3 only) and needs its own much smaller plan.
-- **§19.2 — line diff: dependency or hand-rolled?** Blocks task 2.4. Record the
-  answer here before starting it.
+- **§19.2 — line diff: dependency or hand-rolled?** **Answered 2026-08-14: a
+  production dependency on `similar` (3.1).** The spec's own recommendation,
+  and the reason stands — subtly wrong diff output is worse than a dependency.
+  `similar` is the maintained standard (it is what `insta` diffs with), and it
+  already groups changed runs into hunks with configurable context, which is
+  precisely what §6 specifies; hand-rolling that is where the subtle wrongness
+  would live. It is the only new *shipped* crate in this plan: `Cargo.lock`
+  carries `diff 0.1.13` today, but only as a dev-only transitive of
+  `pretty_assertions`. Task 2.4 adds it to the workspace manifest and to
+  `bitrouter-tui`.
 - **§19.5 — how does the app name ACP schema types?** Blocks task 4.1.
 
 ---
