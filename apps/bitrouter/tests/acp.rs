@@ -952,6 +952,32 @@ impl ServeFixture {
             .collect()
     }
 
+    /// Shut the subprocess down the way a real manager does, and **reap it**.
+    ///
+    /// Dropping stdin is the designed teardown: the child sees EOF, `serve`
+    /// returns, the session drops, and the agent grandchild is killed with it.
+    /// A bare `kill()` skips all of that and races — the grandchild is
+    /// orphaned and can outlive the test still holding inherited descriptors,
+    /// which nextest reports as a "leaky" test. On a Linux CI runner that held
+    /// pipe keeps the *step* alive long after the suite finishes, until the
+    /// runner is killed for unresponsiveness and takes its log with it.
+    async fn shutdown(self) {
+        let Self {
+            mut child, stdin, ..
+        } = self;
+        drop(stdin);
+        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+            Ok(_) => {}
+            Err(_) => {
+                // Hung: kill *and* reap, so the failure is a failure rather
+                // than a leak that outlives the run.
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                panic!("bitrouter acp serve did not exit within 5s of stdin close");
+            }
+        }
+    }
+
     /// Fail if any provider credential appears in `value`'s serialized bytes.
     /// Asserting on the bytes rather than on fields means a secret smuggled
     /// through `_meta` fails too.
@@ -991,7 +1017,7 @@ async fn conformance_providers_list_returns_the_catalog() {
         "no route is in force before providers/set: {listed}"
     );
     ServeFixture::assert_no_credentials(&listed);
-    let _ = fixture.child.kill().await;
+    fixture.shutdown().await;
 }
 
 /// Assertion 2 — `providers/set` never claims a switch it did not perform.
@@ -1045,7 +1071,7 @@ async fn conformance_providers_set_changes_the_effective_route() {
         rejected.get("error").is_some(),
         "an unknown provider must be refused: {rejected}"
     );
-    let _ = fixture.child.kill().await;
+    fixture.shutdown().await;
 }
 
 /// Assertion 3 — a settled turn puts a **non-null, router-measured** cost on
@@ -1106,7 +1132,7 @@ async fn conformance_usage_update_carries_measured_cost() {
          settled before launch must not be counted: {cost}"
     );
     assert_eq!(cost["currency"].as_str(), Some("USD"), "{cost}");
-    let _ = fixture.child.kill().await;
+    fixture.shutdown().await;
 }
 
 /// Assertion 4 — the five `session/update` variants the gateway used to
@@ -1130,5 +1156,5 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
             "'{expected}' must survive the round-trip; saw {kinds:?}"
         );
     }
-    let _ = fixture.child.kill().await;
+    fixture.shutdown().await;
 }

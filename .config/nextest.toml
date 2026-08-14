@@ -9,6 +9,17 @@
 # subprocesses; `terminate-after` is what turns a hang into a verdict.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
+# A test that returns while a descendant still holds its output pipe is a
+# "leaky" test. Locally that is a warning; on a Linux CI runner the held pipe
+# keeps the *step* alive after the suite finishes, until the runner is killed
+# for unresponsiveness — which is how #816 burned 48 minutes per run and
+# destroyed its own log. Spawn a subprocess, reap it.
+# 2s, not something tighter: an HTTP client's pooled connection can outlive
+# its test by a few hundred milliseconds, and failing that would be noise. The
+# failure this guards against — an orphaned subprocess holding the pipe — holds
+# it indefinitely, so a generous bound still catches it.
+leak-timeout = "2s"
+
 
 # CI has no tty and no operator: fail rather than retry into another 49-minute
 # stall, and keep the leaf output so a failure is readable without a re-run.
@@ -16,3 +27,7 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 slow-timeout = { period = "60s", terminate-after = 3 }
 failure-output = "immediate-final"
 fail-fast = false
+# Reported, not fatal. Several tests that predate #816 leak intermittently and
+# `main` is green with them, so a leak is not by itself the thing that kills a
+# runner — failing on it would buy flakiness without buying a diagnosis.
+leak-timeout = "2s"
