@@ -3025,6 +3025,82 @@ auto_sync:
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn registry_sync_workflow_skips_empty_agentic_feeds() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
+        let marker = "      - name: Sync agentic registry feeds\n";
+        let (_, after_marker) = workflow
+            .split_once(marker)
+            .ok_or_else(|| std::io::Error::other("missing agentic sync workflow step"))?;
+        let (_, after_run) = after_marker
+            .split_once("        run: |\n")
+            .ok_or_else(|| std::io::Error::other("missing agentic sync run block"))?;
+        let mut script = String::new();
+        for line in after_run.lines() {
+            if line.starts_with("      - ") {
+                break;
+            }
+            if line.is_empty() {
+                script.push('\n');
+            } else {
+                let command = line.strip_prefix("          ").ok_or_else(|| {
+                    std::io::Error::other("unexpected agentic sync run-block indentation")
+                })?;
+                script.push_str(command);
+                script.push('\n');
+            }
+        }
+
+        let root = test_root("empty-agentic-workflow");
+        fs::create_dir_all(root.join("target"))?;
+        write(
+            &root,
+            "bin/cargo",
+            r#"#!/bin/sh
+cat <<'EOF'
+Providers to sync:
+
+(No `auto_sync.feed: agentic` providers are configured.)
+
+Canonical model source:
+- `registry/models/<vendor>.yaml` is curated.
+EOF
+"#,
+        );
+        write(&root, "bin/npm", "#!/bin/sh\nexit 42\n");
+        for command in ["bin/cargo", "bin/npm"] {
+            let path = root.join(command);
+            let mut permissions = fs::metadata(&path)?.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions)?;
+        }
+
+        let path = format!("{}:{}", root.join("bin").display(), std::env::var("PATH")?);
+        let output = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &script])
+            .current_dir(&root)
+            .env("PATH", path)
+            .env("BITROUTER_API_KEY", "test-only")
+            .output()?;
+
+        assert!(
+            output.status.success(),
+            "workflow should skip before npm; status={:?}, stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "no agentic registry providers configured"
+        );
+        Ok(())
+    }
+
     #[test]
     fn tencent_tokenhub_base_urls_match_official_hosts() {
         let root = crate::workspace_root();
