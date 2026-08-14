@@ -102,7 +102,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/ci-target
         run: >-
           cargo nextest run -p bitrouter --all-features --lib --bins
-          --build-jobs 2
+          --build-jobs 1
 
   test-ubuntu-integration:
     name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
