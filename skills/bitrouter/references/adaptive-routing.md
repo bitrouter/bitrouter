@@ -85,7 +85,7 @@ bitrouter policy publish candidate.yaml --config bitrouter.yaml
 Only an explicit publication under `policy.mode: adaptive` may replace the
 active lock. `frozen` and `adaptive` route identically; mode controls write
 authority, not request-time learning. `bitrouter policy verify --evidence`
-reconstructs an active v2 lock's evidence root when the local ledger is
+reconstructs an active compiled lock's evidence root when the local ledger is
 available. Shipping only the lock preserves routing behavior; the ledger is
 needed only for audit or later compilation.
 

@@ -991,6 +991,16 @@
           "provider_model_id": "claude-opus-4-8",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -1014,6 +1024,16 @@
           "provider_model_id": "claude-opus-4-7",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -1037,6 +1057,15 @@
           "provider_model_id": "claude-opus-4-6",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
           }
         },
         {
@@ -1061,6 +1090,16 @@
           "provider_model_id": "claude-sonnet-5",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -1085,6 +1124,15 @@
           "provider_model_id": "claude-sonnet-4-6",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
           }
         },
         {
@@ -1112,6 +1160,9 @@
         },
         {
           "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-fable-5",
           "pricing": {
             "input_tokens": {
@@ -1126,6 +1177,16 @@
           "provider_model_id": "claude-fable-5",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -1151,6 +1212,9 @@
         },
         {
           "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-5",
           "pricing": {
             "input_tokens": {
@@ -1165,6 +1229,16 @@
           "provider_model_id": "claude-opus-5",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         }
       ],
@@ -2309,6 +2383,9 @@
       "models": [
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-fable-5",
           "pricing": {
             "input_tokens": {
@@ -2320,7 +2397,17 @@
               "text": 50.0
             }
           },
-          "provider_model_id": "anthropic/claude-fable-5"
+          "provider_model_id": "anthropic/claude-fable-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -2342,6 +2429,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-4.6",
           "pricing": {
             "input_tokens": {
@@ -2353,10 +2443,22 @@
               "text": 25.0
             }
           },
-          "provider_model_id": "anthropic/claude-opus-4.6"
+          "provider_model_id": "anthropic/claude-opus-4.6",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-4.7",
           "pricing": {
             "input_tokens": {
@@ -2367,10 +2469,23 @@
               "text": 22.5
             }
           },
-          "provider_model_id": "anthropic/claude-opus-4.7"
+          "provider_model_id": "anthropic/claude-opus-4.7",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-4.8",
           "pricing": {
             "input_tokens": {
@@ -2382,10 +2497,23 @@
               "text": 25.0
             }
           },
-          "provider_model_id": "anthropic/claude-opus-4.8"
+          "provider_model_id": "anthropic/claude-opus-4.8",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-sonnet-4.6",
           "pricing": {
             "input_tokens": {
@@ -2397,10 +2525,22 @@
               "text": 15.0
             }
           },
-          "provider_model_id": "anthropic/claude-sonnet-4.6"
+          "provider_model_id": "anthropic/claude-sonnet-4.6",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-sonnet-5",
           "pricing": {
             "input_tokens": {
@@ -2412,7 +2552,17 @@
               "text": 10.0
             }
           },
-          "provider_model_id": "anthropic/claude-sonnet-5"
+          "provider_model_id": "anthropic/claude-sonnet-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -2458,6 +2608,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "google/gemini-3.1-flash-lite-preview",
           "pricing": {
             "input_tokens": {
@@ -2472,6 +2625,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "google/gemini-3.1-pro-preview",
           "pricing": {
             "input_tokens": {
@@ -2482,10 +2638,21 @@
               "text": 12.0
             }
           },
-          "provider_model_id": "google/gemini-3.1-pro-preview"
+          "provider_model_id": "google/gemini-3.1-pro-preview",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "google/gemini-3.5-flash",
           "pricing": {
             "input_tokens": {
@@ -2496,7 +2663,16 @@
               "text": 9.0
             }
           },
-          "provider_model_id": "google/gemini-3.5-flash"
+          "provider_model_id": "google/gemini-3.5-flash",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -2597,6 +2773,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.4",
           "pricing": {
             "input_tokens": {
@@ -2607,10 +2786,23 @@
               "text": 15.0
             }
           },
-          "provider_model_id": "openai/gpt-5.4"
+          "provider_model_id": "openai/gpt-5.4",
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.4-mini",
           "pricing": {
             "input_tokens": {
@@ -2621,10 +2813,23 @@
               "text": 4.5
             }
           },
-          "provider_model_id": "openai/gpt-5.4-mini"
+          "provider_model_id": "openai/gpt-5.4-mini",
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
@@ -2635,7 +2840,17 @@
               "text": 30.0
             }
           },
-          "provider_model_id": "openai/gpt-5.5"
+          "provider_model_id": "openai/gpt-5.5",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -2914,6 +3129,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
@@ -2925,10 +3143,24 @@
               "text": 6.0
             }
           },
-          "provider_model_id": "openai/gpt-5.6-luna"
+          "provider_model_id": "openai/gpt-5.6-luna",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.6-sol",
           "pricing": {
             "input_tokens": {
@@ -2940,10 +3172,24 @@
               "text": 30.0
             }
           },
-          "provider_model_id": "openai/gpt-5.6-sol"
+          "provider_model_id": "openai/gpt-5.6-sol",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "openai/gpt-5.6-terra",
           "pricing": {
             "input_tokens": {
@@ -2955,7 +3201,18 @@
               "text": 15.0
             }
           },
-          "provider_model_id": "openai/gpt-5.6-terra"
+          "provider_model_id": "openai/gpt-5.6-terra",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -3000,6 +3257,9 @@
         },
         {
           "api_protocol": "openai",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-5",
           "pricing": {
             "input_tokens": {
@@ -3011,7 +3271,17 @@
               "text": 25.0
             }
           },
-          "provider_model_id": "anthropic/claude-opus-5"
+          "provider_model_id": "anthropic/claude-opus-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "openai",
@@ -3383,7 +3653,17 @@
             "tools"
           ],
           "id": "anthropic/claude-opus-4.8",
-          "provider_model_id": "claude-opus-4-8"
+          "provider_model_id": "claude-opus-4-8",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
@@ -3393,7 +3673,17 @@
             "tools"
           ],
           "id": "anthropic/claude-opus-4.7",
-          "provider_model_id": "claude-opus-4-7"
+          "provider_model_id": "claude-opus-4-7",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
@@ -3403,7 +3693,16 @@
             "tools"
           ],
           "id": "anthropic/claude-opus-4.6",
-          "provider_model_id": "claude-opus-4-6"
+          "provider_model_id": "claude-opus-4-6",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
@@ -3414,7 +3713,17 @@
             "image_input"
           ],
           "id": "anthropic/claude-sonnet-5",
-          "provider_model_id": "claude-sonnet-5"
+          "provider_model_id": "claude-sonnet-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
@@ -3425,7 +3734,16 @@
             "image_input"
           ],
           "id": "anthropic/claude-sonnet-4.6",
-          "provider_model_id": "claude-sonnet-4-6"
+          "provider_model_id": "claude-sonnet-4-6",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
@@ -3439,13 +3757,39 @@
         },
         {
           "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-fable-5",
-          "provider_model_id": "claude-fable-5"
+          "provider_model_id": "claude-fable-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning"
+          ],
           "id": "anthropic/claude-opus-5",
-          "provider_model_id": "claude-opus-5"
+          "provider_model_id": "claude-opus-5",
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         }
       ],
       "name": "claude-code",
@@ -3934,6 +4278,14 @@
           "provider_model_id": "gemini-3.1-pro-preview",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high"
+            ]
           }
         },
         {
@@ -3958,6 +4310,15 @@
           "provider_model_id": "gemini-3.5-flash",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
           }
         },
         {
@@ -3989,6 +4350,9 @@
           "api_protocol": [
             "google",
             "openai"
+          ],
+          "capabilities": [
+            "reasoning"
           ],
           "id": "google/gemini-3.1-flash-lite-preview",
           "pricing": {
@@ -4793,6 +5157,17 @@
           "provider_model_id": "gpt-5.6-sol",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -4837,6 +5212,17 @@
           "provider_model_id": "gpt-5.6-terra",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -4881,6 +5267,17 @@
           "provider_model_id": "gpt-5.6-luna",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         },
         {
@@ -4911,6 +5308,16 @@
           "provider_model_id": "gpt-5.5",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
           }
         },
         {
@@ -4941,6 +5348,16 @@
           "provider_model_id": "gpt-5.4",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
           }
         },
         {
@@ -4971,6 +5388,16 @@
           "provider_model_id": "gpt-5.4-mini",
           "rate_limits": {
             "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
           }
         }
       ],
@@ -5020,7 +5447,18 @@
             "tools"
           ],
           "id": "openai/gpt-5.6-sol",
-          "provider_model_id": "gpt-5.6-sol"
+          "provider_model_id": "gpt-5.6-sol",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "responses",
@@ -5029,7 +5467,18 @@
             "tools"
           ],
           "id": "openai/gpt-5.6-terra",
-          "provider_model_id": "gpt-5.6-terra"
+          "provider_model_id": "gpt-5.6-terra",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "responses",
@@ -5038,7 +5487,18 @@
             "tools"
           ],
           "id": "openai/gpt-5.6-luna",
-          "provider_model_id": "gpt-5.6-luna"
+          "provider_model_id": "gpt-5.6-luna",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         {
           "api_protocol": "responses",
@@ -5047,7 +5507,17 @@
             "tools"
           ],
           "id": "openai/gpt-5.5",
-          "provider_model_id": "gpt-5.5"
+          "provider_model_id": "gpt-5.5",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         },
         {
           "api_protocol": "responses",
@@ -5056,7 +5526,17 @@
             "tools"
           ],
           "id": "openai/gpt-5.4",
-          "provider_model_id": "gpt-5.4"
+          "provider_model_id": "gpt-5.4",
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         },
         {
           "api_protocol": "responses",
@@ -5065,7 +5545,17 @@
             "tools"
           ],
           "id": "openai/gpt-5.4-mini",
-          "provider_model_id": "gpt-5.4-mini"
+          "provider_model_id": "gpt-5.4-mini",
+          "reasoning_effort": {
+            "default": "none",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
         }
       ],
       "name": "openai-codex",

@@ -44,9 +44,10 @@ presets:
     policy: auto
 ```
 
-The v2 lock behind `@auto` contains the tier models, canonical `agent_trace`
+The v3 lock behind `@auto` contains the tier targets, canonical `agent_trace`
 routes, capability guardrails, and a decision certificate for every explicit
-route. `@auto:cost` selects the cost variant when one is defined; explicit
+route. A target may be a scalar model or an exact `(model, effort)` pair;
+`@auto:cost` selects the cost variant when one is defined, while explicit
 physical model IDs remain passthrough.
 
 Against that spec BitRouter provides the control plane for an **act → observe → evaluate → compile** cycle:

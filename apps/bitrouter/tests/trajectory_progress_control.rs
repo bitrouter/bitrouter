@@ -1753,7 +1753,7 @@ async fn hidden_continuation_fails_closed_when_reload_removes_its_model() -> any
         .get_mut("auto")
         .ok_or_else(|| anyhow::anyhow!("auto policy missing"))?
         .tiers
-        .insert("strong".to_owned(), "strong:replacement-model".to_owned());
+        .insert("strong".to_owned(), "strong:replacement-model".into());
     write_policy_lock(harness._home.path(), &lock).await?;
 
     let restarted = harness.assemble().await?;

@@ -187,6 +187,7 @@ pub async fn run_optimization(
         &active.document,
         &request.loaded.intent.policy,
         "strong",
+        request.loaded.intent.strong_effort,
         "economy",
         request.loaded.intent.preference,
         &baseline.observations,
@@ -232,7 +233,11 @@ pub async fn run_optimization(
         "candidate",
     )
     .await?;
-    verify_controlled_candidate(&candidate, &target_request_key)?;
+    verify_controlled_candidate(
+        &candidate,
+        &target_request_key,
+        request.loaded.intent.economy_effort,
+    )?;
     workflow_workspaces
         .cleanup()
         .context("removing isolated workflow workspaces")?;
@@ -1087,16 +1092,24 @@ fn evaluation_input(
     }
 }
 
-fn verify_controlled_candidate(candidate: &VariantEvidence, target: &str) -> Result<()> {
+fn verify_controlled_candidate(
+    candidate: &VariantEvidence,
+    target: &str,
+    expected_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> Result<()> {
     let selected = candidate
-        .attributions
+        .observations
         .iter()
-        .filter(|item| item.decision.request_key == target)
+        .filter(|item| item.request_key == target)
         .collect::<Vec<_>>();
     if selected.is_empty()
-        || selected
-            .iter()
-            .any(|item| item.decision.selected_tier != "economy")
+        || selected.iter().any(|item| {
+            item.selected_tier != "economy"
+                || match expected_effort {
+                    Some(effort) => item.selected_effort != Some(effort),
+                    None => item.selected_effort != item.input_effort,
+                }
+        })
     {
         anyhow::bail!("candidate did not exercise the one changed economy route");
     }
@@ -1427,7 +1440,7 @@ mod tests {
 
     use super::{
         FrozenWorkflowWorkspaces, fingerprint_workflow, git_output, percentage_delta_ppm,
-        split_weight, submit_variant_result, writable_database_url,
+        split_weight, submit_variant_result, verify_controlled_candidate, writable_database_url,
     };
     use crate::eval::types::{AdmissionStatus, EvalDecisionRef};
     use crate::optimization::evaluator::{
@@ -1610,11 +1623,7 @@ mod tests {
     }
 
     fn active_policy() -> PolicyLock {
-        let mut lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            ..Default::default()
-        };
+        let mut lock = PolicyLock::default();
         lock.policies.insert(
             "auto".into(),
             PolicyDefinition {
@@ -1644,7 +1653,9 @@ mod tests {
             policy: "auto".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             selected_tier: tier.into(),
+            selected_effort: None,
             baseline_tier: Some("strong".into()),
+            baseline_effort: None,
             policy_digest: policy_digest.into(),
         };
         VariantEvidence {
@@ -1665,6 +1676,8 @@ mod tests {
             observations: vec![RouteObservation {
                 request_key: decision.request_key.clone(),
                 selected_tier: tier.into(),
+                input_effort: None,
+                selected_effort: decision.selected_effort,
                 normalized_cost_micro_usd: Some(60),
             }],
             attributions: vec![VariantAttribution {
@@ -1678,6 +1691,53 @@ mod tests {
                 latency_ms: 200,
             }],
         }
+    }
+
+    #[test]
+    fn controlled_candidate_requires_exact_effort_treatment() -> anyhow::Result<()> {
+        let mut candidate = variant(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "candidate",
+            "economy",
+        );
+        candidate.observations[0].selected_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low);
+
+        verify_controlled_candidate(
+            &candidate,
+            "agent_trace/v2|edit|normal",
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
+        )?;
+        assert!(
+            verify_controlled_candidate(
+                &candidate,
+                "agent_trace/v2|edit|normal",
+                Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn controlled_scalar_candidate_preserves_each_caller_effort() -> anyhow::Result<()> {
+        let mut candidate = variant(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "candidate",
+            "economy",
+        );
+        candidate.observations[0].input_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High);
+        candidate.observations[0].selected_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High);
+
+        verify_controlled_candidate(&candidate, "agent_trace/v2|edit|normal", None)?;
+        candidate.observations[0].selected_effort =
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low);
+        assert!(
+            verify_controlled_candidate(&candidate, "agent_trace/v2|edit|normal", None).is_err()
+        );
+        Ok(())
     }
 
     #[tokio::test]

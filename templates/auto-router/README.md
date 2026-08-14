@@ -5,6 +5,21 @@ prompt and causal history, then selects a tier from the resulting
 `agent_route/v1|<role>|<risk>` key. It uses GPT-5.6 as the strong route, Kimi K3
 as the balanced route, and DeepSeek V4 Pro as the economy route.
 
+Tier values are model targets. The scalar form above remains compatible and
+preserves a caller-supplied reasoning effort. For a model that positively
+declares exact effort support in the registry, a tier may instead own effort:
+
+```yaml
+tiers:
+  strong: { model: "openai-codex:gpt-5.6-sol", effort: high }
+  economy: { model: "openai-codex:gpt-5.6-sol", effort: low }
+```
+
+Those are distinct routing targets even though they share a model. Predictor,
+tool guard, progress guard, continuation, evidence, and fallback behavior stay
+the same; the selected effort is applied by the BitRouter daemon and rendered
+in the upstream protocol's native field.
+
 The frozen mapping is intentionally aggressive: normal mechanical and verify
 work uses economy; implementation, finalization, and context-heavy work mostly
 use balanced; orchestration and selected guarded work use strong. Unknown or
@@ -27,7 +42,7 @@ Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
 cost routing variant. Physical model ids remain passthrough, so an explicit
 `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v2 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
+The v3 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
 are `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
 bands are `normal`, `context`, and `guarded`. Runtime adapters may enrich
 diagnostics from native request shapes, but headers and harness identity do not

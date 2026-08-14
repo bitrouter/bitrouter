@@ -20,9 +20,10 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, ChatStreamOptions, ChatTokenLimitField, Content, DataContent, FinishReason,
-    GenerateResult, GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat,
-    Role, RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart,
-    ToolResultOutput, Usage, UsageOrigin, provider_namespace, set_provider_metadata,
+    GenerateResult, GenerationParams, Message, Modality, Prompt, ProviderMetadata, ReasoningEffort,
+    ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool, ToolChoice,
+    ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
+    set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -54,7 +55,7 @@ pub struct ChatRequest {
     #[serde(default)]
     max_completion_tokens: Option<u32>,
     #[serde(default)]
-    reasoning_effort: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
     /// Output-format constraint. The `json_schema` variant is the
     /// structured-output contract; `json_object` is the legacy JSON mode and
     /// `text` is the default. Promoted to the canonical `response_format` slot
@@ -616,6 +617,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 max_tokens,
                 chat_token_limit_field,
                 reasoning_effort: req.reasoning_effort,
+                reasoning_effort_source: Default::default(),
                 response_modalities,
                 // Chat Completions carries no top-k.
                 top_k: None,
@@ -801,7 +803,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             req.insert(field.into(), mt.into());
         }
         if let Some(re) = &prompt.params.reasoning_effort {
-            req.insert("reasoning_effort".into(), re.clone().into());
+            req.insert("reasoning_effort".into(), re.as_str().into());
         }
         // Render the canonical response_format into Chat Completions' native shape.
         // Inserted before the extras splat so it wins over any legacy

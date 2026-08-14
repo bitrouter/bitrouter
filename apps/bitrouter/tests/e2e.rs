@@ -397,6 +397,123 @@ policy_table:
 }
 
 #[tokio::test]
+async fn workflow_state_policy_routes_same_model_at_distinct_efforts_end_to_end()
+-> anyhow::Result<()> {
+    let upstream = mock_chat_completions_upstream().await;
+    let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
+    let tool_followup_key = workflow_key_for(vec![
+        Message::text(Role::User, "fix"),
+        assistant_calls_for_policy_key("read_file"),
+        Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult {
+                call_id: "call_read_file".to_string(),
+                tool_name: None,
+                output: bitrouter_sdk::language_model::types::ToolResultOutput::Text {
+                    value: "source contents".to_string(),
+                },
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        },
+    ]);
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  mock:
+    api_base: {upstream_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: same-model
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low, high]
+          default: high
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    high:
+      model: mock:same-model
+      effort: high
+    low:
+      model: mock:same-model
+      effort: low
+  fingerprints:
+    "{opening_key}": high
+    "{tool_followup_key}": low
+  default_tier: high
+  tool_use_tier: high
+  tool_safe_tiers: [high, low]
+"#,
+        upstream_uri = upstream.uri(),
+    );
+    let cfg = config::parse_with(&yaml, |_| None)?;
+    let assembled = bitrouter::build_app(&cfg).await?;
+    let language_model = assembled
+        .app
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("language-model pipeline is missing"))?
+        .clone();
+    let state = AppState {
+        language_model,
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [{ "role": "user", "content": "start" }],
+        }))
+        .await
+        .assert_status_ok();
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [
+                { "role": "user", "content": "fix" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_read_file",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_read_file", "content": "source contents" }
+            ],
+        }))
+        .await
+        .assert_status_ok();
+
+    let requests = upstream
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("mock upstream did not capture requests"))?;
+    assert_eq!(requests.len(), 2);
+    let high_body: Value = serde_json::from_slice(&requests[0].body)?;
+    let low_body: Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(high_body["model"], "same-model");
+    assert_eq!(high_body["reasoning_effort"], "high");
+    assert_eq!(low_body["model"], "same-model");
+    assert_eq!(low_body["reasoning_effort"], "low");
+    Ok(())
+}
+
+#[tokio::test]
 async fn streaming_adequacy_settlement_also_persists_metering() {
     use std::time::Duration;
 
@@ -1170,6 +1287,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -1574,6 +1692,10 @@ providers:
       - "*": chat_completions
     models:
       - id: {MODEL_VIA_OPENAI}
+        capabilities: [reasoning, structured_outputs]
+        reasoning_effort: &common_effort
+          levels: [low, medium, high]
+          default: medium
   via_anthropic:
     api_base: {upstream}
     api_key: test-key
@@ -1581,6 +1703,8 @@ providers:
       - "*": messages
     models:
       - id: {MODEL_VIA_ANTHROPIC}
+        capabilities: [reasoning, structured_outputs]
+        reasoning_effort: *common_effort
   via_responses:
     api_base: {upstream}
     api_key: test-key
@@ -1588,6 +1712,8 @@ providers:
       - "*": responses
     models:
       - id: {MODEL_VIA_RESPONSES}
+        capabilities: [reasoning, structured_outputs]
+        reasoning_effort: *common_effort
   via_google:
     api_base: {upstream}
     api_key: test-key
@@ -1595,6 +1721,8 @@ providers:
       - "*": generate_content
     models:
       - id: {MODEL_VIA_GOOGLE}
+        capabilities: [reasoning, structured_outputs]
+        reasoning_effort: *common_effort
 "#
     );
     config::parse_with(&yaml, |_| None).expect("config parses")
@@ -1671,6 +1799,33 @@ fn inbound_google() -> Value {
             "responseSchema": matrix_schema(),
         },
     })
+}
+
+fn inbound_with_effort(inbound: Inbound, model: &str) -> Value {
+    match inbound {
+        Inbound::ChatCompletions => json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "reason carefully" }],
+            "reasoning_effort": "high",
+        }),
+        Inbound::Messages => json!({
+            "model": model,
+            "max_tokens": 256,
+            "messages": [{ "role": "user", "content": "reason carefully" }],
+            "output_config": { "effort": "high" },
+        }),
+        Inbound::Responses => json!({
+            "model": model,
+            "input": "reason carefully",
+            "reasoning": { "effort": "high" },
+        }),
+        Inbound::GenerateContent => json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "reason carefully" }] }],
+            "generationConfig": {
+                "thinkingConfig": { "thinkingLevel": "high" },
+            },
+        }),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1834,6 +1989,28 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
     }
 }
 
+fn assert_native_effort(outbound: Outbound, body: &Value) {
+    let actual = match outbound {
+        Outbound::ChatCompletions => &body["reasoning_effort"],
+        Outbound::Messages => &body["output_config"]["effort"],
+        Outbound::Responses => &body["reasoning"]["effort"],
+        Outbound::GenerateContent => &body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+    };
+    assert_eq!(
+        actual, "high",
+        "reasoning effort must use the outbound protocol's native field; body: {body}"
+    );
+}
+
+async fn run_effort_cell(inbound: Inbound, outbound: Outbound) {
+    let (server, upstream, _runtime_home) = matrix_server().await;
+    let model = outbound.model();
+    let body = inbound_with_effort(inbound, model);
+    post_inbound(&server, inbound, model, &body).await;
+    let upstream_body = captured_outbound(&upstream, outbound).await;
+    assert_native_effort(outbound, &upstream_body);
+}
+
 /// Drive one matrix cell end-to-end.
 async fn run_cell(inbound: Inbound, outbound: Outbound) {
     let repository_cwd = std::env::current_dir().expect("repository cwd");
@@ -1956,4 +2133,25 @@ async fn e2e_response_format_generate_content_in_to_responses_out() {
 #[tokio::test]
 async fn e2e_response_format_generate_content_in_to_generate_content_out() {
     run_cell(Inbound::GenerateContent, Outbound::GenerateContent).await;
+}
+
+#[tokio::test]
+async fn e2e_reasoning_effort_translates_across_all_protocol_pairs() {
+    let inbound_protocols = [
+        Inbound::ChatCompletions,
+        Inbound::Messages,
+        Inbound::Responses,
+        Inbound::GenerateContent,
+    ];
+    let outbound_protocols = [
+        Outbound::ChatCompletions,
+        Outbound::Messages,
+        Outbound::Responses,
+        Outbound::GenerateContent,
+    ];
+    for inbound in inbound_protocols {
+        for outbound in outbound_protocols {
+            run_effort_cell(inbound, outbound).await;
+        }
+    }
 }

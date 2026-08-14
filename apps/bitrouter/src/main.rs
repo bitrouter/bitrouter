@@ -295,9 +295,15 @@ enum Command {
         /// Provider-qualified strong route for optimization onboarding.
         #[arg(long)]
         optimize_strong: Option<String>,
+        /// Policy-owned effort for the optimization strong route.
+        #[arg(long, requires = "optimize_strong")]
+        optimize_strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Provider-qualified economy route for optimization onboarding.
         #[arg(long)]
         optimize_economy: Option<String>,
+        /// Policy-owned effort for the optimization economy route.
+        #[arg(long, requires = "optimize_economy")]
+        optimize_economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Frozen normalized-showback price override. Repeat for unpriced
         /// subscription routes.
         #[arg(long = "optimize-normalized-price")]
@@ -1012,9 +1018,15 @@ enum PolicyAction {
         /// Strong base model. Inferred from an existing preset when omitted.
         #[arg(long)]
         strong: Option<String>,
+        /// Exact reasoning effort owned by the strong target.
+        #[arg(long, requires = "strong")]
+        strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Economy model explored as a replacement.
         #[arg(long)]
         economy: String,
+        /// Exact reasoning effort owned by the economy target.
+        #[arg(long)]
+        economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -1049,7 +1061,7 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Compile a deterministic v2 candidate without changing the active lock.
+    /// Compile a deterministic v3 candidate without changing the active lock.
     Compile {
         /// Candidate output path.
         #[arg(long, value_name = "FILE")]
@@ -1168,9 +1180,15 @@ struct OptimizeSetupArgs {
     /// Provider-qualified strong route. Omit to reuse @auto or prompt.
     #[arg(long)]
     strong: Option<String>,
+    /// Policy-owned effort for the strong route.
+    #[arg(long, requires = "strong")]
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Provider-qualified economy route. Omit to reuse @auto or prompt.
     #[arg(long)]
     economy: Option<String>,
+    /// Policy-owned effort for the economy route.
+    #[arg(long, requires = "economy")]
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Frozen normalized-showback price as
     /// provider:model=uncached,cache_read,cache_write,output. Repeat for
     /// subscription or otherwise unpriced routes.
@@ -1626,14 +1644,18 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_workflow_input,
             optimize_success,
             optimize_strong,
+            optimize_strong_effort,
             optimize_economy,
+            optimize_economy_effort,
             optimize_normalized_prices,
             optimize_preference,
         } => {
             let optimization = if optimize
                 || optimize_workflow_command.is_some()
                 || optimize_strong.is_some()
+                || optimize_strong_effort.is_some()
                 || optimize_economy.is_some()
+                || optimize_economy_effort.is_some()
                 || optimize_success.is_some()
                 || !optimize_workflow_input.is_empty()
                 || !optimize_normalized_prices.is_empty()
@@ -1647,7 +1669,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workflow_inputs: optimize_workflow_input,
                     success_contract: optimize_success,
                     strong: optimize_strong,
+                    strong_effort: optimize_strong_effort,
                     economy: optimize_economy,
+                    economy_effort: optimize_economy_effort,
                     normalized_price_overrides: optimize_normalized_prices,
                     preference: optimize_preference.into(),
                 })
@@ -3435,17 +3459,37 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             name,
             preset,
             strong,
+            strong_effort,
             economy,
+            economy_effort,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::policy_lock::initialize_files(
+            let source_raw = tokio::fs::read_to_string(config_path).await?;
+            let source_config = bitrouter_sdk::config::parse(&source_raw)?;
+            if let Some(strong_model) = strong.as_deref() {
+                bitrouter::optimization::setup::validate_routable_effort(
+                    &source_config,
+                    strong_model,
+                    strong_effort,
+                )
+                .await?;
+            }
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &economy,
+                economy_effort,
+            )
+            .await?;
+            let update = bitrouter::policy_lock::initialize_files_with_efforts(
                 config_path,
                 &name,
                 &preset,
                 strong.as_deref(),
+                strong_effort,
                 &economy,
+                economy_effort,
             )
             .await?;
             output.emit(
@@ -3750,12 +3794,22 @@ fn select_guided_workflow(
 fn select_optimization_route(
     label: &str,
     requested: Option<String>,
-    existing: Option<String>,
-) -> Result<String> {
+    requested_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    existing: Option<bitrouter::optimization::setup::ExistingTierRoute>,
+) -> Result<(
+    String,
+    Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+)> {
     use std::io::IsTerminal;
 
-    if let Some(route) = requested.or(existing) {
-        return Ok(route);
+    if let Some(route) = requested {
+        return Ok((route, requested_effort));
+    }
+    if let Some(existing) = existing {
+        if requested_effort.is_some() && requested_effort != existing.effort {
+            anyhow::bail!("--{label}-effort requires an explicit --{label} route");
+        }
+        return Ok((existing.model, existing.effort));
     }
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
@@ -3766,7 +3820,7 @@ fn select_optimization_route(
     if route.trim().is_empty() {
         anyhow::bail!("{label} route is required");
     }
-    Ok(route)
+    Ok((route, requested_effort))
 }
 
 fn resolve_adaptive_publication_consent(
@@ -3803,7 +3857,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 policy,
                 preset,
                 strong,
+                strong_effort,
                 economy,
+                economy_effort,
                 normalized_price_overrides,
                 preference,
                 evaluator_agent,
@@ -3844,8 +3900,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let (existing_strong, existing_economy) =
                 bitrouter::optimization::setup::existing_tier_routes(&source_config_path, &policy)
                     .await?;
-            let strong = select_optimization_route("strong", strong, existing_strong)?;
-            let economy = select_optimization_route("economy", economy, existing_economy)?;
+            let (strong, strong_effort) =
+                select_optimization_route("strong", strong, strong_effort, existing_strong)?;
+            let (economy, economy_effort) =
+                select_optimization_route("economy", economy, economy_effort, existing_economy)?;
             let operation_path = setup_paths.operation_lock_target();
             let _operation_lock =
                 bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
@@ -3867,7 +3925,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     policy,
                     preset,
                     strong,
+                    strong_effort,
                     economy,
+                    economy_effort,
                     normalized_price_overrides,
                     preference,
                     evaluator_agent,
@@ -3880,6 +3940,8 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 bitrouter::optimization::EvaluatorRoute::Cloud => "cloud",
                 bitrouter::optimization::EvaluatorRoute::Direct => "direct",
             };
+            let strong_target = outcome.intent.strong_target().to_string();
+            let economy_target = outcome.intent.economy_target().to_string();
             output.emit(&OptimizationSetupReport {
                 action: "optimize.setup",
                 model: "@auto",
@@ -3887,8 +3949,8 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 lock: outcome.paths.lock.display().to_string(),
                 contract: outcome.contract_path.display().to_string(),
                 workflow: outcome.intent.workflow.command.clone(),
-                strong: outcome.intent.strong,
-                economy: outcome.intent.economy,
+                strong: strong_target,
+                economy: economy_target,
                 evaluator: format!(
                     "{} ({}, {evaluator_route})",
                     outcome.lock.evaluator.agent, outcome.lock.evaluator.model
@@ -3933,9 +3995,21 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 &loaded.intent.strong,
             )
             .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.strong,
+                loaded.intent.strong_effort,
+            )
+            .await?;
             bitrouter::optimization::setup::validate_routable_model(
                 &source_config,
                 &loaded.intent.economy,
+            )
+            .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.economy,
+                loaded.intent.economy_effort,
             )
             .await?;
             let policy_path = bitrouter::policy_lock::resolve_path(
@@ -6460,8 +6534,14 @@ mod tests {
             "terminal-bench",
             "--preset",
             "coding",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--strong-effort",
+            "high",
             "--economy",
-            "moonshotai/kimi-k2.7-code",
+            "openai-codex:gpt-5.6-sol",
+            "--economy-effort",
+            "low",
             "--config",
             "team/bitrouter.yaml",
         ])
@@ -6473,14 +6553,24 @@ mod tests {
                         name,
                         preset,
                         strong,
+                        strong_effort,
                         economy,
+                        economy_effort,
                         config,
                     },
             }) => {
                 assert_eq!(name, "terminal-bench");
                 assert_eq!(preset, "coding");
-                assert_eq!(strong, None);
-                assert_eq!(economy, "moonshotai/kimi-k2.7-code");
+                assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(economy, "openai-codex:gpt-5.6-sol");
+                assert_eq!(
+                    economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
                 assert_eq!(config, Some(PathBuf::from("team/bitrouter.yaml")));
             }
             _ => panic!("expected policy init"),
@@ -6633,11 +6723,59 @@ mod tests {
         match parsed.command {
             Some(Command::Init {
                 optimize_strong,
+                optimize_strong_effort,
                 optimize_economy,
+                optimize_economy_effort,
                 ..
             }) => {
                 assert!(optimize_strong.is_none());
+                assert!(optimize_strong_effort.is_none());
                 assert!(optimize_economy.is_none());
+                assert!(optimize_economy_effort.is_none());
+            }
+            _ => anyhow::bail!("expected init command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn init_optimization_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let parsed = Cli::try_parse_from([
+            "bitrouter",
+            "init",
+            "--optimize",
+            "--optimize-strong",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-strong-effort",
+            "high",
+            "--optimize-economy",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-economy-effort",
+            "low",
+        ])?;
+        match parsed.command {
+            Some(Command::Init {
+                optimize_strong,
+                optimize_strong_effort,
+                optimize_economy,
+                optimize_economy_effort,
+                ..
+            }) => {
+                assert_eq!(optimize_strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    optimize_strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(
+                    optimize_economy.as_deref(),
+                    Some("openai-codex:gpt-5.6-sol")
+                );
+                assert_eq!(
+                    optimize_economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
             }
             _ => anyhow::bail!("expected init command"),
         }
@@ -6682,7 +6820,7 @@ mod tests {
         let artifact = candidate
             .artifact
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("default v2 policy has no artifact"))?;
+            .ok_or_else(|| anyhow::anyhow!("default compiled policy has no artifact"))?;
         artifact.parent_digest = Some(parent_digest.clone());
         artifact.source_snapshot_time_unix_ms = 1;
         let history = bitrouter::policy_lock::default_history_dir(&policy_path);

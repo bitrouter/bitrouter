@@ -17,6 +17,10 @@ rate_limits: []
 models:
   - id: anthropic/claude-fable-5
     provider_model_id: anthropic/claude-fable-5
+    reasoning_effort: &claude_full_effort
+      levels: [low, medium, high, xhigh, max]
+      default: high
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 10
@@ -37,6 +41,10 @@ models:
     capabilities: [tools]
   - id: anthropic/claude-opus-4.6
     provider_model_id: anthropic/claude-opus-4.6
+    reasoning_effort: &claude_max_effort
+      levels: [low, medium, high, max]
+      default: high
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 5
@@ -46,6 +54,8 @@ models:
         text: 25
   - id: anthropic/claude-opus-4.7
     provider_model_id: anthropic/claude-opus-4.7
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 4.5
@@ -54,6 +64,8 @@ models:
         text: 22.5
   - id: anthropic/claude-opus-4.8
     provider_model_id: anthropic/claude-opus-4.8
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 5
@@ -63,6 +75,8 @@ models:
         text: 25
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: anthropic/claude-sonnet-4.6
+    reasoning_effort: *claude_max_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 3
@@ -72,6 +86,8 @@ models:
         text: 15
   - id: anthropic/claude-sonnet-5
     provider_model_id: anthropic/claude-sonnet-5
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 2
@@ -105,6 +121,7 @@ models:
         text: 0.87
   - id: google/gemini-3.1-flash-lite-preview
     provider_model_id: google/gemini-3.1-flash-lite-preview
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 0.25
@@ -113,6 +130,10 @@ models:
         text: 1.5
   - id: google/gemini-3.1-pro-preview
     provider_model_id: google/gemini-3.1-pro-preview
+    reasoning_effort: &gemini_pro_effort
+      levels: [low, medium, high]
+      default: high
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 2
@@ -121,6 +142,10 @@ models:
         text: 12
   - id: google/gemini-3.5-flash
     provider_model_id: google/gemini-3.5-flash
+    reasoning_effort: &gemini_flash_effort
+      levels: [minimal, low, medium, high]
+      default: medium
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 1.5
@@ -184,6 +209,10 @@ models:
         text: 3
   - id: openai/gpt-5.4
     provider_model_id: openai/gpt-5.4
+    reasoning_effort: &gpt_54_effort
+      levels: [none, low, medium, high, xhigh]
+      default: none
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 2.5
@@ -192,6 +221,8 @@ models:
         text: 15
   - id: openai/gpt-5.4-mini
     provider_model_id: openai/gpt-5.4-mini
+    reasoning_effort: *gpt_54_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 0.75
@@ -200,6 +231,10 @@ models:
         text: 4.5
   - id: openai/gpt-5.5
     provider_model_id: openai/gpt-5.5
+    reasoning_effort: &gpt_55_effort
+      levels: [none, low, medium, high, xhigh]
+      default: medium
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 5
@@ -363,6 +398,10 @@ models:
         text: 3.08
   - id: openai/gpt-5.6-luna
     provider_model_id: openai/gpt-5.6-luna
+    reasoning_effort: &gpt_56_effort
+      levels: [none, low, medium, high, xhigh, max]
+      default: medium
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 1
@@ -372,6 +411,8 @@ models:
         text: 6
   - id: openai/gpt-5.6-sol
     provider_model_id: openai/gpt-5.6-sol
+    reasoning_effort: *gpt_56_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 5
@@ -381,6 +422,8 @@ models:
         text: 30
   - id: openai/gpt-5.6-terra
     provider_model_id: openai/gpt-5.6-terra
+    reasoning_effort: *gpt_56_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 2.5
@@ -413,6 +456,8 @@ models:
         text: 15
   - id: anthropic/claude-opus-5
     provider_model_id: anthropic/claude-opus-5
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
     pricing:
       input_tokens:
         no_cache: 5
