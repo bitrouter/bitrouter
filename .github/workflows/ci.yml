@@ -70,8 +70,14 @@ jobs:
       - uses: taiki-e/install-action@nextest
       # `--profile ci` applies the hang bounds in `.config/nextest.toml`: a
       # wedged test is terminated and reported by name instead of running until
-      # the hosted runner dies, which destroys the log with it.
+      # the hosted runner dies.
+      #
+      # `timeout-minutes` is the outer backstop, and it is the one that makes a
+      # hang *diagnosable*. When the runner dies of its own accord the log blob
+      # is never uploaded, so the failure names nothing; a step timeout fails
+      # the job while the runner is still alive to upload what it has.
       - run: cargo nextest run --workspace --all-features --profile ci
+        timeout-minutes: 20
 
   feature-isolation:
     name: feature-isolation
