@@ -243,7 +243,7 @@ part of the new stack is already built and tested by Phase 2, so 3.1 is a wiring
 change, not new logic. If it fails review it reverts cleanly, because Phase 2
 left the old stack intact.
 
-- [ ] **3.1 Flip the driver to the journal and the writer**
+- [x] **3.1 Flip the driver to the journal and the writer**
   - Depends on: 2.7
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: replace `Transcript` with `Journal` and `Inline` with the writer.

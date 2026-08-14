@@ -695,11 +695,127 @@ fn session_log_tail() -> Vec<ratatui::text::Line<'static>> {
     bitrouter_tui::log_tail::render(path, &log, bitrouter_tui::log_tail::TAIL_LINES)
 }
 
-fn commit_log_tail(
-    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
-) -> Result<()> {
-    view.commit(&session_log_tail())
-        .context("committing the session log tail")
+/// Read the journal, whatever the last holder of the lock did.
+///
+/// A poisoned lock costs a frame at most: the journal is plain data, a panic
+/// mid-`apply` leaves it merely stale, and refusing to draw at all would turn
+/// one lost update into a dead session.
+fn journal(
+    shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
+) -> std::sync::MutexGuard<'_, bitrouter_tui::journal::Journal> {
+    match shared.lock() {
+        Ok(journal) => journal,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// The live view of one chat session.
+///
+/// The document is the journal; this owns the two things the journal cannot
+/// know about — the footer the app composes (§4.5) and the terminal the writer
+/// paints into.
+struct View {
+    writer: bitrouter_tui::writer::Writer<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    cache: bitrouter_tui::writer::Cache,
+    registry: bitrouter_tui::render::Registry,
+    /// How this session is routed. Fixed for its life unless `/route` changes
+    /// it, and absent when the session is direct.
+    route: Option<String>,
+    /// The most recent thing the client itself has to say — a stop reason, a
+    /// route change, a failed turn. One row, replaced rather than accumulated:
+    /// it is about the last thing that happened, and the session log is where
+    /// the history lives.
+    notice: Option<ratatui::text::Line<'static>>,
+    /// A row owned by an open modal. Today only the provider picker.
+    modal: Option<ratatui::text::Line<'static>>,
+    /// The line being typed. Raw mode means nothing is echoed unless the
+    /// footer echoes it.
+    input: String,
+}
+
+impl View {
+    /// Take the terminal.
+    ///
+    /// Called **before** the session's stdin owner exists: the writer reads
+    /// the cursor once at construction, which on a real terminal is a DSR
+    /// query, and a reader already sitting on stdin would take the answer.
+    fn open(route: Option<String>) -> Result<Self> {
+        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
+        Ok(Self {
+            writer: bitrouter_tui::writer::Writer::new(backend).context("opening the writer")?,
+            cache: bitrouter_tui::writer::Cache::default(),
+            registry: bitrouter_tui::render::Registry::default(),
+            route,
+            notice: None,
+            modal: None,
+            input: String::new(),
+        })
+    }
+
+    /// The rows below the document: what this session costs and where it is
+    /// going, then whatever is currently being asked or typed.
+    ///
+    /// Re-emitted as the document's tail on every frame, so it is always the
+    /// newest content and always in the live region — which is what bounds the
+    /// stale-row cost of §4.3 to individual scrolled-off tool calls rather
+    /// than to the session's own summary.
+    fn footer(
+        &self,
+        journal: &bitrouter_tui::journal::Journal,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::text::{Line, Span};
+
+        let cost = journal
+            .usage()
+            .and_then(bitrouter_tui::cost::Cost::from_usage)
+            .map_or_else(bitrouter_tui::cost::unreported, |cost| cost.render());
+        let mut status: Vec<Span<'static>> = cost.spans;
+        if let Some(route) = &self.route {
+            status.push(Span::raw(format!(" · via {route}")));
+        }
+        if let Some(mode) = journal.mode() {
+            status.push(Span::raw(format!(" · {mode}")));
+        }
+        if let Some(title) = journal.title() {
+            status.push(Span::raw(format!(" · {title}")));
+        }
+
+        let mut rows = vec![Line::from(status)];
+        if let Some(notice) = &self.notice {
+            rows.push(notice.clone());
+        }
+        // A question waiting on a person outranks anything else down here.
+        if let Some(prompt) = journal.pending_permission() {
+            rows.push(prompt.render());
+        }
+        if let Some(modal) = &self.modal {
+            rows.push(modal.clone());
+        }
+        rows.push(Line::from(format!("> {}", self.input)));
+        rows
+    }
+
+    /// Paint one frame.
+    ///
+    /// Every caller of this has already decided the frame is worth painting —
+    /// the writer still writes nothing when the document is unchanged, so a
+    /// redundant call costs a render and no output.
+    fn paint(&mut self, shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>) -> Result<()> {
+        let size = self.writer.size();
+        let mut journal = journal(shared);
+        let footer = self.footer(&journal);
+        let document = self.cache.document(&journal, &self.registry, size, &footer);
+        journal.painted();
+        // The lock is not held across the write: a frame can take a
+        // millisecond, and the pump has updates to apply.
+        drop(journal);
+        self.writer.frame(&document).context("painting a frame")
+    }
+
+    /// Leave the cursor below the document. Nothing rendered is removed.
+    fn finish(&mut self) -> Result<()> {
+        self.writer.finish().context("closing the view")
+    }
 }
 
 /// Run one ACP session interactively in the caller's terminal.
@@ -775,6 +891,11 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     }
     eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
 
+    // The view opens **before** the stdin owner: the writer reads the cursor
+    // once, here, and on a real terminal that is a DSR query whose answer a
+    // reader already sitting on stdin would take.
+    let mut view = View::open(routed.via.clone())?;
+
     // Raw mode starts here, after the last plain `eprintln!` — a cooked
     // newline in a raw terminal does not return the carriage. From this point
     // the terminal echoes nothing and delivers no SIGINT: both are ours.
@@ -786,19 +907,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     crate::tui::lifecycle::install_panic_restore();
     let mut shutdown = crate::tui::lifecycle::Shutdown::install();
 
-    // The renderer owns the terminal from here. It is handed lines, never
-    // the session — `bitrouter-tui` cannot depend on this crate, and that is
-    // what keeps the daemon-wide half of this process out of the view.
-    let mut view = bitrouter_tui::viewport::Inline::new(ratatui::backend::CrosstermBackend::new(
-        std::io::stdout(),
-    ))
-    .context("opening the inline viewport")?;
-
-    // The **raw** ACP stream, not the translated one: the renderer is a
-    // protocol client, and translating first would lose exactly the fidelity
-    // it exists to draw.
-    // Permission requests block the turn until a person answers, so they are
-    // drawn in the live area rather than committed to scrollback.
+    // Permission requests block the turn until a person answers. They are the
+    // journal's, but they arrive on their own channel rather than as updates.
     let (permission_tx, mut permission_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut pending = session.permissions();
     let permissions = tokio::spawn(async move {
@@ -809,48 +919,40 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         }
     });
 
-    let (rendered_tx, mut rendered_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (cost_tx, mut cost_rx) = tokio::sync::mpsc::unbounded_channel();
+    // The **raw** ACP stream, not the translated one: the journal is a
+    // protocol client, and translating first would lose exactly the fidelity
+    // it exists to retain.
     let mut updates = session.raw_updates();
-    // Shared with the turn loop, which flushes it when a turn settles. The
-    // pump cannot do that itself: it reads `session/update`, and in ACP v1 a
-    // turn ends on the `session/prompt` *response*, which never appears on
-    // that stream.
-    let transcript = std::sync::Arc::new(std::sync::Mutex::new(
-        bitrouter_tui::transcript::Transcript::default(),
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(
+        bitrouter_tui::journal::Journal::default(),
     ));
-    let pump_transcript = std::sync::Arc::clone(&transcript);
+    // A signal, not a payload: the pump has already applied the update by the
+    // time this arrives, so the loop's only job is to decide when to paint.
+    let (dirty_tx, mut dirty_rx) = tokio::sync::mpsc::unbounded_channel();
+    let pump_journal = std::sync::Arc::clone(&shared);
     let pump = tokio::spawn(async move {
         while let Some(update) = updates.next().await {
-            // Cost is a live figure, not a transcript entry: it belongs in the
-            // status row where it can be replaced, not in scrollback where
-            // each revision would pile up as another line.
-            if let SessionUpdate::UsageUpdate(usage) = &update
-                && let Some(cost) = bitrouter_tui::cost::Cost::from_usage(usage)
-                && cost_tx.send(cost).is_err()
-            {
+            journal(&pump_journal).apply(update);
+            if dirty_tx.send(()).is_err() {
                 return;
-            }
-            let rendered = match pump_transcript.lock() {
-                Ok(mut transcript) => transcript.apply(update),
-                // A poisoned lock costs this update, not the session.
-                Err(poisoned) => poisoned.into_inner().apply(update),
-            };
-            for line in rendered {
-                if rendered_tx.send(line).is_err() {
-                    return;
-                }
             }
         }
     });
 
+    // Every prompt gets its own id so two in a row cannot merge into one run —
+    // which they otherwise would, if the agent answered the first with
+    // nothing at all.
+    let mut prompts = 0_usize;
+    let mut abnormal = false;
+
     'session: loop {
-        // The live row is the prompt while a line is being typed: raw mode
-        // means nothing is echoed unless we echo it.
+        view.input.clear();
+        view.paint(&shared)?;
         let read = tokio::select! {
-            read = stdin.read_line(|buffer| {
-                view.draw(&ratatui::text::Line::from(format!("> {buffer}")))
-                    .context("echoing the prompt")
+            // Raw mode means nothing is echoed unless the footer echoes it.
+            read = stdin.read_line(|typed| {
+                view.input = typed.to_string();
+                view.paint(&shared)
             }) => read?,
             // A signal at an idle prompt ends the session the same way Ctrl-D
             // does — through teardown, not around it.
@@ -860,28 +962,41 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             crate::chat::input::Prompt::Line(line) => line,
             crate::chat::input::Prompt::End => break,
         };
+        view.input.clear();
+        // The last turn's word stands until this one starts, so a stop reason
+        // is readable for as long as the reader is deciding what to say next
+        // rather than for the one frame between them.
+        view.notice = None;
         // A line of exactly `/route` opens the picker. Only offered when the
         // session can honour it — see `can_reroute`.
         if line.trim() == "/route" {
             if routable {
-                pick_provider(&mut view, &mut stdin, &providers).await?;
+                pick_provider(&mut view, &shared, &mut stdin, &providers).await?;
             } else {
-                view.commit(&[ratatui::text::Line::from(
+                view.notice = Some(ratatui::text::Line::from(
                     "this session cannot be rerouted (running direct, or its credential is \
                      its own and cannot be attributed)",
-                )])?;
+                ));
+                view.paint(&shared)?;
             }
             continue;
         }
-        view.commit(&[ratatui::text::Line::from(format!("> {line}"))])
-            .context("committing the prompt")?;
-        // No cost has been reported for this turn yet, and saying so is the
-        // honest starting state — not a zero.
-        let mut cost_line = bitrouter_tui::cost::unreported();
-        view.draw(&cost_line).context("drawing the live row")?;
+        // The prompt joins the document in the user's own voice, so it scrolls
+        // with the answer it asked for.
+        prompts = prompts.saturating_add(1);
+        journal(&shared).apply(SessionUpdate::UserMessageChunk(prompt_chunk(
+            &line, prompts,
+        )));
+        view.paint(&shared)?;
 
         let turn = session.prompt(&line);
         tokio::pin!(turn);
+        // The tick is the streaming frame budget. It lives here rather than at
+        // the prompt because streaming is the only thing that needs
+        // coalescing: a keystroke and a permission paint immediately.
+        let mut ticker = tokio::time::interval(bitrouter_tui::writer::Schedule::INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut schedule = bitrouter_tui::writer::Schedule::default();
         // Both are handled *after* the `select!` rather than inside a branch:
         // the branch bodies run while the arms' futures are still borrowed,
         // and one of those arms holds `stdin` — which is exactly what
@@ -889,20 +1004,26 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         let mut requested = None;
         let mut interrupted = false;
         let outcome = loop {
+            let mut paint = false;
             tokio::select! {
-                update = rendered_rx.recv() => match update {
-                    Some(line) => view.commit(&[line]).context("committing an update")?,
+                update = dirty_rx.recv() => match update {
+                    // Already in the journal; the tick decides when it is seen.
+                    Some(()) => {
+                        schedule.wake(
+                            bitrouter_tui::writer::Trigger::Update,
+                            std::time::Instant::now(),
+                        );
+                    }
                     None => continue,
+                },
+                _ = ticker.tick() => {
+                    paint = schedule.wake(
+                        bitrouter_tui::writer::Trigger::Tick,
+                        std::time::Instant::now(),
+                    );
                 },
                 request = permission_rx.recv() => match request {
                     Some(request) => requested = Some(request),
-                    None => continue,
-                },
-                reported = cost_rx.recv() => match reported {
-                    Some(cost) => {
-                        cost_line = cost.render();
-                        view.draw(&cost_line).context("drawing the cost")?;
-                    }
                     None => continue,
                 },
                 event = stdin.next_event() => match event {
@@ -918,50 +1039,47 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 // is shut down and the terminal restored on the way out.
                 () = shutdown.recv() => break 'session,
             }
+            if paint {
+                view.paint(&shared)?;
+            }
             if let Some(request) = requested.take() {
-                answer_permission(&mut view, &mut stdin, request).await?;
-                // The prompt took the live row; put the cost back.
-                view.draw(&cost_line).context("redrawing the live row")?;
+                answer_permission(&mut view, &shared, &mut stdin, request).await?;
+                schedule.wake(
+                    bitrouter_tui::writer::Trigger::Permission,
+                    std::time::Instant::now(),
+                );
             }
             if interrupted {
                 break None;
             }
         };
-        // Drain whatever the agent emitted between its last update and the
-        // turn resolving, so nothing is lost to the race.
-        while let Ok(line) = rendered_rx.try_recv() {
-            view.commit(&[line])
-                .context("committing a trailing update")?;
-        }
-        // Then end the turn's streaming: chunks buffer until something ends
-        // them, and a turn that is a plain answer ends with nothing but
-        // message chunks. Without this the reply is never drawn.
-        let trailing = match transcript.lock() {
-            Ok(mut transcript) => transcript.flush(),
-            Err(poisoned) => poisoned.into_inner().flush(),
-        };
-        for line in trailing {
-            view.commit(&[line])
-                .context("committing the turn's final lines")?;
-        }
-        match outcome {
+        // Whatever the pump applied between its last signal and the turn
+        // resolving is already in the journal; draining the signals is what
+        // makes the frame below include it.
+        while dirty_rx.try_recv().is_ok() {}
+        view.notice = Some(match outcome {
             // Dropping the turn future stops this side waiting; the agent is
             // told to stop by `session/cancel`, which is a later task. Saying
             // "abandoned" rather than "cancelled" is the honest difference.
-            None => view.commit(&[ratatui::text::Line::from("[turn abandoned]")])?,
-            Some(Ok(response)) => view.commit(&[ratatui::text::Line::from(format!(
-                "[{:?}]",
-                response.stop_reason
-            ))])?,
-            Some(Err(e)) => {
-                view.commit(&[ratatui::text::Line::from(format!("turn failed: {e}"))])?;
-                // A failed turn is the abnormal exit this exists for: the log
-                // holds both the substrate's side and the agent child's.
-                commit_log_tail(&mut view)?;
+            None => ratatui::text::Line::from("[turn abandoned]"),
+            Some(Ok(response)) => {
+                ratatui::text::Line::from(format!("[{:?}]", response.stop_reason))
             }
-        }
-        // The settled turn's cost, kept where the transcript will preserve it.
-        view.commit(&[cost_line]).context("committing the cost")?;
+            Some(Err(e)) => {
+                // A failed turn is the abnormal exit the log tail exists for;
+                // it is written after teardown, when the terminal is the
+                // shell's again.
+                abnormal = true;
+                ratatui::text::Line::from(format!("turn failed: {e}"))
+            }
+        });
+        // A settled turn is immediate: it is the moment the reader is waiting
+        // for, not streaming noise.
+        schedule.wake(
+            bitrouter_tui::writer::Trigger::TurnSettled,
+            std::time::Instant::now(),
+        );
+        view.paint(&shared)?;
     }
 
     pump.abort();
@@ -969,16 +1087,33 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // A session whose agent could not be shut down cleanly ended abnormally
     // too, and the log is where the reason is.
     let shutdown = session.shutdown().await;
-    if shutdown.is_err() {
-        commit_log_tail(&mut view)?;
+    abnormal = abnormal || shutdown.is_err();
+    // Leave the cursor below the document, then give the terminal back —
+    // in that order, because the log tail below is written as ordinary
+    // output and must land in a terminal that is the shell's again.
+    view.finish()?;
+    drop(stdin);
+    if abnormal {
+        write_plain(&mut std::io::stdout(), &session_log_tail())?;
     }
-    // Give the live rows back before anything else prints.
-    view.finish().context("closing the inline viewport")?;
     shutdown.context("shutting down chat session")?;
     if let Some(exporter) = exporter {
         exporter.shutdown();
     }
     Ok(())
+}
+
+/// The user's own prompt, as the update the agent would have sent for it.
+///
+/// Keyed, because the journal's sticky rule continues an open run on an
+/// unkeyed chunk: two prompts in a row with no answer between them would
+/// otherwise become one paragraph.
+fn prompt_chunk(line: &str, nth: usize) -> agent_client_protocol::schema::v1::ContentChunk {
+    use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, MessageId, TextContent};
+
+    let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(line.to_string())));
+    chunk.message_id = Some(MessageId::from(format!("chat:prompt:{nth}")));
+    chunk
 }
 
 /// A rendered line as plain text: the spans concatenated, every style
@@ -1009,10 +1144,15 @@ fn write_plain(
 
 /// The same session, for a stdout that is not a terminal.
 ///
-/// Deliberately not a second renderer: it is the same `Transcript`, printed
-/// without a backend. What it drops is everything that needs a screen — the
-/// live row, the cost figure that replaces itself, the picker, raw mode — and
+/// Deliberately not a second renderer: it is the same journal and the same
+/// renderers, printed without a backend. What it drops is everything that
+/// needs a screen — the footer, the picker, raw mode, painting in place — and
 /// what it keeps is the transcript, which is the part a pipe can use.
+///
+/// The document is written **once per turn**, from the row after the last one
+/// written. A pipe cannot take a row back, so nothing is emitted until the
+/// turn that produces it has settled — which is also what makes in-place
+/// patching arrive as one finished tool call rather than three.
 ///
 /// A permission request is denied rather than asked, because there is nobody
 /// to ask: the terminal that would carry the question is the one that isn't
@@ -1025,17 +1165,29 @@ async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> 
     use futures::FutureExt as _;
     use tokio::io::AsyncBufReadExt as _;
 
+    /// The terminal a pipe does not have. Eighty columns is the convention
+    /// every tool that has had to guess has guessed.
+    const PIPED: ratatui::layout::Size = ratatui::layout::Size {
+        width: 80,
+        height: 24,
+    };
+
     let mut out = std::io::stdout();
-    let mut transcript = bitrouter_tui::transcript::Transcript::default();
+    let mut journal = bitrouter_tui::journal::Journal::default();
+    let mut cache = bitrouter_tui::writer::Cache::default();
+    let registry = bitrouter_tui::render::Registry::default();
+    // How many rows of the document have already been written.
+    let mut written = 0_usize;
+    let mut prompts = 0_usize;
     let mut updates = session.raw_updates();
     let mut permissions = session.permissions();
     // The only reader of stdin on this path, and it takes no raw mode — the
     // one that does (`chat::input::Stdin`) needs a terminal, which is exactly
     // what is missing here.
-    let mut prompts = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
     let ended = loop {
-        let Some(line) = prompts.next_line().await.context("reading stdin")? else {
+        let Some(line) = lines.next_line().await.context("reading stdin")? else {
             break Ok(());
         };
         if line.trim().is_empty() {
@@ -1045,16 +1197,17 @@ async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> 
             writeln!(out, "/route needs a terminal").context("writing to stdout")?;
             continue;
         }
-        if let Err(e) = writeln!(out, "> {line}").context("writing the prompt") {
-            break Err(e);
-        }
+        prompts = prompts.saturating_add(1);
+        journal.apply(SessionUpdate::UserMessageChunk(prompt_chunk(
+            &line, prompts,
+        )));
 
         let turn = session.prompt(&line);
         tokio::pin!(turn);
         let outcome = loop {
             tokio::select! {
                 update = updates.next() => if let Some(update) = update {
-                    write_plain(&mut out, &transcript.apply(update))?;
+                    journal.apply(update);
                 },
                 request = permissions.next() => if let Some(request) = request {
                     let prompt = bitrouter_tui::permission::Prompt::new(
@@ -1075,11 +1228,15 @@ async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> 
             }
         };
         // Whatever the agent emitted between its last update and the turn
-        // resolving, then the trailing chunks the turn's end is what closes.
+        // resolving. There is nothing to flush: the journal has no buffered
+        // state, which is the whole reason it replaced `Transcript`.
         while let Some(Some(update)) = updates.next().now_or_never() {
-            write_plain(&mut out, &transcript.apply(update))?;
+            journal.apply(update);
         }
-        write_plain(&mut out, &transcript.flush())?;
+        let document = cache.document(&journal, &registry, PIPED, &[]);
+        write_plain(&mut out, document.get(written..).unwrap_or_default())?;
+        written = document.len();
+        journal.painted();
         match outcome {
             Ok(response) => {
                 writeln!(out, "[{:?}]", response.stop_reason).context("writing the stop reason")?
@@ -1105,7 +1262,8 @@ async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> 
 /// serving rather than the one they asked for. A `set` that fails leaves the
 /// old route marked, and says why.
 async fn pick_provider(
-    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    view: &mut View,
+    shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
     stdin: &mut crate::chat::input::Stdin,
     providers: &SessionProviders,
 ) -> Result<()> {
@@ -1114,12 +1272,16 @@ async fn pick_provider(
 
     let listed = providers.list().await;
     let Some(picker) = bitrouter_tui::picker::Picker::open(true, &listed) else {
-        view.commit(&[ratatui::text::Line::from(
+        view.notice = Some(ratatui::text::Line::from(
             "no routable providers to choose between",
-        )])?;
+        ));
+        view.paint(shared)?;
         return Ok(());
     };
-    view.draw(&picker.render()).context("drawing the picker")?;
+    // The picker is a footer row for as long as it is open, repainted in
+    // place like everything else down there.
+    view.modal = Some(picker.render());
+    view.paint(shared)?;
 
     // Keys come from the session's one stdin owner, which already holds raw
     // mode: a modal that took and dropped it would be a second owner, and the
@@ -1148,8 +1310,10 @@ async fn pick_provider(
         }
     };
 
+    view.modal = None;
     let Some(id) = chosen else {
-        view.commit(&[ratatui::text::Line::from("route unchanged")])?;
+        view.notice = Some(ratatui::text::Line::from("route unchanged"));
+        view.paint(shared)?;
         return Ok(());
     };
 
@@ -1168,13 +1332,16 @@ async fn pick_provider(
                 .find(|p| p.current.is_some())
                 .map(|p| p.provider_id.0.to_string())
                 .unwrap_or_else(|| "unchanged".to_string());
-            view.commit(&[ratatui::text::Line::from(format!("route: {in_force}"))])?;
+            view.notice = Some(ratatui::text::Line::from(format!("route: {in_force}")));
+            // The footer names the route for the rest of the session, not just
+            // for this frame.
+            view.route = Some(in_force);
         }
         Err(e) => {
-            view.commit(&[ratatui::text::Line::from(format!("route unchanged: {e}"))])?;
+            view.notice = Some(ratatui::text::Line::from(format!("route unchanged: {e}")));
         }
     }
-    Ok(())
+    view.paint(shared)
 }
 
 /// Draw a permission request and block on the user's answer.
@@ -1186,7 +1353,8 @@ async fn pick_provider(
 /// Every path that is not an explicit choice resolves to deny or cancel.
 /// A prompt that resolved ambiguity as consent would be worse than no prompt.
 async fn answer_permission(
-    view: &mut bitrouter_tui::viewport::Inline<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    view: &mut View,
+    shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
     stdin: &mut crate::chat::input::Stdin,
     request: bitrouter_sdk::acp::up::PendingPermission,
 ) -> Result<()> {
@@ -1198,8 +1366,10 @@ async fn answer_permission(
         request.tool_call.tool_call_id.0.to_string(),
         request.options.clone(),
     );
-    view.draw(&prompt.render())
-        .context("drawing the permission prompt")?;
+    // The journal holds the open question, so every frame drawn while it is
+    // open shows it — including one painted by something else entirely.
+    journal(shared).set_pending_permission(Some(prompt.clone()));
+    view.paint(shared)?;
 
     let deny = || match prompt.deny() {
         Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
@@ -1242,13 +1412,15 @@ async fn answer_permission(
 
     let chosen = matches!(outcome, RequestPermissionOutcome::Selected(_));
     request.resolve(outcome);
-    view.commit(&[ratatui::text::Line::from(if chosen {
-        "  permission answered"
+    // Answered: the question stops being asked, and what was decided is said
+    // once rather than left on screen as though it were still open.
+    journal(shared).set_pending_permission(None);
+    view.notice = Some(ratatui::text::Line::from(if chosen {
+        "permission answered"
     } else {
-        "  permission denied"
-    })])
-    .context("recording the permission decision")?;
-    Ok(())
+        "permission denied"
+    }));
+    view.paint(shared)
 }
 
 // ── prompt ────────────────────────────────────────────────────────────────────

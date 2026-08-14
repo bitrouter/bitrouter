@@ -129,15 +129,26 @@ impl<B: Backend + SyncSink> Writer<B> {
     /// life. On a real terminal it is a DSR query that blocks on the reply,
     /// which would both stall a frame and race the session's stdin owner for
     /// the answer, so the frame path may never do it.
+    ///
+    /// A query that fails or times out is **not** fatal: some terminals do not
+    /// answer, and typed-ahead input can arrive where the reply was expected.
+    /// The fallback is the last row, which is the one assumption that can
+    /// never overwrite something already on screen — the session simply starts
+    /// at the bottom and scrolls, exactly as it would under a shell prompt
+    /// there. Refusing to open at all would turn an unanswered question into a
+    /// dead session.
     pub fn new(mut backend: B) -> io::Result<Self> {
         let size = backend.size()?;
-        let cursor = backend.get_cursor_position()?;
         let height = size.height.max(1);
+        let anchor = match backend.get_cursor_position() {
+            Ok(cursor) => cursor.y.min(height.saturating_sub(1)),
+            Err(_) => height.saturating_sub(1),
+        };
         Ok(Self {
             backend,
             prev: Vec::new(),
             viewport_top: 0,
-            anchor: cursor.y.min(height.saturating_sub(1)),
+            anchor,
             width: size.width.max(1),
             height,
         })

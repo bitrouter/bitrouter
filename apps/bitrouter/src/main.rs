@@ -1516,19 +1516,24 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    // `chat` shares this rule with the `acp` verbs: its stdout is the
-    // session transcript, so log lines must not interleave with it.
+    // `chat` shares this rule with the `acp` verbs, and goes further: it owns
+    // the terminal, stderr included. Its renderer paints rows in place against
+    // its own model of where they are, so a log line arriving between frames
+    // does not merely interleave — it scrolls the screen out from under the
+    // renderer and every row below it lands one line off. So chat's logs go to
+    // the session file **only** (see TUI_RENDERER_SPEC §4.6).
     let is_acp = matches!(
         &cli.command,
         Some(Command::Acp { .. } | Command::Chat { .. })
     );
+    let owns_the_terminal = matches!(&cli.command, Some(Command::Chat { .. }));
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
         // Any `acp` subcommand: stderr so stdout stays pristine, plus a
         // per-session file so the substrate's log and the agent child's
         // captured stderr can be read back interleaved.
-        if let Some(path) = init_session_log_tracing_subscriber() {
+        if let Some(path) = init_session_log_tracing_subscriber(!owns_the_terminal) {
             tracing::debug!(log = %path.display(), "session log");
             // Remembered so a session that dies badly can show the end of it
             // and say where the rest is. Set once, at init, because that is
@@ -2573,7 +2578,7 @@ fn session_log_path() -> anyhow::Result<PathBuf> {
 /// cannot be opened is **not** fatal — the session still runs, logging to
 /// stderr alone — because losing the transcript is not a reason to refuse to
 /// start.
-fn init_session_log_tracing_subscriber() -> Option<PathBuf> {
+fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
 
     let env_filter = || {
@@ -2589,11 +2594,24 @@ fn init_session_log_tracing_subscriber() -> Option<PathBuf> {
     });
     match opened {
         Ok((path, file)) => {
-            tracing_subscriber::fmt()
-                .with_ansi(false)
-                .with_writer(std::io::stderr.and(std::sync::Arc::new(file)))
-                .with_env_filter(env_filter())
-                .init();
+            let file = std::sync::Arc::new(file);
+            // `chat` passes `false`: it draws on this terminal, and a log line
+            // between two frames scrolls the screen underneath its renderer.
+            // Everything is still in the file, and `chat` shows the tail of it
+            // when a session ends badly.
+            if also_stderr {
+                tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(std::io::stderr.and(file))
+                    .with_env_filter(env_filter())
+                    .init();
+            } else {
+                tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(file)
+                    .with_env_filter(env_filter())
+                    .init();
+            }
             Some(path)
         }
         Err(e) => {
