@@ -283,8 +283,13 @@ impl TaskAwarePredictiveRouteProjection {
             return None;
         }
 
+        let task_family = TaskFamily::parse_key(task_family)?;
+        if task_family == TaskFamily::Unknown {
+            return None;
+        }
+
         Some(Self::new(
-            TaskFamily::parse_key(task_family)?,
+            task_family,
             NextStepRole::parse_key(next_step_role)?,
             parse_route_risk(risk)?,
         ))
@@ -313,7 +318,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:578df37f9c438fc4f15b59991f4f8ddecd75a4f25a1deae7f192854f7608561d";
+    "sha256:f2c33fd9b53efc1fb22e662cf3b392f2604bf541bf1cb4a62215e5f52c80a04c";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -627,6 +632,7 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             ("role_scoring".into(), 1),
             ("task_complexity".into(), 1),
             ("risk_mapping".into(), 1),
+            ("task_family_boundary_matching".into(), 1),
         ]),
         task_family_scorecard: TaskFamilyScorecard {
             weights: BTreeMap::from([
@@ -795,7 +801,7 @@ fn classify_task_family(
         let key = family.key();
         let matched_count = behavior_terms(&behavior.task_family_terms, key)
             .iter()
-            .filter(|term| text.contains(term.as_str()))
+            .filter(|term| contains_task_term(&text, term))
             .count()
             .min(u8::MAX as usize) as u8;
         let weight = scorecard.weights.get(key).copied().unwrap_or_default();
@@ -803,8 +809,8 @@ fn classify_task_family(
         evidence_counts.insert(*family, matched_count);
     }
 
-    if text.contains("fix")
-        && contains_any(
+    if contains_task_term(&text, "fix")
+        && contains_any_task_terms(
             &text,
             &[
                 "panic",
@@ -823,7 +829,7 @@ fn classify_task_family(
             scorecard.debugging_failure_fix_bonus,
         );
     }
-    if contains_any(
+    if contains_any_task_terms(
         &text,
         behavior_terms(&behavior.task_family_terms, "code:review"),
     ) {
@@ -905,6 +911,28 @@ fn task_family_instruction_text(prompt: &Prompt, normalized_plain_text_history: 
         .or_else(|| prompt.system.clone())
         .unwrap_or_default()
         .to_ascii_lowercase()
+}
+
+fn contains_any_task_terms<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
+    terms
+        .iter()
+        .any(|term| contains_task_term(text, term.as_ref()))
+}
+
+fn contains_task_term(text: &str, term: &str) -> bool {
+    if term.is_empty() {
+        return false;
+    }
+
+    text.match_indices(term).any(|(start, _)| {
+        let end = start + term.len();
+        task_term_boundary(text[..start].chars().next_back())
+            && task_term_boundary(text[end..].chars().next())
+    })
+}
+
+fn task_term_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
 }
 
 fn add_task_family_bonus(scores: &mut BTreeMap<TaskFamily, i16>, family: TaskFamily, bonus: i16) {
@@ -2584,6 +2612,12 @@ mod tests {
             )
             .is_none()
         );
+        assert!(
+            TaskAwarePredictiveRouteProjection::parse_key(
+                "agent_route/v2|unknown|implement|normal"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -2699,5 +2733,27 @@ mod tests {
             private_prediction.task_family_evidence,
             adapter_prediction.task_family_evidence
         );
+    }
+
+    #[test]
+    fn task_family_does_not_match_short_terms_inside_action_words() {
+        let cases = [
+            (
+                "dom and ui inside random and build",
+                "Run the random build command and report its output.",
+            ),
+            (
+                "ci fix and error inside civic prefix and terror",
+                "Run the civic prefix terror command and report its output.",
+            ),
+        ];
+
+        for (name, instruction) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.task_family, TaskFamily::Unknown, "{name}");
+            assert!(prediction.task_family_evidence.is_empty(), "{name}");
+        }
     }
 }
