@@ -10,11 +10,11 @@
 //! at it.
 //!
 //! The SDK's *push* path is a different kind of thing and does not weaken the
-//! rule here. `otel` renders the SDK's own domain model — which span is
-//! `chat`, what counts as a hop, when settlement closes — into an open
-//! standard; that is BitRouter semantics, not vendor glue, so it belongs to
-//! the SDK. `MetricsRenderer` is unchanged by it: the SDK still owns the
-//! trait and never the accumulator.
+//! rule here. What `otel` owns is the **span schema** — the span names, the
+//! `bitrouter.*` attribute vocabulary, and the invariants a deployment cannot
+//! be trusted to re-derive; the OTLP renderer ships with it because there is
+//! one renderer and it is default-off. `MetricsRenderer` is unchanged by it:
+//! the SDK still owns the trait and never the accumulator.
 //!
 //! Spend / token / rate aggregations are *not* SDK concerns. Any deployment
 //! that needs them owns its own storage; see the OSS binary's `metering`

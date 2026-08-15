@@ -18,11 +18,49 @@ that is load-bearing.
 > **Interop surfaces ship in the SDK behind default-off features; deployment
 > business logic does not.**
 
-OTLP export is the SDK's own domain model rendered into an open standard.
-Which span is `chat`, what counts as a hop, when settlement closes — that is
-BitRouter semantics, not vendor glue, and it must be identical across
-deployments or "interop surface" means nothing. The `MetricsRenderer` seam is
-unchanged: the SDK still owns the trait and never the accumulator.
+The interop surface is the **span schema**, and it is worth being exact about
+that, because the loose version of this claim — "OTLP export is the SDK's own
+domain model rendered into an open standard" — does not survive contact with
+the code, and it will be cited by the next PR that wants to move something in.
+
+What is genuinely BitRouter semantics:
+
+- the span names — `chat {inbound-model}`, `route`, per-hop `chat
+  {upstream-model}`, `settle`, and `invoke_agent` / `execute_tool` on the ACP
+  path;
+- the `bitrouter.*` attribute vocabulary;
+- the invariants that fail *silently and expensively* when a deployment
+  re-derives them differently. A hop is not a `gen_ai` generation
+  (`exporter.rs`): stamp `gen_ai.*` on it and every gen_ai-aware backend
+  counts two generations and doubles the reported cost. `acp.rs` withholds
+  `gen_ai.usage.*` because the substrate reports occupancy, not deltas.
+
+That schema must be identical across deployments or "interop surface" means
+nothing, and it is what the SDK owns. **The OTLP renderer ships alongside it
+because there is exactly one renderer and it is default-off** — not because
+OTLP transport, bearer refresh, batch processing or endpoint configuration are
+SDK concerns in their own right.
+
+Be honest about the ratio, so nobody mistakes the justification for a
+principle. Of ~2,556 production lines under `src/otel/` (the tree is 4,425
+lines, 42% of them `#[cfg(test)]`): **~43% span semantics, ~40% transport and
+vendor glue, ~17% deployment configuration.** `config.rs` is 455 lines of
+endpoint, headers, sampler kind, batch sizes, cardinality caps and bearer
+token — deployment configuration by this document's own dichotomy.
+`transport.rs`, `auth_client.rs`, `bearer.rs`, `processor_runtime.rs` (a
+workaround for an upstream `opentelemetry_sdk` 0.32 interval quirk),
+`cardinality.rs`, `http_layer.rs` and `subscriber.rs` contain no BitRouter
+concept at all. And the semantics themselves are not purely vendor-neutral:
+`exporter.rs` stamps `$screen_name` on the root `chat` span because *PostHog's*
+"URL / Screen" column reads it.
+
+None of that makes the placement wrong. It makes the *justification* narrower
+than the sentence this section used to open with. The narrow version covers
+everything actually here; the broad version would also cover metering,
+charging and policy, which must stay out.
+
+`MetricsRenderer` is unchanged by any of this: the SDK still owns the trait and
+never the accumulator.
 
 Three arguments that appear in the issue body were checked against the code
 and **do not hold**. Do not reuse them:
@@ -31,6 +69,48 @@ and **do not hold**. Do not reuse them:
 - *Crate-boundary drift* — no drift had actually occurred.
 - *Version lockstep* — the OTel pins were already hoisted to
   `[workspace.dependencies]` in PR 0, which solves lockstep on its own.
+
+#### The option this document did not pose
+
+This section asks "does OTLP belong in the SDK?" and D2 asks "shim or clean
+cut?". Neither asks the question that was actually live: **keep
+`crates/bitrouter-observe` as its own published crate.** Issue #808 proposed
+moving OTel into `apps/bitrouter`; that is the wrong home for a reason worth
+recording — `apps/bitrouter` *is* an importable library (`[lib] name =
+"bitrouter"`, no `publish = false`), so the objection is not access but weight:
+its tree is 408 crates against the SDK's 154 with `otel-http`, so a consumer
+taking the exporter from the binary would take sea-orm, ratatui, clap and the
+whole CLI with it, on the CLI's release cadence.
+
+But rejecting the binary does not by itself select the SDK. Against the
+standalone crate, SDK placement is measurably *worse* on three axes, and the
+decision is to accept that, not to deny it:
+
+- **Semver.** `tracing_core` 0.1 and `tracing_subscriber` 0.3 are now public
+  dependencies of the foundation crate, caused by one function
+  (`otel::subscriber::tracing_subscriber_layer`). Both are 0.x, where every
+  minor is breaking, and cargo versions crates rather than features — so a
+  `tracing-subscriber` 0.4 forces a breaking `bitrouter-sdk` release even for
+  consumers who never enable `otel`.
+- **Graph position.** `opentelemetry` now roots at `bitrouter-sdk` with six
+  in-repo dependents; under `bitrouter-observe` it had one. Any OTel bump
+  invalidates the build cache for the whole downstream workspace.
+- **Containment cost.** The `sdk-public-api` job, its pinned toolchain and
+  tool, `public-api-deps.txt`, and most of this document exist because the
+  code is now public-API-adjacent.
+
+What buys those costs is a single consumer fact: **`bitrouter-cloud` links
+`bitrouter-sdk` and enables an `otel` transport feature.** It is closed-source
+and out-of-tree, so it needs the exporter from a published library crate, and
+it already takes `bitrouter-sdk` — the standalone crate would be a second
+published dependency delivering code the first one could carry. That, and not
+the "domain model rendered into an open standard" sentence, is the load-bearing
+argument for where this lives.
+
+**Revisit if either fact changes:** if `tracing-subscriber` 0.4 ships, or if a
+second in-repo consumer wants `otel` while another wants a lean build, the
+standalone crate becomes the better shape again and this decision should be
+re-opened rather than defended.
 
 ### D2 — one-shot cut
 

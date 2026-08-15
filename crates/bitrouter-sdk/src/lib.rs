@@ -107,14 +107,28 @@
 //! The dividing line is **interop surfaces ship in the SDK behind default-off
 //! features; deployment business logic does not.**
 //!
-//! [`otel`] is on the SDK side of that line. OTLP export is this crate's own
-//! domain model rendered into an open standard — which span is `chat`, what
-//! counts as a hop, when settlement closes. That is BitRouter semantics, not
-//! vendor glue, and it has to be identical across every deployment or
-//! "interop surface" means nothing. Shipping it here is what makes that
-//! guarantee enforceable. It costs nothing to a consumer who does not want
-//! it: the feature is off by default and the whole OpenTelemetry stack drops
-//! out of the dependency tree with it.
+//! What puts [`otel`] on the SDK side of that line is the **span schema**, not
+//! the exporter: the span names (`chat`, `route`, `settle`, the per-hop
+//! `chat`), the `bitrouter.*` attribute vocabulary, and the invariants that
+//! fail silently and expensively when a deployment gets them wrong — a hop is
+//! not a `gen_ai` generation, and stamping it as one makes every
+//! gen_ai-aware backend double-count the reported cost. That schema has to be
+//! identical across every deployment or "interop surface" means nothing.
+//!
+//! The OTLP renderer ships *with* the schema because there is exactly one
+//! renderer and it is default-off — not because transport, credentials,
+//! batch processing and endpoint configuration are themselves SDK concerns.
+//! They are here as the schema's implementation, and they are most of the
+//! module by volume. Do not read this paragraph as licence to move further
+//! deployment logic in; read it as the narrowest justification that covers
+//! what is already here.
+//!
+//! An out-of-tree consumer that skips the feature pays nothing: it is off by
+//! default and the whole OpenTelemetry stack drops out of the dependency tree
+//! with it (124 crates without, 154 with). That is a claim about *this
+//! crate*, not about the workspace — `apps/bitrouter` enables `otel-http`
+//! unconditionally, so a workspace build resolves one `bitrouter-sdk` node
+//! with the stack on and every in-repo consumer links it.
 //!
 //! One shared library plugin still lives in its own crate:
 //!

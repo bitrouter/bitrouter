@@ -278,7 +278,24 @@ jobs:
               echo "::error::$pkg leaked into the otel-http tree"; exit 1
             fi
           done
-      - name: consumers stay lean
+      - name: consumers stay lean when consumed on their own
+        # Scope, stated exactly, because the obvious reading of this step is
+        # wrong and the wrong reading is the reassuring one.
+        #
+        # `cargo tree -p <crate>` resolves that crate's features IN ISOLATION —
+        # what a downstream gets from `cargo add bitrouter-guardrails`. That is
+        # a real shipped promise and this step guards it: pull the hook crate
+        # on its own and no axum, no OpenTelemetry.
+        #
+        # It is NOT a claim about building this workspace. `apps/bitrouter`
+        # enables `bitrouter-sdk/otel-http` unconditionally, and cargo unifies
+        # features across a workspace build into one `bitrouter-sdk` node, so
+        # `cargo build --workspace` DOES link the OTel stack into every crate
+        # here — `cargo tree --workspace -e normal -i opentelemetry` lists
+        # bitrouter-guardrails among its dependents. Both facts are true at
+        # once; they answer different questions. Do not "strengthen" this step
+        # to assert the workspace case, and do not read its green as evidence
+        # that the stack is absent from a local `cargo build`.
         run: |
           for pkg in axum opentelemetry; do
             if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
@@ -294,7 +311,7 @@ jobs:
             fi
             for pkg in axum opentelemetry; do
               if cargo tree -p "$crate" -e normal -i "$pkg" >/dev/null 2>&1; then
-                echo "::error::$crate must not depend on $pkg by default"; exit 1
+                echo "::error::$crate must not depend on $pkg when resolved on its own (a workspace build unifies features and legitimately does link it)"; exit 1
               fi
             done
           done
