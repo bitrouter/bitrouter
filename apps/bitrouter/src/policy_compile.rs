@@ -821,6 +821,9 @@ fn is_opening_like(request_key: &str) -> bool {
         Some(CanonicalPolicyProjection::Predictive(projection)) => {
             projection.next_step_role == NextStepRole::Orchestrate
         }
+        Some(CanonicalPolicyProjection::TaskAwarePredictive(projection)) => {
+            projection.next_step_role == NextStepRole::Orchestrate
+        }
         None => false,
     }
 }

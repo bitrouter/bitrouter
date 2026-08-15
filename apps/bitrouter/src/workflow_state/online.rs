@@ -7,7 +7,8 @@ use crate::workflow_state::extractors::{
 };
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
 use crate::workflow_state::predictive::{
-    PredictiveRouteIR, PredictiveRouteProjection, predict_next_step,
+    PredictiveRouteIR, PredictiveRouteProjection, TaskAwarePredictiveRouteProjection, TaskFamily,
+    predict_next_step,
 };
 use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
@@ -16,6 +17,7 @@ pub struct OnlineWorkflowState {
     pub predictive: PredictiveRouteIR,
     legacy_fingerprint: String,
     routing_key: String,
+    predictive_compatibility_routing_key_v1: String,
     observed_routing_key: String,
     compatibility_routing_key_v1: String,
     legacy_routing_key: String,
@@ -79,8 +81,18 @@ impl OnlineWorkflowState {
         ir.identity = resolve_workflow_identity(&input, tracker);
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let predictive = predict_next_step(&ir, prompt);
-        let routing_key =
+        let predictive_compatibility_routing_key_v1 =
             PredictiveRouteProjection::new(predictive.next_step_role, predictive.route_risk).key();
+        let routing_key = if predictive.task_family == TaskFamily::Unknown {
+            predictive_compatibility_routing_key_v1.clone()
+        } else {
+            TaskAwarePredictiveRouteProjection::new(
+                predictive.task_family,
+                predictive.next_step_role,
+                predictive.route_risk,
+            )
+            .key()
+        };
         let observed_routing_key = ir.route_projection().key();
         let compatibility_routing_key_v1 = ir.compatibility_route_projection_v1().key();
         let legacy_routing_key = ir.legacy_routing_key();
@@ -89,6 +101,7 @@ impl OnlineWorkflowState {
             predictive,
             legacy_fingerprint,
             routing_key,
+            predictive_compatibility_routing_key_v1,
             observed_routing_key,
             compatibility_routing_key_v1,
             legacy_routing_key,
@@ -101,6 +114,10 @@ impl OnlineWorkflowState {
 
     pub fn observed_routing_key(&self) -> &str {
         &self.observed_routing_key
+    }
+
+    pub fn predictive_compatibility_routing_key_v1(&self) -> &str {
+        &self.predictive_compatibility_routing_key_v1
     }
 
     pub fn compatibility_routing_key_v1(&self) -> &str {
@@ -260,6 +277,55 @@ mod tests {
         assert_eq!(
             state.compatibility_routing_key_v1(),
             "agent_trace/v1|tool_followup|normal"
+        );
+    }
+
+    #[test]
+    fn task_aware_online_state_uses_v2_and_retains_predictive_v1() {
+        let prompt = Prompt {
+            model: "inbound".to_string(),
+            system: None,
+            system_provider_metadata: ProviderMetadata::new(),
+            messages: vec![Message::text(
+                Role::User,
+                "Fix the parser panic in src/parser.rs after this regression failed.",
+            )],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let state = OnlineWorkflowState::from_headers(&HeaderMap::new(), &prompt);
+
+        assert_eq!(
+            state.routing_key(),
+            "agent_route/v2|code:debugging|implement|normal"
+        );
+        assert_eq!(
+            state.predictive_compatibility_routing_key_v1(),
+            "agent_route/v1|implement|normal"
+        );
+
+        let mut private_headers = HeaderMap::new();
+        private_headers.insert("x-bitrouter-harness", HeaderValue::from_static("smithers"));
+        private_headers.insert(
+            "x-smithers-workflow-id",
+            HeaderValue::from_static("private-release-workflow"),
+        );
+        private_headers.insert(
+            "x-smithers-node-id",
+            HeaderValue::from_static("generated-debug-task"),
+        );
+        let private_state = OnlineWorkflowState::from_headers(&private_headers, &prompt);
+
+        assert_eq!(
+            private_state.predictive.task_family,
+            state.predictive.task_family
+        );
+        assert_eq!(
+            private_state.predictive.task_family_evidence,
+            state.predictive.task_family_evidence
         );
     }
 
