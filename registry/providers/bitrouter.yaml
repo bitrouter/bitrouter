@@ -152,13 +152,6 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 9
-  - id: google/gemma-4-31b
-    provider_model_id: google/gemma-4-31b
-    pricing:
-      input_tokens:
-        no_cache: 0.13
-      output_tokens:
-        text: 0.4
   - id: minimax/minimax-m2.5
     provider_model_id: minimax/minimax-m2.5
     pricing:
@@ -292,30 +285,6 @@ models:
         no_cache: 0.276
       output_tokens:
         text: 1.101
-  - id: stepfun/step-3.5-flash
-    provider_model_id: stepfun/step-3.5-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.072
-        cache_read: 0.01425
-      output_tokens:
-        text: 0.216
-  - id: stepfun/step-3.7-flash
-    provider_model_id: stepfun/step-3.7-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.03
-      output_tokens:
-        text: 0.8625
-  - id: tencent/hy3
-    provider_model_id: tencent/hy3
-    pricing:
-      input_tokens:
-        no_cache: 0.066
-        cache_read: 0.029
-      output_tokens:
-        text: 0.26
   - id: x-ai/grok-4.20
     provider_model_id: x-ai/grok-4.20
     pricing:
@@ -439,13 +408,6 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 6
-  - id: meituan/longcat-2.0
-    provider_model_id: meituan/longcat-2.0
-    pricing:
-      input_tokens:
-        no_cache: 0.75
-      output_tokens:
-        text: 2.95
   - id: moonshotai/kimi-k3
     provider_model_id: moonshotai/kimi-k3
     pricing:

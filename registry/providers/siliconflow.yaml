@@ -114,35 +114,6 @@ models:
         no_cache: 0.05
       output_tokens:
         text: 0.45
-  - id: stepfun/step-3.5-flash
-    provider_model_id: stepfun-ai/Step-3.5-Flash
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-      output_tokens:
-        text: 0.3
-  - id: tencent/hy3
-    provider_model_id: tencent/Hy3-preview
-    pricing:
-      input_tokens:
-        no_cache: 0.066
-        cache_read: 0.029
-      output_tokens:
-        text: 0.26
-  - id: google/gemma-4-31b
-    provider_model_id: google/gemma-4-31B-it
-    pricing:
-      input_tokens:
-        no_cache: 0.13
-      output_tokens:
-        text: 0.4
-  - id: meituan/longcat-2.0
-    provider_model_id: meituan-longcat/LongCat-2.0
-    pricing:
-      input_tokens:
-        no_cache: 0.75
-      output_tokens:
-        text: 2.95
 status: active
 weight: 1
 submitted_at: 2026-07-07

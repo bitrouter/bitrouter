@@ -73,8 +73,6 @@ models:
     provider_model_id: grok-4.5
   - id: moonshotai/kimi-k3
     provider_model_id: kimi-k3
-  - id: tencent/hy3
-    provider_model_id: hy3
   - id: openai/gpt-5.6-luna
     provider_model_id: gpt-5.6-luna
 status: active

@@ -64,15 +64,6 @@ models:
         cache_write: 0
       output_tokens:
         text: 4.4
-  - id: stepfun/step-3.7-flash
-    provider_model_id: stepfun/step-3.7-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.19
-        cache_read: 0.03
-        cache_write: 0
-      output_tokens:
-        text: 1.14
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek/deepseek-v4-flash
     pricing:
