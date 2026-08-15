@@ -23,7 +23,7 @@ validation:
 
 - the former three-segment `agent_route/v1|<role>|<risk>` key;
 - every `agent_route/v2|...` key;
-- unknown task-family, role, or risk literals;
+- unrecognized task-family, role, or risk literals;
 - extra or missing segments.
 
 `agent_trace/v2` remains an independent telemetry projection. It is not a
