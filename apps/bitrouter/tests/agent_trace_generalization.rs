@@ -47,6 +47,7 @@ struct NativeCase {
 struct TaskAwareRouteCase {
     name: &'static str,
     instruction: &'static str,
+    pivot: Option<&'static str>,
     history: SemanticHistory,
     task_family: &'static str,
     role: &'static str,
@@ -124,47 +125,59 @@ async fn task_aware_cross_harness_routes_equivalent_requests_identically() {
                 request = request.add_header(*name, *value);
             }
             request.json(&case.body).await.assert_status_ok();
-            expected.push((scenario, case.source));
+            expected.push((scenario, case.source, case.name));
         }
     }
 
     let traces = capture.records();
     assert_eq!(traces.len(), expected.len());
-    for (trace, (scenario, harness)) in traces.iter().zip(&expected) {
+    for (trace, (scenario, harness, case_name)) in traces.iter().zip(&expected) {
         assert_eq!(
             trace.harness, *harness,
-            "{} harness extraction",
-            scenario.name
+            "{} {case_name} harness extraction",
+            scenario.name,
         );
     }
 
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("native task-aware HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), expected.len());
-    for (decision, (scenario, _)) in decisions.iter().zip(&expected) {
+    for (decision, (scenario, _, case_name)) in decisions.iter().zip(&expected) {
         assert_eq!(
             decision.predicted_task_family.as_deref(),
             Some(scenario.task_family),
-            "{} family",
-            scenario.name
+            "{} {case_name} family",
+            scenario.name,
         );
         assert_eq!(
             decision.predicted_role.as_deref(),
             Some(scenario.role),
-            "{} role",
-            scenario.name
+            "{} {case_name} role",
+            scenario.name,
+        );
+        assert_eq!(
+            decision.route_projection.as_deref(),
+            Some(scenario.primary_route),
+            "{} {case_name} primary route",
+            scenario.name,
         );
         assert_eq!(
             decision.request_key, scenario.matched_route,
-            "{} matched route",
-            scenario.name
+            "{} {case_name} matched route",
+            scenario.name,
         );
         assert_eq!(
             decision.selected_tier.as_deref(),
             Some(scenario.tier),
-            "{} tier",
-            scenario.name
+            "{} {case_name} tier",
+            scenario.name,
         );
+        if scenario.name == "later causal pivot" {
+            assert_ne!(
+                scenario.primary_route, scenario.matched_route,
+                "{case_name} regression fixture must exercise sparse v2 fallback"
+            );
+        }
     }
 }
 
@@ -325,7 +338,7 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
-            Some("sha256:f2c33fd9b53efc1fb22e662cf3b392f2604bf541bf1cb4a62215e5f52c80a04c")
+            Some("sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6")
         );
         assert_eq!(
             decision.prediction_confidence_kind.as_deref(),
@@ -936,7 +949,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             );
             assert_eq!(
                 record.predictor_contract_digest,
-                "sha256:f2c33fd9b53efc1fb22e662cf3b392f2604bf541bf1cb4a62215e5f52c80a04c",
+                "sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6",
                 "{history:?} {}",
                 fixture.id
             );
@@ -1539,11 +1552,12 @@ fn terminus_contract() -> &'static str {
     "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."
 }
 
-fn task_aware_route_cases() -> [TaskAwareRouteCase; 4] {
+fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
     [
         TaskAwareRouteCase {
             name: "debugging recovery",
             instruction: "Fix the parser panic after the regression test failed.",
+            pivot: None,
             history: SemanticHistory::FailedTest,
             task_family: "code:debugging",
             role: "implement",
@@ -1555,6 +1569,7 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 4] {
         TaskAwareRouteCase {
             name: "review verification",
             instruction: "Review this pull request diff for security vulnerabilities and audit it.",
+            pivot: None,
             history: SemanticHistory::PostEdit,
             task_family: "code:review",
             role: "verify",
@@ -1566,6 +1581,7 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 4] {
         TaskAwareRouteCase {
             name: "web research inspection",
             instruction: "Read current web sources from sources.json and research the release.",
+            pivot: None,
             history: SemanticHistory::NarrowRead,
             task_family: "agent:web_research",
             role: "mechanical",
@@ -1577,6 +1593,7 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 4] {
         TaskAwareRouteCase {
             name: "unknown fallback",
             instruction: "Run the shell command and report its output.",
+            pivot: None,
             history: SemanticHistory::Opening,
             task_family: "unknown",
             role: "unknown",
@@ -1584,6 +1601,18 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 4] {
             primary_route: "agent_route/v1|unknown|normal",
             matched_route: "agent_route/v1|unknown|normal",
             tier: "balanced",
+        },
+        TaskAwareRouteCase {
+            name: "later causal pivot",
+            instruction: "Review the parser API and report any compatibility risks.",
+            pivot: Some("Fix the regression in src/parser.rs and implement the correction."),
+            history: SemanticHistory::PostRead,
+            task_family: "code:debugging",
+            role: "implement",
+            risk: "normal",
+            primary_route: "agent_route/v2|code:debugging|implement|normal",
+            matched_route: "agent_route/v1|implement|normal",
+            tier: "strong",
         },
     ]
 }
@@ -1648,6 +1677,18 @@ fn task_aware_harness_case(
             let user_index = usize::from(source_name == "terminus");
             body["messages"][user_index]["content"] =
                 Value::String(scenario.instruction.to_string());
+        }
+    }
+    if let Some(pivot) = scenario.pivot {
+        match protocol {
+            MatrixProtocol::Responses => body["input"]
+                .as_array_mut()
+                .expect("responses input is an array")
+                .push(json!({"type": "message", "role": "user", "content": pivot})),
+            MatrixProtocol::Chat | MatrixProtocol::Messages => body["messages"]
+                .as_array_mut()
+                .expect("native messages are an array")
+                .push(json!({"role": "user", "content": pivot})),
         }
     }
     NativeCase {

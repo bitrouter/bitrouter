@@ -1651,11 +1651,13 @@ mod tests {
         let decision = EvalDecisionRef {
             decision_id: format!("req-{name}:auto"),
             policy: "auto".into(),
+            route_projection: None,
             request_key: "agent_trace/v2|edit|normal".into(),
             selected_tier: tier.into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            predictive_v1_fallback_tier: None,
             policy_digest: policy_digest.into(),
         };
         VariantEvidence {
@@ -1674,6 +1676,7 @@ mod tests {
             normalized_cost_micro_usd: if name == "baseline" { 100 } else { 60 },
             observed_latency_ms: 200,
             observations: vec![RouteObservation {
+                route_projection: decision.route_projection.clone(),
                 request_key: decision.request_key.clone(),
                 selected_tier: tier.into(),
                 input_effort: None,

@@ -41,7 +41,8 @@ use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisio
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::predictive::{
-    NextActionClass, NextStepRole, PredictiveEvidence, is_predictive_reason_code,
+    NextActionClass, NextStepRole, PredictiveEvidence, TaskAwarePredictiveRouteProjection,
+    is_predictive_reason_code, is_task_family_reason_code,
 };
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
@@ -104,6 +105,7 @@ pub struct PolicyDecision {
     pub prediction_confidence_kind: Option<String>,
     pub prediction_reason_codes: Vec<String>,
     pub task_family_reason_codes: Vec<String>,
+    pub predictive_v1_fallback_tier: Option<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
     pub request_qualified: bool,
@@ -384,14 +386,17 @@ impl PolicyTableRouter {
     }
 
     pub(crate) fn eval_baseline_tier(&self, decision: &PolicyDecision) -> Option<String> {
-        self.eval_observer
-            .as_ref()
-            .and_then(|observer| {
-                observer
-                    .route_baselines
-                    .get(&decision.request_key)
-                    .cloned()
-                    .or_else(|| observer.default_baseline.clone())
+        decision
+            .predictive_v1_fallback_tier
+            .clone()
+            .or_else(|| {
+                self.eval_observer.as_ref().and_then(|observer| {
+                    observer
+                        .route_baselines
+                        .get(&decision.request_key)
+                        .cloned()
+                        .or_else(|| observer.default_baseline.clone())
+                })
             })
             .or_else(|| decision.static_tier.clone())
     }
@@ -459,6 +464,7 @@ impl PolicyTableRouter {
         };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
+        let predictive_v1_request_key = online.predictive_compatibility_routing_key_v1();
         let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
@@ -499,6 +505,7 @@ impl PolicyTableRouter {
             task_family_reason_codes: task_family_reason_codes(
                 &online.predictive.task_family_evidence,
             ),
+            predictive_v1_fallback_tier: None,
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
             request_qualified: false,
@@ -522,12 +529,17 @@ impl PolicyTableRouter {
 
         let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
             &primary_request_key,
-            online.predictive_compatibility_routing_key_v1(),
+            predictive_v1_request_key,
             &observed_route_projection,
             online.compatibility_routing_key_v1(),
         ) else {
             return decision;
         };
+        if matched_request_key == predictive_v1_request_key
+            && TaskAwarePredictiveRouteProjection::parse_key(&primary_request_key).is_some()
+        {
+            decision.predictive_v1_fallback_tier = Some(raw_static_tier.to_owned());
+        }
         decision.request_key = matched_request_key.to_string();
         decision.static_tier = Some(raw_static_tier.to_string());
         decision.static_model = self
@@ -763,11 +775,13 @@ impl PolicyTableRouter {
                     decision_id: format!("{request_id}:{}", observer.policy),
                     policy: observer.policy.clone(),
                     policy_digest: observer.policy_digest.clone(),
+                    route_projection: decision.route_projection.clone(),
                     request_key: decision.request_key.clone(),
                     selected_tier: selected_tier.to_string(),
                     selected_effort: decision.selected_effort,
                     baseline_tier: baseline_tier.clone(),
                     baseline_effort,
+                    predictive_v1_fallback_tier: decision.predictive_v1_fallback_tier.clone(),
                     preset: Some(observer.policy.clone()),
                     holdout: false,
                     continuation_proposed_tier: bounded_continuation_label(
@@ -788,6 +802,7 @@ impl PolicyTableRouter {
                     predicted_action: decision.predicted_action.clone(),
                     prediction_confidence_ppm: decision.prediction_confidence_ppm,
                     task_family_confidence_ppm: decision.task_family_confidence_ppm,
+                    task_family_reason_codes: decision.task_family_reason_codes.clone(),
                     predictor_contract_digest: decision.predictor_contract_digest.clone(),
                     prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                     observation: None,
@@ -804,6 +819,7 @@ impl PolicyTableRouter {
                 input_model,
                 input_effort,
                 key_strategy: key_strategy_name().to_string(),
+                route_projection: Some(decision.route_projection.clone()),
                 request_key: decision.request_key.clone(),
                 ledger_key: self
                     .state_namespace
@@ -817,6 +833,7 @@ impl PolicyTableRouter {
                 preset_variant: self.eval_observer.as_ref().map(|item| item.policy.clone()),
                 baseline_tier,
                 baseline_effort,
+                predictive_v1_fallback_tier: decision.predictive_v1_fallback_tier.clone(),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
                 workflow_identity: decision.workflow_identity.clone(),
@@ -944,24 +961,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
     evidence
         .iter()
         .map(|item| item.code.as_str())
-        .filter(|code| {
-            matches!(
-                *code,
-                "task_code_generation"
-                    | "task_code_debugging"
-                    | "task_code_review"
-                    | "task_code_sql_database"
-                    | "task_code_frontend_ui"
-                    | "task_code_devops_config"
-                    | "task_code_repository_analysis"
-                    | "task_agent_multi_step_planning"
-                    | "task_agent_workflow_execution"
-                    | "task_agent_web_research"
-                    | "task_agent_memory_operations"
-                    | "task_agent_general"
-                    | "task_unknown"
-            )
-        })
+        .filter(|code| is_task_family_reason_code(code))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .take(MAX_PREDICTION_REASON_CODES)
@@ -1017,16 +1017,30 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::eval::settlement::EvalSettlementRecorder;
+    use crate::eval::store::EvalStore;
+    use crate::eval::types::{
+        EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
+    };
+    use crate::metering::PricingTable;
+    use crate::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
+    use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
+    use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::PolicyKeyStrategy;
+    use bitrouter_sdk::event::EventBus;
     use bitrouter_sdk::language_model::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -1436,7 +1450,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:f2c33fd9b53efc1fb22e662cf3b392f2604bf541bf1cb4a62215e5f52c80a04c")
+            Some("sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -2117,6 +2131,10 @@ mod tests {
                     "strong".to_string(),
                 ),
                 (
+                    "agent_route/v1|verify|normal".to_string(),
+                    "economy".to_string(),
+                ),
+                (
                     "agent_trace/v2|tool_followup|normal".to_string(),
                     "economy".to_string(),
                 ),
@@ -2141,6 +2159,7 @@ mod tests {
             "agent_route/v2|code:review|verify|normal"
         );
         assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(decision.predictive_v1_fallback_tier, None);
     }
 
     #[test]
@@ -2186,6 +2205,227 @@ mod tests {
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
     }
 
+    #[tokio::test]
+    async fn sparse_v2_settlement_compiles_against_inherited_v1_tier() -> anyhow::Result<()> {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        active
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?
+            .adequacy
+            .min_semantic_successes_for_lock = 1;
+        let policy_digest = semantic_digest(&active)?;
+        let policy = active
+            .policies
+            .get("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
+        let table = PolicyTable::from_config(
+            &policy.as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen),
+        )
+        .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
+        let route_baselines = active.certificates["auto"]
+            .iter()
+            .filter_map(|(request_key, certificate)| {
+                certificate
+                    .baseline_tier
+                    .as_ref()
+                    .map(|baseline| (request_key.clone(), baseline.clone()))
+            })
+            .collect();
+        let pending = PendingEvalDecisionStore::default();
+        let router = PolicyTableRouter::new(table).with_eval_observer(
+            pending.clone(),
+            "auto",
+            policy_digest.clone(),
+            route_baselines,
+            policy.default_tier.clone(),
+        );
+        let mut prompt = prompt("@auto");
+        prompt.messages = vec![user(
+            "Implement a new module and refactor the parser API in src/parser.rs.",
+        )];
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v2|code:generation|implement|normal"
+        );
+        assert_eq!(decision.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
+        let strong_model = policy
+            .tiers
+            .get("strong")
+            .ok_or_else(|| anyhow::anyhow!("template strong tier missing"))?
+            .model()
+            .to_owned();
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: strong_model,
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        )?;
+        let invocation = EvalInvocation::new("local");
+        router.record_bound_policy_decision(
+            "request-sparse-v2",
+            &invocation,
+            prompt.model,
+            prompt.params.reasoning_effort,
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let correlated = pending
+            .peek(&invocation, "local")
+            .ok_or_else(|| anyhow::anyhow!("pending sparse-v2 decision missing"))?;
+        assert_eq!(
+            correlated.route_projection,
+            "agent_route/v2|code:generation|implement|normal"
+        );
+        assert_eq!(correlated.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(
+            correlated.predictive_v1_fallback_tier.as_deref(),
+            Some("balanced")
+        );
+        assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            correlated.task_family_reason_codes,
+            vec!["task_code_generation"]
+        );
+
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let recorder =
+            EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
+        let mut settlement = SettlementContext {
+            request_id: "request-sparse-v2".into(),
+            caller: CallerContext::local(),
+            target: None,
+            model_id: "gpt-5.6-sol".into(),
+            reasoning_effort: None,
+            provider_id: "openai-codex".into(),
+            account_label: None,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            usage_origin: UsageOrigin::ProviderReported,
+            raw_usage: None,
+            web_search_count: 0,
+            media_input_count: 0,
+            media_output_count: 0,
+            server_tool_calls: Vec::new(),
+            streamed: false,
+            request_duration_ms: 100,
+            upstream_duration_ms: Some(90),
+            ttft_ms: None,
+            generation_duration_ms: None,
+            first_token_kind: None,
+            finish_reason: None,
+            error: None,
+            events: EventBus::default(),
+        };
+        settlement.emit(invocation);
+        recorder.record(&mut settlement).await?;
+        let subject = store
+            .subject("request:request-sparse-v2")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("settled sparse-v2 subject missing"))?;
+        let settled = subject
+            .decisions
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("settled sparse-v2 decision missing"))?;
+        assert_eq!(
+            settled.route_projection.as_deref(),
+            Some("agent_route/v2|code:generation|implement|normal")
+        );
+        assert_eq!(settled.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(
+            settled.predictive_v1_fallback_tier.as_deref(),
+            Some("balanced")
+        );
+        assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            subject
+                .evidence
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
+                .attributes
+                .get("task_family_reason_codes")
+                .map(String::as_str),
+            Some("task_code_generation")
+        );
+
+        let result = EvaluationResult {
+            schema_version: EVAL_SCHEMA_VERSION,
+            eval_id: subject.eval_id.clone(),
+            evidence_digest: subject.evidence_digest.clone(),
+            evaluator: EvaluatorIdentity {
+                authority_id: "task-native".into(),
+                evaluator_id: "sparse-v2-regression".into(),
+                kind: EvaluatorKind::TaskNative,
+                version: "1".into(),
+                config_digest: policy_digest,
+            },
+            verdict: EvalVerdict::Pass,
+            metrics: BTreeMap::new(),
+            hard_violations: Vec::new(),
+            confidence_ppm: Some(1_000_000),
+            evidence_refs: Vec::new(),
+            decision_credit: BTreeMap::new(),
+            idempotency_key: "sparse-v2-regression".into(),
+            submitted_at: "2026-08-15T00:00:01Z".into(),
+        };
+        let eval = EvalEvidenceSnapshot {
+            evidence_root:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            frozen_at: "2026-08-15T00:00:02Z".into(),
+            records: vec![EvalEvidenceRecord {
+                result_id: "sparse-v2-result".into(),
+                content_digest:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                subject,
+                result,
+            }],
+        };
+        let routes = eval.route_evidence()?;
+        let attributed = routes
+            .get(&(
+                "auto".to_owned(),
+                "agent_route/v2|code:generation|implement|normal".to_owned(),
+            ))
+            .ok_or_else(|| anyhow::anyhow!("v2 compiler attribution missing"))?;
+        assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            attributed.matched_request_keys,
+            BTreeSet::from(["agent_route/v1|implement|normal".to_owned()])
+        );
+        let compiled = compile_candidate(CompileInput {
+            current: &active,
+            parent_digest: None,
+            legacy: &LegacyAdequacySnapshot {
+                snapshot_time_unix_ms: 0,
+                pins: Vec::new(),
+                exploration: Vec::new(),
+                semantic_successes: Vec::new(),
+                reliability_events: Vec::new(),
+            },
+            eval: Some(&eval),
+            proposed_progress_guards: None,
+        })?
+        .document;
+        let certificate = compiled
+            .certificate("auto", "agent_route/v2|code:generation|implement|normal")
+            .ok_or_else(|| anyhow::anyhow!("compiled sparse-v2 certificate missing"))?;
+        assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+        Ok(())
+    }
+
     #[test]
     fn task_aware_policy_unknown_prediction_never_uses_a_v2_key() {
         let mut cfg = config();
@@ -2198,6 +2438,32 @@ mod tests {
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
         assert!(!decision.route_projection.starts_with("agent_route/v2|"));
+    }
+
+    #[test]
+    fn unknown_prediction_uses_an_explicit_v1_route_before_default() -> anyhow::Result<()> {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.fingerprints
+            .insert("agent_route/v1|unknown|normal".into(), "economy".into());
+        cfg.default_tier = Some("strong".into());
+        let routed = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("configured router missing"))?;
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Run the shell command and report its output.")];
+
+        let explicit = routed.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(explicit.route_projection, "agent_route/v1|unknown|normal");
+        assert_eq!(explicit.request_key, "agent_route/v1|unknown|normal");
+        assert_eq!(explicit.selected_tier.as_deref(), Some("economy"));
+
+        cfg.fingerprints.clear();
+        let defaulted = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("default router missing"))?;
+        let fallback = defaulted.decision_for(&prompt, &HeaderMap::new());
+        assert_eq!(fallback.selected_tier.as_deref(), Some("strong"));
+        Ok(())
     }
 
     #[test]

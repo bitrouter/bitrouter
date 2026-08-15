@@ -188,6 +188,10 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     for (event_key, attribute_key) in [
         ("routing.predicted_role", "predicted_role"),
         ("routing.predicted_task_family", "predicted_task_family"),
+        (
+            "routing.task_family_reason_codes",
+            "task_family_reason_codes",
+        ),
         ("routing.predicted_action", "predicted_action"),
         (
             "routing.predictor_contract_digest",
@@ -294,6 +298,11 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
+        route_projection: event
+            .evidence
+            .categorical
+            .get("route.route_projection")
+            .cloned(),
         request_key: required("route.request_key")?,
         selected_tier: required("route.selected_tier")?,
         selected_effort,
@@ -303,6 +312,11 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
             .get("route.baseline_tier")
             .cloned(),
         baseline_effort,
+        predictive_v1_fallback_tier: event
+            .evidence
+            .categorical
+            .get("route.predictive_v1_fallback_tier")
+            .cloned(),
         policy_digest,
     }))
 }
@@ -487,9 +501,14 @@ mod tests {
         assert_eq!(envelope.subject.decisions.len(), 1);
         assert_eq!(envelope.subject.decisions[0].decision_id, "route-1");
         assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");
+        assert_eq!(envelope.subject.decisions[0].route_projection, None);
         assert_eq!(
             envelope.subject.decisions[0].request_key,
             "agent_trace/v2|planning|normal"
+        );
+        assert_eq!(
+            envelope.subject.decisions[0].predictive_v1_fallback_tier,
+            None
         );
         assert_eq!(
             envelope.subject.requested_dimensions,

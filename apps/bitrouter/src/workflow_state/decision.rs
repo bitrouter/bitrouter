@@ -29,6 +29,9 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub input_effort: Option<ReasoningEffort>,
     pub key_strategy: String,
+    /// Primary canonical policy projection considered before sparse fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_projection: Option<String>,
     pub request_key: String,
     /// Database key for adequacy state. Named policies namespace this while
     /// keeping `request_key` human-readable. Old records omit it.
@@ -48,6 +51,9 @@ pub struct PolicyDecisionRecord {
     pub baseline_tier: Option<String>,
     #[serde(default)]
     pub baseline_effort: Option<ReasoningEffort>,
+    /// Tier selected by the corresponding predictive-v1 role/risk cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predictive_v1_fallback_tier: Option<String>,
     pub legacy_fingerprint: String,
     #[serde(rename = "trace_state", alias = "workflow_state")]
     pub workflow_state: String,
@@ -446,6 +452,7 @@ mod tests {
             input_model: "inbound".to_string(),
             input_effort: None,
             key_strategy: "agent_trace".to_string(),
+            route_projection: None,
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
             ledger_key: Some("agent_trace/v1|tool_followup|normal".to_string()),
             policy: None,
@@ -453,6 +460,7 @@ mod tests {
             preset_variant: None,
             baseline_tier: Some("capable".to_string()),
             baseline_effort: None,
+            predictive_v1_fallback_tier: None,
             legacy_fingerprint: "after_read_file".to_string(),
             workflow_state: "tool_followup".to_string(),
             workflow_identity: WorkflowIdentity::default(),
@@ -528,6 +536,8 @@ mod tests {
 
         let parsed: PolicyDecisionRecord = serde_json::from_str(legacy).unwrap();
 
+        assert_eq!(parsed.route_projection, None);
+        assert_eq!(parsed.predictive_v1_fallback_tier, None);
         assert_eq!(parsed.predicted_role, None);
         assert_eq!(parsed.predicted_task_family, None);
         assert_eq!(parsed.predicted_action, None);

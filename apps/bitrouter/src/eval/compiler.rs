@@ -93,16 +93,27 @@ impl EvalEvidenceSnapshot {
                 {
                     continue;
                 }
+                let route_projection = decision
+                    .route_projection
+                    .as_ref()
+                    .unwrap_or(&decision.request_key);
                 let route = routes
-                    .entry((decision.policy.clone(), decision.request_key.clone()))
+                    .entry((decision.policy.clone(), route_projection.clone()))
                     .or_default();
-                if let Some(baseline) = &decision.baseline_tier {
+                route
+                    .matched_request_keys
+                    .insert(decision.request_key.clone());
+                if let Some(baseline) = decision
+                    .predictive_v1_fallback_tier
+                    .as_ref()
+                    .or(decision.baseline_tier.as_ref())
+                {
                     match &route.baseline_tier {
                         Some(existing) if existing != baseline => {
                             anyhow::bail!(
                                 "eval route '{}:{}' names conflicting baselines",
                                 decision.policy,
-                                decision.request_key
+                                route_projection
                             );
                         }
                         None => route.baseline_tier = Some(baseline.clone()),
@@ -171,6 +182,7 @@ impl EvalEvidenceSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteEvalEvidence {
     pub baseline_tier: Option<String>,
+    pub matched_request_keys: BTreeSet<String>,
     pub tiers: BTreeMap<String, TierEvalEvidence>,
     pub sources: BTreeSet<EvaluatorKind>,
     pub evaluator_config_digests: BTreeSet<String>,
@@ -350,11 +362,13 @@ mod tests {
         subject.decisions.push(EvalDecisionRef {
             decision_id: "decision-b".into(),
             policy: "auto".into(),
+            route_projection: None,
             request_key: "agent_trace/v1|review|normal".into(),
             selected_tier: "strong".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            predictive_v1_fallback_tier: None,
             policy_digest: subject.policy_digest.clone(),
         });
         subject
@@ -414,11 +428,13 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
+                route_projection: None,
                 request_key: "agent_trace/v1|edit|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
+                predictive_v1_fallback_tier: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],

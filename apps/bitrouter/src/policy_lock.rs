@@ -45,6 +45,8 @@ pub(crate) const OPTIMIZATION_EXPERIMENT_COMPILER_ID: &str =
     "bitrouter-optimization-private-experiment";
 const EMPTY_SHA256: &str =
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const PRIOR_V1_PREDICTOR_DIGEST: &str =
+    "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec";
 
 /// The complete deterministic policy artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,10 +454,15 @@ fn validate_predictor_contract(
     policy: &PolicyDefinition,
     lockfile_version: u32,
 ) -> Result<()> {
-    let uses_predictive_routes = policy
+    let uses_v1_routes = policy
         .routes
         .keys()
-        .any(|key| key.starts_with("agent_route/v1|") || key.starts_with("agent_route/v2|"));
+        .any(|key| key.starts_with("agent_route/v1|"));
+    let uses_v2_routes = policy
+        .routes
+        .keys()
+        .any(|key| key.starts_with("agent_route/v2|"));
+    let uses_predictive_routes = uses_v1_routes || uses_v2_routes;
     if uses_predictive_routes && lockfile_version < EVIDENCE_POLICY_LOCKFILE_VERSION {
         anyhow::bail!(
             "policy '{policy_name}' predictive agent_route routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
@@ -471,7 +478,14 @@ fn validate_predictor_contract(
             compiled_scorecard_digest()
         );
     };
-    if actual != &expected {
+    let prior_v1 = PredictorContract {
+        algorithm: "deterministic_scorecard".to_owned(),
+        version: 1,
+        config_digest: PRIOR_V1_PREDICTOR_DIGEST.to_owned(),
+        confidence_kind: "heuristic_margin".to_owned(),
+        calibration_digest: None,
+    };
+    if actual != &expected && !(uses_v1_routes && !uses_v2_routes && actual == &prior_v1) {
         anyhow::bail!(
             "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
             compiled_scorecard_digest()
@@ -2643,9 +2657,11 @@ impl ModelSelector for PolicyRuntime {
                 route_event_id: stable_id("route-intent", owner, &trajectory_request_id),
                 guard_event_id: stable_id("guard-activation", owner, &trajectory_request_id),
                 policy_name: policy_name.to_owned(),
+                route_projection: decision.route_projection.clone(),
                 request_key,
                 baseline_tier,
                 baseline_effort,
+                predictive_v1_fallback_tier: decision.predictive_v1_fallback_tier.clone(),
                 tier_efforts: router.effective_tier_efforts(input_effort),
                 preset: Some(policy_name.to_owned()),
                 projection,
@@ -2932,6 +2948,71 @@ mod tests {
         ]));
 
         validate_document(&lock)
+    }
+
+    #[test]
+    fn prior_predictor_contract_is_admitted_only_for_v1_routes() -> anyhow::Result<()> {
+        let legacy = PredictorContract {
+            algorithm: "deterministic_scorecard".into(),
+            version: 1,
+            config_digest:
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            confidence_kind: "heuristic_margin".into(),
+            calibration_digest: None,
+        };
+        let mut v1_only = task_aware_lock(BTreeMap::from([(
+            "agent_route/v1|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+        v1_only
+            .policies
+            .get_mut("coding")
+            .ok_or_else(|| anyhow::anyhow!("test policy missing"))?
+            .predictor = Some(legacy.clone());
+        validate_document(&v1_only)?;
+
+        let mut with_v2 = task_aware_lock(BTreeMap::from([(
+            "agent_route/v2|code:review|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+        with_v2
+            .policies
+            .get_mut("coding")
+            .ok_or_else(|| anyhow::anyhow!("test policy missing"))?
+            .predictor = Some(legacy.clone());
+        assert!(validate_document(&with_v2).is_err());
+
+        for changed in [
+            PredictorContract {
+                algorithm: "different_scorecard".into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                config_digest: TEST_DIGEST.into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                version: 2,
+                ..legacy.clone()
+            },
+            PredictorContract {
+                confidence_kind: "calibrated".into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                calibration_digest: Some(TEST_DIGEST.into()),
+                ..legacy.clone()
+            },
+        ] {
+            let mut changed_lock = v1_only.clone();
+            changed_lock
+                .policies
+                .get_mut("coding")
+                .ok_or_else(|| anyhow::anyhow!("test policy missing"))?
+                .predictor = Some(changed);
+            assert!(validate_document(&changed_lock).is_err());
+        }
+        Ok(())
     }
 
     #[test]
@@ -4017,6 +4098,10 @@ policies:
         assert!(!lock_raw.contains("explore_enabled:"));
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
+        assert_eq!(
+            policy.tiers.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from(["balanced".into(), "economy".into(), "strong".into()])
+        );
         assert_eq!(
             policy.tiers["balanced"].model(),
             "bitrouter:moonshotai/kimi-k3"

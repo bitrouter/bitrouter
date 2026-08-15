@@ -297,6 +297,10 @@ fn parse_assistant_action(
         })
 }
 
+pub(crate) fn is_assistant_action(message: &bitrouter_sdk::language_model::types::Message) -> bool {
+    message.role == Role::Assistant && parse_assistant_action(message).is_some()
+}
+
 fn normalized_action_history(prompt: &Prompt) -> Option<NormalizedActionHistory> {
     const MAX_SIGNALS: u8 = 3;
     let mut history = NormalizedActionHistory {

@@ -104,11 +104,13 @@ pub async fn import_semantic_reward_feedback(
             decisions: vec![EvalDecisionRef {
                 decision_id,
                 policy,
+                route_projection: None,
                 request_key,
                 selected_tier: selected_tier.to_string(),
                 selected_effort: candidate.selected_effort,
                 baseline_tier: Some(baseline_tier.to_string()),
                 baseline_effort: candidate.static_effort,
+                predictive_v1_fallback_tier: None,
                 policy_digest,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),

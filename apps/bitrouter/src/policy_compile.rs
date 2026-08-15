@@ -725,6 +725,7 @@ fn eval_route_evidence_digest(
     canonical_digest(&(
         policy_name,
         request_key,
+        evidence.map(|route| &route.matched_request_keys),
         evidence.map(|route| &route.evidence_records),
     ))
 }
@@ -1036,11 +1037,13 @@ mod tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: "decision-effort".into(),
                         policy: "auto".into(),
+                        route_projection: None,
                         request_key: EDIT_KEY.into(),
                         selected_tier: "economy".into(),
                         selected_effort: None,
                         baseline_tier: Some("strong".into()),
                         baseline_effort: Some(ReasoningEffort::High),
+                        predictive_v1_fallback_tier: None,
                         policy_digest: "policy-digest".into(),
                     }],
                     requested_dimensions: BTreeSet::new(),
@@ -1234,11 +1237,13 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-pretrained-demotion".into(),
                 policy: "auto".into(),
+                route_projection: None,
                 request_key: TEMPLATE_ECONOMY_KEY.into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
+                predictive_v1_fallback_tier: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1455,11 +1460,13 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
+                route_projection: None,
                 request_key: EDIT_KEY.into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
+                predictive_v1_fallback_tier: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1566,11 +1573,13 @@ mod tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: format!("decision-{tier}"),
                         policy: "auto".into(),
+                        route_projection: None,
                         request_key: EDIT_KEY.into(),
                         selected_tier: tier.into(),
                         selected_effort: None,
                         baseline_tier: Some("strong".into()),
                         baseline_effort: None,
+                        predictive_v1_fallback_tier: None,
                         policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
                     }],
                     requested_dimensions: BTreeSet::from([

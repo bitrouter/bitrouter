@@ -503,9 +503,11 @@ mod tests {
                         route_event_id: "route-report".into(),
                         guard_event_id: "guard-report".into(),
                         policy_name: "coding".into(),
+                        route_projection: "agent_route/v2|unknown|orchestrate|normal".into(),
                         request_key: "agent_trace/v2|opening|normal".into(),
                         baseline_tier: Some("strong".into()),
                         baseline_effort: None,
+                        predictive_v1_fallback_tier: Some("strong".into()),
                         tier_efforts: Default::default(),
                         preset: Some("coding".into()),
                         projection: RouteProjection::parse_key("agent_trace/v2|opening|normal")
