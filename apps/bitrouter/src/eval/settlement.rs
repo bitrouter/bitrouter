@@ -18,6 +18,7 @@ use super::types::{
     evidence_digest,
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
+use crate::workflow_state::predictive::TaskFamily;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
 
 /// Opaque, process-local identity for one pipeline invocation that produced an
@@ -90,8 +91,10 @@ pub struct PendingEvalDecision {
     pub continuation_proposed_effort: Option<ReasoningEffort>,
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
+    pub predicted_task_family: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
+    pub task_family_confidence_ppm: Option<u32>,
     pub predictor_contract_digest: Option<String>,
     pub prediction_confidence_kind: Option<String>,
     pub observation: Option<PredictionObservation>,
@@ -105,8 +108,10 @@ pub(crate) struct PredictionObservationSnapshot {
     continuation_proposed_effort: Option<ReasoningEffort>,
     continuation_adjustment: Option<String>,
     predicted_role: Option<String>,
+    predicted_task_family: Option<String>,
     predicted_action: Option<String>,
     prediction_confidence_ppm: Option<u32>,
+    task_family_confidence_ppm: Option<u32>,
     predictor_contract_digest: Option<String>,
     prediction_confidence_kind: Option<String>,
     observed_action: Option<ObservedActionClass>,
@@ -131,12 +136,19 @@ impl PendingEvalDecision {
                 32,
             ),
             predicted_role: self.predicted_role.as_deref().map(normalize_predicted_role),
+            predicted_task_family: self
+                .predicted_task_family
+                .as_deref()
+                .map(normalize_predicted_task_family),
             predicted_action: self
                 .predicted_action
                 .as_deref()
                 .map(normalize_predicted_action),
             prediction_confidence_ppm: self
                 .prediction_confidence_ppm
+                .map(|confidence| confidence.min(1_000_000)),
+            task_family_confidence_ppm: self
+                .task_family_confidence_ppm
                 .map(|confidence| confidence.min(1_000_000)),
             predictor_contract_digest: bounded_continuation_label(
                 self.predictor_contract_digest.as_deref(),
@@ -177,11 +189,17 @@ impl PredictionObservationSnapshot {
         if let Some(role) = &self.predicted_role {
             attributes.insert("predicted_role".into(), role.clone());
         }
+        if let Some(task_family) = &self.predicted_task_family {
+            attributes.insert("predicted_task_family".into(), task_family.clone());
+        }
         if let Some(action) = &self.predicted_action {
             attributes.insert("predicted_action".into(), action.clone());
         }
         if let Some(confidence) = self.prediction_confidence_ppm {
             attributes.insert("prediction_confidence_ppm".into(), confidence.to_string());
+        }
+        if let Some(confidence) = self.task_family_confidence_ppm {
+            attributes.insert("task_family_confidence_ppm".into(), confidence.to_string());
         }
         if let Some(digest) = &self.predictor_contract_digest {
             attributes.insert("predictor_contract_digest".into(), digest.clone());
@@ -233,12 +251,21 @@ impl PredictionObservationSnapshot {
         if let Some(role) = &self.predicted_role {
             categorical.insert("routing.predicted_role".into(), role.clone());
         }
+        if let Some(task_family) = &self.predicted_task_family {
+            categorical.insert("routing.predicted_task_family".into(), task_family.clone());
+        }
         if let Some(action) = &self.predicted_action {
             categorical.insert("routing.predicted_action".into(), action.clone());
         }
         if let Some(confidence) = self.prediction_confidence_ppm {
             structural.insert(
                 "routing.prediction_confidence_ppm".into(),
+                u64::from(confidence),
+            );
+        }
+        if let Some(confidence) = self.task_family_confidence_ppm {
+            structural.insert(
+                "routing.task_family_confidence_ppm".into(),
                 u64::from(confidence),
             );
         }
@@ -281,6 +308,13 @@ fn normalize_predicted_role(value: &str) -> String {
         }
         _ => "unknown".to_owned(),
     }
+}
+
+fn normalize_predicted_task_family(value: &str) -> String {
+    TaskFamily::parse_key(value)
+        .unwrap_or(TaskFamily::Unknown)
+        .key()
+        .to_owned()
 }
 
 fn normalize_predicted_action(value: &str) -> String {
@@ -665,8 +699,10 @@ mod tests {
                 continuation_proposed_effort: Some(ReasoningEffort::Medium),
                 continuation_adjustment: Some("pin".into()),
                 predicted_role: None,
+                predicted_task_family: Some("code:review".into()),
                 predicted_action: None,
                 prediction_confidence_ppm: None,
+                task_family_confidence_ppm: Some(1_500_000),
                 predictor_contract_digest: None,
                 prediction_confidence_kind: None,
                 observation: None,
@@ -719,6 +755,14 @@ mod tests {
             Some(&"pin".to_owned())
         );
         assert_eq!(
+            evidence.attributes.get("predicted_task_family"),
+            Some(&"code:review".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("task_family_confidence_ppm"),
+            Some(&"1000000".to_owned())
+        );
+        assert_eq!(
             subject.requested_dimensions,
             BTreeSet::from([
                 "cost.usd_micros".to_string(),
@@ -757,8 +801,10 @@ mod tests {
                 continuation_proposed_effort: None,
                 continuation_adjustment: None,
                 predicted_role: Some("implement".into()),
+                predicted_task_family: Some("code:review".into()),
                 predicted_action: Some("mutate".into()),
                 prediction_confidence_ppm: Some(900_000),
+                task_family_confidence_ppm: Some(800_000),
                 predictor_contract_digest: Some(
                     "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec"
                         .into(),
@@ -827,8 +873,10 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
+            predicted_task_family: Some("code:review".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            task_family_confidence_ppm: Some(800_000),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
@@ -888,8 +936,10 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
+            predicted_task_family: Some("code:review".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            task_family_confidence_ppm: Some(800_000),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),

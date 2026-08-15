@@ -1566,8 +1566,10 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
+            predicted_task_family: Some("code:review".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            task_family_confidence_ppm: Some(800_000),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),

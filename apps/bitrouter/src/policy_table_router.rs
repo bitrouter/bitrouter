@@ -96,11 +96,14 @@ pub struct PolicyDecision {
     pub continuation_proposed_effort: Option<ReasoningEffort>,
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
+    pub predicted_task_family: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
+    pub task_family_confidence_ppm: Option<u32>,
     pub predictor_contract_digest: Option<String>,
     pub prediction_confidence_kind: Option<String>,
     pub prediction_reason_codes: Vec<String>,
+    pub task_family_reason_codes: Vec<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
     pub request_qualified: bool,
@@ -162,17 +165,22 @@ impl PolicyTable {
         }))
     }
 
-    /// Resolve the predictive key, then observed v2 and v1 compatibility
-    /// projections, then the default. The returned key is the key that actually
-    /// selected the tier, except that defaults retain the predictive key.
+    /// Resolve the task-aware predictive key, predictive v1 compatibility key,
+    /// observed v2 and v1 compatibility projections, then the default. The
+    /// returned key is the key that actually selected the tier, except that
+    /// defaults retain the primary predictive key.
     fn tier_for_workflow<'table, 'key>(
         &'table self,
-        predictive: &'key str,
+        predictive_primary: &'key str,
+        predictive_v1: &'key str,
         observed_v2: &'key str,
         observed_v1: &'key str,
     ) -> Option<(&'table str, &'key str)> {
-        if let Some(tier) = self.fingerprints.get(predictive) {
-            return Some((tier.as_str(), predictive));
+        if let Some(tier) = self.fingerprints.get(predictive_primary) {
+            return Some((tier.as_str(), predictive_primary));
+        }
+        if let Some(tier) = self.fingerprints.get(predictive_v1) {
+            return Some((tier.as_str(), predictive_v1));
         }
         if let Some(tier) = self.fingerprints.get(observed_v2) {
             return Some((tier.as_str(), observed_v2));
@@ -180,7 +188,9 @@ impl PolicyTable {
         if let Some(tier) = self.fingerprints.get(observed_v1) {
             return Some((tier.as_str(), observed_v1));
         }
-        self.default_tier.as_deref().map(|tier| (tier, predictive))
+        self.default_tier
+            .as_deref()
+            .map(|tier| (tier, predictive_primary))
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -473,15 +483,22 @@ impl PolicyTableRouter {
             predicted_role: Some(
                 prediction_role_name(online.predictive.next_step_role).to_string(),
             ),
+            predicted_task_family: Some(online.predictive.task_family.key().to_string()),
             predicted_action: Some(
                 prediction_action_name(online.predictive.next_action_class).to_string(),
             ),
             prediction_confidence_ppm: Some(prediction_confidence_ppm(
                 online.predictive.confidence,
             )),
+            task_family_confidence_ppm: Some(prediction_confidence_ppm(
+                online.predictive.task_family_confidence,
+            )),
             predictor_contract_digest: Some(online.predictive.predictor_contract_digest.clone()),
             prediction_confidence_kind: Some(online.predictive.confidence_kind.clone()),
             prediction_reason_codes: prediction_reason_codes(&online.predictive.evidence),
+            task_family_reason_codes: task_family_reason_codes(
+                &online.predictive.task_family_evidence,
+            ),
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
             request_qualified: false,
@@ -505,6 +522,7 @@ impl PolicyTableRouter {
 
         let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
             &primary_request_key,
+            online.predictive_compatibility_routing_key_v1(),
             &observed_route_projection,
             online.compatibility_routing_key_v1(),
         ) else {
@@ -702,6 +720,9 @@ impl PolicyTableRouter {
             trace_agent_role = decision.workflow_identity.role.as_str(),
             trace_context_epoch = decision.workflow_identity.context_epoch,
             trace_session_fingerprint = %decision.workflow_identity.fingerprint,
+            predicted_task_family = ?decision.predicted_task_family,
+            task_family_confidence_ppm = ?decision.task_family_confidence_ppm,
+            task_family_reason_codes = ?decision.task_family_reason_codes,
             input_effort = ?decision.input_effort,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
@@ -763,8 +784,10 @@ impl PolicyTableRouter {
                         32,
                     ),
                     predicted_role: decision.predicted_role.clone(),
+                    predicted_task_family: decision.predicted_task_family.clone(),
                     predicted_action: decision.predicted_action.clone(),
                     prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                    task_family_confidence_ppm: decision.task_family_confidence_ppm,
                     predictor_contract_digest: decision.predictor_contract_digest.clone(),
                     prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                     observation: None,
@@ -808,11 +831,14 @@ impl PolicyTableRouter {
                 continuation_proposed_effort: decision.continuation_proposed_effort,
                 continuation_adjustment: decision.continuation_adjustment.clone(),
                 predicted_role: decision.predicted_role.clone(),
+                predicted_task_family: decision.predicted_task_family.clone(),
                 predicted_action: decision.predicted_action.clone(),
                 prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                task_family_confidence_ppm: decision.task_family_confidence_ppm,
                 predictor_contract_digest: decision.predictor_contract_digest.clone(),
                 prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                 prediction_reason_codes: decision.prediction_reason_codes.clone(),
+                task_family_reason_codes: decision.task_family_reason_codes.clone(),
                 observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
                 trajectory_sequence: decision.trajectory_sequence,
@@ -907,6 +933,35 @@ fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
         .iter()
         .map(|item| item.code.as_str())
         .filter(|code| is_predictive_reason_code(code))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_PREDICTION_REASON_CODES)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .map(|item| item.code.as_str())
+        .filter(|code| {
+            matches!(
+                *code,
+                "task_code_generation"
+                    | "task_code_debugging"
+                    | "task_code_review"
+                    | "task_code_sql_database"
+                    | "task_code_frontend_ui"
+                    | "task_code_devops_config"
+                    | "task_code_repository_analysis"
+                    | "task_agent_multi_step_planning"
+                    | "task_agent_workflow_execution"
+                    | "task_agent_web_research"
+                    | "task_agent_memory_operations"
+                    | "task_agent_general"
+                    | "task_unknown"
+            )
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .take(MAX_PREDICTION_REASON_CODES)
@@ -1381,7 +1436,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+            Some("sha256:f2c33fd9b53efc1fb22e662cf3b392f2604bf541bf1cb4a62215e5f52c80a04c")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -1471,6 +1526,48 @@ mod tests {
                 "read_result_available",
                 "score_margin_low",
                 "test_succeeded",
+            ]
+        );
+    }
+
+    #[test]
+    fn task_family_reason_codes_allow_only_task_categories_in_sorted_capped_order() {
+        let evidence = [
+            "task_code_review",
+            "task_agent_general",
+            "customer_secret",
+            "task_code_debugging",
+            "task_agent_web_research",
+            "task_code_generation",
+            "task_agent_memory_operations",
+            "task_code_sql_database",
+            "task_code_frontend_ui",
+            "task_code_devops_config",
+            "task_code_repository_analysis",
+            "task_agent_multi_step_planning",
+            "task_agent_workflow_execution",
+            "task_unknown",
+            "task_code_review",
+        ]
+        .into_iter()
+        .map(|code| PredictiveEvidence {
+            code: code.to_string(),
+            weight: 1,
+            confidence: 0.9,
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            task_family_reason_codes(&evidence),
+            vec![
+                "task_agent_general",
+                "task_agent_memory_operations",
+                "task_agent_multi_step_planning",
+                "task_agent_web_research",
+                "task_agent_workflow_execution",
+                "task_code_debugging",
+                "task_code_devops_config",
+                "task_code_frontend_ui",
             ]
         );
     }
@@ -1890,6 +1987,27 @@ mod tests {
         ]
     }
 
+    fn completed_task_review_mutation_step() -> Vec<Message> {
+        vec![
+            user(
+                "Review this pull request for security bugs, audit the diff, and verify the test suite.",
+            ),
+            assistant_calls("write_file"),
+            Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult {
+                    call_id: "call_write_file".to_string(),
+                    tool_name: None,
+                    output: ToolResultOutput::Text {
+                        value: "updated source contents".to_string(),
+                    },
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
+                }],
+            },
+        ]
+    }
+
     fn route_with_headers(
         router: &PolicyTableRouter,
         messages: Vec<Message>,
@@ -1959,15 +2077,155 @@ mod tests {
         let mut prompt = prompt("inbound");
         prompt.messages = completed_read_step();
 
+        let online = OnlineWorkflowState::for_named_policy(&HeaderMap::new(), &prompt);
+        assert_eq!(
+            online.predictive_compatibility_routing_key_v1(),
+            "agent_route/v1|implement|normal"
+        );
+
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
         assert_eq!(decision.request_key, "agent_route/v1|implement|normal");
-        assert_eq!(decision.route_projection, "agent_route/v1|implement|normal");
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v2|code:debugging|implement|normal"
+        );
         assert_eq!(
             decision.observed_route_projection,
             "agent_trace/v2|tool_followup|normal"
         );
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn task_aware_policy_v2_override_wins_before_observed_state() {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
+            ]),
+            fingerprints: HashMap::from([
+                (
+                    "agent_route/v2|code:review|verify|normal".to_string(),
+                    "strong".to_string(),
+                ),
+                (
+                    "agent_trace/v2|tool_followup|normal".to_string(),
+                    "economy".to_string(),
+                ),
+            ]),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v2|code:review|verify|normal"
+        );
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v2|code:review|verify|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+    }
+
+    #[test]
+    fn predictive_v1_fallback_wins_before_observed_state() {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
+            ]),
+            fingerprints: HashMap::from([
+                (
+                    "agent_route/v1|verify|normal".to_string(),
+                    "economy".to_string(),
+                ),
+                (
+                    "agent_trace/v2|tool_followup|normal".to_string(),
+                    "strong".to_string(),
+                ),
+            ]),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v2|code:review|verify|normal"
+        );
+        assert_eq!(decision.request_key, "agent_route/v1|verify|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
+    }
+
+    #[test]
+    fn task_aware_policy_unknown_prediction_never_uses_a_v2_key() {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.default_tier = None;
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Run the shell command and report its output.")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert!(!decision.route_projection.starts_with("agent_route/v2|"));
+    }
+
+    #[test]
+    fn task_aware_policy_records_bounded_task_observability() -> anyhow::Result<()> {
+        let path = temp_path("task-aware-decisions.jsonl");
+        let table = PolicyTable::from_config(&config())
+            .ok_or_else(|| anyhow::anyhow!("configured table missing"))?;
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone())?;
+        let router = PolicyTableRouter::new(table).with_decision_recorder(recorder);
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        assert!(router.route_prompt(&mut prompt, &HeaderMap::new()));
+        let records = PolicyDecisionRecord::load_jsonl(&path)?;
+        let record = records
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("task-aware decision record missing"))?;
+        let value = serde_json::to_value(record)?;
+
+        assert_eq!(value["predicted_task_family"], "code:review");
+        assert_eq!(value["task_family_confidence_ppm"], 800_000);
+        assert_eq!(
+            value["task_family_reason_codes"],
+            serde_json::json!(["task_code_review"])
+        );
+
+        let _ = std::fs::remove_file(path);
+        Ok(())
     }
 
     #[test]

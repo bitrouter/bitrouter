@@ -438,6 +438,7 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             }
             validate_progress_guard(name, policy, guard)?;
         }
+        validate_predictive_route_keys(name, policy)?;
         validate_predictor_contract(name, policy, document.lockfile_version)?;
     }
     if document.is_compiled() {
@@ -454,10 +455,10 @@ fn validate_predictor_contract(
     let uses_predictive_routes = policy
         .routes
         .keys()
-        .any(|key| key.starts_with("agent_route/v1|"));
+        .any(|key| key.starts_with("agent_route/v1|") || key.starts_with("agent_route/v2|"));
     if uses_predictive_routes && lockfile_version < EVIDENCE_POLICY_LOCKFILE_VERSION {
         anyhow::bail!(
-            "policy '{policy_name}' agent_route/v1 routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
+            "policy '{policy_name}' predictive agent_route routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
         );
     }
     if !uses_predictive_routes && policy.predictor.is_none() {
@@ -466,7 +467,7 @@ fn validate_predictor_contract(
     let expected = compiled_predictor_contract();
     let Some(actual) = policy.predictor.as_ref() else {
         anyhow::bail!(
-            "policy '{policy_name}' uses agent_route/v1 but is missing its signed predictor contract (expected {})",
+            "policy '{policy_name}' uses predictive agent_route routes but is missing its signed predictor contract (expected {})",
             compiled_scorecard_digest()
         );
     };
@@ -475,6 +476,21 @@ fn validate_predictor_contract(
             "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
             compiled_scorecard_digest()
         );
+    }
+    Ok(())
+}
+
+fn validate_predictive_route_keys(policy_name: &str, policy: &PolicyDefinition) -> Result<()> {
+    for route_key in policy
+        .routes
+        .keys()
+        .filter(|key| key.starts_with("agent_route/"))
+    {
+        if CanonicalPolicyProjection::parse_key(route_key).is_none() {
+            anyhow::bail!(
+                "policy '{policy_name}' route '{route_key}' is not a canonical agent_route projection"
+            );
+        }
     }
     Ok(())
 }
@@ -2756,7 +2772,10 @@ fn pinned_continuation_effort(
 fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
     if matches!(
         CanonicalPolicyProjection::parse_key(route_projection),
-        Some(CanonicalPolicyProjection::Predictive(_))
+        Some(
+            CanonicalPolicyProjection::Predictive(_)
+                | CanonicalPolicyProjection::TaskAwarePredictive(_)
+        )
     ) {
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
@@ -2832,6 +2851,88 @@ mod tests {
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn certificate(selected_tier: &str) -> PolicyCertificate {
+        PolicyCertificate {
+            owner: RouteOwner::Compiler,
+            selected_tier: selected_tier.to_string(),
+            baseline_tier: Some("strong".to_string()),
+            source: CertificateSource::LegacyAdequacyV1,
+            eligible_episodes: 1,
+            independent_tasks: 1,
+            quality: None,
+            economics: None,
+            latency: None,
+            critical_violations: 0,
+            verdict: PromotionVerdict::Promote,
+            evaluator_config_digest: None,
+            compiler_config_digest: TEST_DIGEST.to_string(),
+            evidence_digest: TEST_DIGEST.to_string(),
+            legacy: None,
+        }
+    }
+
+    fn task_aware_lock(routes: BTreeMap<String, String>) -> PolicyLock {
+        let mut policy = definition();
+        policy.routes = routes.clone();
+        policy.predictor = Some(compiled_predictor_contract());
+        let certificates = routes
+            .iter()
+            .map(|(key, tier)| (key.clone(), certificate(tier)))
+            .collect();
+        PolicyLock {
+            lockfile_version: EVIDENCE_POLICY_LOCKFILE_VERSION,
+            artifact: Some(PolicyArtifact::empty()),
+            policies: BTreeMap::from([("coding".to_string(), policy)]),
+            certificates: BTreeMap::from([("coding".to_string(), certificates)]),
+        }
+    }
+
+    #[test]
+    fn v2_predictor_contract_rejects_v2_only_routes_without_a_predictor() {
+        let mut lock = task_aware_lock(BTreeMap::from([(
+            "agent_route/v2|code:review|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+        lock.policies
+            .get_mut("coding")
+            .expect("test policy")
+            .predictor = None;
+
+        let error = validate_document(&lock)
+            .expect_err("v2 predictive routes without a predictor contract must be rejected");
+
+        assert!(error.to_string().contains("predictor"));
+    }
+
+    #[test]
+    fn v2_predictor_contract_rejects_malformed_task_family_route_keys() {
+        let lock = task_aware_lock(BTreeMap::from([(
+            "agent_route/v2|code:not_a_family|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+
+        let error = validate_document(&lock)
+            .expect_err("malformed task-family route keys must not be admitted");
+
+        assert!(error.to_string().contains("canonical"));
+    }
+
+    #[test]
+    fn v2_predictor_contract_accepts_mixed_v1_and_v2_routes() -> anyhow::Result<()> {
+        let lock = task_aware_lock(BTreeMap::from([
+            (
+                "agent_route/v1|verify|normal".to_string(),
+                "economy".to_string(),
+            ),
+            (
+                "agent_route/v2|code:review|verify|normal".to_string(),
+                "strong".to_string(),
+            ),
+        ]));
+
+        validate_document(&lock)
+    }
 
     #[test]
     fn v1_remains_readable_but_v2_requires_an_artifact() -> anyhow::Result<()> {

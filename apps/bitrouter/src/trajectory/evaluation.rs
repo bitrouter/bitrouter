@@ -187,6 +187,7 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     let mut attributes = BTreeMap::new();
     for (event_key, attribute_key) in [
         ("routing.predicted_role", "predicted_role"),
+        ("routing.predicted_task_family", "predicted_task_family"),
         ("routing.predicted_action", "predicted_action"),
         (
             "routing.predictor_contract_digest",
@@ -220,6 +221,16 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     {
         attributes.insert(
             "prediction_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.task_family_confidence_ppm")
+    {
+        attributes.insert(
+            "task_family_confidence_ppm".to_owned(),
             confidence.to_string(),
         );
     }
