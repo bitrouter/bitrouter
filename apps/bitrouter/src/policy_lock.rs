@@ -2788,10 +2788,7 @@ fn pinned_continuation_effort(
 fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
     if matches!(
         CanonicalPolicyProjection::parse_key(route_projection),
-        Some(
-            CanonicalPolicyProjection::Predictive(_)
-                | CanonicalPolicyProjection::TaskAwarePredictive(_)
-        )
+        Some(CanonicalPolicyProjection::Predictive(_))
     ) {
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }

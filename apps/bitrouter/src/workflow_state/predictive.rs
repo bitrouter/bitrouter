@@ -196,54 +196,12 @@ pub struct PredictorContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PredictiveRouteProjection {
-    pub next_step_role: NextStepRole,
-    pub risk: RouteRisk,
-}
-
-impl PredictiveRouteProjection {
-    pub const fn new(next_step_role: NextStepRole, risk: RouteRisk) -> Self {
-        Self {
-            next_step_role,
-            risk,
-        }
-    }
-
-    pub const fn schema_version(&self) -> u8 {
-        1
-    }
-
-    pub fn key(&self) -> String {
-        format!("agent_route/v1|{}|{}", self.next_step_role.key(), self.risk)
-    }
-
-    pub fn parse_key(value: &str) -> Option<Self> {
-        let mut segments = value.split('|');
-        let (Some(namespace_version), Some(next_step_role), Some(risk), None) = (
-            segments.next(),
-            segments.next(),
-            segments.next(),
-            segments.next(),
-        ) else {
-            return None;
-        };
-        if namespace_version != "agent_route/v1" {
-            return None;
-        }
-        let risk = parse_route_risk(risk)?;
-
-        Some(Self::new(NextStepRole::parse_key(next_step_role)?, risk))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskAwarePredictiveRouteProjection {
     pub task_family: TaskFamily,
     pub next_step_role: NextStepRole,
     pub risk: RouteRisk,
 }
 
-impl TaskAwarePredictiveRouteProjection {
+impl PredictiveRouteProjection {
     pub const fn new(
         task_family: TaskFamily,
         next_step_role: NextStepRole,
@@ -257,20 +215,20 @@ impl TaskAwarePredictiveRouteProjection {
     }
 
     pub const fn schema_version(&self) -> u8 {
-        2
+        1
     }
 
     pub fn key(&self) -> String {
         format!(
-            "agent_route/v2|{}|{}|{}",
+            "agent_route/v1|{}|{}|{}",
             self.task_family.key(),
             self.next_step_role.key(),
             self.risk
         )
     }
 
-    pub const fn compatibility_projection_v1(&self) -> PredictiveRouteProjection {
-        PredictiveRouteProjection::new(self.next_step_role, self.risk)
+    pub const fn unknown_baseline(&self) -> Self {
+        Self::new(TaskFamily::Unknown, self.next_step_role, self.risk)
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
@@ -284,19 +242,15 @@ impl TaskAwarePredictiveRouteProjection {
         ) else {
             return None;
         };
-        if namespace_version != "agent_route/v2" {
+        if namespace_version != "agent_route/v1" {
             return None;
         }
-
-        let task_family = TaskFamily::parse_key(task_family)?;
-        if task_family == TaskFamily::Unknown {
-            return None;
-        }
+        let risk = parse_route_risk(risk)?;
 
         Some(Self::new(
-            task_family,
+            TaskFamily::parse_key(task_family)?,
             NextStepRole::parse_key(next_step_role)?,
-            parse_route_risk(risk)?,
+            risk,
         ))
     }
 }
@@ -305,7 +259,6 @@ impl TaskAwarePredictiveRouteProjection {
 pub enum CanonicalPolicyProjection {
     Observed(RouteProjection),
     Predictive(PredictiveRouteProjection),
-    TaskAwarePredictive(TaskAwarePredictiveRouteProjection),
 }
 
 impl CanonicalPolicyProjection {
@@ -313,9 +266,6 @@ impl CanonicalPolicyProjection {
         RouteProjection::parse_key(value)
             .map(Self::Observed)
             .or_else(|| PredictiveRouteProjection::parse_key(value).map(Self::Predictive))
-            .or_else(|| {
-                TaskAwarePredictiveRouteProjection::parse_key(value).map(Self::TaskAwarePredictive)
-            })
     }
 }
 
@@ -2113,25 +2063,63 @@ mod tests {
 
     #[test]
     fn predictive_projection_uses_a_stable_canonical_key() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeGeneration,
+            NextStepRole::Implement,
+            RouteRisk::Normal,
+        );
 
-        assert_eq!(projection.key(), "agent_route/v1|implement|normal");
+        assert_eq!(
+            projection.key(),
+            "agent_route/v1|code:generation|implement|normal"
+        );
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
         assert!(CanonicalPolicyProjection::parse_key("agent_trace/v2|edit|normal").is_some());
-        assert!(CanonicalPolicyProjection::parse_key("agent_route/v1|implement|normal").is_some());
-        assert!(matches!(
-            CanonicalPolicyProjection::parse_key("agent_route/v2|code:review|verify|normal"),
-            Some(CanonicalPolicyProjection::TaskAwarePredictive(_))
-        ));
-        assert!(CanonicalPolicyProjection::parse_key("agent_route/v2|implement|normal").is_none());
+        assert!(CanonicalPolicyProjection::parse_key(&projection.key()).is_some());
+        assert!(CanonicalPolicyProjection::parse_key("agent_route/v1|implement|normal").is_none());
+        assert!(CanonicalPolicyProjection::parse_key(
+            "agent_route/v2|code:review|verify|normal"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn predictive_projection_has_one_v1_task_aware_shape() {
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeReview,
+            NextStepRole::Verify,
+            RouteRisk::Normal,
+        );
+
+        assert_eq!(
+            projection.key(),
+            "agent_route/v1|code:review|verify|normal"
+        );
+        assert_eq!(
+            projection.unknown_baseline().key(),
+            "agent_route/v1|unknown|verify|normal"
+        );
+        assert_eq!(
+            PredictiveRouteProjection::parse_key(&projection.key()),
+            Some(projection)
+        );
+        assert!(PredictiveRouteProjection::parse_key("agent_route/v1|verify|normal").is_none());
+        assert!(PredictiveRouteProjection::parse_key(
+            "agent_route/v2|code:review|verify|normal"
+        )
+        .is_none());
     }
 
     #[test]
     fn predictive_projection_round_trips_exactly() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeReview,
+            NextStepRole::Verify,
+            RouteRisk::Normal,
+        );
 
         assert_eq!(projection.schema_version(), 1);
         assert_eq!(
@@ -2140,7 +2128,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<PredictiveRouteProjection>(
-                r#"{"schema_version":2,"next_step_role":"implement","risk":"normal"}"#
+                r#"{"task_family":"code_review","next_step_role":"verify","risk":"normal","compatibility":true}"#
             )
             .is_err()
         );
@@ -2185,10 +2173,14 @@ mod tests {
 
     #[test]
     fn predictive_key_excludes_source_specific_identity() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeDebugging,
+            NextStepRole::Implement,
+            RouteRisk::Normal,
+        );
         let key = projection.key();
 
-        assert_eq!(key, "agent_route/v1|implement|normal");
+        assert_eq!(key, "agent_route/v1|code:debugging|implement|normal");
         for source_identity in ["codex", "claude_code", "hermes", "smithers", "openclaw"] {
             assert!(!key.contains(source_identity), "{source_identity}");
         }
@@ -2561,10 +2553,12 @@ mod tests {
 
         assert_eq!(
             PredictiveRouteProjection::new(
+                named_prediction.task_family,
                 named_prediction.next_step_role,
                 named_prediction.route_risk
             ),
             PredictiveRouteProjection::new(
+                renamed_prediction.task_family,
                 renamed_prediction.next_step_role,
                 renamed_prediction.route_risk
             )
@@ -2810,8 +2804,8 @@ mod tests {
     }
 
     #[test]
-    fn task_aware_projection_round_trips_exactly() {
-        let projection = TaskAwarePredictiveRouteProjection::new(
+    fn predictive_projection_rejects_noncanonical_family_and_segments() {
+        let projection = PredictiveRouteProjection::new(
             TaskFamily::CodeDebugging,
             NextStepRole::Implement,
             RouteRisk::Guarded,
@@ -2819,27 +2813,21 @@ mod tests {
 
         assert_eq!(
             projection.key(),
-            "agent_route/v2|code:debugging|implement|guarded"
+            "agent_route/v1|code:debugging|implement|guarded"
         );
         assert_eq!(
-            TaskAwarePredictiveRouteProjection::parse_key(&projection.key()),
+            PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
         assert!(
-            TaskAwarePredictiveRouteProjection::parse_key(
-                "agent_route/v2|debugging|implement|guarded"
+            PredictiveRouteProjection::parse_key(
+                "agent_route/v1|debugging|implement|guarded"
             )
             .is_none()
         );
         assert!(
-            TaskAwarePredictiveRouteProjection::parse_key(
-                "agent_route/v2|code:debugging|implement|guarded|extra"
-            )
-            .is_none()
-        );
-        assert!(
-            TaskAwarePredictiveRouteProjection::parse_key(
-                "agent_route/v2|unknown|implement|normal"
+            PredictiveRouteProjection::parse_key(
+                "agent_route/v1|code:debugging|implement|guarded|extra"
             )
             .is_none()
         );

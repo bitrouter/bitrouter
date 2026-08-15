@@ -130,13 +130,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|normal",
-            "agent_route/v1|implement|normal",
-            "agent_route/v1|implement|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
         ]
     );
     Ok(())
@@ -1058,35 +1058,35 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-near-done-finalize-001",
                 "agent_trace/v2|test|normal".to_string(),
-                "agent_route/v1|finalize|normal".to_string(),
+                "agent_route/v1|unknown|finalize|normal".to_string(),
                 NextActionClass::AnswerOrSummarize,
                 Some(true),
             ),
             (
                 "predictive-opening-plan-001",
                 "agent_trace/v2|opening|normal".to_string(),
-                "agent_route/v2|agent:multi_step_planning|orchestrate|normal".to_string(),
+                "agent_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "agent_route/v1|verify|normal".to_string(),
+                "agent_route/v1|unknown|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
             (
                 "predictive-post-read-implement-001",
                 "agent_trace/v2|tool_followup|normal".to_string(),
-                "agent_route/v1|implement|normal".to_string(),
+                "agent_route/v1|unknown|implement|normal".to_string(),
                 NextActionClass::Mutate,
                 Some(true),
             ),
             (
                 "predictive-repeated-failure-replan-001",
                 "agent_trace/v2|test|guarded".to_string(),
-                "agent_route/v1|orchestrate|guarded".to_string(),
+                "agent_route/v1|unknown|orchestrate|guarded".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
@@ -1128,7 +1128,7 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "agent_route/v1|orchestrate|normal"
+        "agent_route/v1|unknown|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -1167,7 +1167,7 @@ fn new_fixture_prediction_is_compared_exactly() {
     assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
     assert_eq!(
         summary.records[0].predictive_route_key,
-        "agent_route/v1|orchestrate|normal"
+        "agent_route/v1|unknown|orchestrate|normal"
     );
 }
 

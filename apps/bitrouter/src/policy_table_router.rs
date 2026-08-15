@@ -41,7 +41,7 @@ use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisio
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::predictive::{
-    NextActionClass, NextStepRole, PredictiveEvidence, TaskAwarePredictiveRouteProjection,
+    NextActionClass, NextStepRole, PredictiveEvidence, PredictiveRouteProjection,
     is_predictive_reason_code, is_task_family_reason_code,
 };
 use crate::workflow_state::session::WorkflowIdentityTracker;
@@ -464,7 +464,7 @@ impl PolicyTableRouter {
         };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
-        let predictive_v1_request_key = online.predictive_compatibility_routing_key_v1();
+        let baseline_request_key = online.baseline_routing_key();
         let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
@@ -527,16 +527,18 @@ impl PolicyTableRouter {
             return decision;
         }
 
+        let observed_compatibility_key = online.ir.compatibility_route_projection_v1().key();
         let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
             &primary_request_key,
-            predictive_v1_request_key,
+            baseline_request_key,
             &observed_route_projection,
-            online.compatibility_routing_key_v1(),
+            &observed_compatibility_key,
         ) else {
             return decision;
         };
-        if matched_request_key == predictive_v1_request_key
-            && TaskAwarePredictiveRouteProjection::parse_key(&primary_request_key).is_some()
+        if matched_request_key == baseline_request_key
+            && PredictiveRouteProjection::parse_key(&primary_request_key).is_some()
+            && primary_request_key != baseline_request_key
         {
             decision.predictive_v1_fallback_tier = Some(raw_static_tier.to_owned());
         }
@@ -2093,8 +2095,8 @@ mod tests {
 
         let online = OnlineWorkflowState::for_named_policy(&HeaderMap::new(), &prompt);
         assert_eq!(
-            online.predictive_compatibility_routing_key_v1(),
-            "agent_route/v1|implement|normal"
+            online.baseline_routing_key(),
+            "agent_route/v1|unknown|implement|normal"
         );
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());

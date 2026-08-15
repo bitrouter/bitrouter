@@ -1101,9 +1101,6 @@ pub fn select_target_request_key(
             CanonicalPolicyProjection::Predictive(projection) => {
                 projection.next_step_role == NextStepRole::Orchestrate
             }
-            CanonicalPolicyProjection::TaskAwarePredictive(projection) => {
-                projection.next_step_role == NextStepRole::Orchestrate
-            }
         };
         if opening && !policy.adequacy.explore_opening {
             continue;
@@ -1238,9 +1235,9 @@ pub fn build_experiment_lock(
             .get(target_request_key)
             .cloned()
             .or_else(|| match &projection {
-                CanonicalPolicyProjection::TaskAwarePredictive(projection) => policy
+                CanonicalPolicyProjection::Predictive(projection) => policy
                     .routes
-                    .get(&projection.compatibility_projection_v1().key())
+                    .get(&projection.unknown_baseline().key())
                     .cloned(),
                 _ => None,
             })

@@ -9,8 +9,7 @@ use crate::workflow_state::ir::{
     SessionConfidence, WorkflowStateKind,
 };
 use crate::workflow_state::predictive::{
-    NextActionClass, PredictiveRouteProjection, TaskAwarePredictiveRouteProjection, TaskFamily,
-    is_predictive_reason_code, predict_next_step,
+    NextActionClass, PredictiveRouteProjection, is_predictive_reason_code, predict_next_step,
 };
 
 #[derive(Debug, Default)]
@@ -41,7 +40,6 @@ pub struct ReplayRecord {
     pub observed_projection: RouteProjection,
     pub observed_route_key: String,
     pub predictive_projection: PredictiveRouteProjection,
-    pub task_aware_predictive_projection: Option<TaskAwarePredictiveRouteProjection>,
     pub predictive_route_key: String,
     pub next_action_class: NextActionClass,
     pub predictor_contract_digest: String,
@@ -115,20 +113,12 @@ impl ReplayEvaluator {
             summary.model_ladder.observe(&ir.capability_constraints);
 
             let prediction = predict_next_step(&ir, &fixture.prompt);
-            let predictive_projection =
-                PredictiveRouteProjection::new(prediction.next_step_role, prediction.route_risk);
-            let task_aware_predictive_projection = (prediction.task_family != TaskFamily::Unknown)
-                .then(|| {
-                    TaskAwarePredictiveRouteProjection::new(
-                        prediction.task_family,
-                        prediction.next_step_role,
-                        prediction.route_risk,
-                    )
-                });
-            let predictive_route_key = task_aware_predictive_projection
-                .as_ref()
-                .map(TaskAwarePredictiveRouteProjection::key)
-                .unwrap_or_else(|| predictive_projection.key());
+            let predictive_projection = PredictiveRouteProjection::new(
+                prediction.task_family,
+                prediction.next_step_role,
+                prediction.route_risk,
+            );
+            let predictive_route_key = predictive_projection.key();
             let prediction_reason_codes = prediction
                 .evidence
                 .iter()
@@ -156,7 +146,6 @@ impl ReplayEvaluator {
                 observed_projection,
                 observed_route_key,
                 predictive_projection,
-                task_aware_predictive_projection,
                 predictive_route_key,
                 next_action_class: prediction.next_action_class,
                 predictor_contract_digest: prediction.predictor_contract_digest,
