@@ -93,21 +93,14 @@ impl EvalEvidenceSnapshot {
                 {
                     continue;
                 }
-                let route_projection = decision
-                    .route_projection
-                    .as_ref()
-                    .unwrap_or(&decision.request_key);
+                let route_projection = &decision.route_projection;
                 let route = routes
                     .entry((decision.policy.clone(), route_projection.clone()))
                     .or_default();
                 route
                     .matched_request_keys
                     .insert(decision.request_key.clone());
-                if let Some(baseline) = decision
-                    .predictive_v1_fallback_tier
-                    .as_ref()
-                    .or(decision.baseline_tier.as_ref())
-                {
+                if let Some(baseline) = decision.baseline_tier.as_ref() {
                     match &route.baseline_tier {
                         Some(existing) if existing != baseline => {
                             anyhow::bail!(
@@ -317,7 +310,11 @@ mod tests {
 
         let snapshot = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root).await?;
         let routes = snapshot.route_evidence()?;
-        let tier = &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
+        let tier = &routes[&(
+            "auto".into(),
+            "agent_route/v1|unknown|implement|normal".into(),
+        )]
+            .tiers["economy"];
         assert_eq!(tier.pass_rate_ppm(), 1_000_000);
         assert_eq!(tier.independent_tasks.len(), 1);
         Ok(())
@@ -359,16 +356,17 @@ mod tests {
         let store = EvalStore::new(db);
         let service = EvalService::new(store.clone(), EvalConfig::default());
         let mut subject = subject()?;
+        subject.decisions[0].route_projection =
+            "agent_route/v1|code:generation|implement|normal".into();
         subject.decisions.push(EvalDecisionRef {
             decision_id: "decision-b".into(),
             policy: "auto".into(),
-            route_projection: None,
-            request_key: "agent_trace/v1|review|normal".into(),
+            route_projection: "agent_route/v1|unknown|verify|normal".into(),
+            request_key: "agent_route/v1|unknown|verify|normal".into(),
             selected_tier: "strong".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             policy_digest: subject.policy_digest.clone(),
         });
         subject
@@ -402,11 +400,22 @@ mod tests {
         let routes = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
             .await?
             .route_evidence()?;
-        let quality =
-            &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
+        let quality = &routes[&(
+            "auto".into(),
+            "agent_route/v1|code:generation|implement|normal".into(),
+        )]
+            .tiers["economy"];
         assert_eq!(quality.pass_rate_ppm(), 1_000_000);
         assert_eq!(quality.cost_micro_usd.mean(), None);
-        let cost = &routes[&("auto".into(), "agent_trace/v1|review|normal".into())].tiers["strong"];
+        assert_eq!(
+            routes[&(
+                "auto".into(),
+                "agent_route/v1|code:generation|implement|normal".into(),
+            )]
+                .matched_request_keys,
+            BTreeSet::from(["agent_route/v1|unknown|implement|normal".into()])
+        );
+        let cost = &routes[&("auto".into(), "agent_route/v1|unknown|verify|normal".into())].tiers["strong"];
         assert_eq!(cost.pass_rate_ppm(), 0);
         assert_eq!(cost.eligible_episodes, 0);
         assert_eq!(cost.cost_micro_usd.mean(), Some(420));
@@ -428,13 +437,12 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
-                route_projection: None,
-                request_key: "agent_trace/v1|edit|normal".into(),
+                route_projection: "agent_route/v1|unknown|implement|normal".into(),
+                request_key: "agent_route/v1|unknown|implement|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
-                predictive_v1_fallback_tier: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],

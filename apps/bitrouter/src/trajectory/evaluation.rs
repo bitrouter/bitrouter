@@ -298,11 +298,7 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
-        route_projection: event
-            .evidence
-            .categorical
-            .get("route.route_projection")
-            .cloned(),
+        route_projection: required("route.route_projection")?,
         request_key: required("route.request_key")?,
         selected_tier: required("route.selected_tier")?,
         selected_effort,
@@ -312,11 +308,6 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
             .get("route.baseline_tier")
             .cloned(),
         baseline_effort,
-        predictive_v1_fallback_tier: event
-            .evidence
-            .categorical
-            .get("route.predictive_v1_fallback_tier")
-            .cloned(),
         policy_digest,
     }))
 }
@@ -501,14 +492,13 @@ mod tests {
         assert_eq!(envelope.subject.decisions.len(), 1);
         assert_eq!(envelope.subject.decisions[0].decision_id, "route-1");
         assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");
-        assert_eq!(envelope.subject.decisions[0].route_projection, None);
         assert_eq!(
-            envelope.subject.decisions[0].request_key,
-            "agent_trace/v2|planning|normal"
+            envelope.subject.decisions[0].route_projection,
+            "agent_route/v1|unknown|orchestrate|normal"
         );
         assert_eq!(
-            envelope.subject.decisions[0].predictive_v1_fallback_tier,
-            None
+            envelope.subject.decisions[0].request_key,
+            "agent_route/v1|unknown|orchestrate|normal"
         );
         assert_eq!(
             envelope.subject.requested_dimensions,
@@ -831,7 +821,14 @@ mod tests {
             BTreeMap::from([
                 ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
-                ("route.request_key".to_owned(), projection.to_owned()),
+                (
+                    "route.request_key".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
+                (
+                    "route.route_projection".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),
                 ("route.projection".to_owned(), projection.to_owned()),
@@ -927,7 +924,11 @@ mod tests {
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
                 (
                     "route.request_key".to_owned(),
-                    "agent_trace/v2|planning|normal".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
+                (
+                    "route.route_projection".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),

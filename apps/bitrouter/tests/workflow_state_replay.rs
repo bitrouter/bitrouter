@@ -409,7 +409,6 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         preset_variant: None,
         baseline_tier: Some("strong".to_string()),
         baseline_effort: None,
-        predictive_v1_fallback_tier: None,
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
         workflow_identity: Default::default(),
@@ -483,7 +482,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 
 #[tokio::test]
 async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
-    let canonical_key = "agent_trace/v1|tool_followup|normal";
+    let canonical_key = "agent_route/v1|unknown|implement|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
     generic.headers.insert(
@@ -507,6 +506,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
 
     let mut generic_decision = benchmark_decision("req-reward-generic-merge");
     generic_decision.key_strategy = "agent_trace".to_string();
+    generic_decision.route_projection = Some(canonical_key.to_string());
     generic_decision.request_key = canonical_key.to_string();
     generic_decision.ledger_key = Some(ledger_key.clone());
     generic_decision.selected_tier = Some("cheap".to_string());
@@ -2163,16 +2163,15 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        route_projection: None,
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
         preset_variant: None,
         baseline_tier: Some("capable".to_string()),
         baseline_effort: None,
-        predictive_v1_fallback_tier: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -2310,7 +2309,7 @@ fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decision
 }
 
 #[tokio::test]
-async fn legacy_workflow_state_lock_and_artifact_replay_without_projection_migration() {
+async fn legacy_workflow_state_lock_is_rejected_before_replay() {
     let root = temp_path("legacy-workflow-state-replay");
     std::fs::create_dir_all(&root).unwrap();
     let config_path = root.join("bitrouter.yaml");
@@ -2349,71 +2348,10 @@ policies:
     .unwrap();
     let config =
         config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
-    let loaded = policy_lock::load_for_config(&config, Some(&config_path))
+    let error = policy_lock::load_for_config(&config, Some(&config_path))
         .await
-        .unwrap()
-        .expect("legacy bound lock loads");
-    let definition = loaded.document.policies.get("legacy").unwrap();
-    assert_eq!(
-        definition
-            .as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen)
-            .key_strategy,
-        bitrouter_sdk::config::PolicyKeyStrategy::AgentTrace
-    );
-    assert!(
-        definition
-            .routes
-            .contains_key("codex|responses|tool_followup"),
-        "legacy source-specific route remains legacy evidence"
-    );
-
-    let trace_path = root.join("traces.jsonl");
-    let legacy_trace = CapturedIngressTrace {
-        id: "legacy-request".to_string(),
-        captured_at: None,
-        harness: HarnessId::Codex,
-        protocol: ProtocolKind::Responses,
-        method: "POST".to_string(),
-        path: "/v1/responses".to_string(),
-        headers: Default::default(),
-        raw_body: json!({
-            "model": "vendor/strong",
-            "previous_response_id": "resp_legacy",
-            "input": "continue"
-        }),
-        outcome: RealTraceOutcome {
-            http_status: 200,
-            status: "completed".to_string(),
-        },
-    };
-    TraceArchive::write_jsonl(&trace_path, &[legacy_trace], &TraceSanitizer::default()).unwrap();
-    let fixtures = TraceArchive::read_replay_fixtures(&trace_path).unwrap();
-    let replay = ReplayEvaluator.run(&fixtures);
-    assert_eq!(replay.total, 1);
-    assert_eq!(replay.covered, 1);
-
-    let decision_path = root.join("legacy-decisions.jsonl");
-    let mut legacy_decision = benchmark_decision("legacy-request");
-    legacy_decision.key_strategy = "workflow_state".to_string();
-    legacy_decision.request_key = "codex|responses|tool_followup".to_string();
-    PolicyDecisionRecord::write_jsonl(&decision_path, &[legacy_decision]).unwrap();
-    let legacy_records = PolicyDecisionRecord::load_jsonl(&decision_path).unwrap();
-    assert_eq!(
-        legacy_records[0].request_key,
-        "codex|responses|tool_followup"
-    );
-    assert!(!legacy_records[0].request_key.starts_with("agent_trace/"));
-
-    let canonical_path = root.join("agent-trace-decisions.jsonl");
-    let mut canonical = benchmark_decision("agent-trace-request");
-    canonical.key_strategy = "agent_trace".to_string();
-    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
-    PolicyDecisionRecord::write_jsonl(&canonical_path, &[canonical]).unwrap();
-    let canonical_records = PolicyDecisionRecord::load_jsonl(&canonical_path).unwrap();
-    assert_eq!(
-        canonical_records[0].request_key,
-        "agent_trace/v1|tool_followup|normal"
-    );
+        .expect_err("retired workflow_state strategy must be rejected");
+    assert!(format!("{error:#}").contains("no longer supported"));
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -2464,16 +2402,15 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        route_projection: None,
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
         preset_variant: None,
         baseline_tier: Some("capable".to_string()),
         baseline_effort: None,
-        predictive_v1_fallback_tier: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -2600,10 +2537,10 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        route_projection: None,
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
-        ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
+        ledger_key: Some("coding\0agent_route/v1|unknown|implement|normal".to_string()),
         policy: Some("coding".to_string()),
         policy_digest: Some(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
@@ -2611,7 +2548,6 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         preset_variant: Some("coding".to_string()),
         baseline_tier: Some("capable".to_string()),
         baseline_effort: None,
-        predictive_v1_fallback_tier: None,
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -2680,10 +2616,17 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         candidate.settlement_outcome,
         SemanticSettlementOutcome::ProviderReportedComputed
     );
-    assert_eq!(candidate.request_key, "agent_trace/v1|tool_followup|normal");
+    assert_eq!(
+        candidate.route_projection,
+        "agent_route/v1|code:generation|implement|normal"
+    );
+    assert_eq!(
+        candidate.request_key,
+        "agent_route/v1|unknown|implement|normal"
+    );
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0agent_trace/v1|tool_followup|normal")
+        Some("coding\0agent_route/v1|unknown|implement|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),

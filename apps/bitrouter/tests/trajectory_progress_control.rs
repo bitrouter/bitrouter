@@ -2623,8 +2623,10 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
     auto.tiers
         .insert("economy".into(), "economy:economy-model".into());
     auto.default_tier = Some("strong".into());
-    auto.routes
-        .insert("agent_route/v1|orchestrate|normal".into(), "economy".into());
+    auto.routes.insert(
+        "agent_route/v1|unknown|orchestrate|normal".into(),
+        "economy".into(),
+    );
     let mut certificate = lock
         .certificates
         .get("auto")
@@ -2633,10 +2635,10 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
         .ok_or_else(|| anyhow::anyhow!("template lock is missing an auto certificate"))?;
     certificate.selected_tier = "economy".into();
     certificate.baseline_tier = Some("strong".into());
-    lock.certificates
-        .entry("auto".into())
-        .or_default()
-        .insert("agent_route/v1|orchestrate|normal".into(), certificate);
+    lock.certificates.entry("auto".into()).or_default().insert(
+        "agent_route/v1|unknown|orchestrate|normal".into(),
+        certificate,
+    );
     let harness = HttpHarness::with_lock(lock).await?;
     let assembled = harness.assemble().await?;
     let server = server(&assembled);
@@ -2664,7 +2666,7 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
     );
     assert_ne!(
         outcome.latest_projection.as_deref(),
-        Some("agent_route/v1|orchestrate|normal")
+        Some("agent_route/v1|unknown|orchestrate|normal")
     );
     Ok(())
 }
@@ -2736,7 +2738,7 @@ async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_follo
         .ok_or_else(|| anyhow::anyhow!("template auto policy has no progress guard"))?
         .protected_tiers
         .insert("balanced".into());
-    let unprotected_followup_key = "agent_route/v1|implement|normal";
+    let unprotected_followup_key = "agent_route/v1|unknown|implement|normal";
     auto.routes
         .insert(unprotected_followup_key.into(), "economy".into());
     lock.certificates

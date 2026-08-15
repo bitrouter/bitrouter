@@ -2,10 +2,10 @@
 
 This starter policy predicts the task family and role of the next response from
 the native prompt and causal history. It first looks for a sparse exact
-`agent_route/v2|<task-family>|<role>|<risk>` override; when that cell is not
-listed, it falls back to the complete `agent_route/v1|<role>|<risk>` role
-baseline. It uses GPT-5.6 as the strong route, Kimi K3 as the balanced route,
-and DeepSeek V4 Pro as the economy route.
+`agent_route/v1|<task-family>|<role>|<risk>` override; when that cell is not
+listed, it falls back to the complete
+`agent_route/v1|unknown|<role>|<risk>` baseline. It uses GPT-5.6 as the strong
+route, Kimi K3 as the balanced route, and DeepSeek V4 Pro as the economy route.
 
 Tier values are model targets. The scalar form above remains compatible and
 preserves a caller-supplied reasoning effort. For a model that positively
@@ -45,31 +45,29 @@ the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
 form addresses the same policy. Physical model ids remain passthrough, so an
 explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v3 lock retains all fifteen generic
-`agent_route/v1|<role>|<risk>` baseline cells. The predicted roles are
+The lock publishes all fifteen
+`agent_route/v1|unknown|<role>|<risk>` baseline cells. The predicted roles are
 `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
 bands are `normal`, `context`, and `guarded`.
 
 When a task family is confidently classified, its primary key is
-`agent_route/v2|<task-family>|<role>|<risk>`. The twelve task families are
+`agent_route/v1|<task-family>|<role>|<risk>`. The twelve task families are
 `code:generation`, `code:debugging`, `code:review`, `code:sql_database`,
 `code:frontend_ui`, `code:devops_config`, `code:repository_analysis`,
 `agent:multi_step_planning`, `agent:workflow_execution`, `agent:web_research`,
 `agent:memory_operations`, and `agent:general`. The template deliberately
-publishes only three v2 experiments:
+publishes only three task-specific experiments:
 
-- `agent_route/v2|code:review|verify|normal` → `strong`
-- `agent_route/v2|code:debugging|implement|guarded` → `strong`
-- `agent_route/v2|agent:web_research|mechanical|normal` → `balanced`
+- `agent_route/v1|code:review|verify|normal` → `strong`
+- `agent_route/v1|code:debugging|implement|guarded` → `strong`
+- `agent_route/v1|agent:web_research|mechanical|normal` → `balanced`
 
-Those are exact overrides, not a new matrix: every other classified v2 cell
-falls back to its v1 role-and-risk baseline at runtime. A request with an
-unknown task family likewise uses the v1 key directly. Shell dispatch, file
-dispatch, and tool dispatch stay bounded action/role evidence; they do not
-create task-family cells or change a task-family route. Runtime adapters may
-enrich diagnostics from native request shapes, but headers and harness identity
-do not choose a tier. Existing `agent_trace/v2` and `agent_trace/v1` locks
-remain routable through exact compatibility fallbacks.
+Those are exact overrides, not a full matrix: every other classified task cell
+falls back to the v1 `unknown` task-family baseline for the same role and risk.
+Shell dispatch, file dispatch, and tool dispatch stay bounded action/role
+evidence; they do not create task-family cells or change a task-family route.
+Runtime adapters may enrich diagnostics from native request shapes, but headers
+and harness identity do not choose a tier.
 
 All three tiers are listed in `tool_safe_tiers`. Supplying tools therefore does
 not clamp a predictive selection to another tier, and the template never
@@ -109,7 +107,7 @@ Raw prompt text, response text, and tool arguments are not persisted as routing
 evidence. The ledger retains structural ancestry, categorical projections and
 risk, exact counters, and keyed digests.
 
-The fifteen v1 baseline routes and three sparse v2 routes are compiler-owned
+The fifteen unknown-family baseline routes and three sparse task routes are compiler-owned
 experiments with one matching lockfile certificate per explicit route.
 Certificate evidence digests bind the policy name, predictive key, and selected
 tier; the shared compiler digest binds the complete template policy.

@@ -51,9 +51,6 @@ pub struct PolicyDecisionRecord {
     pub baseline_tier: Option<String>,
     #[serde(default)]
     pub baseline_effort: Option<ReasoningEffort>,
-    /// Tier selected by the corresponding predictive-v1 role/risk cell.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub predictive_v1_fallback_tier: Option<String>,
     pub legacy_fingerprint: String,
     #[serde(rename = "trace_state", alias = "workflow_state")]
     pub workflow_state: String,
@@ -460,7 +457,6 @@ mod tests {
             preset_variant: None,
             baseline_tier: Some("capable".to_string()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             legacy_fingerprint: "after_read_file".to_string(),
             workflow_state: "tool_followup".to_string(),
             workflow_identity: WorkflowIdentity::default(),
@@ -537,7 +533,6 @@ mod tests {
         let parsed: PolicyDecisionRecord = serde_json::from_str(legacy).unwrap();
 
         assert_eq!(parsed.route_projection, None);
-        assert_eq!(parsed.predictive_v1_fallback_tier, None);
         assert_eq!(parsed.predicted_role, None);
         assert_eq!(parsed.predicted_task_family, None);
         assert_eq!(parsed.predicted_action, None);

@@ -975,14 +975,14 @@ fn policy_table_absent_leaves_section_empty() {
 }
 
 #[test]
-fn policy_table_agent_trace_key_strategy_is_canonical_and_workflow_state_is_compatible() {
+fn policy_table_agent_trace_key_strategy_is_the_only_supported_strategy() {
     let yaml = r#"
 policy_table:
   key_strategy: agent_trace
   tiers:
     cheap: vendor/cheap
   fingerprints:
-    "agent_trace/v1|opening|normal": cheap
+    "agent_route/v1|unknown|orchestrate|normal": cheap
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
     assert_eq!(cfg.policy_table.key_strategy, PolicyKeyStrategy::AgentTrace);
@@ -990,15 +990,12 @@ policy_table:
     let serialized = serde_saphyr::to_string(&cfg.policy_table).unwrap();
     assert!(serialized.contains("key_strategy: agent_trace"));
 
-    let compatible = parse_with(
+    let retired = parse_with(
         "policy_table:\n  key_strategy: workflow_state\n  tiers: { cheap: vendor/cheap }\n",
         |_| None,
     )
-    .unwrap();
-    assert_eq!(
-        compatible.policy_table.key_strategy,
-        PolicyKeyStrategy::AgentTrace
-    );
+    .expect_err("retired workflow_state strategy must fail");
+    assert!(retired.to_string().contains("no longer supported"));
 
     let schema = serde_json::to_value(schemars::schema_for!(PolicyTableConfig)).unwrap();
     let rendered = serde_json::to_string(&schema).unwrap();
@@ -1007,14 +1004,8 @@ policy_table:
 }
 
 #[test]
-fn policy_key_strategy_keeps_the_workflow_state_rust_variant_and_serializes_canonically() {
-    let legacy_api = PolicyKeyStrategy::WorkflowState;
-    assert!(matches!(legacy_api, PolicyKeyStrategy::WorkflowState));
-    let serialized = serde_saphyr::to_string(&legacy_api).unwrap();
-    assert_eq!(serialized.trim(), "agent_trace");
-
-    let unsupported_api = PolicyKeyStrategy::LegacyFingerprint;
-    let serialized = serde_saphyr::to_string(&unsupported_api).unwrap();
+fn policy_key_strategy_serializes_as_the_only_canonical_strategy() {
+    let serialized = serde_saphyr::to_string(&PolicyKeyStrategy::AgentTrace).unwrap();
     assert_eq!(serialized.trim(), "agent_trace");
 }
 
@@ -1030,6 +1021,39 @@ fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
             "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace'"
         ),
         "got: {err}"
+    );
+}
+
+#[test]
+fn policy_table_rejects_retired_route_key_shapes() {
+    for route_key in [
+        "agent_trace/v2|edit|normal",
+        "agent_route/v1|implement|normal",
+        "agent_route/v2|code:review|verify|normal",
+        "agent_route/v1|code:review|developer|normal",
+    ] {
+        let yaml = format!(
+            "policy_table:\n  tiers: {{ cheap: vendor/cheap }}\n  fingerprints:\n    \"{route_key}\": cheap\n"
+        );
+        let error = parse_with(&yaml, |_| None).expect_err("retired route key must fail");
+        assert!(
+            error.to_string().contains("canonical agent_route/v1"),
+            "unexpected error for {route_key}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inert_policy_table_still_rejects_retired_route_key_shapes() {
+    let error = parse_with(
+        "policy_table:\n  fingerprints:\n    \"agent_trace/v2|edit|normal\": economy\n",
+        |_| None,
+    )
+    .expect_err("an inert table must not hide a retired route key");
+
+    assert!(
+        error.to_string().contains("canonical agent_route/v1"),
+        "unexpected error: {error}"
     );
 }
 
@@ -1105,8 +1129,8 @@ policy_table:
     cheap: vendor/cheap
     flagship: vendor/flagship
   fingerprints:
-    opening: flagship
-    after_read_file: cheap
+    "agent_route/v1|unknown|orchestrate|normal": flagship
+    "agent_route/v1|unknown|mechanical|normal": cheap
   default_tier: flagship
   tool_use_tier: flagship
   tool_safe_tiers:
@@ -1123,7 +1147,7 @@ policy_table:
     assert_eq!(
         cfg.policy_table
             .fingerprints
-            .get("opening")
+            .get("agent_route/v1|unknown|orchestrate|normal")
             .map(String::as_str),
         Some("flagship")
     );
@@ -1144,7 +1168,7 @@ policy_table:
   tiers:
     cheap: vendor/cheap
   fingerprints:
-    opening: flagship
+    "agent_route/v1|unknown|orchestrate|normal": flagship
 "#;
     let err = parse_with(yaml, |_| None).unwrap_err();
     assert!(

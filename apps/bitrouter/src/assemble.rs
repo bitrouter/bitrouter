@@ -2030,10 +2030,11 @@ mod trajectory_assembly_tests {
     use super::{Config, build_app_with_path};
     use crate::eval::types::EvalScope;
     use crate::policy_lock::{
-        LEGACY_POLICY_LOCKFILE_VERSION, PolicyDefinition, PolicyLock, deterministic_yaml,
-        semantic_digest,
+        CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
+        RouteOwner, deterministic_yaml, semantic_digest,
     };
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    use crate::workflow_state::predictive::compiled_predictor_contract;
 
     async fn assemble_named_policy(
         trajectory_enabled: bool,
@@ -2087,6 +2088,9 @@ presets:
         );
         let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
         let guarded = progress_guard.is_some();
+        const ROUTE_KEY: &str = "agent_route/v1|unknown|unknown|normal";
+        const TEST_DIGEST: &str =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let policy = PolicyDefinition {
             tiers: BTreeMap::from([
                 ("economy".into(), "vendor:economy-model".into()),
@@ -2095,24 +2099,41 @@ presets:
             routes: if guarded {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([("agent_trace/v2|opening|normal".into(), "economy".into())])
+                BTreeMap::from([(ROUTE_KEY.into(), "economy".into())])
             },
             default_tier: Some(if guarded { "economy" } else { "strong" }.into()),
             tool_use_tier: Some("strong".into()),
             tool_safe_tiers: vec!["strong".into()],
             progress_guard,
+            predictor: (!guarded).then(compiled_predictor_contract),
             ..PolicyDefinition::default()
         };
-        let mut lock = if guarded {
-            PolicyLock::default()
-        } else {
-            PolicyLock {
-                lockfile_version: LEGACY_POLICY_LOCKFILE_VERSION,
-                artifact: None,
-                policies: BTreeMap::new(),
-                certificates: BTreeMap::new(),
-            }
-        };
+        let mut lock = PolicyLock::default();
+        if !guarded {
+            lock.certificates.insert(
+                "coding".into(),
+                BTreeMap::from([(
+                    ROUTE_KEY.into(),
+                    PolicyCertificate {
+                        owner: RouteOwner::Operator,
+                        selected_tier: "economy".into(),
+                        baseline_tier: Some("strong".into()),
+                        source: CertificateSource::Operator,
+                        eligible_episodes: 0,
+                        independent_tasks: 0,
+                        quality: None,
+                        economics: None,
+                        latency: None,
+                        critical_violations: 0,
+                        verdict: PromotionVerdict::Promote,
+                        evaluator_config_digest: None,
+                        compiler_config_digest: TEST_DIGEST.into(),
+                        evidence_digest: TEST_DIGEST.into(),
+                        legacy: None,
+                    },
+                )]),
+            );
+        }
         lock.policies.insert("coding".into(), policy);
         let digest = semantic_digest(&lock)?;
         tokio::fs::write(

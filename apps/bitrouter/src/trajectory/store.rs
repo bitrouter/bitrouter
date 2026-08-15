@@ -203,7 +203,6 @@ pub(crate) struct GuardedRouteInput {
     pub request_key: String,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub predictive_v1_fallback_tier: Option<String>,
     pub tier_efforts:
         std::collections::BTreeMap<String, bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub preset: Option<String>,
@@ -2222,9 +2221,6 @@ fn build_guarded_route_batch(
             "route.baseline_effort".to_owned(),
             baseline_effort.to_string(),
         );
-    }
-    if let Some(tier) = &input.predictive_v1_fallback_tier {
-        categorical.insert("route.predictive_v1_fallback_tier".to_owned(), tier.clone());
     }
     if let Some(preset) = &input.preset {
         categorical.insert("route.preset".to_owned(), preset.clone());
@@ -5505,11 +5501,10 @@ mod tests {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
-            route_projection: "agent_route/v2|code:generation|implement|normal".into(),
+            route_projection: "agent_route/v1|code:generation|implement|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: Some("reference".into()),
             tier_efforts: Default::default(),
             preset: Some("auto:cost".into()),
             projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")

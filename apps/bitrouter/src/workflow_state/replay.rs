@@ -249,7 +249,7 @@ mod tests {
     use crate::workflow_state::replay::ReplayEvaluator;
 
     #[test]
-    fn task_aware_replay_uses_v2_and_compares_expected_family() {
+    fn task_aware_replay_uses_unified_v1_and_compares_expected_family() {
         let fixture = WorkflowTraceFixture::from_value(json!({
             "id": "task-aware-debugging",
             "harness": "generic",
@@ -280,7 +280,7 @@ mod tests {
 
         assert_eq!(
             summary.records[0].predictive_route_key,
-            "agent_route/v2|code:debugging|implement|normal"
+            "agent_route/v1|code:debugging|implement|normal"
         );
         assert_eq!(summary.records[0].prediction_matches_expected, Some(true));
     }

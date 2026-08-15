@@ -227,10 +227,7 @@ mod tests {
         );
 
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
-        assert_eq!(
-            state.routing_key(),
-            "agent_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"
@@ -320,10 +317,7 @@ mod tests {
 
         assert_eq!(state.ir.harness_id, HarnessId::Generic);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
-        assert_eq!(
-            state.routing_key(),
-            "agent_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"
@@ -348,10 +342,7 @@ mod tests {
         assert_eq!(state.ir.harness_id, HarnessId::Smithers);
         assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
         assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
-        assert_eq!(
-            state.routing_key(),
-            "agent_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"

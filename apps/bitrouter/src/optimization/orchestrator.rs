@@ -1128,7 +1128,7 @@ async fn submit_variant_result(
     let selected = evidence
         .attributions
         .iter()
-        .filter(|item| item.decision.request_key == target_request_key)
+        .filter(|item| item.decision.route_projection == target_request_key)
         .collect::<Vec<_>>();
     if selected.is_empty() {
         anyhow::bail!(
@@ -1651,13 +1651,12 @@ mod tests {
         let decision = EvalDecisionRef {
             decision_id: format!("req-{name}:auto"),
             policy: "auto".into(),
-            route_projection: None,
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: tier.into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             policy_digest: policy_digest.into(),
         };
         VariantEvidence {
@@ -1708,13 +1707,13 @@ mod tests {
 
         verify_controlled_candidate(
             &candidate,
-            "agent_trace/v2|edit|normal",
+            "agent_route/v1|unknown|implement|normal",
             Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
         )?;
         assert!(
             verify_controlled_candidate(
                 &candidate,
-                "agent_trace/v2|edit|normal",
+                "agent_route/v1|unknown|implement|normal",
                 Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
             )
             .is_err()
@@ -1734,11 +1733,16 @@ mod tests {
         candidate.observations[0].selected_effort =
             Some(bitrouter_sdk::language_model::types::ReasoningEffort::High);
 
-        verify_controlled_candidate(&candidate, "agent_trace/v2|edit|normal", None)?;
+        verify_controlled_candidate(&candidate, "agent_route/v1|unknown|implement|normal", None)?;
         candidate.observations[0].selected_effort =
             Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low);
         assert!(
-            verify_controlled_candidate(&candidate, "agent_trace/v2|edit|normal", None).is_err()
+            verify_controlled_candidate(
+                &candidate,
+                "agent_route/v1|unknown|implement|normal",
+                None,
+            )
+            .is_err()
         );
         Ok(())
     }
@@ -1751,11 +1755,12 @@ mod tests {
         let service = crate::eval::EvalService::new(store.clone(), EvalConfig::default());
         let active = active_policy();
         let active_digest = semantic_digest(&active)?;
+        let target = "agent_route/v1|code:generation|implement|normal";
         let experiment = crate::optimization::runner::build_experiment_lock(
             &active,
             &active_digest,
             "auto",
-            "agent_trace/v2|edit|normal",
+            target,
             "economy",
         )?;
         let evaluator = EvaluatorLock {
@@ -1779,24 +1784,18 @@ mod tests {
             evidence_refs: vec!["workflow-output".into()],
             reason: "The workflow contract passed.".into(),
         };
+        let mut baseline = variant(&active_digest, "baseline", "strong");
+        baseline.observations[0].route_projection = target.into();
+        baseline.attributions[0].decision.route_projection = target.into();
         submit_variant_result(
-            &service,
-            &store,
-            "run-1",
-            "agent_trace/v2|edit|normal",
-            &variant(&active_digest, "baseline", "strong"),
-            &opinion,
-            &evaluator,
+            &service, &store, "run-1", target, &baseline, &opinion, &evaluator,
         )
         .await?;
+        let mut candidate = variant(&semantic_digest(&experiment)?, "candidate", "economy");
+        candidate.observations[0].route_projection = target.into();
+        candidate.attributions[0].decision.route_projection = target.into();
         submit_variant_result(
-            &service,
-            &store,
-            "run-1",
-            "agent_trace/v2|edit|normal",
-            &variant(&semantic_digest(&experiment)?, "candidate", "economy"),
-            &opinion,
-            &evaluator,
+            &service, &store, "run-1", target, &candidate, &opinion, &evaluator,
         )
         .await?;
         assert!(
@@ -1827,13 +1826,9 @@ mod tests {
             },
             &PromotionQualityCriteria::manual_review(),
         )?;
-        assert_eq!(
-            compiled.document.policies["auto"].routes["agent_trace/v2|edit|normal"],
-            "economy"
-        );
+        assert_eq!(compiled.document.policies["auto"].routes[target], "economy");
         assert!(compiled.changes.iter().any(|change| {
-            change.request_key == "agent_trace/v2|edit|normal"
-                && change.verdict == PromotionVerdict::Promote
+            change.request_key == target && change.verdict == PromotionVerdict::Promote
         }));
         Ok(())
     }

@@ -143,8 +143,7 @@ async fn stale_candidate_loses_compare_and_swap_without_touching_active_bytes() 
         .policies
         .get_mut("auto")
         .ok_or_else(|| anyhow::anyhow!("base fixture must contain the auto policy"))?
-        .routes
-        .insert("agent_trace/v1|edit|normal".into(), "strong".into());
+        .default_tier = Some("economy".into());
     let newer_bytes = deterministic_yaml(&newer)?;
     std::fs::write(&active_path, &newer_bytes)?;
 
@@ -241,13 +240,12 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             policy: "auto:cost".into(),
             policy_digest:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            route_projection: "agent_trace/v2|edit|normal".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -472,13 +470,12 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         decisions: vec![EvalDecisionRef {
             decision_id: "decision-publication".into(),
             policy: "auto".into(),
-            route_projection: None,
-            request_key: "agent_trace/v1|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             policy_digest: semantic_digest(&active)?,
         }],
         requested_dimensions: BTreeSet::from(["quality.pass".into()]),
@@ -545,7 +542,7 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         Some(manifest.evidence_root.as_str())
     );
     assert_eq!(
-        published.policies["auto"].routes["agent_trace/v1|edit|normal"],
+        published.policies["auto"].routes["agent_route/v1|unknown|implement|normal"],
         "economy"
     );
     Ok(())

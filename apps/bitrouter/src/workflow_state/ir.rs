@@ -423,43 +423,6 @@ impl WorkflowStateIR {
             risk,
         }
     }
-
-    /// Exact v1 projection used only to keep published v1 locks routable while
-    /// their routes are migrated to v2.
-    pub fn compatibility_route_projection_v1(&self) -> RouteProjection {
-        let guarded_state = matches!(
-            self.state_kind,
-            WorkflowStateKind::Unknown
-                | WorkflowStateKind::Debug
-                | WorkflowStateKind::Review
-                | WorkflowStateKind::Recovery
-                | WorkflowStateKind::Finalization
-        );
-        let high_cost_constraint = matches!(
-            self.capability_constraints.context_pressure,
-            RequirementLevel::High
-        ) || matches!(
-            self.capability_constraints.expected_redo_penalty,
-            RequirementLevel::High
-        ) || matches!(
-            self.capability_constraints.output_precision,
-            RequirementLevel::High
-        );
-        let risk = if self.recovery_signal == RecoverySignal::LikelyRecovery
-            || guarded_state
-            || high_cost_constraint
-        {
-            RouteRisk::Guarded
-        } else {
-            RouteRisk::Normal
-        };
-
-        RouteProjection {
-            schema_version: 1,
-            state_kind: self.state_kind.clone(),
-            risk,
-        }
-    }
 }
 
 fn option_key(value: Option<&str>) -> String {
@@ -740,16 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn route_projection_keeps_an_exact_v1_compatibility_key() {
-        let mut review = sample_ir();
-        review.state_kind = WorkflowStateKind::Review;
-        review.recovery_signal = RecoverySignal::None;
-        review.capability_constraints = CapabilityConstraints::default();
-        assert_eq!(
-            review.compatibility_route_projection_v1().key(),
-            "agent_trace/v1|review|guarded"
-        );
-
+    fn route_projection_rejects_retired_trace_v1_keys() {
         let parsed = RouteProjection::parse_key("agent_trace/v2|edit|context")
             .expect("canonical v2 context projection");
         assert_eq!(parsed.risk, RouteRisk::Context);

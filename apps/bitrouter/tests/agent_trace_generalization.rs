@@ -175,7 +175,7 @@ async fn task_aware_cross_harness_routes_equivalent_requests_identically() {
         if scenario.name == "later causal pivot" {
             assert_ne!(
                 scenario.primary_route, scenario.matched_route,
-                "{case_name} regression fixture must exercise sparse v2 fallback"
+                "{case_name} regression fixture must exercise unknown-family fallback"
             );
         }
     }
@@ -219,7 +219,10 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     assert_eq!(decisions.len(), 7, "each HTTP request emits one decision");
     for decision in &decisions {
         assert_eq!(decision.key_strategy, "agent_trace");
-        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|orchestrate|normal"
+        );
         assert_eq!(
             decision.selected_tier.as_deref(),
             Some("strong"),
@@ -334,7 +337,10 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         .expect("release requests emit policy decisions");
     assert_eq!(decisions.len(), 3);
     for decision in decisions {
-        assert_eq!(decision.request_key, "agent_route/v1|mechanical|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|mechanical|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
@@ -703,7 +709,10 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         .expect("HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), 15);
     for decision in decisions.iter().step_by(2).take(7) {
-        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|unknown|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
@@ -711,11 +720,11 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         );
     }
     for (decision, key) in decisions[1..10].iter().step_by(2).zip([
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
     ]) {
         assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
@@ -724,7 +733,10 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
             Some("complete")
         );
     }
-    assert_eq!(decisions[11].request_key, "agent_route/v1|unknown|normal");
+    assert_eq!(
+        decisions[11].request_key,
+        "agent_route/v1|unknown|unknown|normal"
+    );
     assert_eq!(decisions[11].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[11].selected_model.as_deref(),
@@ -732,14 +744,17 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     );
     assert_eq!(
         decisions[13].request_key,
-        "agent_route/v1|implement|guarded"
+        "agent_route/v1|unknown|implement|guarded"
     );
     assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
         decisions[13].selected_model.as_deref(),
         Some(MOCK_STRONG_MODEL)
     );
-    assert_eq!(decisions[14].request_key, "agent_route/v1|unknown|normal");
+    assert_eq!(
+        decisions[14].request_key,
+        "agent_route/v1|unknown|unknown|normal"
+    );
     assert_eq!(decisions[14].static_tier.as_deref(), Some("balanced"));
     assert_eq!(decisions[14].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
@@ -760,8 +775,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
     let mut scenarios = [
         (
             "edit",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|verify|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|verify|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
             "balanced",
@@ -771,8 +786,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "test",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|finalize|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|finalize|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
             "balanced",
@@ -782,8 +797,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "tool followup",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|unknown|normal",
             terminus_tool_case("@auto", None),
             claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
             "balanced",
@@ -793,8 +808,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "recovery",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
             claude_fixture_case(
                 "@auto:cost",
@@ -841,7 +856,7 @@ async fn native_literal_histories_receive_exact_template_decisions() {
     ) in scenarios.iter().zip(decisions.chunks_exact(4))
     {
         for root in [&pair[0], &pair[2]] {
-            assert_eq!(root.request_key, "agent_route/v1|unknown|normal");
+            assert_eq!(root.request_key, "agent_route/v1|unknown|unknown|normal");
             assert_eq!(root.selected_tier.as_deref(), Some("balanced"));
             assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
         }
@@ -881,7 +896,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Orchestrate,
             NextActionClass::ReasonOrPlan,
             "normal",
-            "agent_route/v1|orchestrate|normal",
+            "agent_route/v1|unknown|orchestrate|normal",
             &["opening_broad_goal"] as &[&str],
             "strong",
         ),
@@ -890,7 +905,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Mechanical,
             NextActionClass::InspectOrRead,
             "normal",
-            "agent_route/v1|mechanical|normal",
+            "agent_route/v1|unknown|mechanical|normal",
             &["narrow_read_requested"],
             "economy",
         ),
@@ -899,7 +914,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Implement,
             NextActionClass::Mutate,
             "normal",
-            "agent_route/v1|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
             &["concrete_mutation_requested", "read_result_available"],
             "economy",
         ),
@@ -908,7 +923,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Verify,
             NextActionClass::ExecuteOrTest,
             "normal",
-            "agent_route/v1|verify|normal",
+            "agent_route/v1|unknown|verify|normal",
             &["concrete_mutation_requested", "mutation_result_available"],
             "economy",
         ),
@@ -917,7 +932,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Implement,
             NextActionClass::Mutate,
             "guarded",
-            "agent_route/v1|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
             &["concrete_mutation_requested", "test_failed_once"],
             "strong",
         ),
@@ -926,7 +941,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Finalize,
             NextActionClass::AnswerOrSummarize,
             "normal",
-            "agent_route/v1|finalize|normal",
+            "agent_route/v1|unknown|finalize|normal",
             &["concrete_mutation_requested", "progress_near_done"],
             "balanced",
         ),
@@ -1401,23 +1416,23 @@ fn predictive_matrix_router() -> PolicyTableRouter {
         ]),
         fingerprints: HashMap::from([
             (
-                "agent_route/v1|orchestrate|normal".to_string(),
+                "agent_route/v1|unknown|orchestrate|normal".to_string(),
                 "strong".to_string(),
             ),
             (
-                "agent_route/v1|implement|normal".to_string(),
+                "agent_route/v1|unknown|implement|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|mechanical|normal".to_string(),
+                "agent_route/v1|unknown|mechanical|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|verify|normal".to_string(),
+                "agent_route/v1|unknown|verify|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|finalize|normal".to_string(),
+                "agent_route/v1|unknown|finalize|normal".to_string(),
                 "balanced".to_string(),
             ),
         ]),
@@ -1562,8 +1577,8 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             task_family: "code:debugging",
             role: "implement",
             risk: "guarded",
-            primary_route: "agent_route/v2|code:debugging|implement|guarded",
-            matched_route: "agent_route/v2|code:debugging|implement|guarded",
+            primary_route: "agent_route/v1|code:debugging|implement|guarded",
+            matched_route: "agent_route/v1|code:debugging|implement|guarded",
             tier: "strong",
         },
         TaskAwareRouteCase {
@@ -1574,8 +1589,8 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             task_family: "code:review",
             role: "verify",
             risk: "normal",
-            primary_route: "agent_route/v2|code:review|verify|normal",
-            matched_route: "agent_route/v2|code:review|verify|normal",
+            primary_route: "agent_route/v1|code:review|verify|normal",
+            matched_route: "agent_route/v1|code:review|verify|normal",
             tier: "strong",
         },
         TaskAwareRouteCase {
@@ -1586,8 +1601,8 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             task_family: "agent:web_research",
             role: "mechanical",
             risk: "normal",
-            primary_route: "agent_route/v2|agent:web_research|mechanical|normal",
-            matched_route: "agent_route/v2|agent:web_research|mechanical|normal",
+            primary_route: "agent_route/v1|agent:web_research|mechanical|normal",
+            matched_route: "agent_route/v1|agent:web_research|mechanical|normal",
             tier: "balanced",
         },
         TaskAwareRouteCase {
@@ -1598,8 +1613,8 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             task_family: "unknown",
             role: "unknown",
             risk: "normal",
-            primary_route: "agent_route/v1|unknown|normal",
-            matched_route: "agent_route/v1|unknown|normal",
+            primary_route: "agent_route/v1|unknown|unknown|normal",
+            matched_route: "agent_route/v1|unknown|unknown|normal",
             tier: "balanced",
         },
         TaskAwareRouteCase {
@@ -1610,8 +1625,8 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             task_family: "code:debugging",
             role: "implement",
             risk: "normal",
-            primary_route: "agent_route/v2|code:debugging|implement|normal",
-            matched_route: "agent_route/v1|implement|normal",
+            primary_route: "agent_route/v1|code:debugging|implement|normal",
+            matched_route: "agent_route/v1|unknown|implement|normal",
             tier: "strong",
         },
     ]

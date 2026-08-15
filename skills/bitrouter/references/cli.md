@@ -180,14 +180,13 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | `bitrouter policy rollback <DIGEST> [--config PATH] [--socket PATH]` | Restore exact lock bytes from local promotion history, then reload or restore on rejection. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
 
-Adaptive routing uses generic `agent_trace` projections. Native runtime adapters
-add diagnostics only, not policy keys, and private BitRouter headers are not
-needed. `agent_trace` is the active and default strategy;
-`key_strategy: legacy_fingerprint` is rejected and must be migrated to
-canonical `agent_trace/v2|<state>|<risk>` routes. Existing v1 locks remain
-compatible through exact projection fallback. Existing `workflow_state`
-lock configuration is readable for compatibility, while canonical lock output
-uses `agent_trace`. `adequacy.explore_opening: true` enables exploration for
+Adaptive routing uses a source-independent predictor selected by
+`key_strategy: agent_trace`. Its static policy keys are exclusively canonical
+`agent_route/v1|<task-family>|<role>|<risk>` values. Native runtime adapters add
+diagnostics only, not policy keys, and private BitRouter headers are not needed.
+Observed `agent_trace/v2` values remain telemetry; retired route shapes and
+`key_strategy: legacy_fingerprint` are rejected during configuration
+validation. `adequacy.explore_opening: true` enables exploration for
 source-neutral opening projections. The removed
 `adequacy.max_downgraded_requests_per_session` setting is rejected because
 session identity is diagnostic-only.

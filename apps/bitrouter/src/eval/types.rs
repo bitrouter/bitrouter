@@ -30,8 +30,7 @@ pub enum EvalSubjectStatus {
 pub struct EvalDecisionRef {
     pub decision_id: String,
     pub policy: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route_projection: Option<String>,
+    pub route_projection: String,
     pub request_key: String,
     pub selected_tier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,8 +38,6 @@ pub struct EvalDecisionRef {
     pub baseline_tier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_effort: Option<ReasoningEffort>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub predictive_v1_fallback_tier: Option<String>,
     pub policy_digest: String,
 }
 
@@ -213,14 +210,9 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
             anyhow::bail!("duplicate eval decision id '{}';", decision.decision_id)
         }
         validate_identifier(&decision.policy, "decision.policy")?;
-        if let Some(route_projection) = &decision.route_projection {
-            validate_identifier(route_projection, "decision.route_projection")?;
-        }
+        validate_identifier(&decision.route_projection, "decision.route_projection")?;
         validate_identifier(&decision.request_key, "decision.request_key")?;
         validate_identifier(&decision.selected_tier, "decision.selected_tier")?;
-        if let Some(tier) = &decision.predictive_v1_fallback_tier {
-            validate_identifier(tier, "decision.predictive_v1_fallback_tier")?;
-        }
         validate_digest(&decision.policy_digest, "decision.policy_digest")?;
     }
     for dimension in &subject.requested_dimensions {
@@ -510,46 +502,54 @@ mod tests {
     }
 
     #[test]
-    fn legacy_decision_without_effort_round_trips_byte_semantically() -> anyhow::Result<()> {
-        let legacy = serde_json::json!({
+    fn decision_without_primary_route_projection_is_rejected() {
+        let incomplete = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "request_key": "agent_trace/v1|edit|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
             "selected_tier": "economy",
             "baseline_tier": "strong",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
-
-        let decoded: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
-
-        assert_eq!(decoded.route_projection, None);
-        assert_eq!(decoded.selected_effort, None);
-        assert_eq!(decoded.baseline_effort, None);
-        assert_eq!(decoded.predictive_v1_fallback_tier, None);
-        assert_eq!(serde_json::to_value(decoded)?, legacy);
-        Ok(())
+        assert!(serde_json::from_value::<EvalDecisionRef>(incomplete).is_err());
     }
 
     #[test]
-    fn primary_projection_and_fallback_tier_are_bounded() {
+    fn retired_predictive_v1_fallback_field_is_rejected() {
+        let mut retired = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "route_projection": "agent_route/v1|code:generation|implement|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
+            "selected_tier": "balanced",
+            "baseline_tier": "balanced",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+        retired
+            .as_object_mut()
+            .expect("decision fixture is an object")
+            .insert(
+                ["predictive_v1", "fallback_tier"].join("_"),
+                serde_json::json!("balanced"),
+            );
+
+        assert!(serde_json::from_value::<EvalDecisionRef>(retired).is_err());
+    }
+
+    #[test]
+    fn primary_projection_is_bounded() {
         let mut subject = subject_fixture();
         subject.decisions.push(EvalDecisionRef {
             decision_id: "decision-1".into(),
             policy: "auto".into(),
-            route_projection: Some("x".repeat(513)),
-            request_key: "agent_route/v1|implement|normal".into(),
+            route_projection: "x".repeat(513),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "balanced".into(),
             selected_effort: None,
             baseline_tier: Some("balanced".into()),
             baseline_effort: None,
-            predictive_v1_fallback_tier: None,
             policy_digest: subject.policy_digest.clone(),
         });
-        assert!(validate_subject(&subject).is_err());
-
-        subject.decisions[0].route_projection =
-            Some("agent_route/v2|code:generation|implement|normal".into());
-        subject.decisions[0].predictive_v1_fallback_tier = Some("x".repeat(513));
         assert!(validate_subject(&subject).is_err());
     }
 

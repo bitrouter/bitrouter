@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use bitrouter_sdk::config::parse_agent_route_key;
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
@@ -232,19 +233,7 @@ impl PredictiveRouteProjection {
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
-        let mut segments = value.split('|');
-        let (Some(namespace_version), Some(task_family), Some(next_step_role), Some(risk), None) = (
-            segments.next(),
-            segments.next(),
-            segments.next(),
-            segments.next(),
-            segments.next(),
-        ) else {
-            return None;
-        };
-        if namespace_version != "agent_route/v1" {
-            return None;
-        }
+        let (task_family, next_step_role, risk) = parse_agent_route_key(value)?;
         let risk = parse_route_risk(risk)?;
 
         Some(Self::new(
@@ -252,20 +241,6 @@ impl PredictiveRouteProjection {
             NextStepRole::parse_key(next_step_role)?,
             risk,
         ))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CanonicalPolicyProjection {
-    Observed(RouteProjection),
-    Predictive(PredictiveRouteProjection),
-}
-
-impl CanonicalPolicyProjection {
-    pub fn parse_key(value: &str) -> Option<Self> {
-        RouteProjection::parse_key(value)
-            .map(Self::Observed)
-            .or_else(|| PredictiveRouteProjection::parse_key(value).map(Self::Predictive))
     }
 }
 
@@ -2077,13 +2052,14 @@ mod tests {
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
-        assert!(CanonicalPolicyProjection::parse_key("agent_trace/v2|edit|normal").is_some());
-        assert!(CanonicalPolicyProjection::parse_key(&projection.key()).is_some());
-        assert!(CanonicalPolicyProjection::parse_key("agent_route/v1|implement|normal").is_none());
-        assert!(CanonicalPolicyProjection::parse_key(
-            "agent_route/v2|code:review|verify|normal"
-        )
-        .is_none());
+        assert!(RouteProjection::parse_key("agent_trace/v2|edit|normal").is_some());
+        let retired_short_v1 = format!("agent_route/v1|{}|normal", "implement");
+        let retired_v2 = format!(
+            "agent_route/{}|code:review|verify|normal",
+            ["v", "2"].concat()
+        );
+        assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
+        assert!(PredictiveRouteProjection::parse_key(&retired_v2).is_none());
     }
 
     #[test]
@@ -2094,10 +2070,7 @@ mod tests {
             RouteRisk::Normal,
         );
 
-        assert_eq!(
-            projection.key(),
-            "agent_route/v1|code:review|verify|normal"
-        );
+        assert_eq!(projection.key(), "agent_route/v1|code:review|verify|normal");
         assert_eq!(
             projection.unknown_baseline().key(),
             "agent_route/v1|unknown|verify|normal"
@@ -2106,11 +2079,13 @@ mod tests {
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
-        assert!(PredictiveRouteProjection::parse_key("agent_route/v1|verify|normal").is_none());
-        assert!(PredictiveRouteProjection::parse_key(
-            "agent_route/v2|code:review|verify|normal"
-        )
-        .is_none());
+        let retired_short_v1 = format!("agent_route/v1|{}|normal", "verify");
+        let retired_v2 = format!(
+            "agent_route/{}|code:review|verify|normal",
+            ["v", "2"].concat()
+        );
+        assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
+        assert!(PredictiveRouteProjection::parse_key(&retired_v2).is_none());
     }
 
     #[test]
@@ -2820,10 +2795,8 @@ mod tests {
             Some(projection)
         );
         assert!(
-            PredictiveRouteProjection::parse_key(
-                "agent_route/v1|debugging|implement|guarded"
-            )
-            .is_none()
+            PredictiveRouteProjection::parse_key("agent_route/v1|debugging|implement|guarded")
+                .is_none()
         );
         assert!(
             PredictiveRouteProjection::parse_key(

@@ -6163,7 +6163,8 @@ mod tests {
     {
       "decision_id": "decision-1",
       "policy": "auto",
-      "request_key": "agent_trace/v1|edit|normal",
+      "route_projection": "agent_route/v1|code:generation|implement|normal",
+      "request_key": "agent_route/v1|unknown|implement|normal",
       "selected_tier": "economy",
       "baseline_tier": "strong",
       "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
