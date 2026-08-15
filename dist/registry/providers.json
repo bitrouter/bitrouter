@@ -863,24 +863,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "stepfun/step-3.7-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "cache_write": 0.0,
-              "no_cache": 0.19
-            },
-            "output_tokens": {
-              "text": 1.14
-            }
-          },
-          "provider_model_id": "stepfun/step-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
@@ -2676,19 +2658,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "google/gemma-4-31b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.13
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider_model_id": "google/gemma-4-31b"
-        },
-        {
-          "api_protocol": "openai",
           "id": "minimax/minimax-m2.5",
           "pricing": {
             "input_tokens": {
@@ -2947,48 +2916,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01425,
-              "no_cache": 0.072
-            },
-            "output_tokens": {
-              "text": 0.216
-            }
-          },
-          "provider_model_id": "stepfun/step-3.5-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "stepfun/step-3.7-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.8625
-            }
-          },
-          "provider_model_id": "stepfun/step-3.7-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "tencent/hy3",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.029,
-              "no_cache": 0.066
-            },
-            "output_tokens": {
-              "text": 0.26
-            }
-          },
-          "provider_model_id": "tencent/hy3"
-        },
-        {
-          "api_protocol": "openai",
           "id": "x-ai/grok-4.20",
           "pricing": {
             "input_tokens": {
@@ -3230,19 +3157,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "meituan/longcat-2.0",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.75
-            },
-            "output_tokens": {
-              "text": 2.95
-            }
-          },
-          "provider_model_id": "meituan/longcat-2.0"
-        },
-        {
-          "api_protocol": "openai",
           "id": "moonshotai/kimi-k3",
           "pricing": {
             "input_tokens": {
@@ -3403,22 +3317,6 @@
             }
           },
           "provider_model_id": "gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "id": "google/gemma-4-31b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.99
-            },
-            "output_tokens": {
-              "text": 1.49
-            }
-          },
-          "provider_model_id": "gemma-4-31b",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5720,11 +5618,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "tencent/hy3",
-          "provider_model_id": "hy3"
-        },
-        {
-          "api_protocol": "openai",
           "id": "openai/gpt-5.6-luna",
           "provider_model_id": "gpt-5.6-luna"
         }
@@ -6702,41 +6595,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "stepfun/step-3.7-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.15
-            }
-          },
-          "provider_model_id": "stepfun/step-3.7-flash"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "stepfun/step-3.5-flash"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "qwen/qwen3.7-plus",
           "pricing": {
             "input_tokens": {
@@ -7102,24 +6960,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "tencent/hy3",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.033,
-              "no_cache": 0.132
-            },
-            "output_tokens": {
-              "text": 0.528
-            }
-          },
-          "provider_model_id": "tencent/hy3"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "z-ai/glm-4.7",
           "pricing": {
             "input_tokens": {
@@ -7224,24 +7064,6 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "meituan/longcat-2.0",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.006,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider_model_id": "meituan/longcat-2.0"
         },
         {
           "api_protocol": [
@@ -7538,20 +7360,6 @@
             }
           },
           "provider_model_id": "glm-5.2"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "tencent/hy3",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.0261,
-              "no_cache": 0.066
-            },
-            "output_tokens": {
-              "text": 0.26
-            }
-          },
-          "provider_model_id": "hy3-preview"
         }
       ],
       "name": "qianfan",
@@ -8029,59 +7837,6 @@
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "stepfun-ai/Step-3.5-Flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "tencent/hy3",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.029,
-              "no_cache": 0.066
-            },
-            "output_tokens": {
-              "text": 0.26
-            }
-          },
-          "provider_model_id": "tencent/Hy3-preview"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "google/gemma-4-31b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.13
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider_model_id": "google/gemma-4-31B-it"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "meituan/longcat-2.0",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.75
-            },
-            "output_tokens": {
-              "text": 2.95
-            }
-          },
-          "provider_model_id": "meituan-longcat/LongCat-2.0"
         }
       ],
       "name": "siliconflow",
@@ -8269,19 +8024,6 @@
             }
           },
           "provider_model_id": "zai-org/GLM-5.2"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "stepfun-ai/Step-3.5-Flash"
         }
       ],
       "name": "siliconflow_cn",
@@ -8290,272 +8032,6 @@
       ],
       "status": "active",
       "submitted_at": "2026-07-07",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://api.stepfun.ai/v1",
-      "auth_scheme": "x-api-key",
-      "billing": "usage_token",
-      "byok": true,
-      "community": false,
-      "id": "stepfun",
-      "metadata": {
-        "datacenters": [
-          "US"
-        ],
-        "headquarters": "CN",
-        "name": "StepFun",
-        "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
-        "slug": "stepfun",
-        "terms_of_service_url": "https://platform.stepfun.ai/docs/en/agreement/userservice"
-      },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "structured_outputs"
-          ],
-          "id": "stepfun/step-3.7-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.037,
-              "no_cache": 0.185
-            },
-            "output_tokens": {
-              "text": 1.11
-            }
-          },
-          "provider_model_id": "step-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "step-3.5-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "name": "stepfun",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-06-01",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://api.stepfun.com/v1",
-      "auth_scheme": "x-api-key",
-      "billing": "usage_token",
-      "byok": true,
-      "community": false,
-      "id": "stepfun_cn",
-      "metadata": {
-        "datacenters": [
-          "CN"
-        ],
-        "headquarters": "CN",
-        "name": "StepFun",
-        "privacy_policy_url": "https://platform.stepfun.com/docs/zh/agreement/userprivacy",
-        "slug": "stepfun",
-        "terms_of_service_url": "https://platform.stepfun.com/docs/zh/agreement/userservice"
-      },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "structured_outputs"
-          ],
-          "id": "stepfun/step-3.7-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.037,
-              "no_cache": 0.185
-            },
-            "output_tokens": {
-              "text": 1.11
-            }
-          },
-          "provider_model_id": "step-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "stepfun/step-3.5-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "step-3.5-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "name": "stepfun_cn",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-06-01",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://api.stepfun.ai/step_plan/v1",
-      "auth_scheme": "x-api-key",
-      "billing": "subscription",
-      "byok": true,
-      "community": false,
-      "display_name": "StepFun Step Plan",
-      "id": "stepfun_step_plan",
-      "metadata": {
-        "datacenters": [
-          "US"
-        ],
-        "headquarters": "CN",
-        "name": "StepFun",
-        "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
-        "slug": "stepfun",
-        "terms_of_service_url": "https://platform.stepfun.ai/docs/en/agreement/userservice"
-      },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "structured_outputs"
-          ],
-          "id": "stepfun/step-3.7-flash",
-          "provider_model_id": "step-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "stepfun/step-3.5-flash",
-          "provider_model_id": "step-3.5-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "name": "stepfun_step_plan",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-07-06",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://api.stepfun.com/step_plan/v1",
-      "auth_scheme": "x-api-key",
-      "billing": "subscription",
-      "byok": true,
-      "community": false,
-      "display_name": "StepFun Step Plan (China)",
-      "id": "stepfun_step_plan_cn",
-      "metadata": {
-        "datacenters": [
-          "CN"
-        ],
-        "headquarters": "CN",
-        "name": "StepFun",
-        "privacy_policy_url": "https://platform.stepfun.com/docs/zh/agreement/userprivacy",
-        "slug": "stepfun",
-        "terms_of_service_url": "https://platform.stepfun.com/docs/zh/agreement/userservice"
-      },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "structured_outputs"
-          ],
-          "id": "stepfun/step-3.7-flash",
-          "provider_model_id": "step-3.7-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "stepfun/step-3.5-flash",
-          "provider_model_id": "step-3.5-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "name": "stepfun_step_plan_cn",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-07-06",
       "weight": 1.0
     },
     {
@@ -9263,27 +8739,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "id": "tencent/hy3",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.0,
-              "cache_write": 0.0,
-              "no_cache": 0.0
-            },
-            "output_tokens": {
-              "text": 0.0
-            }
-          },
-          "provider_model_id": "hy3",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "name": "tencent_cn",
@@ -9349,22 +8804,6 @@
             }
           },
           "provider_model_id": "kimi-k2-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "id": "google/gemma-4-31b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.0
-            }
-          },
-          "provider_model_id": "gemma4-31b",
           "rate_limits": {
             "requests_per_minute": 60
           }

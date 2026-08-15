@@ -200,17 +200,20 @@ Ready-made **policy specs** for common agentic workflows start in [`templates/au
 
 BitRouter routes to a *model*, not a provider. Each family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
 
-| Lab      | Latest models                    |
-| -------- | -------------------------------- |
-| DeepSeek | DeepSeek V4 Flash 0731 / V4 Pro  |
-| Alibaba  | Qwen3.8 Max / Qwen3.7 Max        |
-| Moonshot | Kimi K3 / K2.7 Code              |
-| Z.ai     | GLM-5.2 / 5.1                    |
-| MiniMax  | MiniMax M3 / M2.7                |
-| Xiaomi   | MiMo V2.5 Pro / V2.5             |
-| StepFun  | Step 3.7 Flash / 3.5 Flash       |
+| Lab       | Latest models                    |
+| --------- | -------------------------------- |
+| OpenAI    | GPT-5.6 Sol / Terra / Luna       |
+| Anthropic | Claude Opus 5 / Sonnet 5         |
+| Google    | Gemini 3.6 Flash / 3.5 Flash     |
+| xAI       | Grok 4.6 / 4.5                   |
+| DeepSeek  | DeepSeek V4 Flash 0731 / V4 Pro  |
+| Alibaba   | Qwen3.8 Max / Qwen3.7 Max        |
+| Moonshot  | Kimi K3 / K2.7 Code              |
+| Z.ai      | GLM-5.2 / 5.1                    |
+| MiniMax   | MiniMax M3 / M2.7                |
+| Xiaomi    | MiMo V2.5 Pro / V2.5             |
 
-Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
+Frontier models from OpenAI, Anthropic, Google, and xAI also route over a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex) instead of a key. Full catalog in the [registry/](registry/).
 
 ## Harness integrations
 

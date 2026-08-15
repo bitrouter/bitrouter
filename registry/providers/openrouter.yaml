@@ -219,21 +219,6 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
-  - id: stepfun/step-3.7-flash
-    provider_model_id: stepfun/step-3.7-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.2
-        cache_read: 0.04
-      output_tokens:
-        text: 1.15
-  - id: stepfun/step-3.5-flash
-    provider_model_id: stepfun/step-3.5-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-      output_tokens:
-        text: 0.3
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen/qwen3.7-plus
     pricing:
@@ -399,14 +384,6 @@ models:
         no_cache: 0.14
       output_tokens:
         text: 1
-  - id: tencent/hy3
-    provider_model_id: tencent/hy3
-    pricing:
-      input_tokens:
-        no_cache: 0.132
-        cache_read: 0.033
-      output_tokens:
-        text: 0.528
   - id: z-ai/glm-4.7
     provider_model_id: z-ai/glm-4.7
     pricing:
@@ -458,14 +435,6 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
-  - id: meituan/longcat-2.0
-    provider_model_id: meituan/longcat-2.0
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.006
-      output_tokens:
-        text: 1.2
   - id: anthropic/claude-opus-5
     provider_model_id: anthropic/claude-opus-5
     pricing:

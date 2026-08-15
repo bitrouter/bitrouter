@@ -24,13 +24,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: google/gemma-4-31b
-    provider_model_id: gemma-4-31b
-    pricing:
-      input_tokens:
-        no_cache: 0.99
-      output_tokens:
-        text: 1.49
   - id: z-ai/glm-4.7
     provider_model_id: zai-glm-4.7
     pricing:

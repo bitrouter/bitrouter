@@ -3483,11 +3483,11 @@ api_base: https://api.acme.test/v1
         assert_provider_mapping(
             siliconflow,
             "SiliconFlow",
-            "meituan/longcat-2.0",
-            "meituan-longcat/LongCat-2.0",
-            0.75,
-            (None, None),
-            2.95,
+            "deepseek/deepseek-v4-pro",
+            "deepseek-ai/DeepSeek-V4-Pro",
+            1.74,
+            (Some(0.145), None),
+            3.48,
         );
     }
 
