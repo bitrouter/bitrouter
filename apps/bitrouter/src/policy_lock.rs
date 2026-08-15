@@ -4258,6 +4258,29 @@ policies:
             assert_eq!(certificate.source, CertificateSource::Mixed);
             assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
             assert_eq!(certificate.selected_tier, policy.routes[request_key]);
+            if request_key.starts_with("agent_route/v2|") {
+                let mut segments = request_key.split('|');
+                let (Some("agent_route/v2"), Some(_task_family), Some(role), Some(risk), None) = (
+                    segments.next(),
+                    segments.next(),
+                    segments.next(),
+                    segments.next(),
+                    segments.next(),
+                ) else {
+                    anyhow::bail!("template v2 route '{request_key}' is not canonical");
+                };
+                let v1_key = format!("agent_route/v1|{role}|{risk}");
+                let baseline_tier = policy.routes.get(&v1_key).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "template v2 route '{request_key}' has no v1 fallback '{v1_key}'"
+                    )
+                })?;
+                assert_eq!(
+                    certificate.baseline_tier.as_deref(),
+                    Some(baseline_tier.as_str()),
+                    "template v2 route '{request_key}' must certify its v1 fallback tier"
+                );
+            }
             assert_eq!(&certificate.compiler_config_digest, compiler_digest);
             let expected_evidence_digest = canonical_template_digest(&(
                 "auto-router-predictive-route-v1",
