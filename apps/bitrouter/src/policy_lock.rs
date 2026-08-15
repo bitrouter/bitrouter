@@ -2650,7 +2650,7 @@ impl ModelSelector for PolicyRuntime {
                 policy_digest: policy_digest.to_owned(),
                 policy: guard.clone(),
                 carries_tools: !ctx.prompt().tools.is_empty(),
-                tool_use_tier: router.tool_use_tier().map(ToOwned::to_owned),
+                tool_use_tier: router.tool_use_tier(),
                 tool_safe_tiers: router.tool_safe_tiers(),
             };
             let (correlated, guarded) = trajectory

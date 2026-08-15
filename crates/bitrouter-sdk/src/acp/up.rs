@@ -280,7 +280,7 @@ fn agent_command(
         .envs(env)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped())
         // Belt-and-braces: the reaper is the real teardown; this covers the
         // child handle being dropped without it ever running.
         .kill_on_drop(true);
@@ -297,8 +297,15 @@ fn agent_command(
 /// agent — the process re-parents to pid 1 and does not reliably exit on
 /// stdin EOF. Must run inside a tokio runtime (both call sites do). Shared by
 /// [`UpstreamConnection::spawn`] and [`health_check`] so both paths spawn
-/// identically. Stderr is inherited: agent logs land on our stderr alongside
-/// the substrate's own.
+/// identically.
+///
+/// The child's stderr is **captured**, not inherited, and re-emitted line by
+/// line through `tracing` under the `acp::agent` target. Inheriting it wrote
+/// the agent's diagnostics straight at the terminal's fd 2, where they raced
+/// an inline TUI's drawing and could not be captured at all. Going through
+/// `tracing` means whatever subscriber the binary installed decides where the
+/// lines land, so the agent's log and the substrate's own interleave into one
+/// destination in the order they happened.
 fn spawn_agent_process(
     command: &str,
     args: &[String],
@@ -317,10 +324,35 @@ fn spawn_agent_process(
         .stdout
         .take()
         .ok_or_else(|| anyhow::anyhow!("agent child has no stdout pipe"))?;
+    if let Some(stderr) = child.stderr.take() {
+        forward_agent_stderr(command.to_string(), stderr);
+    }
     Ok((
         ByteStreams::new(stdin.compat_write(), stdout.compat()),
         child,
     ))
+}
+
+/// Drain the agent child's stderr into `tracing`, one event per line, under
+/// the `acp::agent` target.
+///
+/// Detached rather than joined: the reader ends on its own when the pipe
+/// closes at child exit, and making teardown wait on it would let a child
+/// that never closes stderr stall the shutdown path.
+///
+/// Lines are emitted at `info`. Agents write ordinary progress there as well
+/// as failures, so `warn` would cry wolf; a subscriber that wants them quieter
+/// can filter the target.
+fn forward_agent_stderr(command: String, stderr: tokio::process::ChildStderr) {
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        // A read error means the pipe is gone; there is nothing to report it
+        // to that would not itself be this log.
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::info!(target: "acp::agent", agent = %command, "{line}");
+        }
+    });
 }
 
 /// SIGKILL the child's whole process group (it is its own group leader via

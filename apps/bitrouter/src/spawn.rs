@@ -108,35 +108,9 @@ pub struct AgentSpec {
 /// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
 /// envelope reports it as `kind: "bad_request"`, not `internal` — and lists
 /// what is available.
-///
-/// A harness that exists in the catalog but is no longer launch-supported gets
-/// a *different* message from an unknown one. "Not a launchable harness —
-/// available: …" would read as "you typo'd" to someone whose working command
-/// stopped working, and send them looking for a spelling mistake that isn't
-/// there.
 pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
     let known = crate::harness::by_interactive_binary(id)
         .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()));
-    if let Some(harness) = known
-        && !harness.launch_supported()
-    {
-        let name = harness.interactive_binary.unwrap_or(harness.id);
-        // Only offer `spawn` to a harness that actually has a headless ACP
-        // adapter. grok and agy have none, and sending someone to a command
-        // that will reject them next is worse than the original refusal.
-        let alternative = if harness.acp_command.is_some() {
-            format!(
-                " — run it directly, or drive it headlessly with `bitrouter spawn {}`",
-                harness.id
-            )
-        } else {
-            " — run it directly (it has no headless adapter either)".to_string()
-        };
-        return Err(anyhow::Error::new(BitrouterError::bad_request(format!(
-            "'{name}' is no longer supported by `bitrouter launch`{alternative}. Supported: {}",
-            launchable().join(", ")
-        ))));
-    }
     known.ok_or_else(|| {
         anyhow::Error::new(BitrouterError::bad_request(format!(
             "'{id}' is not a launchable harness — available: {}",
@@ -192,7 +166,10 @@ pub struct ChildLaunch {
 /// would break `skip_auth: false` outright. Those launches fall back to the
 /// unattributed window summary, and [`print_exit_summary`] says so rather than
 /// implying a precision it does not have.
-fn resolve_launch_token(parent_auth: Option<String>, bitrouter_key: Option<String>) -> String {
+pub(crate) fn resolve_launch_token(
+    parent_auth: Option<String>,
+    bitrouter_key: Option<String>,
+) -> String {
     parent_auth
         .or(bitrouter_key)
         .unwrap_or_else(mint_launch_token)
@@ -209,7 +186,7 @@ fn mint_launch_token() -> String {
 
 /// Whether a resolved credential is one we minted — i.e. whether this launch's
 /// requests will carry its own attribution, or fall back to the window.
-fn is_launch_token(token: &str) -> bool {
+pub(crate) fn is_launch_token(token: &str) -> bool {
     bitrouter_sdk::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
 }
 
@@ -333,12 +310,6 @@ pub struct Prepared<'a> {
     /// slot. `None` when the user supplied their own key — spend then falls
     /// back to the unattributed time window.
     pub launch_id: Option<String>,
-    /// The model pinned for this launch, named in the hosted status row.
-    pub model: Option<String>,
-    /// What the gateways delivered, for the hosted row to state while there
-    /// are no metrics yet. `None` for own-auth harnesses, which say their own
-    /// thing.
-    pub capability: Option<String>,
     /// Stamped before the child exists, so the exit summary's window covers
     /// exactly the wrapped session. Nothing between here and the spawn spends.
     pub session_start: chrono::DateTime<chrono::Utc>,
@@ -451,9 +422,6 @@ pub async fn prepare<'a>(
         harness,
         source,
         launch_id: is_launch_token(&token).then(|| token.clone()),
-        model: opts.model.clone(),
-        capability: (!matches!(harness.routing, crate::harness::Routing::OwnAuth))
-            .then(|| capability_summary(harness, &gateways, &Palette::none())),
         // Timestamp the wrapped session so the exit summary can attribute
         // spend to exactly this run of the agent.
         session_start: chrono::Utc::now(),
@@ -498,11 +466,9 @@ fn startup_line(
 
 /// What the gateways actually delivered to this harness, as one phrase.
 ///
-/// Shared by the startup line and the hosted status row (#796, #782). Under
-/// `--tui` the startup line is on screen for milliseconds — entering the
-/// alternate screen hides the normal screen right after it prints — so the
-/// hosted row has to carry the same fact, and carrying it from the same
-/// function is what stops the two from drifting into disagreeing.
+/// The startup line (#796, #782) and the machine-readable launch report are
+/// both built from this one function, so the two cannot drift into disagreeing
+/// about what the harness actually got.
 pub(crate) fn capability_summary(
     harness: &crate::harness::Harness,
     gateways: &[crate::harness::McpServer],
@@ -546,111 +512,6 @@ fn child_args(launch: &ChildLaunch, agent_args: &[String]) -> Vec<String> {
     let mut args = launch.args_prefix.clone();
     args.extend_from_slice(agent_args);
     args
-}
-
-/// Env keys the host **sets**, because the emulator's real capabilities differ
-/// from the outer terminal's. `TERM` must promise only what we render:
-/// passing through `xterm-kitty` invites graphics sequences the emulator
-/// cannot draw.
-pub const HOSTED_ENV_SET: &[&str] = &["TERM", "COLORTERM"];
-
-/// Env keys `portable-pty` may add when absent in the parent.
-pub const HOSTED_ENV_MAY_ADD: &[&str] = &["SHELL"];
-
-/// Env keys the host **unsets**: inherited values that would lie about the
-/// terminal the child is actually talking to, and would steer harnesses onto
-/// rendering paths the emulator does not implement.
-pub const HOSTED_ENV_UNSET: &[&str] = &[
-    "TERM_PROGRAM",
-    "TERM_PROGRAM_VERSION",
-    "KITTY_WINDOW_ID",
-    "KITTY_PID",
-    "WEZTERM_EXECUTABLE",
-    "WEZTERM_PANE",
-    "WEZTERM_UNIX_SOCKET",
-    "ITERM_SESSION_ID",
-    "ALACRITTY_SOCKET",
-    "ALACRITTY_LOG",
-    "ALACRITTY_WINDOW_ID",
-    "LINES",
-    "COLUMNS",
-];
-
-/// The child env for hosted mode: the routing overlay **verbatim**, plus the
-/// terminal-identity corrections above.
-///
-/// Gated with its only caller, [`exec_hosted`]: an item whose consumers are
-/// all behind a `cfg` has to carry the same `cfg`, or the platform that
-/// excludes them sees dead code.
-///
-/// The routing half is byte-identical to plain `launch` by construction — it
-/// is the same [`ChildLaunch`] from the same [`prepare`]. Only terminal
-/// identity may differ, and only by the three lists, which
-/// `hosted_env_differs_only_by_the_allowlist` pins.
-#[cfg(unix)]
-fn hosted_env(launch: &ChildLaunch) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> = vec![
-        ("TERM".to_string(), "xterm-256color".to_string()),
-        ("COLORTERM".to_string(), "truecolor".to_string()),
-    ];
-    for key in HOSTED_ENV_UNSET {
-        // `CommandBuilder` inherits the parent environment, so a lying value
-        // has to be actively overwritten; there is no "unset" in the overlay.
-        env.push(((*key).to_string(), String::new()));
-    }
-    // The overlay lands last so routing always wins over terminal identity.
-    env.extend(launch.env.iter().cloned());
-    env
-}
-
-/// Run the prepared child **hosted** inside BitRouter's emulator, with the
-/// status row pinned underneath (`--tui`).
-#[cfg(unix)]
-pub async fn exec_hosted(prepared: Prepared<'_>) -> Result<()> {
-    let Prepared {
-        binary,
-        launch,
-        agent_args,
-        harness,
-        source,
-        session_start,
-        launch_id,
-        model,
-        capability,
-        ..
-    } = prepared;
-
-    let socket = {
-        let cfg = crate::paths::load_config(source).await?;
-        crate::daemon::resolve_socket_path(
-            source.home().join("bitrouter.yaml").as_path(),
-            &cfg.server.control_socket,
-        )
-    };
-    let ctx = crate::tui::host::HostContext {
-        source,
-        socket,
-        harness,
-        launch_id: launch_id.clone(),
-        model,
-        capability,
-    };
-    let code = crate::tui::host::run(
-        &binary.display().to_string(),
-        &child_args(&launch, &agent_args),
-        &hosted_env(&launch),
-        ctx,
-    )
-    .await?;
-
-    print_exit_summary(
-        source,
-        launch_id.as_deref(),
-        session_start,
-        &Palette::for_stderr(),
-    )
-    .await;
-    std::process::exit(code);
 }
 
 /// Run the prepared child with the terminal **inherited** — the harness owns
@@ -1839,65 +1700,6 @@ mod tests {
         assert!(is_launch_token(&minted), "{minted}");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn hosted_env_differs_only_by_the_allowlist() {
-        // The requirement `--tui` lives or dies on: the routing half of the
-        // child env is byte-identical to plain `launch`. Only terminal
-        // identity may differ, and only by the documented lists — anything
-        // else means the hosted child is being routed differently, which is
-        // the drift the whole `prepare`/`exec` seam exists to prevent.
-        let launch = ChildLaunch {
-            env: vec![
-                ("ANTHROPIC_BASE_URL".to_string(), "http://x:1".to_string()),
-                ("ANTHROPIC_AUTH_TOKEN".to_string(), "brl_tok".to_string()),
-            ],
-            args_prefix: vec![],
-        };
-        let hosted = hosted_env(&launch);
-
-        // Every routing pair survives verbatim.
-        for (key, value) in &launch.env {
-            assert!(
-                hosted.iter().any(|(k, v)| k == key && v == value),
-                "{key} must reach the hosted child unchanged"
-            );
-        }
-
-        // And nothing outside the allowlist was invented.
-        let allowed: Vec<&str> = HOSTED_ENV_SET
-            .iter()
-            .chain(HOSTED_ENV_MAY_ADD)
-            .chain(HOSTED_ENV_UNSET)
-            .copied()
-            .collect();
-        for (key, _) in &hosted {
-            let from_overlay = launch.env.iter().any(|(k, _)| k == key);
-            assert!(
-                from_overlay || allowed.contains(&key.as_str()),
-                "hosted mode set `{key}`, which is neither routing nor in the allowlist"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_routing_overlay_outranks_terminal_identity() {
-        // A harness that legitimately wants its own TERM (or any key we also
-        // touch) must win: routing is the contract, terminal identity is our
-        // correction to it.
-        let launch = ChildLaunch {
-            env: vec![("TERM".to_string(), "harness-choice".to_string())],
-            args_prefix: vec![],
-        };
-        let hosted = hosted_env(&launch);
-        let last_term = hosted
-            .iter()
-            .rfind(|(k, _)| k == "TERM")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(last_term, Some("harness-choice"));
-    }
-
     #[test]
     fn only_a_minted_credential_is_treated_as_attribution() {
         // A user's own key must never be re-read as a launch tag: it is real
@@ -1956,52 +1758,12 @@ mod tests {
         }
         // The full expected surface, spelled out so a catalog change is a
         // deliberate CLI change.
-        assert_eq!(launchable(), vec!["claude", "codex", "opencode", "pi"]);
-    }
-
-    #[test]
-    fn a_dropped_harness_is_told_it_was_dropped_not_that_it_is_a_typo() {
-        // These still exist in the catalog, still have an interactive binary,
-        // and still work as ACP agents — `launch` just no longer claims them.
-        // Someone whose working command stopped working must not be sent
-        // hunting for a spelling mistake.
-        for name in ["hermes", "openclaw", "grok", "agy"] {
-            let error = resolve_launch_agent(name)
-                .expect_err(&format!("{name} must be rejected by launch"))
-                .to_string();
-            assert!(error.contains("no longer supported"), "{name}: {error}");
-            // Only harnesses that actually have a headless adapter are sent
-            // to `spawn`; grok and agy have none, and pointing them at a
-            // command that would reject them next is worse than the refusal.
-            let harness = crate::harness::by_interactive_binary(name).expect("catalog");
-            if harness.acp_command.is_some() {
-                assert!(
-                    error.contains(&format!("bitrouter spawn {}", harness.id)),
-                    "{name}: must name the surface that still drives it: {error}"
-                );
-            } else {
-                assert!(
-                    !error.contains("bitrouter spawn"),
-                    "{name} has no ACP adapter; the message must not offer one: {error}"
-                );
-                assert!(error.contains("run it directly"), "{name}: {error}");
-            }
-            assert!(
-                !error.contains("is not a launchable harness"),
-                "{name}: that is the unknown-id message: {error}"
-            );
-            // Still resolvable as a catalog entry — this is a launch policy,
-            // not a deletion.
-            assert!(
-                crate::harness::by_interactive_binary(name).is_some(),
-                "{name}"
-            );
-        }
-        // The catalog id spelling is rejected the same way.
-        let error = resolve_launch_agent("antigravity")
-            .expect_err("catalog id must be rejected too")
-            .to_string();
-        assert!(error.contains("no longer supported"), "{error}");
+        assert_eq!(
+            launchable(),
+            vec![
+                "agy", "claude", "codex", "grok", "hermes", "openclaw", "opencode", "pi"
+            ]
+        );
     }
 
     #[test]
@@ -2013,16 +1775,14 @@ mod tests {
         let err = resolve_launch_agent("nope").expect_err("unknown id");
         let msg = err.to_string();
         assert!(msg.contains("is not a launchable harness"), "{msg}");
-        // The message lists the fix — only what `launch` actually supports,
-        // so it never advertises a harness that would then be refused.
-        for id in ["claude", "codex", "opencode", "pi"] {
+        // The message lists the fix — every harness `launch` actually
+        // supports, which is now every catalog entry with an interactive
+        // binary. It never advertises one that would then be refused, and
+        // never omits one that would have worked.
+        for id in [
+            "claude", "codex", "opencode", "pi", "hermes", "openclaw", "grok", "agy",
+        ] {
             assert!(msg.contains(id), "{msg} should list {id}");
-        }
-        for dropped in ["hermes", "openclaw", "grok", "agy"] {
-            assert!(
-                !msg.contains(dropped),
-                "{msg} must not offer {dropped}, which launch would reject"
-            );
         }
         // A typo is the caller's mistake, not a BitRouter fault: the error
         // envelope must report `bad_request`, never `internal`.

@@ -9,17 +9,9 @@
 //!
 //! See `docs/OBSERVABILITY_TUI_SPEC.md`.
 
-/// Input-path conformance tests. Test-only, and unix-only because the
-/// conformance child is a shell with a `stty`-controlled line discipline.
-#[cfg(all(test, unix))]
-mod conformance;
-#[cfg(unix)]
-pub mod host;
 pub mod lifecycle;
-pub mod pty;
 pub mod render;
 pub mod snapshot;
-pub mod term;
 /// The interactive view. Unix-only, gated here and nowhere else.
 #[cfg(unix)]
 pub mod watch;
@@ -65,7 +57,7 @@ async fn run_watch_unix(
     socket: &Path,
     window: TimeWindow,
 ) -> Result<()> {
-    lifecycle::enter(lifecycle::Input::Keys)?;
+    lifecycle::enter()?;
     lifecycle::install_panic_restore();
     let result = watch::event_loop(source, socket, window).await;
     lifecycle::restore();

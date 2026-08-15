@@ -441,22 +441,27 @@ fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     atomicwrites::replace_atomic(source, destination)
 }
 
-/// Resolve the bitrouter home the same way the daemon's runtime artefacts do
-/// (`$BITROUTER_HOME`, else `$HOME/.bitrouter`, with `%USERPROFILE%` as the
-/// Windows `$HOME` fallback) and return its stable install id. Used by the
-/// telemetry opt-in, which has no [`ConfigSource`] in scope.
+/// Resolve the bitrouter home the same way the daemon's runtime artefacts do:
+/// `$BITROUTER_HOME`, else `$HOME/.bitrouter`, with `%USERPROFILE%` as the
+/// Windows `$HOME` fallback.
+///
+/// For callers that have no [`ConfigSource`] in scope — the telemetry opt-in,
+/// and the session log, which is opened before any config is resolved.
+pub fn runtime_home() -> Result<PathBuf> {
+    if let Some(h) = std::env::var_os("BITROUTER_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(h));
+    }
+    let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
+    let home =
+        home.context("could not determine home directory (no $HOME set); set $BITROUTER_HOME")?;
+    Ok(PathBuf::from(home).join(".bitrouter"))
+}
+
+/// The stable install id under [`runtime_home`]. Used by the telemetry opt-in.
 pub fn install_id() -> Result<String> {
-    let home = if let Some(h) = std::env::var_os("BITROUTER_HOME").filter(|v| !v.is_empty()) {
-        PathBuf::from(h)
-    } else {
-        let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
-        #[cfg(windows)]
-        let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
-        let home =
-            home.context("could not determine home directory (no $HOME set); set $BITROUTER_HOME")?;
-        PathBuf::from(home).join(".bitrouter")
-    };
-    get_or_create_install_id(&home)
+    get_or_create_install_id(&runtime_home()?)
 }
 
 /// Sentinel filename marking that the first-run telemetry notice has been shown.

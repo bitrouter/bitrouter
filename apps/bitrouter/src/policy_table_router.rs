@@ -166,6 +166,22 @@ impl PolicyTable {
         }))
     }
 
+    /// A spec that routes nothing.
+    ///
+    /// What a reload installs when the fresh config defines no tiers. The
+    /// transform is baked into the built `App` and cannot be unregistered, so
+    /// "no policy table" has to be expressible as a table: every lookup misses,
+    /// so `route_prompt` leaves the caller's model alone.
+    pub fn inert() -> Arc<Self> {
+        Arc::new(Self {
+            tiers: HashMap::new(),
+            fingerprints: HashMap::new(),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+        })
+    }
+
     /// Resolve the exact task-aware predictive key, its unknown-family
     /// baseline, then the default. The returned key is the key that actually
     /// selected the tier, except that defaults retain the primary key.
@@ -278,7 +294,23 @@ impl PolicyTable {
 /// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
 /// (`None` when no tiers are defined) or [`PolicyTableRouter::new`].
 pub struct PolicyTableRouter {
-    table: Arc<PolicyTable>,
+    /// Swappable so `bitrouter reload` can install a fresh spec into the
+    /// *live* transform. The router itself is baked into the built `App` and
+    /// cannot be re-registered, so the reloadable unit has to be the table
+    /// inside it rather than the router around it.
+    ///
+    /// A plain `RwLock` rather than a channel or an async lock: reads happen
+    /// on the per-request hot path from [`PromptTransform::apply`], which is
+    /// synchronous, and writes happen once per reload.
+    table: std::sync::RwLock<Arc<PolicyTable>>,
+    /// Launch id → provider id, for sessions that asked to be rerouted
+    /// (`providers/set`, ACP_TUI_SPEC §6).
+    ///
+    /// Keyed by launch id so an override can only ever move the traffic of
+    /// the session that asked for it. A caller with no launch tag — anyone
+    /// authenticating with a real credential — is never matched, so no
+    /// override can reach them.
+    route_overrides: std::sync::RwLock<HashMap<String, String>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
@@ -302,7 +334,8 @@ impl PolicyTableRouter {
     /// transform. No adequacy ledger is attached.
     pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
         PolicyTable::from_config(config).map(|table| Self {
-            table,
+            table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -311,10 +344,80 @@ impl PolicyTableRouter {
         })
     }
 
+    /// The spec in force right now. Clones the `Arc` rather than handing out a
+    /// borrow so a concurrent [`Self::replace_table`] cannot invalidate a
+    /// decision already in progress: a request that started under the old
+    /// table finishes under it.
+    ///
+    /// A poisoned lock yields the value anyway. The alternative is a panic on
+    /// the request path over a writer that panicked while swapping a
+    /// declarative table — the stale spec is strictly the better failure.
+    fn table(&self) -> Arc<PolicyTable> {
+        match self.table.read() {
+            Ok(table) => Arc::clone(&table),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Install a freshly built spec into this live router (`bitrouter reload`).
+    ///
+    /// Returns whether the swap happened; a poisoned lock is reported rather
+    /// than silently dropping the operator's new table.
+    pub(crate) fn replace_table(&self, table: Arc<PolicyTable>) -> bool {
+        match self.table.write() {
+            Ok(mut current) => {
+                *current = table;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Point one session's traffic at `provider_id` until it is cleared.
+    ///
+    /// Returns whether the override was installed; a poisoned lock is reported
+    /// rather than silently dropping the request, because a caller that thinks
+    /// it switched provider and did not is exactly the failure this whole
+    /// surface exists to avoid.
+    pub fn set_route_override(&self, launch_id: &str, provider_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.insert(launch_id.to_string(), provider_id.to_string());
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Drop a session's override. Called when the session ends, so an override
+    /// cannot outlive the thing that asked for it and catch a later launch
+    /// that happens to reuse the id.
+    pub fn clear_route_override(&self, launch_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.remove(launch_id);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The provider this request's session has been redirected to, if any.
+    fn route_override_for(&self, headers: &HeaderMap) -> Option<String> {
+        let launch_id = bitrouter_sdk::caller::launch_tag(
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        )?;
+        match self.route_overrides.read() {
+            Ok(overrides) => overrides.get(&launch_id).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(&launch_id).cloned(),
+        }
+    }
+
     /// Build a router over an immutable policy table.
     pub fn new(table: Arc<PolicyTable>) -> Self {
         Self {
-            table,
+            table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -392,19 +495,21 @@ impl PolicyTableRouter {
             .or_else(|| decision.static_tier.clone())
     }
 
-    pub(crate) fn tool_use_tier(&self) -> Option<&str> {
-        self.table.tool_use_tier.as_deref()
+    /// Returns an owned value rather than a borrow: the table it reads is
+    /// swappable, so nothing inside it can outlive the call.
+    pub(crate) fn tool_use_tier(&self) -> Option<String> {
+        self.table().tool_use_tier.clone()
     }
 
     pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.table.tool_safe_tiers.iter().cloned().collect()
+        self.table().tool_safe_tiers.iter().cloned().collect()
     }
 
     pub(crate) fn effective_tier_efforts(
         &self,
         inherited: Option<ReasoningEffort>,
     ) -> std::collections::BTreeMap<String, ReasoningEffort> {
-        self.table
+        self.table()
             .tiers
             .iter()
             .filter_map(|(tier, target)| {
@@ -417,7 +522,7 @@ impl PolicyTableRouter {
     }
 
     pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
-        self.table.effort_of_tier(tier)
+        self.table().effort_of_tier(tier)
     }
 
     fn ledger_key(&self, request_key: &str) -> String {
@@ -517,24 +622,25 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some((raw_static_tier, matched_request_key)) = self
-            .table
-            .tier_for_workflow(&primary_request_key, baseline_request_key)
+        // One snapshot for the whole decision: a reload landing mid-decision
+        // must not let the tier and the model it maps to come from different
+        // tables.
+        let table = self.table();
+        let Some((raw_static_tier, matched_request_key)) =
+            table.tier_for_workflow(&primary_request_key, baseline_request_key)
         else {
             return decision;
         };
         decision.request_key = matched_request_key.to_string();
         decision.static_tier = Some(raw_static_tier.to_string());
-        decision.static_model = self
-            .table
+        decision.static_model = table
             .model_of_tier(raw_static_tier)
             .map(ToString::to_string);
-        decision.static_effort = self
-            .table
+        decision.static_effort = table
             .effort_of_tier(raw_static_tier)
             .or(decision.input_effort);
         let (selected_tier, static_clamped) = if apply_tool_floor {
-            self.table.guardrail_with_status(raw_static_tier, prompt)
+            table.guardrail_with_status(raw_static_tier, prompt)
         } else {
             (raw_static_tier, false)
         };
@@ -545,12 +651,8 @@ impl PolicyTableRouter {
         };
 
         decision.selected_tier = Some(selected_tier.to_string());
-        decision.selected_model = self
-            .table
-            .model_of_tier(selected_tier)
-            .map(ToString::to_string);
-        decision.selected_effort = self
-            .table
+        decision.selected_model = table.model_of_tier(selected_tier).map(ToString::to_string);
+        decision.selected_effort = table
             .effort_of_tier(selected_tier)
             .or(decision.input_effort);
         if decision.selected_model.is_none() {
@@ -560,6 +662,22 @@ impl PolicyTableRouter {
     }
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
+        // A live `providers/set` outranks the configured table: it is this
+        // session's operator saying where its traffic goes, now. It does not
+        // outrank a model the caller pinned itself — the same exemption the
+        // table honours, and the only case where the caller wins.
+        if !is_explicitly_routed(&prompt.model)
+            && let Some(provider) = self.route_override_for(headers)
+        {
+            // Keep the model, change the provider: ACP's `providers/set`
+            // names a provider, not a model.
+            let rerouted = format!("{provider}:{}", prompt.model);
+            if prompt.model != rerouted {
+                prompt.model = rerouted;
+                return true;
+            }
+            return false;
+        }
         let input_model = prompt.model.clone();
         let input_effort = prompt.params.reasoning_effort;
         let decision = self.decision_for(prompt, headers);
@@ -606,11 +724,12 @@ impl PolicyTableRouter {
         tool_floor_applied: bool,
     ) {
         decision.selected_tier = selected_tier.map(ToOwned::to_owned);
+        let table = self.table();
         decision.selected_model = selected_tier
-            .and_then(|tier| self.table.model_of_tier(tier))
+            .and_then(|tier| table.model_of_tier(tier))
             .map(ToOwned::to_owned);
         decision.selected_effort = selected_tier
-            .and_then(|tier| self.table.effort_of_tier(tier))
+            .and_then(|tier| table.effort_of_tier(tier))
             .or(decision.input_effort);
         decision.reason = match (guard_applied, tool_floor_applied) {
             (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
@@ -640,8 +759,11 @@ impl PolicyTableRouter {
                 let pinned_effort = effort_authoritative
                     .then_some(*effective_effort)
                     .unwrap_or(decision.input_effort);
-                let selected_tier = self
-                    .table
+                // Through the snapshot, like every other lookup: a reload
+                // landing here must not answer from a table the rest of this
+                // decision never saw.
+                let table = self.table();
+                let selected_tier = table
                     .stable_tier_of_target(effective_model, pinned_effort)
                     .ok_or_else(|| {
                         bitrouter_sdk::BitrouterError::bad_request(
@@ -696,7 +818,7 @@ impl PolicyTableRouter {
         let baseline_tier = self.eval_baseline_tier(&decision);
         let baseline_effort = baseline_tier
             .as_deref()
-            .and_then(|tier| self.table.effort_of_tier(tier))
+            .and_then(|tier| self.table().effort_of_tier(tier))
             .or(input_effort);
         let ingress_request_id = headers
             .get("x-bitrouter-request-id")
@@ -867,7 +989,7 @@ impl PolicyTableRouter {
         let selected_model = decision.selected_model.as_deref()?;
         let selected_tier = decision.selected_tier.as_deref()?;
         let configured = self
-            .table
+            .table()
             .target_of_tier(selected_tier)
             .filter(|target| target.model() == selected_model)
             .cloned()?;
@@ -1000,6 +1122,63 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
+    /// A `providers/set` override must move **only** the traffic of the launch
+    /// that asked for it. Keyed by launch tag, so a caller with a real
+    /// credential — which carries no tag — can never be caught by one.
+    #[test]
+    fn a_route_override_moves_only_its_own_launch() {
+        let router = PolicyTableRouter::new(PolicyTable::inert());
+        assert!(router.set_route_override("brl_mine", "beta"));
+
+        let headers_for = |auth: &str| {
+            let mut h = HeaderMap::new();
+            if let Ok(value) = auth.parse() {
+                h.insert("authorization", value);
+            }
+            h
+        };
+        let routed_model = |auth: &str| {
+            let mut prompt = prompt_with_model("m1");
+            router.route_prompt(&mut prompt, &headers_for(auth));
+            prompt.model
+        };
+
+        // The session that asked is rerouted, keeping its model.
+        assert_eq!(routed_model("Bearer brl_mine"), "beta:m1");
+        // Another launch is untouched.
+        assert_eq!(routed_model("Bearer brl_theirs"), "m1");
+        // A real credential carries no launch tag and cannot be matched.
+        assert_eq!(routed_model("Bearer sk-a-real-key"), "m1");
+        // Neither can an unauthenticated caller.
+        assert_eq!(routed_model(""), "m1");
+
+        // A model the caller pinned itself still wins — the same exemption the
+        // policy table honours.
+        let mut pinned = prompt_with_model("openai:gpt-5");
+        router.route_prompt(&mut pinned, &headers_for("Bearer brl_mine"));
+        assert_eq!(pinned.model, "openai:gpt-5");
+
+        // Clearing restores the configured route.
+        assert!(router.clear_route_override("brl_mine"));
+        assert_eq!(routed_model("Bearer brl_mine"), "m1");
+    }
+
+    fn prompt_with_model(model: &str) -> Prompt {
+        Prompt {
+            model: model.to_string(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![bitrouter_sdk::language_model::types::Message::text(
+                Role::User,
+                "hi",
+            )],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
     use super::*;
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::settlement::EvalSettlementRecorder;

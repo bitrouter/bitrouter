@@ -16,43 +16,28 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
-/// What the terminal must report while a surface is up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Input {
-    /// Keys only — enough for a view that navigates a list.
-    Keys,
-    /// Keys, mouse, and bracketed paste.
-    ///
-    /// Required whenever a **child** owns the screen: without mouse capture a
-    /// mouse-reporting harness never sees a click, and without bracketed paste
-    /// a multi-line paste arrives as a burst of keystrokes the harness will
-    /// interpret as a burst of submits. Both are fidelity-matrix items, and
-    /// both fail silently rather than loudly.
-    Full,
+/// Take raw mode, and nothing else.
+///
+/// The inline chat renderer wants the keys but not the screen switch — its
+/// whole design is that finished rows stay in ordinary scrollback. Splitting
+/// this out is also what keeps `enable_raw_mode` to a single call site in the
+/// binary, so there is exactly one thing for [`restore`] to undo.
+pub fn enter_raw() -> Result<()> {
+    enable_raw_mode()?;
+    Ok(())
 }
 
-/// Put the terminal into the state a surface draws against: raw mode,
-/// alternate screen, the requested input reporting, and the user's window
-/// title saved so [`restore`] can put it back.
+/// Put the terminal into the state the view draws against: raw mode,
+/// alternate screen, key reporting, and the user's window title saved so
+/// [`restore`] can put it back.
 ///
 /// Any failure here returns `Err` **after** undoing whatever already
 /// succeeded — the panic hook is installed by the caller only once this
 /// returns `Ok`, so a half-entered terminal must clean up after itself.
-pub fn enter(input: Input) -> Result<()> {
-    enable_raw_mode()?;
+pub fn enter() -> Result<()> {
+    enter_raw()?;
     let mut out = std::io::stdout();
     if let Err(e) = execute!(out, EnterAlternateScreen) {
-        let _ = disable_raw_mode();
-        return Err(e.into());
-    }
-    if input == Input::Full
-        && let Err(e) = execute!(
-            out,
-            crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste
-        )
-    {
-        let _ = execute!(out, LeaveAlternateScreen);
         let _ = disable_raw_mode();
         return Err(e.into());
     }
@@ -70,15 +55,15 @@ pub fn enter(input: Input) -> Result<()> {
 pub fn restore() {
     let _ = disable_raw_mode();
     let mut out = std::io::stdout();
-    // Disabled unconditionally: `restore` runs from panic hooks and signal
-    // branches that cannot know which `Input` mode was entered, and disabling
-    // a reporting mode that was never on is harmless.
+    // Bracketed paste is the chat session's, not this view's, and disabling a
+    // mode that was never enabled costs nothing — which is why it belongs
+    // here, in the one function every exit already reaches.
     let _ = execute!(
         out,
         crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableMouseCapture
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
     );
-    let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
     // XTWINOPS pop: put the user's window title back.
     let _ = write!(out, "\x1b[23;0t");
     let _ = out.flush();
@@ -95,6 +80,43 @@ pub fn install_panic_restore() {
     }));
 }
 
+/// The third exit, as a `select!` arm.
+///
+/// Normal teardown and a panic both run Rust code that can reach [`restore`].
+/// A signal runs none: `kill`, a supervisor stopping the process, or a closed
+/// terminal window sending SIGHUP would otherwise end it with the terminal
+/// still in raw mode. This wraps the watch view's `ShutdownSignals` — the
+/// registration is the same, only the caller is new — so an inline session can
+/// await it alongside its own futures and leave by the front door.
+///
+/// Registration that fails, and every platform without these signals, resolve
+/// **never** rather than immediately: an arm that fired at once would end the
+/// session on its first poll, which is worse than the exit it is guarding.
+pub struct Shutdown {
+    #[cfg(unix)]
+    signals: Option<crate::tui::watch::ShutdownSignals>,
+}
+
+impl Shutdown {
+    /// Register once, before the loop — see `ShutdownSignals::install`.
+    pub fn install() -> Self {
+        Self {
+            #[cfg(unix)]
+            signals: crate::tui::watch::ShutdownSignals::install().ok(),
+        }
+    }
+
+    /// Resolve when one of them fires.
+    pub async fn recv(&mut self) {
+        #[cfg(unix)]
+        if let Some(signals) = self.signals.as_mut() {
+            signals.recv().await;
+            return;
+        }
+        std::future::pending().await
+    }
+}
+
 /// Hand the real terminal to a child (`$EDITOR`, `providers login`), run it,
 /// and take the screen back.
 ///
@@ -104,7 +126,7 @@ pub fn install_panic_restore() {
 ///
 /// The caller must not draw until this returns, and must force a full redraw
 /// afterwards — the child owned the screen and the view's idea of it is stale.
-pub async fn suspend<F, Fut>(input: Input, run: F) -> Result<()>
+pub async fn suspend<F, Fut>(run: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<()>>,
@@ -113,6 +135,54 @@ where
     let result = run().await;
     // Re-enter even when the child failed: the alternative is returning to a
     // caller that is about to draw into a cooked terminal.
-    let reentered = enter(input);
+    let reentered = enter();
     result.and(reentered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The signal arm must be *quiet*. It sits in a `select!` next to the
+    /// futures that do the session's work, and one that resolved on its first
+    /// poll would end every session the instant it started — including on the
+    /// platforms and sandboxes where registration is not available at all.
+    #[tokio::test]
+    async fn the_shutdown_arm_does_not_fire_on_its_own() {
+        let mut shutdown = Shutdown::install();
+        let fired =
+            tokio::time::timeout(std::time::Duration::from_millis(50), shutdown.recv()).await;
+        assert!(
+            fired.is_err(),
+            "the shutdown arm resolved with no signal delivered"
+        );
+    }
+
+    /// The panic exit is a *chain*: [`restore`] runs, and then whatever hook
+    /// was already installed still reports the panic. A hook that replaced its
+    /// predecessor would restore the terminal and swallow the message that
+    /// says why the session died.
+    #[test]
+    fn the_panic_hook_restores_and_still_reports() {
+        let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&reported);
+        let original = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |_| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        install_panic_restore();
+        let panicked = std::panic::catch_unwind(|| panic!("a panic mid-draw"));
+        std::panic::set_hook(original);
+
+        assert!(panicked.is_err(), "the panic must still propagate");
+        assert!(
+            reported.load(std::sync::atomic::Ordering::SeqCst),
+            "the previous hook must still run, so the panic is still reported"
+        );
+        assert!(
+            !crossterm::terminal::is_raw_mode_enabled().unwrap_or(true),
+            "the terminal must not be left in raw mode by a panic"
+        );
+    }
 }

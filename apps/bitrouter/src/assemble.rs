@@ -104,6 +104,11 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
+    /// The live `policy_table:` transform, when one was wired. The built `App`
+    /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
+    /// concrete handle to swap a freshly built spec into it, because the
+    /// transform itself cannot be re-registered on a built `App`.
+    pub policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
     /// Snapshot provider for `bitrouter observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
@@ -694,15 +699,19 @@ pub async fn build_app_with_path(
     // the transform skips any already-`provider:`-routed model (the `claude-code:`
     // subscription route) and any request carrying a bitrouter server-tool
     // declaration (the `bitrouter/fusion` alias's injected tool).
-    let app = match policy_table {
+    let (app, policy_table_router) = match policy_table {
         Some(table) => {
             let mut router = crate::policy_table_router::PolicyTableRouter::new(table);
             if let Some(recorder) = policy_decision_recorder {
                 router = router.with_shared_decision_recorder(recorder);
             }
-            app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
+            let router = Arc::new(router);
+            (
+                app.prompt_transform(Arc::clone(&router) as Arc<dyn PromptTransform>),
+                Some(router),
+            )
         }
-        None => app,
+        None => (app, None),
     };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
@@ -736,6 +745,7 @@ pub async fn build_app_with_path(
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
+        policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,

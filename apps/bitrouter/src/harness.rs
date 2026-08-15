@@ -398,24 +398,23 @@ impl Harness {
         }
     }
 
-    /// Whether `bitrouter launch` will host this harness.
+    /// Whether `bitrouter launch` will run this harness: exactly those with an
+    /// [`interactive_binary`](Self::interactive_binary).
     ///
-    /// Separate from owning an [`interactive_binary`](Self::interactive_binary):
-    /// `hermes`, `openclaw`, `grok`, and `agy` still have one, and can still be
-    /// run directly or driven headlessly by `bitrouter spawn` — `launch` simply
-    /// no longer claims to support them.
+    /// The cut to four ids was made when `launch` also promised a *hosted
+    /// terminal*, and that promise was the expensive one — an emulator has to
+    /// be verified per harness against upstream releases nobody here controls.
+    /// With hosting gone `launch` promises only what the overlay already gives
+    /// every interactive entry in the catalog: it execs the binary with the
+    /// routing overlay applied, and states before handover what the harness
+    /// actually got (see [`Self::injects_mcp`], which is a real per-harness
+    /// ceiling and stays one).
     ///
-    /// The reason is verification, not capability. `launch` promises routing,
-    /// gateway injection, and (under `--tui`) a hosted terminal, and each of
-    /// those promises has to be checked per harness against upstream releases
-    /// nobody here controls. Four is a surface we can actually keep honest;
-    /// eight was a claim we could not.
-    ///
-    /// `grok` and `agy` additionally remain **providers** — the daemon borrows
-    /// their subscription sessions to serve other requests — which is a
-    /// separate stack entirely and is untouched by this.
+    /// `grok` and `agy` are launchable *and* remain **providers** — the daemon
+    /// borrows their subscription sessions to serve other requests. Their own
+    /// traffic is unrouted and unmetered, which the startup line says.
     pub fn launch_supported(&self) -> bool {
-        matches!(self.id, "claude-acp" | "codex-acp" | "opencode" | "pi-acp")
+        self.interactive_binary.is_some()
     }
 
     /// Whether [`Self::launch_overlay`] can inject MCP servers (the
