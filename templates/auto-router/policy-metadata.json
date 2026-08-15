@@ -1,7 +1,8 @@
 {
   "schemaVersion": 1,
-  "routingStrategy": "predictive_role_risk_v1",
-  "migration": "This v2 policy routes deterministic agent_route/v1 role and risk predictions while retaining observed agent_trace compatibility for older locks.",
+  "routingStrategy": "task_aware_predictive_role_risk_v2",
+  "migration": "This v3 lock retains the complete agent_route/v1 role and risk baseline, adds sparse deterministic agent_route/v2 task-family overrides, and retains observed agent_trace compatibility for older locks.",
+  "taskAwareRouting": "A v2 key is agent_route/v2|<task-family>|<role>|<risk>. An exact v2 override wins; an unlisted task cell falls back to the matching v1 role baseline. Task-specific cells are compiler-owned experiments until settled evaluation evidence promotes them.",
   "toolPolicy": "All three tiers are tool-safe; supplied tools do not clamp the selected predictive route.",
   "strongMutationObservation": "A strong-model mutation that differs from the predicted action is recorded as a descriptive mismatch, never as an automatic quality verdict.",
   "crossAgentQuality": "unvalidated",

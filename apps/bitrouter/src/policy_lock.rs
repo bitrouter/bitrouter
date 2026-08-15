@@ -3998,6 +3998,11 @@ policies:
 
     #[test]
     fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
+        use bitrouter_sdk::language_model::{
+            GenerationParams, Message, Prompt, Role,
+            types::{Content, ProviderMetadata, ToolResultOutput},
+        };
+
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -4006,7 +4011,6 @@ policies:
         let config = bitrouter_sdk::config::parse(&config_raw)?;
         let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
 
-        validate_for_config(&config, &lock)?;
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert!(!config_raw.contains("writeback:"));
         assert!(!lock_raw.contains("enabled:"));
@@ -4017,8 +4021,15 @@ policies:
             policy.tiers["balanced"].model(),
             "bitrouter:moonshotai/kimi-k3"
         );
+        let v1_routes = policy
+            .routes
+            .iter()
+            .filter(|(key, _)| key.starts_with("agent_route/v1|"))
+            .map(|(key, tier)| (key.clone(), tier.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(v1_routes.len(), 15);
         assert_eq!(
-            policy.routes,
+            v1_routes,
             BTreeMap::from([
                 ("agent_route/v1|finalize|context".into(), "balanced".into()),
                 ("agent_route/v1|finalize|guarded".into(), "strong".into()),
@@ -4043,6 +4054,79 @@ policies:
                 ("agent_route/v1|verify|normal".into(), "economy".into()),
             ])
         );
+        let v2_routes = policy
+            .routes
+            .iter()
+            .filter(|(key, _)| key.starts_with("agent_route/v2|"))
+            .map(|(key, tier)| (key.clone(), tier.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(v2_routes.len(), 3);
+        assert_eq!(
+            v2_routes,
+            BTreeMap::from([
+                (
+                    "agent_route/v2|agent:web_research|mechanical|normal".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v2|code:debugging|implement|guarded".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v2|code:review|verify|normal".into(),
+                    "strong".into(),
+                ),
+            ])
+        );
+        let router =
+            PolicyTableRouter::from_config(&policy.as_table_config(PolicyRuntimeMode::Frozen))
+                .ok_or_else(|| anyhow::anyhow!("auto template is missing policy tiers"))?;
+        let fallback_prompt = Prompt {
+            model: "incoming".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![
+                Message::text(
+                    Role::User,
+                    "Implement a new module and refactor the parser API.",
+                ),
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall {
+                        id: "call_read_file".into(),
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![Content::ToolResult {
+                        call_id: "call_read_file".into(),
+                        tool_name: None,
+                        output: ToolResultOutput::Text {
+                            value: "parser source".into(),
+                        },
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                },
+            ],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let fallback = router.decision_for(&fallback_prompt, &http::HeaderMap::new());
+        assert_eq!(
+            fallback.route_projection,
+            "agent_route/v2|code:generation|implement|normal"
+        );
+        assert_eq!(fallback.request_key, "agent_route/v1|implement|normal");
+        assert_eq!(fallback.selected_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.default_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
@@ -4060,6 +4144,7 @@ policies:
         let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
+        validate_for_config(&config, &lock)?;
         Ok(())
     }
 
@@ -4133,11 +4218,21 @@ policies:
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
         let policy = &lock.policies["auto"];
-        assert_eq!(certificates.len(), 15);
+        assert_eq!(certificates.len(), 18);
         assert_eq!(
             certificates.keys().collect::<Vec<_>>(),
             policy.routes.keys().collect::<Vec<_>>()
         );
+        for request_key in policy
+            .routes
+            .keys()
+            .filter(|key| key.starts_with("agent_route/v2|"))
+        {
+            assert!(
+                certificates.contains_key(request_key),
+                "v2 route '{request_key}' must have one matching certificate"
+            );
+        }
         let compiler_digest = &lock
             .artifact
             .as_ref()
