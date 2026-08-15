@@ -288,7 +288,7 @@ async fn edit_config(path: Option<PathBuf>, socket: &Path) -> String {
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
     let display = path.display().to_string();
-    let outcome = lifecycle::suspend(lifecycle::Input::Keys, || async {
+    let outcome = lifecycle::suspend(|| async {
         let status = tokio::process::Command::new(&editor)
             .arg(&path)
             .status()

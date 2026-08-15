@@ -296,10 +296,54 @@ bitrouter acp prompt --agent <id> [-c <path>] <text>
 
 Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
+### `bitrouter chat`
+
+```
+bitrouter chat <agent> [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+```
+
+Chat with an ACP agent in your terminal, routed through BitRouter. The interactive counterpart to `acp serve`: instead of exposing the session to a manager over stdio, it renders the session for you — streamed messages, agent reasoning, tool calls with diffs, permission prompts, and what the turn cost.
+
+The renderer draws **inline**, not on the alternate screen. Finished output is written into your terminal's real scrollback, so search, selection, and copy keep working, and `Ctrl-D` (or `Ctrl-C`) leaves the transcript behind rather than clearing it.
+
+A tool call is **one entity, repainted in place**: a call going pending → in progress → completed occupies one row that changes, not three rows that accumulate. Edits render as hunks with three lines of context around each change, naming the file's absolute path; a tool's output is capped at 40 rows with the remainder counted (`… 1,240 more lines`).
+
+**One row can go stale.** Rows are only repainted while they are still on screen. A tool call that scrolls off while still running keeps the status it had when it left, so scrolling back may show `◍ Edit src/lib.rs` on a call that has since finished. This is the price of never clearing your scrollback to fix it, which is the one thing the renderer will not do. `Ctrl-L` repaints what is on screen.
+
+`chat` holds the terminal in **raw mode** for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are handled by its own single-line editor rather than by your shell. The editor supports typing, backspace, word-delete (`Ctrl-W` or `Alt-Backspace`) and bracketed paste; there is no history and no multi-line entry yet. A redirected stdout (`bitrouter chat agent | tee log`) takes no raw mode at all and prints the session as plain text with no escape sequences.
+
+**Keys**
+
+| Key | Effect |
+|---|---|
+| `Enter` | Send the line |
+| `Esc` | Answer the open permission prompt with *no*, or close the picker; with neither open, cancel the running turn |
+| `Ctrl-C` | Cancel the running turn; end the session when idle |
+| `Ctrl-D` | End the session (when idle) |
+| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal |
+| `Ctrl-W` | Delete the word before the cursor |
+
+Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
+
+Routing flags are shared verbatim with `acp serve` / `acp prompt`.
+
+**In-session commands**
+
+| Input | Effect |
+|---|---|
+| `/route` | List routable providers and switch this session's route mid-session. Only offered when the session can honour it — see below. |
+| `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
+
+**The cost line always states whose spend it is.** When the session's traffic is attributable, the figure is the session's. When it is not — you supplied your own credential, which BitRouter never rewrites to tag — the line reads `all callers` before the number, because it is then the daemon's total for the window and not yours alone. If the agent reports no cost, the line reads `cost unreported`, never `$0.00`.
+
+**`/route` is absent when it cannot work.** Changing a live route needs a daemon to install the override in and an attributable launch id to scope it to. A `--direct` session has neither, and a session using your own credential has no launch id; in both cases `chat` says so rather than offering a command that would fail. When the switch is applied, `chat` re-reads `providers/list` and reports the route the daemon is actually serving — a refused change reports the old route and the reason.
+
+On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
+
 ### `bitrouter launch`
 
 ```
-bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] [--tui] -- <agent args…>
+bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
 Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
@@ -311,19 +355,7 @@ launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skil
 launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
 ```
 
-#### `--tui` (opt-in)
-
-Hosts the harness **inside BitRouter's terminal**, with a persistent status row underneath showing the harness, pinned model, the provider that actually served, tokens, cache, and spend for this launch.
-
-An emulator is required rather than chosen: some harnesses render inline on the main screen and others take the alternate screen, and an alt-screen app owns the whole display — so a reserved status line cannot survive one. To guarantee the row for every harness, BitRouter owns the screen and composites.
-
-**The cost is scrollback.** Hosted, history belongs to BitRouter rather than your terminal: terminal search and selection no longer see the agent's output, and copy routes through an OSC-52 relay. That is daily friction, so plain `launch` stays the default and the recommended daily driver. Drop the flag to go back to launching the harness directly — every error raised from inside the wrapper says so.
-
-The child's environment and arguments are identical to plain `launch` apart from terminal identity (`TERM`, `COLORTERM`, and clearing inherited `TERM_PROGRAM`/`KITTY_*`/`WEZTERM_*`/`ITERM_*`/`ALACRITTY_*`, which would otherwise lie about the terminal the harness is talking to). Routing is byte-identical by construction — both modes build the child from one function.
-
-`--tui` conflicts with `--check` (which preflights and exits, so there is no display to attach to), requires a terminal, and is unix-only today. Without a per-launch credential (i.e. when you supply your own `BITROUTER_API_KEY`), the row's spend is daemon-wide and says `(all callers)`.
-
-`-a/--agent` takes a launch-supported harness: **`claude`, `codex`, `opencode`, `pi`** (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
+`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
 
 | Harness | How it reaches BitRouter |
 | --- | --- |
@@ -331,17 +363,18 @@ The child's environment and arguments are identical to plain `launch` apart from
 | `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
 | `opencode` | synthesized `OPENCODE_CONFIG` JSON declaring a `bitrouter` openai-compatible provider |
 | `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bitrouter --model …` |
+| `hermes` | synthesized `HERMES_HOME` with a `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) |
+| `openclaw` | synthesized `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) |
+| `grok`, `agy` | **not routed** — own-auth subscription clients (see below) |
 
 
 The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
 
-**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` (its synthesized config file). `pi` exposes no injectable MCP surface and launches without the gateways.
+**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
 
 `--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
 
-**`hermes`, `openclaw`, `grok`, and `agy` are no longer launch-supported.** They remain catalog harnesses — run them directly, or drive them headlessly with `bitrouter spawn <id>` — and `launch` refuses them with a message saying so rather than one implying a typo. `grok` and `agy` also remain **providers**: subscription clients whose sessions the daemon borrows to serve other requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
-
-The reason is verification, not capability. Every promise `launch` makes — routing, gateway injection, and under `--tui` a hosted terminal — has to be re-checked per harness against upstream releases nobody here controls. Four is a surface that can be kept honest; see [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md).
+**`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
 

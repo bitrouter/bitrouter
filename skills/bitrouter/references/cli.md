@@ -159,6 +159,39 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
 
+## Interactive chat (`bitrouter chat`)
+
+The interactive counterpart to `acp serve`: same launch, same routing flags, same per-session log, but the session is rendered for a person instead of exposed to a manager over stdio.
+
+| Command | What it does |
+|---|---|
+| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and the turn's measured cost. Draws inline — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
+
+**Raw mode**: `chat` holds the terminal in raw mode for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are its own line editor's rather than the shell's. Typing, backspace, word-delete and bracketed paste; no history, no multi-line. A redirected stdout takes no raw mode and prints plain text with no escape sequences.
+
+**Keys**
+
+| Key | Effect |
+|---|---|
+| `Enter` | Send the line |
+| `Esc` | Deny the open permission prompt, or close the picker; with neither open, cancel the running turn |
+| `Ctrl-C` | Cancel the running turn; end the session when idle |
+| `Ctrl-D` | End the session (idle only) |
+| `Ctrl-L` | Repaint the screen |
+| `Ctrl-W` | Delete the previous word |
+
+Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
+
+**In-session commands**: `/route` opens the provider picker; `/commands` lists the slash commands the agent itself advertises.
+
+**A scrolled-off row can be stale**: rows are repainted only while they are on screen, so a tool call that scrolls away mid-run keeps the status it had when it left. The renderer will not clear your scrollback to fix that. `Ctrl-L` repaints what is on screen.
+
+**Cost honesty**: the cost line always carries its scope. `USD 0.4200` is this session's spend; `all callers USD 1.3200` means the traffic could not be attributed (you supplied your own credential, which BitRouter never rewrites to tag) so the figure is the daemon's window total; `cost unreported` means the agent sent no cost — it is never rendered as `$0.00`.
+
+**`/route`**: lists routable providers and switches the live session's route. Offered **only** when the session can honour it — that needs a daemon to install the override in and an attributable launch id to scope it by, so a `--direct` session or one using your own credential is told plainly that it cannot be rerouted. After a switch, `chat` re-reads `providers/list` and reports what the daemon is actually serving; a refused change reports the old route and why.
+
+**On failure**: a failed turn prints the tail of `~/.bitrouter/logs/session-<stamp>-<pid>.log` after the session ends and names the path. There is no permanent log pane. `chat` logs **only** to that file — it owns the terminal, so a stray log line would scroll the screen out from under the renderer.
+
 ## Setup helpers
 
 | Command | Effect |
@@ -268,8 +301,7 @@ config file — headless `spawn` still runs those direct with a note.
 
 | Command | Effect |
 |---|---|
-| `bitrouter launch --agent <claude\|codex\|opencode\|pi> [--model ID] [--config PATH] [--base-url URL] [--no-install] [--no-start] [--check] [--tui] -- <agent args...>` | Launch a coding-agent CLI's native TUI through BitRouter without editing agent config files. `--agent` accepts the four launch-supported harnesses (`claude`, `codex`, `opencode`, `pi`); an unknown id fails up front with the available list. **`hermes`, `openclaw`, `grok`, and `agy` are no longer launch-supported** — they remain catalog harnesses (run directly, or headlessly via `bitrouter spawn <id>`), and grok/agy remain providers; `launch` refuses them with a message saying so rather than one implying a typo. Claude uses child env overrides (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`); Codex uses one-shot `-c` provider overrides with `wire_api="responses"`; **opencode, pi, hermes, and openclaw route via synthesized config** — an `OPENCODE_CONFIG` JSON / a `PI_CODING_AGENT_DIR` with `models.json` / a `HERMES_HOME` with `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) / an `OPENCLAW_STATE_DIR`+`OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) — written under the working tree's self-ignoring `.bitrouter/launch/`, model lists filled best-effort from the daemon's `/v1/models`. **grok and agy are own-auth harnesses**: subscription clients whose sessions the daemon itself borrows (`supergrok` / `google-ai`), so they launch with their own auth, never redirected (stderr says so; `--check` reports it as a `routing` warning). `--model ID` pins the model through whatever mechanism the harness has (model env var / `-c model=` / the synthesized config's default / the own-auth harness's native `-m`\|`--model` flag). **Gateway MCP injection**: the `bitrouter_tools` server (the daemon's aggregate `/mcp` route, omitted when `mcp.aggregate.enabled: false`) and the `bitrouter_skills` server (`mcp serve --backend skills`) are injected into the harnesses that have a mechanism for it — claude (`--mcp-config`), codex (`-c mcp_servers…`), opencode and hermes (their synthesized config files); pi, openclaw, grok, and agy have no injectable MCP surface and launch without them. Only `claude` and `codex` have a bundled native installer; the others error with a pointer upstream. Prints a one-line session spend summary to stderr on exit. |
-| `bitrouter launch --agent <id> --tui` | Same launch, hosted inside BitRouter's terminal with a persistent status row (harness, model, provider that served, tokens, spend). **Opt-in**: hosting moves scrollback from the user's terminal to BitRouter, so terminal search stops finding agent output — plain `launch` stays the daily driver. Conflicts with `--check`, needs a TTY, unix only. |
+| `bitrouter launch --agent <id> [--model ID] [--config PATH] [--base-url URL] [--no-install] [--no-start] [--check] -- <agent args...>` | Launch a coding-agent CLI's native TUI through BitRouter without editing agent config files. `--agent` accepts **every catalog harness with an interactive binary** (`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`; catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve); an unknown id fails up front with the available list. Claude uses child env overrides (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`); Codex uses one-shot `-c` provider overrides with `wire_api="responses"`; **opencode, pi, hermes, and openclaw route via synthesized config** — an `OPENCODE_CONFIG` JSON / a `PI_CODING_AGENT_DIR` with `models.json` / a `HERMES_HOME` with `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) / an `OPENCLAW_STATE_DIR`+`OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) — written under the working tree's self-ignoring `.bitrouter/launch/`, model lists filled best-effort from the daemon's `/v1/models`. **grok and agy are own-auth harnesses**: subscription clients whose sessions the daemon itself borrows (`supergrok` / `google-ai`), so they launch with their own auth, never redirected (stderr says so; `--check` reports it as a `routing` warning). `--model ID` pins the model through whatever mechanism the harness has (model env var / `-c model=` / the synthesized config's default / the own-auth harness's native `-m`\|`--model` flag). **Gateway MCP injection**: the `bitrouter_tools` server (the daemon's aggregate `/mcp` route, omitted when `mcp.aggregate.enabled: false`) and the `bitrouter_skills` server (`mcp serve --backend skills`) are injected into the harnesses that have a mechanism for it — claude (`--mcp-config`), codex (`-c mcp_servers…`), opencode and hermes (their synthesized config files); pi, openclaw, grok, and agy have no injectable MCP surface and launch without them. Only `claude` and `codex` have a bundled native installer; the others error with a pointer upstream. Prints a one-line session spend summary to stderr on exit. |
 | `bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON\|@PATH] [session/routing flags]` | Spawn an ACP sub-agent, send one prompt, stream **NDJSON** to stdout, exit. `<agent>` is a catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. `--result-schema` adds the machine-consumable result contract (see **Result contract** above). |
 | `bitrouter spawn <agent> --serve [session/routing flags]` | Serve the sub-agent as a vanilla ACP Agent over stdio (for a GUI/manager). Same as `acp serve`, with routing attempted by default when the headless adapter supports it. |
 | `bitrouter spawn <agent> --check [routing flags]` | Preflight harness resolution, the routing decision, and daemon reachability without launching anything. |
