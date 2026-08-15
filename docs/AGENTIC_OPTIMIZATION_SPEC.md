@@ -160,7 +160,7 @@ One `optimize run` performs these steps:
 10. Import host-authored normalized metering metrics and agentic quality
     results into the source config's Eval Exchange, crediting quality only to
     the route key changed by the controlled experiment.
-11. Freeze an immutable Eval snapshot and compile a v2 candidate from the
+11. Freeze an immutable Eval snapshot and compile a v3 candidate from the
     active parent lock plus that exact snapshot.
 12. Save the report, candidate, and lock transition. Never publish as part of
     `run`.
@@ -230,7 +230,7 @@ bitrouter optimize status [--config FILE]
 Interactive `setup` may omit workflow and route flags. It deterministically
 discovers repository-owned eval/benchmark package scripts and executable
 entrypoints, adopts a unique candidate, prompts on ambiguity, and reuses an
-existing `@auto` strong/economy ladder when present. If repository facts are
+existing `bitrouter/auto` strong/economy ladder when present. If repository facts are
 insufficient it asks for exact argv/model ids; non-interactive execution fails
 before mutation and prints the required explicit flags.
 
@@ -243,10 +243,28 @@ bitrouter optimize setup \
   --workflow-arg smoke.jsonl \
   --workflow-input .venv \
   --strong openai-codex:gpt-5.6-sol \
-  --economy bitrouter:deepseek/deepseek-v4-flash-0731 \
+  --strong-effort high \
+  --economy openai-codex:gpt-5.6-sol \
+  --economy-effort low \
   --normalized-price openai-codex:gpt-5.6-sol=5,0.5,6.25,30 \
   --preference balanced
 ```
+
+Strong and economy are compound `(provider:model, effort)` targets. They may
+name the same model only when both effort levels are explicit, distinct, and
+supported by that exact provider/model route.
+Omitting an effort retains the historical scalar target and preserves an
+effort supplied by the workflow. An explicit policy effort wins over caller
+effort and is translated by the daemon to OpenAI Chat Completions
+`reasoning_effort`, OpenAI Responses `reasoning.effort`, Anthropic Messages
+`output_config.effort`, or Gemini GenerateContent
+`generationConfig.thinkingConfig.thinkingLevel`. Gemini 2.5 numeric
+`thinkingBudget` remains opaque and cannot be combined with a qualitative
+policy effort. Provider/model support is an exact registry capability, not a
+name-family guess. In particular, Anthropic documents that changing effort
+invalidates the prompt-cache prefix for the conversation, so the optimizer
+uses authoritative cache-aware settlement instead of assuming that lower
+effort is automatically cheaper.
 
 Interactive onboarding presents agentic review as the default evaluator. It
 does not display unvalidated percentage promises. `review` is intentionally
@@ -264,7 +282,7 @@ reinterprets the guard as a convenience.
 The optimizer fails closed when any of these are missing or inconsistent:
 
 - active source config or named policy lock;
-- distinct strong and economy models;
+- distinct strong and economy compound targets (model and/or effort);
 - evaluator executable or structured result;
 - workflow metering, policy decision, or pricing join;
 - active/candidate command comparability;

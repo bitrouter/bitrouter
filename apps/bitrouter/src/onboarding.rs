@@ -203,7 +203,9 @@ pub struct OnboardingOptimization {
     /// Observable success criteria; interactive onboarding fills it in.
     pub success_contract: Option<String>,
     pub strong: Option<String>,
+    pub strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub economy: Option<String>,
+    pub economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub normalized_price_overrides: Vec<String>,
     pub preference: crate::optimization::OptimizationPreference,
 }
@@ -556,10 +558,17 @@ async fn preflight_headless_optimization_routes(
     } else {
         (None, None)
     };
-    resolve_onboarding_route("strong", requested.strong.clone(), existing_strong, false)?;
+    resolve_onboarding_route(
+        "strong",
+        requested.strong.clone(),
+        requested.strong_effort,
+        existing_strong,
+        false,
+    )?;
     resolve_onboarding_route(
         "economy",
         requested.economy.clone(),
+        requested.economy_effort,
         existing_economy,
         false,
     )?;
@@ -901,7 +910,9 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
             workflow_inputs: Vec::new(),
             success_contract: None,
             strong: None,
+            strong_effort: None,
             economy: None,
+            economy_effort: None,
             normalized_price_overrides: Vec::new(),
             preference: crate::optimization::OptimizationPreference::Balanced,
         },
@@ -952,7 +963,9 @@ fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<Onboarding
         workflow_inputs,
         success_contract: Some(success_contract),
         strong: requested.strong,
+        strong_effort: requested.strong_effort,
         economy: requested.economy,
+        economy_effort: requested.economy_effort,
         normalized_price_overrides: requested.normalized_price_overrides,
         preference,
     }))
@@ -1011,22 +1024,32 @@ fn interactive_workflow_command(config: &Path) -> Result<Vec<String>> {
 fn resolve_onboarding_route(
     label: &str,
     requested: Option<String>,
-    existing: Option<String>,
+    requested_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    existing: Option<crate::optimization::setup::ExistingTierRoute>,
     interactive: bool,
-) -> Result<String> {
-    if let Some(route) = requested.or(existing) {
-        return Ok(route);
+) -> Result<(
+    String,
+    Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+)> {
+    if let Some(route) = requested {
+        return Ok((route, requested_effort));
+    }
+    if let Some(existing) = existing {
+        if requested_effort.is_some() && requested_effort != existing.effort {
+            anyhow::bail!("optimization {label} effort requires an explicit {label} route");
+        }
+        return Ok((existing.model, existing.effort));
     }
     if !interactive {
         anyhow::bail!(
-            "no {label} route exists in @auto; pass --optimize-{label} with a provider-qualified model"
+            "no {label} route exists in bitrouter/auto; pass --optimize-{label} with a provider-qualified model"
         );
     }
     let route = prompt_line(&format!("  {label} route (provider:model): "))?;
     if route.trim().is_empty() {
         anyhow::bail!("{label} route is required");
     }
-    Ok(route)
+    Ok((route, requested_effort))
 }
 
 async fn configure_optimization(
@@ -1067,10 +1090,20 @@ async fn configure_optimization(
     let (existing_strong, existing_economy) =
         crate::optimization::setup::existing_tier_routes(config, "auto").await?;
     let interactive = std::io::stdin().is_terminal();
-    let strong =
-        resolve_onboarding_route("strong", requested.strong, existing_strong, interactive)?;
-    let economy =
-        resolve_onboarding_route("economy", requested.economy, existing_economy, interactive)?;
+    let (strong, strong_effort) = resolve_onboarding_route(
+        "strong",
+        requested.strong,
+        requested.strong_effort,
+        existing_strong,
+        interactive,
+    )?;
+    let (economy, economy_effort) = resolve_onboarding_route(
+        "economy",
+        requested.economy,
+        requested.economy_effort,
+        existing_economy,
+        interactive,
+    )?;
     let evaluator_agent = if installed.iter().any(|agent| agent.contains("codex")) {
         "codex-acp"
     } else if installed.iter().any(|agent| agent.contains("claude")) {
@@ -1096,7 +1129,9 @@ async fn configure_optimization(
             policy: "auto".into(),
             preset: "auto".into(),
             strong,
+            strong_effort,
             economy,
+            economy_effort,
             normalized_price_overrides: requested.normalized_price_overrides,
             preference: requested.preference,
             evaluator_agent: evaluator_agent.into(),
@@ -1105,12 +1140,14 @@ async fn configure_optimization(
         },
     )
     .await?;
+    let strong_target = outcome.intent.strong_target().to_string();
+    let economy_target = outcome.intent.economy_target().to_string();
     Ok(OptimizationOnboardingReport {
         intent: outcome.paths.intent.display().to_string(),
         lock: outcome.paths.lock.display().to_string(),
         evaluator: evaluator_agent.into(),
-        strong: outcome.intent.strong,
-        economy: outcome.intent.economy,
+        strong: strong_target,
+        economy: economy_target,
         normalized_price_overrides: outcome.intent.normalized_price_overrides,
         preference: outcome.intent.preference,
     })
@@ -1619,22 +1656,54 @@ mod tests {
             resolve_onboarding_route(
                 "strong",
                 Some("provider-a:model-a".into()),
-                Some("provider-b:model-b".into()),
+                Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
+                Some(crate::optimization::setup::ExistingTierRoute {
+                    model: "provider-b:model-b".into(),
+                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::Medium,),
+                }),
                 false,
             )?,
-            "provider-a:model-a"
+            (
+                "provider-a:model-a".into(),
+                Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+            )
         );
         assert_eq!(
-            resolve_onboarding_route("economy", None, Some("provider-b:model-b".into()), false,)?,
-            "provider-b:model-b"
+            resolve_onboarding_route(
+                "economy",
+                None,
+                None,
+                Some(crate::optimization::setup::ExistingTierRoute {
+                    model: "provider-b:model-b".into(),
+                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
+                }),
+                false,
+            )?,
+            (
+                "provider-b:model-b".into(),
+                Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+            )
         );
-        let missing = resolve_onboarding_route("economy", None, None, false);
+        let missing = resolve_onboarding_route("economy", None, None, None, false);
         assert!(missing.is_err());
         assert!(
             missing
                 .err()
                 .map(|error| error.to_string())
                 .is_some_and(|message| message.contains("--optimize-economy"))
+        );
+        assert!(
+            resolve_onboarding_route(
+                "strong",
+                None,
+                Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
+                Some(crate::optimization::setup::ExistingTierRoute {
+                    model: "provider-b:model-b".into(),
+                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
+                }),
+                false,
+            )
+            .is_err()
         );
         Ok(())
     }

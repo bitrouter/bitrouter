@@ -16,6 +16,7 @@ pub mod agent_registry;
 pub mod agents;
 pub mod assemble;
 pub mod auth;
+pub mod chat;
 pub mod claude_code;
 pub mod cloud;
 pub mod commands;

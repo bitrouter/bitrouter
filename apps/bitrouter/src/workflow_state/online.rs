@@ -6,12 +6,17 @@ use crate::workflow_state::extractors::{
     ExtractorInput, extract_workflow_state, parse_compatibility_harness,
 };
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
+use crate::workflow_state::predictive::{
+    PredictiveRouteIR, PredictiveRouteProjection, predict_next_step,
+};
 use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
 pub struct OnlineWorkflowState {
     pub ir: WorkflowStateIR,
+    pub predictive: PredictiveRouteIR,
     legacy_fingerprint: String,
     routing_key: String,
+    observed_routing_key: String,
     compatibility_routing_key_v1: String,
     legacy_routing_key: String,
 }
@@ -73,13 +78,18 @@ impl OnlineWorkflowState {
         let mut ir = extract_workflow_state(&input);
         ir.identity = resolve_workflow_identity(&input, tracker);
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
-        let routing_key = ir.route_projection().key();
+        let predictive = predict_next_step(&ir, prompt);
+        let routing_key =
+            PredictiveRouteProjection::new(predictive.next_step_role, predictive.route_risk).key();
+        let observed_routing_key = ir.route_projection().key();
         let compatibility_routing_key_v1 = ir.compatibility_route_projection_v1().key();
         let legacy_routing_key = ir.legacy_routing_key();
         Self {
             ir,
+            predictive,
             legacy_fingerprint,
             routing_key,
+            observed_routing_key,
             compatibility_routing_key_v1,
             legacy_routing_key,
         }
@@ -87,6 +97,10 @@ impl OnlineWorkflowState {
 
     pub fn routing_key(&self) -> &str {
         &self.routing_key
+    }
+
+    pub fn observed_routing_key(&self) -> &str {
+        &self.observed_routing_key
     }
 
     pub fn compatibility_routing_key_v1(&self) -> &str {
@@ -134,7 +148,7 @@ fn parse_protocol(value: &str) -> Option<ProtocolKind> {
 mod tests {
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::language_model::types::{
-        Content, GenerationParams, Message, Prompt, ProviderMetadata, Role,
+        Content, GenerationParams, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
     };
     use http::HeaderValue;
 
@@ -188,6 +202,23 @@ mod tests {
         }
     }
 
+    fn prompt_after_completed_read() -> Prompt {
+        let mut prompt = prompt_after_tool("read_file");
+        prompt.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult {
+                call_id: "call_read_file".to_string(),
+                tool_name: None,
+                output: ToolResultOutput::Text {
+                    value: "source contents".to_string(),
+                },
+                dynamic: false,
+                provider_metadata: ProviderMetadata::new(),
+            }],
+        });
+        prompt
+    }
+
     #[test]
     fn online_state_exposes_ir_key_and_legacy_fingerprint() {
         let prompt = prompt_after_tool("Bash");
@@ -199,12 +230,37 @@ mod tests {
         );
 
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
-        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|normal");
+        assert_eq!(
+            state.observed_routing_key(),
+            "agent_trace/v2|tool_followup|normal"
+        );
         assert_eq!(
             state.compatibility_routing_key_v1(),
             "agent_trace/v1|tool_followup|normal"
         );
         assert_eq!(state.ir.last_tool_name.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn online_state_separates_predictive_and_observed_route_keys() {
+        let prompt = prompt_after_completed_read();
+        let state = OnlineWorkflowState::from_prompt(
+            &HeaderMap::new(),
+            &prompt,
+            Some(HarnessId::ClaudeCode),
+            ProtocolKind::Messages,
+        );
+
+        assert_eq!(state.routing_key(), "agent_route/v1|implement|normal");
+        assert_eq!(
+            state.observed_routing_key(),
+            "agent_trace/v2|tool_followup|normal"
+        );
+        assert_eq!(
+            state.compatibility_routing_key_v1(),
+            "agent_trace/v1|tool_followup|normal"
+        );
     }
 
     #[test]
@@ -218,7 +274,11 @@ mod tests {
 
         assert_eq!(state.ir.harness_id, HarnessId::Generic);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
-        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|normal");
+        assert_eq!(
+            state.observed_routing_key(),
+            "agent_trace/v2|tool_followup|normal"
+        );
         assert!(state.ir.evidence.iter().any(|e| {
             e.kind == "trace_adapter" && e.value == "compatibility_harness_hint:Codex"
         }));
@@ -239,7 +299,11 @@ mod tests {
         assert_eq!(state.ir.harness_id, HarnessId::Smithers);
         assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
         assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
-        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_route/v1|unknown|normal");
+        assert_eq!(
+            state.observed_routing_key(),
+            "agent_trace/v2|tool_followup|normal"
+        );
         assert!(
             state.legacy_routing_key().starts_with(
                 "smithers|chat_completions|tool_followup|release-review|analyze-risk|"

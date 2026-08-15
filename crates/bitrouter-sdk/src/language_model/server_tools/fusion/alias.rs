@@ -15,7 +15,16 @@
 //! Reference: <https://openrouter.ai/docs/guides/features/server-tools/fusion>
 
 use super::config::{FUSION_TOOL, FusionSettings};
+use crate::error::BitrouterError;
 use crate::language_model::types::{Prompt, ProviderMetadata, Tool};
+
+const DEFAULT_FUSION_ALIAS: &str = "bitrouter/fusion";
+
+fn conflicts_with_router_address(alias: &str) -> bool {
+    alias.starts_with('@')
+        || alias.starts_with("bitrouter:")
+        || (alias.starts_with("bitrouter/") && alias != DEFAULT_FUSION_ALIAS)
+}
 
 /// The defaults the alias expands to (the "Quality" preset by default).
 #[derive(Clone, Debug)]
@@ -36,6 +45,20 @@ pub struct FusionAliasConfig {
 }
 
 impl FusionAliasConfig {
+    /// Reject an alias that would run before and shadow preset or BitRouter
+    /// model-address resolution. The official `bitrouter/fusion` alias is the
+    /// only transform allowed to claim the reserved namespace.
+    pub fn validate_settings(settings: &FusionSettings) -> crate::Result<()> {
+        let alias = settings.alias.as_deref().unwrap_or(DEFAULT_FUSION_ALIAS);
+        if conflicts_with_router_address(alias) {
+            return Err(BitrouterError::bad_request(format!(
+                "server_tools.fusion.alias '{alias}' conflicts with reserved model addressing; \
+                 use '{DEFAULT_FUSION_ALIAS}' or a non-reserved model name"
+            )));
+        }
+        Ok(())
+    }
+
     /// Build an alias config from the `server_tools.fusion` settings, applying
     /// defaults: alias = `bitrouter/fusion`; outer model = configured, else the
     /// judge, else the first panel model; judge = configured, else the first
@@ -43,6 +66,11 @@ impl FusionAliasConfig {
     /// model alone. Returns `None` when nothing identifies an outer model (no
     /// outer_model, judge, or panel) — i.e. Fusion is effectively unconfigured.
     pub fn from_settings(settings: &FusionSettings) -> Option<Self> {
+        // Keep direct SDK construction safe as well as app assembly. The app
+        // calls `validate_settings` first so operators receive the diagnostic;
+        // this guard prevents callers that only use this Option-returning
+        // convenience from constructing a transform that can hijack routing.
+        Self::validate_settings(settings).ok()?;
         let outer_model = settings
             .outer_model
             .clone()
@@ -62,7 +90,7 @@ impl FusionAliasConfig {
             alias: settings
                 .alias
                 .clone()
-                .unwrap_or_else(|| "bitrouter/fusion".to_string()),
+                .unwrap_or_else(|| DEFAULT_FUSION_ALIAS.to_string()),
             outer_model,
             panel,
             judge,
@@ -75,7 +103,7 @@ impl FusionAliasConfig {
     /// the `bitrouter:fusion` declaration, and nudge the model toward it. Returns
     /// `true` when the alias matched and the prompt was rewritten.
     pub fn apply(&self, prompt: &mut Prompt) -> bool {
-        if prompt.model != self.alias {
+        if conflicts_with_router_address(&self.alias) || prompt.model != self.alias {
             return false;
         }
         prompt.model = self.outer_model.clone();
@@ -232,6 +260,42 @@ mod tests {
     #[test]
     fn from_settings_is_none_when_nothing_configured() {
         assert!(FusionAliasConfig::from_settings(&FusionSettings::default()).is_none());
+    }
+
+    #[test]
+    fn configured_aliases_cannot_claim_reserved_route_addresses() {
+        for alias in [
+            "bitrouter/auto",
+            "bitrouter/unknown",
+            "bitrouter:auto",
+            "@auto",
+        ] {
+            let settings = FusionSettings {
+                alias: Some(alias.to_string()),
+                outer_model: Some("anthropic/claude-opus-4.8".to_string()),
+                ..Default::default()
+            };
+
+            let error = FusionAliasConfig::validate_settings(&settings).unwrap_err();
+            assert_eq!(error.status(), 400);
+            assert!(error.to_string().contains(alias));
+            assert!(
+                FusionAliasConfig::from_settings(&settings).is_none(),
+                "reserved alias {alias} must not create an ingress transform"
+            );
+        }
+    }
+
+    #[test]
+    fn ingress_transform_defensively_refuses_a_reserved_alias_collision() {
+        let mut cfg = sample_cfg();
+        cfg.alias = "bitrouter/auto".to_string();
+        let mut prompt = prompt_with_model("bitrouter/auto");
+
+        assert!(!cfg.apply(&mut prompt));
+        assert_eq!(prompt.model, "bitrouter/auto");
+        assert!(prompt.tools.is_empty());
+        assert!(prompt.system.is_none());
     }
 
     #[test]

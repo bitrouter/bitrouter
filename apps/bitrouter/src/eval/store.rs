@@ -717,7 +717,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: "agent_trace/v1|edit|normal".into(),
                 selected_tier: selected_tier.into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest: subject.policy_digest.clone(),
             }];
             store.insert_subject(&subject).await?;

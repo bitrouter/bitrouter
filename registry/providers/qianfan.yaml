@@ -81,14 +81,6 @@ models:
         cache_read: 0.26
       output_tokens:
         text: 4.4
-  - id: tencent/hy3
-    provider_model_id: hy3-preview
-    pricing:
-      input_tokens:
-        no_cache: 0.066
-        cache_read: 0.0261
-      output_tokens:
-        text: 0.26
 status: active
 weight: 1
 submitted_at: 2026-07-07

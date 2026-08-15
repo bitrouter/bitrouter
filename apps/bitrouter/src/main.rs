@@ -295,9 +295,15 @@ enum Command {
         /// Provider-qualified strong route for optimization onboarding.
         #[arg(long)]
         optimize_strong: Option<String>,
+        /// Policy-owned effort for the optimization strong route.
+        #[arg(long, requires = "optimize_strong")]
+        optimize_strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Provider-qualified economy route for optimization onboarding.
         #[arg(long)]
         optimize_economy: Option<String>,
+        /// Policy-owned effort for the optimization economy route.
+        #[arg(long, requires = "optimize_economy")]
+        optimize_economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Frozen normalized-showback price override. Repeat for unpriced
         /// subscription routes.
         #[arg(long = "optimize-normalized-price")]
@@ -435,15 +441,6 @@ enum Command {
         /// without launching the agent.
         #[arg(long)]
         check: bool,
-        /// Host the harness inside BitRouter's terminal, with a persistent
-        /// status row underneath showing model, provider, tokens, and spend.
-        ///
-        /// Opt-in, and not the recommended daily driver: hosting moves
-        /// scrollback from your terminal to BitRouter, so terminal search and
-        /// selection no longer see the agent's output. Drop the flag to go
-        /// back to launching the harness directly.
-        #[arg(long, conflicts_with = "check")]
-        tui: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -573,6 +570,32 @@ enum Command {
     Acp {
         #[command(subcommand)]
         cmd: AcpCmd,
+    },
+    /// Chat with an ACP agent in your terminal, routed through BitRouter.
+    ///
+    /// The interactive counterpart to `acp serve`: instead of exposing the
+    /// session to a manager over stdio, this renders it for you — messages,
+    /// tool calls, permission prompts, and what the turn cost.
+    ///
+    /// Output lands in your terminal's real scrollback, so search, selection,
+    /// and copy keep working. `Ctrl-C` leaves a readable transcript behind.
+    Chat {
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry.
+        agent: String,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -995,9 +1018,15 @@ enum PolicyAction {
         /// Strong base model. Inferred from an existing preset when omitted.
         #[arg(long)]
         strong: Option<String>,
+        /// Exact reasoning effort owned by the strong target.
+        #[arg(long, requires = "strong")]
+        strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Economy model explored as a replacement.
         #[arg(long)]
         economy: String,
+        /// Exact reasoning effort owned by the economy target.
+        #[arg(long)]
+        economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -1032,7 +1061,7 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Compile a deterministic v2 candidate without changing the active lock.
+    /// Compile a deterministic v3 candidate without changing the active lock.
     Compile {
         /// Candidate output path.
         #[arg(long, value_name = "FILE")]
@@ -1148,12 +1177,18 @@ struct OptimizeSetupArgs {
     /// Preset passed to the workflow as `@preset`.
     #[arg(long, default_value = "auto")]
     preset: String,
-    /// Provider-qualified strong route. Omit to reuse @auto or prompt.
+    /// Provider-qualified strong route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     strong: Option<String>,
-    /// Provider-qualified economy route. Omit to reuse @auto or prompt.
+    /// Policy-owned effort for the strong route.
+    #[arg(long, requires = "strong")]
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    /// Provider-qualified economy route. Omit to reuse bitrouter/auto or prompt.
     #[arg(long)]
     economy: Option<String>,
+    /// Policy-owned effort for the economy route.
+    #[arg(long, requires = "economy")]
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Frozen normalized-showback price as
     /// provider:model=uncached,cache_read,cache_write,output. Repeat for
     /// subscription or otherwise unpriced routes.
@@ -1375,20 +1410,8 @@ enum AcpCmd {
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
-        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is attempted by
-        /// default when the harness supports headless redirection.
-        #[arg(long)]
-        direct: bool,
-        /// Override the gateway base URL (else derived from `server.listen`).
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Pin the harness's model (via its model env var / `-c model=`).
-        #[arg(long)]
-        model: Option<String>,
-        /// Never auto-start a local daemon when none is running — fail fast.
-        #[arg(long)]
-        no_start: bool,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1416,20 +1439,8 @@ enum AcpCmd {
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
         no_wait: bool,
-        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
-        /// the harness use its own provider auth. Routing is attempted by
-        /// default when the harness supports headless redirection.
-        #[arg(long)]
-        direct: bool,
-        /// Override the gateway base URL (else derived from `server.listen`).
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Pin the harness's model (via its model env var / `-c model=`).
-        #[arg(long)]
-        model: Option<String>,
-        /// Never auto-start a local daemon when none is running — fail fast.
-        #[arg(long)]
-        no_start: bool,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1487,8 +1498,16 @@ async fn async_main() {
     match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
+            // A pre-ACP routing failure is reported on **stderr**, never as a
+            // stdout envelope: `acp serve` owns stdout for JSON-RPC and `acp
+            // prompt` for NDJSON, and `prompt` has already put the structured
+            // `error` line on that stream itself. Keyed off the error's type
+            // rather than the command shape, so it cannot misclassify a
+            // sibling mode (`spawn --check` still gets its JSON report).
             if raw_cloud_api {
                 eprintln!("error: {e:#}");
+            } else if let Some(routing) = e.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
+                eprintln!("error: {routing}");
             } else {
                 let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
             }
@@ -1515,12 +1534,30 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    let is_acp = matches!(&cli.command, Some(Command::Acp { .. }));
+    // `chat` shares this rule with the `acp` verbs, and goes further: it owns
+    // the terminal, stderr included. Its renderer paints rows in place against
+    // its own model of where they are, so a log line arriving between frames
+    // does not merely interleave — it scrolls the screen out from under the
+    // renderer and every row below it lands one line off. So chat's logs go to
+    // the session file **only** (see TUI_RENDERER_SPEC §4.6).
+    let is_acp = matches!(
+        &cli.command,
+        Some(Command::Acp { .. } | Command::Chat { .. })
+    );
+    let owns_the_terminal = matches!(&cli.command, Some(Command::Chat { .. }));
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
-        // Any `acp` subcommand: init with stderr so stdout stays pristine.
-        init_stderr_tracing_subscriber();
+        // Any `acp` subcommand: stderr so stdout stays pristine, plus a
+        // per-session file so the substrate's log and the agent child's
+        // captured stderr can be read back interleaved.
+        if let Some(path) = init_session_log_tracing_subscriber(!owns_the_terminal) {
+            tracing::debug!(log = %path.display(), "session log");
+            // Remembered so a session that dies badly can show the end of it
+            // and say where the rest is. Set once, at init, because that is
+            // the only place the path exists.
+            bitrouter::acp_cli::remember_session_log(path);
+        }
     } else {
         init_basic_tracing_subscriber();
     }
@@ -1607,14 +1644,18 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             optimize_workflow_input,
             optimize_success,
             optimize_strong,
+            optimize_strong_effort,
             optimize_economy,
+            optimize_economy_effort,
             optimize_normalized_prices,
             optimize_preference,
         } => {
             let optimization = if optimize
                 || optimize_workflow_command.is_some()
                 || optimize_strong.is_some()
+                || optimize_strong_effort.is_some()
                 || optimize_economy.is_some()
+                || optimize_economy_effort.is_some()
                 || optimize_success.is_some()
                 || !optimize_workflow_input.is_empty()
                 || !optimize_normalized_prices.is_empty()
@@ -1628,7 +1669,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     workflow_inputs: optimize_workflow_input,
                     success_contract: optimize_success,
                     strong: optimize_strong,
+                    strong_effort: optimize_strong_effort,
                     economy: optimize_economy,
+                    economy_effort: optimize_economy_effort,
                     normalized_price_overrides: optimize_normalized_prices,
                     preference: optimize_preference.into(),
                 })
@@ -1690,7 +1733,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_install,
             no_start,
             check,
-            tui,
             agent_args,
         } => {
             let opts = bitrouter::spawn::SpawnOptions {
@@ -1702,7 +1744,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 no_start,
                 check,
             };
-            run_launch(config.as_deref(), opts, tui, output).await
+            run_launch(config.as_deref(), opts, output).await
         }
         Command::Spawn {
             agent,
@@ -1750,7 +1792,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     no_start,
                     check,
                 };
-                return run_launch(config.as_deref(), opts, false, output).await;
+                return run_launch(config.as_deref(), opts, output).await;
             }
 
             let Some(agent) = agent else {
@@ -1815,6 +1857,24 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
+        Command::Chat {
+            agent,
+            turn_timeout,
+            routing,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let options = bitrouter::acp_cli::launch_options(turn_timeout);
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options,
+                routing,
+            };
+            bitrouter::acp_cli::chat(ctx).await
+        }
         Command::Update {
             check,
             tag,
@@ -2512,6 +2572,80 @@ fn init_stderr_tracing_subscriber() {
         .init();
 }
 
+/// Where this process's session log lives: `~/.bitrouter/logs/`, one file per
+/// session, named for the wall-clock start and the pid.
+///
+/// The pid is what makes it unique — two sessions started in the same second
+/// must not share a file, and at this point in startup there is no session id
+/// to name it after (the log has to exist before the agent that would produce
+/// one is spawned).
+fn session_log_path() -> anyhow::Result<PathBuf> {
+    let dir = bitrouter::paths::runtime_home()?.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S");
+    Ok(dir.join(format!("session-{stamp}-{}.log", std::process::id())))
+}
+
+/// Install a tracing subscriber that writes to **stderr and a session log
+/// file**. Used for the `acp` subcommands.
+///
+/// The fourth initializer, alongside [`init_basic_tracing_subscriber`],
+/// [`init_stderr_tracing_subscriber`], and [`init_serve_tracing_subscriber`].
+/// It exists because an ACP session has *two* diagnostic streams — the
+/// substrate's own and the agent child's, which `spawn_agent_process` now
+/// captures and re-emits through `tracing` — and reading them means reading
+/// them interleaved, in one place, after the fact. stderr is kept as well as
+/// the file: dropping it would silently change what an operator running the
+/// command in a terminal sees.
+///
+/// Returns the log's path so the caller can name it in a failure. A file that
+/// cannot be opened is **not** fatal — the session still runs, logging to
+/// stderr alone — because losing the transcript is not a reason to refuse to
+/// start.
+fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    let env_filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    let opened = session_log_path().and_then(|path| {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        Ok((path, file))
+    });
+    match opened {
+        Ok((path, file)) => {
+            let file = std::sync::Arc::new(file);
+            // `chat` passes `false`: it draws on this terminal, and a log line
+            // between two frames scrolls the screen underneath its renderer.
+            // Everything is still in the file, and `chat` shows the tail of it
+            // when a session ends badly.
+            if also_stderr {
+                tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(std::io::stderr.and(file))
+                    .with_env_filter(env_filter())
+                    .init();
+            } else {
+                tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(file)
+                    .with_env_filter(env_filter())
+                    .init();
+            }
+            Some(path)
+        }
+        Err(e) => {
+            init_stderr_tracing_subscriber();
+            tracing::warn!("no session log ({e}); logging to stderr only");
+            None
+        }
+    }
+}
+
 /// Install the full tracing subscriber for the `serve` command: fmt plus
 /// — when OTel is configured — the bridge layer that mirrors `tracing`
 /// spans into OTel via the supplied exporter's SDK tracer.
@@ -2648,6 +2782,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
         bitrouter::paths::ConfigSource::Default { .. } => bitrouter::reload::ReloadSource::Default,
     };
+    // Cloned before the reloader takes it: the control socket needs the same
+    // handle to install `providers/set` route overrides into the live
+    // transform.
+    let policy_router_for_control = assembled.policy_table_router.clone();
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(
         bitrouter::reload::AppReloader::new(
             policy_store.clone(),
@@ -2655,7 +2793,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             assembled.upstream_executor,
             reload_source,
         )
-        .with_policy_runtime(assembled.policy_runtime),
+        .with_policy_runtime(assembled.policy_runtime)
+        .with_policy_table_router(assembled.policy_table_router),
     );
 
     daemon::write_pid_file(&pid_path).await?;
@@ -2708,6 +2847,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         listen,
         reloader.clone(),
         observe_provider,
+        policy_router_for_control,
     );
 
     // SIGHUP triggers a config reload — reload should be available via either
@@ -3321,17 +3461,37 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             name,
             preset,
             strong,
+            strong_effort,
             economy,
+            economy_effort,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::policy_lock::initialize_files(
+            let source_raw = tokio::fs::read_to_string(config_path).await?;
+            let source_config = bitrouter_sdk::config::parse(&source_raw)?;
+            if let Some(strong_model) = strong.as_deref() {
+                bitrouter::optimization::setup::validate_routable_effort(
+                    &source_config,
+                    strong_model,
+                    strong_effort,
+                )
+                .await?;
+            }
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &economy,
+                economy_effort,
+            )
+            .await?;
+            let update = bitrouter::policy_lock::initialize_files_with_efforts(
                 config_path,
                 &name,
                 &preset,
                 strong.as_deref(),
+                strong_effort,
                 &economy,
+                economy_effort,
             )
             .await?;
             output.emit(
@@ -3636,23 +3796,33 @@ fn select_guided_workflow(
 fn select_optimization_route(
     label: &str,
     requested: Option<String>,
-    existing: Option<String>,
-) -> Result<String> {
+    requested_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    existing: Option<bitrouter::optimization::setup::ExistingTierRoute>,
+) -> Result<(
+    String,
+    Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+)> {
     use std::io::IsTerminal;
 
-    if let Some(route) = requested.or(existing) {
-        return Ok(route);
+    if let Some(route) = requested {
+        return Ok((route, requested_effort));
+    }
+    if let Some(existing) = existing {
+        if requested_effort.is_some() && requested_effort != existing.effort {
+            anyhow::bail!("--{label}-effort requires an explicit --{label} route");
+        }
+        return Ok((existing.model, existing.effort));
     }
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
-            "no {label} route exists in @auto; pass --{label} with a provider-qualified model"
+            "no {label} route exists in bitrouter/auto; pass --{label} with a provider-qualified model"
         );
     }
     let route = read_optimization_prompt(&format!("  {label} route (provider:model): "))?;
     if route.trim().is_empty() {
         anyhow::bail!("{label} route is required");
     }
-    Ok(route)
+    Ok((route, requested_effort))
 }
 
 fn resolve_adaptive_publication_consent(
@@ -3672,7 +3842,7 @@ fn resolve_adaptive_publication_consent(
     {
         return Ok(true);
     }
-    anyhow::bail!("publication cancelled; @auto remains frozen and unchanged")
+    anyhow::bail!("publication cancelled; bitrouter/auto remains frozen and unchanged")
 }
 
 async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
@@ -3689,7 +3859,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 policy,
                 preset,
                 strong,
+                strong_effort,
                 economy,
+                economy_effort,
                 normalized_price_overrides,
                 preference,
                 evaluator_agent,
@@ -3730,8 +3902,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             let (existing_strong, existing_economy) =
                 bitrouter::optimization::setup::existing_tier_routes(&source_config_path, &policy)
                     .await?;
-            let strong = select_optimization_route("strong", strong, existing_strong)?;
-            let economy = select_optimization_route("economy", economy, existing_economy)?;
+            let (strong, strong_effort) =
+                select_optimization_route("strong", strong, strong_effort, existing_strong)?;
+            let (economy, economy_effort) =
+                select_optimization_route("economy", economy, economy_effort, existing_economy)?;
             let operation_path = setup_paths.operation_lock_target();
             let _operation_lock =
                 bitrouter::policy_lock::try_acquire_publication_lock(&operation_path)?;
@@ -3753,7 +3927,9 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                     policy,
                     preset,
                     strong,
+                    strong_effort,
                     economy,
+                    economy_effort,
                     normalized_price_overrides,
                     preference,
                     evaluator_agent,
@@ -3766,15 +3942,17 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 bitrouter::optimization::EvaluatorRoute::Cloud => "cloud",
                 bitrouter::optimization::EvaluatorRoute::Direct => "direct",
             };
+            let strong_target = outcome.intent.strong_target().to_string();
+            let economy_target = outcome.intent.economy_target().to_string();
             output.emit(&OptimizationSetupReport {
                 action: "optimize.setup",
-                model: "@auto",
+                model: "bitrouter/auto",
                 intent: outcome.paths.intent.display().to_string(),
                 lock: outcome.paths.lock.display().to_string(),
                 contract: outcome.contract_path.display().to_string(),
                 workflow: outcome.intent.workflow.command.clone(),
-                strong: outcome.intent.strong,
-                economy: outcome.intent.economy,
+                strong: strong_target,
+                economy: economy_target,
                 evaluator: format!(
                     "{} ({}, {evaluator_route})",
                     outcome.lock.evaluator.agent, outcome.lock.evaluator.model
@@ -3819,9 +3997,21 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 &loaded.intent.strong,
             )
             .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.strong,
+                loaded.intent.strong_effort,
+            )
+            .await?;
             bitrouter::optimization::setup::validate_routable_model(
                 &source_config,
                 &loaded.intent.economy,
+            )
+            .await?;
+            bitrouter::optimization::setup::validate_routable_effort(
+                &source_config,
+                &loaded.intent.economy,
+                loaded.intent.economy_effort,
             )
             .await?;
             let policy_path = bitrouter::policy_lock::resolve_path(
@@ -4080,7 +4270,10 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
 
                 let interactive = std::io::stdin().is_terminal();
                 let answer = if !enable_adaptive && interactive {
-                    eprintln!("  Publish reviewed candidate {} to @auto?", latest.run_id);
+                    eprintln!(
+                        "  Publish reviewed candidate {} to bitrouter/auto?",
+                        latest.run_id
+                    );
                     eprintln!(
                         "  This enables adaptive policy publication; rollback remains available from policy history."
                     );
@@ -4445,7 +4638,7 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
             };
             output.emit(&OptimizationStatusReport {
                 action: "optimize.status",
-                model: "@auto",
+                model: "bitrouter/auto",
                 intent: loaded.paths.intent.display().to_string(),
                 intent_digest: loaded.digest,
                 lock_active_policy_digest: lock.document.active_policy_digest,
@@ -5189,7 +5382,6 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
 async fn run_launch(
     config: Option<&std::path::Path>,
     opts: bitrouter::spawn::SpawnOptions,
-    tui: bool,
     output: &bitrouter::output::Output,
 ) -> Result<()> {
     let source = bitrouter::paths::resolve_config(config)?;
@@ -5201,30 +5393,6 @@ async fn run_launch(
             Ok(())
         } else {
             std::process::exit(report.exit_code());
-        }
-    } else if tui {
-        // Hosting needs a real screen to attach to, and every failure here
-        // names the escape hatch: the flag is the only thing between the user
-        // and a working launch.
-        use std::io::IsTerminal;
-        if !std::io::stdout().is_terminal() {
-            anyhow::bail!(
-                "`--tui` needs a terminal to draw in (stdout is redirected). Run \
-                 `bitrouter launch` without `--tui`."
-            );
-        }
-        // A `cfg!(unix)` *runtime* check would not do: `exec_hosted` only
-        // exists under the same gate, so the call has to disappear at compile
-        // time or Windows fails to build.
-        #[cfg(not(unix))]
-        {
-            let _ = (&source, &cfg, opts);
-            anyhow::bail!("`--tui` is unix-only today. Run `bitrouter launch` without `--tui`.");
-        }
-        #[cfg(unix)]
-        {
-            let prepared = bitrouter::spawn::prepare(&source, &cfg, opts).await?;
-            bitrouter::spawn::exec_hosted(prepared).await
         }
     } else {
         bitrouter::spawn::run(&source, &cfg, opts).await
@@ -5238,21 +5406,12 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         AcpCmd::Serve {
             agent,
             turn_timeout,
-            direct,
-            base_url,
-            model,
-            no_start,
+            routing,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let routing = bitrouter::acp_cli::RoutingOptions {
-                direct,
-                base_url,
-                model,
-                no_start,
-            };
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,
                 config: cfg,
@@ -5266,22 +5425,13 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             agent,
             turn_timeout,
             no_wait,
-            direct,
-            base_url,
-            model,
-            no_start,
+            routing,
             config,
             text,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let routing = bitrouter::acp_cli::RoutingOptions {
-                direct,
-                base_url,
-                model,
-                no_start,
-            };
             let mut stdout = tokio::io::stdout();
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,
@@ -6389,8 +6539,14 @@ mod tests {
             "terminal-bench",
             "--preset",
             "coding",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--strong-effort",
+            "high",
             "--economy",
-            "moonshotai/kimi-k2.7-code",
+            "openai-codex:gpt-5.6-sol",
+            "--economy-effort",
+            "low",
             "--config",
             "team/bitrouter.yaml",
         ])
@@ -6402,14 +6558,24 @@ mod tests {
                         name,
                         preset,
                         strong,
+                        strong_effort,
                         economy,
+                        economy_effort,
                         config,
                     },
             }) => {
                 assert_eq!(name, "terminal-bench");
                 assert_eq!(preset, "coding");
-                assert_eq!(strong, None);
-                assert_eq!(economy, "moonshotai/kimi-k2.7-code");
+                assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(economy, "openai-codex:gpt-5.6-sol");
+                assert_eq!(
+                    economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
                 assert_eq!(config, Some(PathBuf::from("team/bitrouter.yaml")));
             }
             _ => panic!("expected policy init"),
@@ -6562,11 +6728,59 @@ mod tests {
         match parsed.command {
             Some(Command::Init {
                 optimize_strong,
+                optimize_strong_effort,
                 optimize_economy,
+                optimize_economy_effort,
                 ..
             }) => {
                 assert!(optimize_strong.is_none());
+                assert!(optimize_strong_effort.is_none());
                 assert!(optimize_economy.is_none());
+                assert!(optimize_economy_effort.is_none());
+            }
+            _ => anyhow::bail!("expected init command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn init_optimization_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
+        use clap::Parser;
+
+        let parsed = Cli::try_parse_from([
+            "bitrouter",
+            "init",
+            "--optimize",
+            "--optimize-strong",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-strong-effort",
+            "high",
+            "--optimize-economy",
+            "openai-codex:gpt-5.6-sol",
+            "--optimize-economy-effort",
+            "low",
+        ])?;
+        match parsed.command {
+            Some(Command::Init {
+                optimize_strong,
+                optimize_strong_effort,
+                optimize_economy,
+                optimize_economy_effort,
+                ..
+            }) => {
+                assert_eq!(optimize_strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
+                assert_eq!(
+                    optimize_strong_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+                );
+                assert_eq!(
+                    optimize_economy.as_deref(),
+                    Some("openai-codex:gpt-5.6-sol")
+                );
+                assert_eq!(
+                    optimize_economy_effort,
+                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
+                );
             }
             _ => anyhow::bail!("expected init command"),
         }
@@ -6611,7 +6825,7 @@ mod tests {
         let artifact = candidate
             .artifact
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("default v2 policy has no artifact"))?;
+            .ok_or_else(|| anyhow::anyhow!("default compiled policy has no artifact"))?;
         artifact.parent_digest = Some(parent_digest.clone());
         artifact.source_snapshot_time_unix_ms = 1;
         let history = bitrouter::policy_lock::default_history_dir(&policy_path);

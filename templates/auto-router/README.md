@@ -1,10 +1,30 @@
-# Adaptive `@auto` routing
+# Predictive `bitrouter/auto:cost` routing
 
-This starter policy uses GPT-5.6 as the strong route, Kimi K3 as the balanced
-route, and DeepSeek V4 Pro as the economy route. It is agent- and
-workflow-independent: ordinary `edit`, `test`, and `tool_followup` projections
-use economy; read-only `review` and long-context execution projections use
-balanced; guarded and unmatched projections use strong.
+This starter policy predicts the role of the next response from the native
+prompt and causal history, then selects a tier from the resulting
+`agent_route/v1|<role>|<risk>` key. It uses GPT-5.6 as the strong route, Kimi K3
+as the balanced route, and DeepSeek V4 Pro as the economy route.
+
+Tier values are model targets. The scalar form above remains compatible and
+preserves a caller-supplied reasoning effort. For a model that positively
+declares exact effort support in the registry, a tier may instead own effort:
+
+```yaml
+tiers:
+  strong: { model: "openai-codex:gpt-5.6-sol", effort: high }
+  economy: { model: "openai-codex:gpt-5.6-sol", effort: low }
+```
+
+Those are distinct routing targets even though they share a model. Predictor,
+tool guard, progress guard, continuation, evidence, and fallback behavior stay
+the same; the selected effort is applied by the BitRouter daemon and rendered
+in the upstream protocol's native field.
+
+The frozen mapping is intentionally aggressive: normal mechanical and verify
+work uses economy; implementation, finalization, and context-heavy work mostly
+use balanced; orchestration and selected guarded work use strong. Unknown or
+unmatched predictions use the balanced default. Prediction is deterministic and
+does not add a controller call or modify the request.
 
 Start BitRouter from this directory:
 
@@ -18,24 +38,30 @@ lock. Traces, metering, eval subjects/results, snapshots, and separate candidate
 exports remain available. Set `policy.mode: adaptive` only when the process may
 publish a reviewed candidate; it does not enable request-time learning.
 
-Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
-cost routing variant. Physical model ids remain passthrough, so an explicit
-`openai-codex:gpt-5.6-sol` request is not converted to a preset.
+Use `bitrouter/auto` for the strong base policy, or `bitrouter/auto:cost` to add
+the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
+form addresses the same policy. Physical model ids remain passthrough, so an
+explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v2 lock uses generic `agent_trace/v2|<state>|<risk>` keys. The `context`
-risk band is separate from hard `guarded` recovery/redo/precision risk. Runtime
-adapters enrich diagnostics from native request shapes but do not supply policy
-keys. No private BitRouter headers are required. Published `agent_trace/v1`
-locks remain routable through an exact compatibility fallback; new default
-decisions and learning evidence use v2.
+The v3 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
+are `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
+bands are `normal`, `context`, and `guarded`. Runtime adapters may enrich
+diagnostics from native request shapes, but headers and harness identity do not
+choose a tier. Existing `agent_trace/v2` and `agent_trace/v1` locks remain
+routable through exact compatibility fallbacks.
 
-The v2 request projection also bounds model-induced loops without keeping a
-source-specific session budget. A visible agent trajectory with eight prior
-assistant action turns raises expected redo risk to `guarded`, and an observed
-execution failure remains guarded through the next two execution observations.
-Both signals are reconstructed from inbound message history. Ordinary long
-conversations without agent actions are unaffected; protocols that hide prior
-turns retain explicit visibility-gap evidence instead of inventing state.
+All three tiers are listed in `tool_safe_tiers`. Supplying tools therefore does
+not clamp a predictive selection to another tier, and the template never
+removes, renames, constrains, or rewrites tool definitions. `tool_use_tier`
+remains `strong` as the fallback for a future tier that is not declared
+tool-safe; it does not override any tier in this template.
+
+Prediction and observation are separate. The decision record contains the
+predicted role and action before generation; the response observer later records
+only a bounded categorical action. If the strong model mutates when a different
+action was predicted, analysis counts that as an action mismatch. The mismatch
+is descriptive evidence only: it is not a quality verdict, does not rewrite the
+response, and does not mutate the active route during the request.
 
 This template explicitly enables local trajectory persistence and carries a
 conservative `progress_guard` example in its signed policy. These settings are
@@ -58,13 +84,14 @@ monotonic once reached; consecutive and same-projection limits bound repeated
 unprotected routing. The example omits a cost limit because unknown cost must
 remain unknown rather than act like zero or trigger a fabricated threshold.
 
-Neither raw task content nor task, tool, model, harness, workflow, case, or
-benchmark labels are progress-control inputs. The ledger persists structural
-ancestry, categorical projections and risk, exact counters, and keyed digests.
+Raw prompt text, response text, and tool arguments are not persisted as routing
+evidence. The ledger retains structural ancestry, categorical projections and
+risk, exact counters, and keyed digests.
 
-The eight starter routes are compiler-owned experiments informed by settled
-trace analysis, model protocol canaries, and synthetic long-context action
-qualification. Cross-agent quality has not been validated; evaluate the policy
+The fifteen starter routes are compiler-owned experiments with one matching v2
+certificate per route. Certificate evidence digests bind the policy name,
+predictive key, and selected tier; the shared compiler digest binds the complete
+template policy. Cross-agent quality has not been validated; evaluate the policy
 against your own traffic before broad rollout.
 Admitted evidence can promote or demote compiler-owned routes. Routes explicitly
 authored as operator-owned remain pinned: conflicting evidence is reported

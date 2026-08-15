@@ -12,7 +12,8 @@ use bitrouter_sdk::{BitrouterError, HeaderMap, Result};
 use http::{HeaderName, HeaderValue};
 
 use crate::policy_table_router::PolicyTable;
-use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateKind};
+use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
+use crate::workflow_state::predictive::{NextActionClass, NextStepRole};
 
 #[derive(Debug)]
 pub struct WorkflowTraceFixture {
@@ -30,6 +31,15 @@ pub struct ExpectedWorkflowState {
     pub state_kind: WorkflowStateKind,
     pub baseline_fingerprint: String,
     pub confidence_min: f32,
+    #[serde(default)]
+    pub prediction: Option<ExpectedPredictiveRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExpectedPredictiveRoute {
+    pub next_step_role: NextStepRole,
+    pub next_action_class: NextActionClass,
+    pub route_risk: RouteRisk,
 }
 
 #[derive(Debug, Deserialize)]

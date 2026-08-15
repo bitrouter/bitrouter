@@ -20,6 +20,9 @@ models:
   # input rate; cache_write is the one-time cost to populate the prompt cache.
   - id: openai/gpt-5.6-sol
     provider_model_id: gpt-5.6-sol
+    reasoning_effort: &gpt_56_effort
+      levels: [none, low, medium, high, xhigh, max]
+      default: medium
     compatibility: &modern_openai_chat
       chat_completions:
         token_limit_field: max_completion_tokens
@@ -44,6 +47,7 @@ models:
       - tools
   - id: openai/gpt-5.6-terra
     provider_model_id: gpt-5.6-terra
+    reasoning_effort: *gpt_56_effort
     compatibility: *modern_openai_chat
     pricing:
       input_tokens:
@@ -66,6 +70,7 @@ models:
       - tools
   - id: openai/gpt-5.6-luna
     provider_model_id: gpt-5.6-luna
+    reasoning_effort: *gpt_56_effort
     compatibility: *modern_openai_chat
     pricing:
       input_tokens:
@@ -88,6 +93,9 @@ models:
       - tools
   - id: openai/gpt-5.5
     provider_model_id: gpt-5.5
+    reasoning_effort: &gpt_55_effort
+      levels: [none, low, medium, high, xhigh]
+      default: medium
     compatibility: *modern_openai_chat
     pricing:
       input_tokens:
@@ -101,6 +109,9 @@ models:
       - tools
   - id: openai/gpt-5.4
     provider_model_id: gpt-5.4
+    reasoning_effort: &gpt_54_effort
+      levels: [none, low, medium, high, xhigh]
+      default: none
     compatibility: *modern_openai_chat
     pricing:
       input_tokens:
@@ -114,6 +125,7 @@ models:
       - tools
   - id: openai/gpt-5.4-mini
     provider_model_id: gpt-5.4-mini
+    reasoning_effort: *gpt_54_effort
     compatibility: *modern_openai_chat
     pricing:
       input_tokens:

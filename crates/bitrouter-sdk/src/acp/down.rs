@@ -35,7 +35,7 @@
 //! upstream callbacks to the manager:
 //!
 //! - **Updates:** [`Session::raw_updates`] yields each raw ACP
-//!   [`SessionUpdate`](agent_client_protocol::schema::v1::SessionUpdate);
+//!   [`SessionUpdate`];
 //!   we wrap it in a [`SessionNotification`] (with the manager-facing session id)
 //!   and send it as a `session/update` notification — verbatim, no reverse
 //!   mapping.
@@ -72,8 +72,9 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
+    InitializeRequest, InitializeResponse, ListProvidersResponse, NewSessionRequest,
+    NewSessionResponse, PromptRequest, PromptResponse, ProviderInfo, RequestPermissionRequest,
+    SessionId, SessionNotification, SessionUpdate, SetProviderRequest, SetProviderResponse,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
@@ -87,6 +88,13 @@ use crate::acp::engine::Session;
 /// `fs/` and `terminal/` namespaces (and any unknown method) gets a JSON-RPC
 /// "method not found" reply via the dispatch catch-all.
 const METHOD_SESSION_CANCEL: &str = "session/cancel";
+/// The router's own routing surface (spec §6). Dispatched as **raw JSON-RPC**
+/// over the schema crate's `unstable_llm_providers` types: the 1.2 runtime
+/// crate does not forward that feature, so there is no typed handler to
+/// register — only the shapes. This is not ACP v2; `providers/*` appears in
+/// v1's agent surface too.
+const METHOD_PROVIDERS_LIST: &str = "providers/list";
+const METHOD_PROVIDERS_SET: &str = "providers/set";
 
 /// A transport wrapper that fires a one-shot when the inner transport's
 /// **incoming** stream ends (the manager's write side / our stdin hit EOF).
@@ -169,7 +177,49 @@ impl<T: ConnectTo<Agent>> ConnectTo<Agent> for EofSignaling<T> {
 pub fn serve(
     session: Arc<Session>,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
-    serve_on(session, Stdio::new())
+    serve_on(session, Stdio::new(), ServeExtensions::default())
+}
+
+/// The router-owned surfaces this endpoint exposes on top of a plain relayed
+/// session.
+///
+/// The general rule (spec §7): BitRouter *forwards* what the upstream agent
+/// knows and *adds* what only the router knows. Everything the router adds
+/// enters through here, so the SDK stays ignorant of metering stores, routing
+/// catalogs, and config — it only knows the ACP shapes.
+#[derive(Default)]
+pub struct ServeExtensions {
+    /// Router-synthesized `SessionUpdate`s, forwarded to the manager
+    /// interleaved with the upstream's own. Dropping the sender ends the
+    /// injected stream without ending the session.
+    pub injected_updates: Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>>,
+    /// Backs `providers/list` and `providers/set`. `None` leaves both methods
+    /// answering `method not found`, which is the honest answer for an
+    /// endpoint that has no routing catalog behind it.
+    pub providers: Option<Arc<dyn ProviderSurface>>,
+}
+
+/// The router's provider/model routing surface, in ACP's own nouns.
+///
+/// Implemented by the app layer, which owns the routing catalog. **No
+/// implementation may put a credential in a response** — `ProviderCurrentConfig`
+/// is specified as non-secret routing config, and credential management stays
+/// on the CLI.
+#[async_trait::async_trait]
+pub trait ProviderSurface: Send + Sync {
+    /// The routing catalog, with `current` reflecting the effective route.
+    async fn list(&self) -> Vec<ProviderInfo>;
+    /// Point this session's route at `provider_id`. `Err` carries a message
+    /// the manager can render.
+    async fn set(&self, request: SetProviderRequest) -> std::result::Result<(), String>;
+}
+
+/// [`serve`], plus the router-owned surfaces in [`ServeExtensions`].
+pub fn serve_with(
+    session: Arc<Session>,
+    extensions: ServeExtensions,
+) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
+    serve_on(session, Stdio::new(), extensions)
 }
 
 /// Serve `session` as a vanilla ACP Agent over an arbitrary transport. `serve`
@@ -178,7 +228,12 @@ pub fn serve(
 fn serve_on(
     session: Arc<Session>,
     transport: impl ConnectTo<Agent> + 'static,
+    extensions: ServeExtensions,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
+    let ServeExtensions {
+        injected_updates: injected,
+        providers,
+    } = extensions;
     // Wrap the transport so we get a one-shot when the manager disconnects
     // (incoming EOF). `main_fn` awaits this instead of parking forever.
     let (eof_tx, eof_rx) = oneshot::channel::<()>();
@@ -291,6 +346,7 @@ fn serve_on(
         .on_receive_dispatch(
             move |message: Dispatch, cx: ConnectionTo<Client>| {
                 let session = Arc::clone(&session_dispatch);
+                let providers = providers.clone();
                 async move {
                     match message {
                         // Responses to the agent's OWN server-initiated requests
@@ -309,6 +365,29 @@ fn serve_on(
                                 let _ = session.cancel().await;
                                 Ok(())
                             })?;
+                            Ok(Handled::Yes)
+                        }
+                        // `providers/*`: the router's own surface, answered by
+                        // raw dispatch because the runtime crate has no typed
+                        // handler for it. Off the dispatch loop — `list` and
+                        // `set` both reach the app layer, which may do I/O.
+                        Dispatch::Request(ref req, _)
+                            if providers.is_some()
+                                && matches!(
+                                    req.method(),
+                                    METHOD_PROVIDERS_LIST | METHOD_PROVIDERS_SET
+                                ) =>
+                        {
+                            let Dispatch::Request(req, responder) = message else {
+                                // Unreachable: the guard above already matched
+                                // `Request`. Written as a value rather than a
+                                // panic so an impossible state stays a dropped
+                                // message, not a killed session.
+                                return Ok(Handled::Yes);
+                            };
+                            cx.spawn(
+                                async move { answer_providers(req, responder, providers).await },
+                            )?;
                             Ok(Handled::Yes)
                         }
                         // Any other unhandled request (fs/*, terminal/*, unknown):
@@ -337,6 +416,9 @@ fn serve_on(
             transport,
             move |connection: ConnectionTo<Client>| async move {
                 spawn_update_forwarder(&connection, &session_forward, record_for_forward.clone())?;
+                if let Some(injected) = injected {
+                    spawn_injected_forwarder(&connection, injected, record_for_forward.clone())?;
+                }
                 spawn_permission_forwarder(&connection, &session_forward)?;
                 // Keep the connection (and its handlers/forwarders) alive until
                 // the manager disconnects (incoming EOF), then return so
@@ -349,6 +431,78 @@ fn serve_on(
                 Ok(())
             },
         )
+}
+
+/// Answer one `providers/list` or `providers/set` request.
+///
+/// Both go through [`ProviderSurface`], so nothing about BitRouter's routing
+/// catalog is known here. A malformed `providers/set` payload is an
+/// invalid-params error rather than a silent default: silently routing
+/// somewhere the manager did not ask for would be worse than refusing.
+async fn answer_providers(
+    request: agent_client_protocol::UntypedMessage,
+    responder: Responder<serde_json::Value>,
+    providers: Option<Arc<dyn ProviderSurface>>,
+) -> agent_client_protocol::Result<()> {
+    let Some(providers) = providers else {
+        return responder
+            .respond_with_error(agent_client_protocol::schema::v1::Error::method_not_found());
+    };
+    match request.method() {
+        METHOD_PROVIDERS_LIST => {
+            let response = ListProvidersResponse::new(providers.list().await);
+            match serde_json::to_value(response) {
+                Ok(value) => responder.respond(value),
+                Err(e) => responder.respond_with_internal_error(e),
+            }
+        }
+        METHOD_PROVIDERS_SET => {
+            let parsed: std::result::Result<SetProviderRequest, _> =
+                serde_json::from_value(request.params().clone());
+            let Ok(set) = parsed else {
+                return responder.respond_with_error(
+                    agent_client_protocol::schema::v1::Error::invalid_params(),
+                );
+            };
+            match providers.set(set).await {
+                Ok(()) => match serde_json::to_value(SetProviderResponse::new()) {
+                    Ok(value) => responder.respond(value),
+                    Err(e) => responder.respond_with_internal_error(e),
+                },
+                Err(message) => responder.respond_with_internal_error(message),
+            }
+        }
+        // Unreachable: the dispatch guard admits only the two methods above.
+        other => responder.respond_with_internal_error(format!("unroutable method '{other}'")),
+    }
+}
+
+/// Forward router-synthesized [`SessionUpdate`]s to the manager on the same
+/// notification channel as the upstream's own.
+///
+/// A separate task rather than a merge inside [`spawn_update_forwarder`]: the
+/// two streams are independent, and a synthesized update must not be held up
+/// behind an idle upstream.
+fn spawn_injected_forwarder(
+    connection: &ConnectionTo<Client>,
+    mut injected: tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>,
+    record_id: String,
+) -> agent_client_protocol::Result<()> {
+    let conn = connection.clone();
+    connection.spawn(async move {
+        while let Some(update) = injected.recv().await {
+            if conn
+                .send_notification(SessionNotification::new(
+                    SessionId::new(record_id.clone()),
+                    update,
+                ))
+                .is_err()
+            {
+                break;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Spawn the task that forwards each raw upstream [`SessionUpdate`] to the
@@ -509,7 +663,11 @@ mod tests {
 
                 // ── serve(agent side) ↔ test Client over an in-memory duplex. ──
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 // The client captures `session/update` notifications so the
                 // main_fn can await one after prompting.
@@ -629,7 +787,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(PERM_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -777,7 +939,11 @@ mod tests {
                 let record_id = session.state().record_id.clone();
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -842,7 +1008,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(CAPS_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -921,7 +1091,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(LINK_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -1031,7 +1205,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(TWO_ALLOW_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let (update_tx, mut update_rx) =
                     futures::channel::mpsc::unbounded::<SessionNotification>();
@@ -1147,7 +1325,11 @@ mod tests {
                 let record_id = session.state().record_id.clone();
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -1219,7 +1401,11 @@ mod tests {
                 let (session, _base) = launch_stub_session(HANDSHAKE_STUB).await;
 
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()
@@ -1288,7 +1474,11 @@ mod tests {
             .run_until(async {
                 let (session, _base) = launch_stub_session(BASH_STUB).await;
                 let (agent_channel, client_channel) = Channel::duplex();
-                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+                let agent = tokio::task::spawn_local(serve_on(
+                    Arc::clone(&session),
+                    agent_channel,
+                    ServeExtensions::default(),
+                ));
 
                 let client_result = Client
                     .builder()

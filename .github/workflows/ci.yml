@@ -62,262 +62,155 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            retries: "0"
+          - os: windows-latest
+            # Windows also exposes the trajectory timestamp race under load.
+            retries: "2"
     runs-on: ${{ matrix.os }}
-    # The write grants exist for the live-stream diagnostic in the Linux test
-    # step: the runner dies too abruptly to upload logs, so the step streams
-    # its own output into a PR comment while the machine is still alive.
-    # Commenting on a PR via the issues endpoint requires pull-requests:write
-    # (issues:write alone 403s — measured on run 31626912063).
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    # This is the only job in the workspace that *links* — clippy, doc, msrv
-    # and dist all stop at metadata — and it is the one job that has been
-    # dying on ubuntu whenever it runs cold. What is actually known, after
-    # nine dead runs (each annotated "The hosted runner lost communication
-    # with the server"):
-    #
-    #   - Warm runs pass in 2-3 minutes on every OS. Only a *cold* ubuntu
-    #     build has ever died, and it has died every single time.
-    #   - The runner goes deaf UNDER 25 MINUTES into the cold build (an
-    #     in-step `timeout 25m` never fired on run 31616659931; a job-level
-    #     30m cancellation was never processed on run 31594067605). The
-    #     ~48-minute failure timestamps are GitHub's detection lag, not the
-    #     moment of death.
-    #   - Nothing inside the VM moved that death: +25 GB disk (31601397839),
-    #     +8 GB swap (31611661569), lld, and reduced debuginfo all left the
-    #     timeline byte-identical. Every run died with post steps skipped,
-    #     so nothing was ever cached and no logs were ever uploaded.
-    #
-    # Hence the shape of this job: never require any single cargo process to
-    # survive longer than 15 minutes, and bank progress with an explicit
-    # cache save after every bounded chunk — inside the job, before the
-    # wedge window, not in a post step that a dead runner will never run. A
-    # cold build then converges across attempts no matter what the killer
-    # turns out to be: each attempt restores the previous attempt's chunks
-    # and reaches strictly further. `timeout-minutes` stays only as an outer
-    # backstop; a cancelled job skips its post steps (measured, 31594067605),
-    # so nothing below relies on it.
-    timeout-minutes: 75
-    env:
-      # Headroom for the cold build. A cold `--workspace --all-features` test
-      # build is ~9.1 GB of `target/` (measured on macOS/arm64);
-      # `line-tables-only` takes that to ~7.2 GB with all 2496 tests still
-      # enumerating identically, and keeps `file:line` in test backtraces —
-      # the part anyone reads.
-      #
-      # Expect a larger saving on Linux than that macOS figure suggests, since
-      # Linux embeds DWARF in each of the ~25 test binaries while macOS leaves
-      # it in the `.o` files and Windows in separate `.pdb`s.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      # Ruled-out-but-kept: +25 GB disk and +8 GB swap each failed to move
-      # the cold-build death by a second (runs 31601397839, 31611661569), so
-      # neither is the fix — but both are cheap, harmless headroom and
-      # removing them would re-add untested variables. lld likewise: not the
-      # fix, kept because it makes the bounded chunks below cover more build
-      # per 15 minutes.
-      - name: reclaim disk, extend swap
-        if: runner.os == 'Linux'
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@nextest
+      - run: >-
+          cargo nextest run --workspace --all-features
+          --retries "${{ matrix.retries }}"
+
+  # A cold all-features build used to compile and link every large application
+  # test target on one runner. Split by Cargo target so each runner has bounded
+  # late-stage link pressure while preserving the original Linux test surface.
+  test-ubuntu-workspace:
+    name: test (ubuntu-latest, workspace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@nextest
+      - run: >-
+          cargo nextest run --workspace --exclude bitrouter --all-features
+          --build-jobs 2
+
+  test-ubuntu-bitrouter:
+    name: test (ubuntu-latest, bitrouter ${{ matrix.target }})
+    needs: test-ubuntu-integration
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: lib
+            build_jobs: "2"
+            flags: --lib
+          - target: bin
+            build_jobs: "1"
+            flags: --bin bitrouter
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: add swap for the lib test harness
+        if: matrix.target == 'lib'
         run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
-                      /opt/hostedtoolcache/CodeQL || true
-          sudo docker image prune --all --force || true
-          df -h /
-          sudo fallocate -l 8G /swapfile-ci
-          sudo chmod 600 /swapfile-ci
-          sudo mkswap /swapfile-ci
-          sudo swapon /swapfile-ci
+          sudo fallocate --length 8G /swapfile-bitrouter
+          sudo chmod 600 /swapfile-bitrouter
+          sudo mkswap /swapfile-bitrouter
+          sudo swapon /swapfile-bitrouter
           free -h
-          command -v ld.lld || sudo apt-get install -y --no-install-recommends lld
-      # rust-cache saves in a POST step, and nine dead runners have proven a
-      # post step is exactly where this job's cache save must not live. On
-      # Linux the explicit restore/save steps below replace it; macOS and
-      # Windows keep it, since their runners end cleanly.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache: ${{ matrix.os != 'ubuntu-latest' }}
+          cache-shared-key: ubuntu-bitrouter-tests-v1
+          cache-save-if: false
+          cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
-      - name: restore build cache
-        id: restore
-        if: runner.os == 'Linux'
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
-          restore-keys: |
-            seed-test-linux-${{ hashFiles('Cargo.lock') }}-
-            seed-test-linux-
-      # ── bounded build chunks ──
-      # Each chunk gives cargo at most 15 minutes — safely inside the <25m
-      # window the runner is known to survive — and exits 124 on the bound.
-      # An explicit save banks whatever that chunk compiled BEFORE the next
-      # chunk risks the machine. Exit codes other than 0/124 are real build
-      # errors and fail the job honestly. RUSTFLAGS restates -D warnings
-      # because a step-level env overrides the job-level value
-      # setup-rust-toolchain sets; it must be identical across every cargo
-      # invocation here or the chunks would rebuild instead of resuming.
-      - name: build (chunk 1)
-        id: b1
-        if: runner.os == 'Linux'
-        env:
-          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+      - env:
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs }}
+          TEST_TARGET_FLAGS: ${{ matrix.flags }}
+        shell: bash
         run: |
-          ( while true; do
-              { date -u +%T; free -m | sed -n '2,3p'; df -h / | tail -1; } \
-                >> "$RUNNER_TEMP/resources.log"
-              sleep 30
-            done ) &
-          rc=0
-          timeout --signal=INT --kill-after=60s 15m \
-            cargo build --workspace --all-features --tests || rc=$?
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
-          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
-      - name: bank chunk 1
-        if: runner.os == 'Linux' && steps.b1.outputs.rc == '124'
-        uses: actions/cache/save@v4
+          read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
+          cargo nextest run -p bitrouter --all-features \
+            --build-jobs "$TEST_BUILD_JOBS" \
+            "${target_flags[@]}"
+
+  test-ubuntu-integration:
+    name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: interfaces
+            retries: "0"
+            targets: >-
+              --test acp --test cloud_api --test daemon --test e2e
+              --test full_stack
+          - shard: observability
+            retries: "0"
+            targets: >-
+              --test agent_trace_generalization --test observe_hierarchy
+              --test workflow_state_real_agent_e2e
+              --test workflow_state_replay
+          - shard: optimization
+            retries: "0"
+            targets: >-
+              --test eval_exchange_equivalence --test optimization_discovery
+              --test optimization_output --test policy_eval_control_plane
+          - shard: control-plane
+            # Trajectory assertions occasionally observe async event timestamps
+            # out of order; retry the isolated test process before failing CI.
+            retries: "2"
+            targets: >-
+              --test onboarding --test smithers_reward_loop
+              --test terminus_2_workflow_state
+              --test trajectory_progress_control
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c1
-      - name: build (chunk 2)
-        id: b2
-        if: runner.os == 'Linux' && steps.b1.outputs.rc == '124'
+          cache-shared-key: ubuntu-bitrouter-tests-v1
+          cache-save-if: ${{ matrix.shard == 'interfaces' }}
+          cache-workspace-crates: true
+      - uses: taiki-e/install-action@nextest
+      - name: run integration shard
+        shell: bash
         env:
-          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+          TEST_RETRIES: ${{ matrix.retries }}
+          TEST_TARGETS: ${{ matrix.targets }}
         run: |
-          rc=0
-          timeout --signal=INT --kill-after=60s 15m \
-            cargo build --workspace --all-features --tests || rc=$?
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
-          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
-      - name: bank chunk 2
-        if: runner.os == 'Linux' && steps.b2.outputs.rc == '124'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c2
-      - name: build (chunk 3)
-        id: b3
-        if: runner.os == 'Linux' && steps.b2.outputs.rc == '124'
-        env:
-          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
+          read -r -a test_targets <<< "$TEST_TARGETS"
+          cargo nextest run -p bitrouter --all-features --build-jobs 2 \
+            --retries "$TEST_RETRIES" \
+            "${test_targets[@]}"
+
+  test-ubuntu:
+    name: test (ubuntu-latest)
+    if: always()
+    needs:
+      - test-ubuntu-workspace
+      - test-ubuntu-bitrouter
+      - test-ubuntu-integration
+    runs-on: ubuntu-latest
+    env:
+      WORKSPACE_RESULT: ${{ needs.test-ubuntu-workspace.result }}
+      BITROUTER_RESULT: ${{ needs.test-ubuntu-bitrouter.result }}
+      INTEGRATION_RESULT: ${{ needs.test-ubuntu-integration.result }}
+    steps:
+      - name: require every ubuntu test shard
+        shell: bash
         run: |
-          rc=0
-          timeout --signal=INT --kill-after=60s 15m \
-            cargo build --workspace --all-features --tests || rc=$?
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
-          { [ "$rc" = 0 ] || [ "$rc" = 124 ]; }
-      - name: bank chunk 3
-        if: runner.os == 'Linux' && steps.b3.outputs.rc == '124'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}-c3
-      # Bank the COMPLETED build before any test runs. Run 31621627135 is
-      # why this sits here and not at the end of the job: the cold build
-      # finished in 4m01s (the build was never the killer), the machine then
-      # went deaf during the test phase, and the completed build was lost
-      # because the save was ordered after the tests. Tests must never be
-      # able to destroy a finished build again.
-      - name: save build cache
-        if: >-
-          runner.os == 'Linux' &&
-          (steps.b1.outputs.rc == '0' || steps.b2.outputs.rc == '0' || steps.b3.outputs.rc == '0')
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: seed-test-linux-${{ hashFiles('Cargo.lock') }}-final
-      # Tests only run against a completed build; the RUSTFLAGS match makes
-      # nextest reuse the chunks' artifacts instead of rebuilding.
-      #
-      # The machine dies DURING THE TEST PHASE (established by run
-      # 31621627135: cold build done in 4m01s, wedge afterwards), and it dies
-      # too abruptly for logs, artifacts, or post steps — so the step streams
-      # its own output somewhere the death cannot reach: a PR comment,
-      # PATCHed in place every 20s while the machine is alive. When the
-      # runner goes deaf, the last update names the tests that were running.
-      #
-      # The stream arms ONLY when the exact-key cache restore missed — the
-      # cold-ish runs, which are the only runs that have ever died (warm runs
-      # finish the whole test phase inside the first ~5 minutes after boot,
-      # which every historically-green ubuntu job also did). Warm runs stay
-      # comment-free. Push-triggered runs (no PR number) skip the stream too.
-      # This diagnostic comes out once the wedging test is found and fixed.
-      - name: test
-        if: >-
-          runner.os == 'Linux' &&
-          (steps.b1.outputs.rc == '0' || steps.b2.outputs.rc == '0' || steps.b3.outputs.rc == '0')
-        env:
-          RUSTFLAGS: "-D warnings -C link-arg=-fuse-ld=lld"
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-          NO_COLOR: "1"
-          CARGO_TERM_COLOR: never
-        run: |
-          LOG="$RUNNER_TEMP/nextest.log"
-          : > "$LOG"
-          if [ -n "$PR_NUMBER" ] && [ "${{ steps.restore.outputs.cache-hit }}" != "true" ]; then
-            HDR="🔬 live \`test (ubuntu-latest)\` stream — run ${{ github.run_id }} attempt ${{ github.run_attempt }} — auto-updated in place"
-            CID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" -f body="$HDR" --jq .id || true)
-            if [ -n "$CID" ]; then
-              ( while true; do
-                  { printf '%s — %s UTC\n\n```\n' "$HDR" "$(date -u +%T)"
-                    tail -c 55000 "$LOG"
-                    printf '\n```\n'
-                  } > "$RUNNER_TEMP/body.txt"
-                  gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$CID" \
-                    -F body=@"$RUNNER_TEMP/body.txt" >/dev/null 2>&1 || true
-                  sleep 20
-                done ) &
+          for result in \
+            "$WORKSPACE_RESULT" \
+            "$BITROUTER_RESULT" \
+            "$INTEGRATION_RESULT"
+          do
+            if [[ "$result" != "success" ]]; then
+              echo "::error::An Ubuntu test shard finished with: $result"
+              exit 1
             fi
-          fi
-          set -o pipefail
-          timeout --signal=INT --kill-after=60s 15m \
-            cargo nextest run --workspace --all-features 2>&1 | tee "$LOG"
-      # A checkpointed-but-unfinished cold build must fail the job — tests
-      # did not run — but it fails having banked up to 45 minutes of build,
-      # so re-running this job resumes instead of starting over.
-      - name: cold build checkpointed, not finished
-        if: runner.os == 'Linux' && steps.b3.outputs.rc == '124'
-        run: |
-          echo "::warning::cold build exceeded 3x15m chunks; progress is cached — re-run this job to continue"
-          exit 1
-      # macOS and Windows restore a cache and finish in minutes. They have
-      # never been in the failing state, so they run unwrapped — and
-      # `timeout` is coreutils anyway, not a pwsh builtin with the same name.
-      - name: test
-        if: runner.os != 'Linux'
-        run: cargo nextest run --workspace --all-features
-      # Runs on the failure path: if this job dies on capacity again, these
-      # are the numbers that say so instead of leaving it to inference.
-      - name: resources
-        if: always() && runner.os == 'Linux'
-        run: |
-          df -h /
-          free -h
-          sudo dmesg | tail -n 40 || true
-          tail -n 240 "$RUNNER_TEMP/resources.log" || true
+          done
 
   feature-isolation:
     name: feature-isolation

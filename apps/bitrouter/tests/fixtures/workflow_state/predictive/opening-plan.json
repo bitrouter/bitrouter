@@ -1,0 +1,26 @@
+{
+  "id": "predictive-opening-plan-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "headers": {},
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Investigate the repository architecture, identify the affected components, and plan a safe implementation with tests and acceptance checks."
+      }
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7,
+    "prediction": {
+      "next_step_role": "orchestrate",
+      "next_action_class": "reason_or_plan",
+      "route_risk": "normal"
+    }
+  }
+}

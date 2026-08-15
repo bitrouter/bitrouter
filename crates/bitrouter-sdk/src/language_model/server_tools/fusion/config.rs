@@ -147,7 +147,8 @@ pub struct FusionSettings {
     pub judge: Option<String>,
     /// Optional dedicated synthesizer model.
     pub synthesizer: Option<String>,
-    /// Alias slug (defaults to `bitrouter/fusion`).
+    /// Alias slug (defaults to `bitrouter/fusion`). Custom aliases cannot use
+    /// `@preset`, `bitrouter:`, or the reserved `bitrouter/` namespace.
     pub alias: Option<String>,
     /// The model the alias resolves to (defaults to the judge, then the first
     /// panel model).

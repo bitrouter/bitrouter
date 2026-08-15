@@ -10,7 +10,8 @@ pub mod orchestrator;
 pub mod runner;
 pub mod setup;
 
-pub const OPTIMIZATION_SCHEMA_VERSION: u32 = 1;
+pub const LEGACY_OPTIMIZATION_SCHEMA_VERSION: u32 = 1;
+pub const OPTIMIZATION_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_INTENT_FILENAME: &str = "bitrouter.optimize.yaml";
 pub const DEFAULT_LOCK_FILENAME: &str = "bitrouter.optimize.lock.yaml";
 pub const DEFAULT_CONTRACT_FILENAME: &str = "bitrouter.eval.md";
@@ -80,7 +81,11 @@ pub struct OptimizationIntent {
     pub policy: String,
     pub preset: String,
     pub strong: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub economy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     /// Frozen normalized-showback prices for routes whose provider does not
     /// publish token pricing (for example a flat-rate subscription). Values
     /// use `provider:model=uncached,cache_read,cache_write,output`.
@@ -92,8 +97,16 @@ pub struct OptimizationIntent {
 
 impl OptimizationIntent {
     pub fn validate(&self) -> Result<()> {
-        if self.version != OPTIMIZATION_SCHEMA_VERSION {
+        if !matches!(
+            self.version,
+            LEGACY_OPTIMIZATION_SCHEMA_VERSION | OPTIMIZATION_SCHEMA_VERSION
+        ) {
             anyhow::bail!("unsupported optimization intent version {}", self.version);
+        }
+        if self.version == LEGACY_OPTIMIZATION_SCHEMA_VERSION
+            && (self.strong_effort.is_some() || self.economy_effort.is_some())
+        {
+            anyhow::bail!("optimization intent v1 does not support effort-qualified routes");
         }
         self.workflow.validate()?;
         if self.contract.as_os_str().is_empty() || self.source_config.as_os_str().is_empty() {
@@ -112,7 +125,12 @@ impl OptimizationIntent {
             }
         }
         if self.strong == self.economy {
-            anyhow::bail!("strong and economy routes must be distinct");
+            match (self.strong_effort, self.economy_effort) {
+                (Some(strong), Some(economy)) if strong != economy => {}
+                _ => anyhow::bail!(
+                    "same-model optimization requires two explicit, distinct effort levels"
+                ),
+            }
         }
         for (label, route) in [("strong", &self.strong), ("economy", &self.economy)] {
             let Some((provider, model)) = route.split_once(':') else {
@@ -136,6 +154,14 @@ impl OptimizationIntent {
             }
         }
         Ok(())
+    }
+
+    pub fn strong_target(&self) -> bitrouter_sdk::config::PolicyModelTarget {
+        policy_target(&self.strong, self.strong_effort)
+    }
+
+    pub fn economy_target(&self) -> bitrouter_sdk::config::PolicyModelTarget {
+        policy_target(&self.economy, self.economy_effort)
     }
 
     pub fn semantic_digest(&self) -> Result<String> {
@@ -181,8 +207,8 @@ pub fn validate_policy_contract(
         .policies
         .get(&intent.policy)
         .ok_or_else(|| anyhow::anyhow!("optimization policy '{}' is missing", intent.policy))?;
-    if policy.tiers.get("strong") != Some(&intent.strong)
-        || policy.tiers.get("economy") != Some(&intent.economy)
+    if policy.tiers.get("strong") != Some(&intent.strong_target())
+        || policy.tiers.get("economy") != Some(&intent.economy_target())
     {
         anyhow::bail!("active strong/economy tiers no longer match optimization intent");
     }
@@ -192,10 +218,23 @@ pub fn validate_policy_contract(
         .any(|definition| definition.progress_guard.is_some())
     {
         anyhow::bail!(
-            "workflow optimization does not yet support active progress guards because a temporary v1 experiment could not preserve their runtime semantics"
+            "workflow optimization does not yet support active progress guards because the controlled experiment cannot isolate their runtime semantics"
         );
     }
     Ok(())
+}
+
+fn policy_target(
+    model: &str,
+    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> bitrouter_sdk::config::PolicyModelTarget {
+    effort.map_or_else(
+        || bitrouter_sdk::config::PolicyModelTarget::Model(model.to_owned()),
+        |effort| bitrouter_sdk::config::PolicyModelTarget::ModelEffort {
+            model: model.to_owned(),
+            effort,
+        },
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,7 +366,10 @@ pub struct LoadedOptimizationLock {
 
 impl OptimizationLock {
     pub fn validate(&self) -> Result<()> {
-        if self.lockfile_version != OPTIMIZATION_SCHEMA_VERSION {
+        if !matches!(
+            self.lockfile_version,
+            LEGACY_OPTIMIZATION_SCHEMA_VERSION | OPTIMIZATION_SCHEMA_VERSION
+        ) {
             anyhow::bail!(
                 "unsupported optimization lockfile version {}",
                 self.lockfile_version
@@ -625,11 +667,14 @@ fn sensitive_infrastructure_environment_name(name: &str) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
+
     use super::{
-        EvaluatorLock, EvaluatorRoute, OptimizationIntent, OptimizationLock, OptimizationPaths,
-        OptimizationPreference, ResolvedEvaluator, WorkflowCommand, load_intent, load_lock,
-        model_credential_environment_names, sensitive_infrastructure_environment_name,
-        write_intent_create_new, write_lock_compare_and_swap,
+        EvaluatorLock, EvaluatorRoute, OPTIMIZATION_SCHEMA_VERSION, OptimizationIntent,
+        OptimizationLock, OptimizationPaths, OptimizationPreference, ResolvedEvaluator,
+        WorkflowCommand, load_intent, load_lock, model_credential_environment_names,
+        sensitive_infrastructure_environment_name, write_intent_create_new,
+        write_lock_compare_and_swap,
     };
 
     fn intent() -> OptimizationIntent {
@@ -645,7 +690,9 @@ mod tests {
             policy: "auto".into(),
             preset: "auto".into(),
             strong: "bitrouter:openai/gpt-5.6".into(),
+            strong_effort: None,
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            economy_effort: None,
             normalized_price_overrides: Vec::new(),
             preference: OptimizationPreference::Balanced,
             evaluator: ResolvedEvaluator {
@@ -654,6 +701,61 @@ mod tests {
                 route: EvaluatorRoute::Cloud,
             },
         }
+    }
+
+    #[test]
+    fn optimization_intent_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
+        let mut intent = intent();
+        intent.version = OPTIMIZATION_SCHEMA_VERSION;
+        intent.economy = intent.strong.clone();
+        intent.strong_effort = Some(ReasoningEffort::High);
+        intent.economy_effort = Some(ReasoningEffort::Low);
+
+        intent.validate()?;
+
+        assert_ne!(intent.strong_target(), intent.economy_target());
+        assert_eq!(intent.strong_target().effort(), Some(ReasoningEffort::High));
+        assert_eq!(intent.economy_target().effort(), Some(ReasoningEffort::Low));
+        Ok(())
+    }
+
+    #[test]
+    fn optimization_intent_rejects_duplicate_compound_target() {
+        let mut intent = intent();
+        intent.version = OPTIMIZATION_SCHEMA_VERSION;
+        intent.economy = intent.strong.clone();
+        intent.strong_effort = Some(ReasoningEffort::High);
+        intent.economy_effort = Some(ReasoningEffort::High);
+
+        assert!(intent.validate().is_err());
+    }
+
+    #[test]
+    fn optimization_intent_rejects_same_model_with_inherited_effort() {
+        let mut intent = intent();
+        intent.version = OPTIMIZATION_SCHEMA_VERSION;
+        intent.economy = intent.strong.clone();
+        intent.economy_effort = Some(ReasoningEffort::Low);
+
+        let error = intent.validate().err().map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("same-model optimization requires two explicit, distinct effort levels")
+        );
+    }
+
+    #[test]
+    fn legacy_optimization_intent_rejects_effort_qualification() {
+        let mut intent = intent();
+        intent.strong_effort = Some(ReasoningEffort::High);
+
+        let error = intent.validate().err().map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("optimization intent v1 does not support effort-qualified routes")
+        );
     }
 
     #[tokio::test]

@@ -87,7 +87,6 @@ export OPENCODE_ZEN_API_KEY=...        # opencode-zen AND opencode-go (shared)
 bitrouter start          # detached daemon, logs to ~/.bitrouter/bitrouter.log
 bitrouter status         # green dot + pid / listen / model count
 bitrouter status --watch # live request stream + spend (pipe it for one snapshot)
-bitrouter launch -a claude --tui   # same launch, hosted with a persistent spend row
 bitrouter update         # self-update the binary (prereleases by default); --check to dry-run
 ```
 
@@ -169,15 +168,19 @@ Read these on demand — don't load them all upfront.
 | `references/harness-claude-code.md` | Wiring Claude Code at `localhost:4356` |
 | `references/harness-codex.md` | Wiring Codex CLI |
 | `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
-| `references/harness-hermes-agent.md` | Wiring Hermes Agent (native plugin — not `bitrouter launch`) |
-| `references/harness-openclaw.md` | Wiring OpenClaw (native plugin — not `bitrouter launch`) |
-| `references/adaptive-routing.md` | Generic `@auto` routing, trace projections, policy locks, and compatibility |
+| `references/harness-hermes-agent.md` | Wiring Hermes Agent persistently (its native plugin; `bitrouter launch -a hermes` synthesizes a throwaway `HERMES_HOME` instead) |
+| `references/harness-openclaw.md` | Wiring OpenClaw persistently (its native plugin; `bitrouter launch -a openclaw` synthesizes a throwaway profile instead) |
+| `references/adaptive-routing.md` | Generic `bitrouter/auto` routing, trace projections, policy locks, and compatibility |
 | `references/workflow-optimization.md` | Version-controlled agentic quality/cost optimization: onboarding, run/review/publish loop, evaluator defaults, and failure semantics |
 | `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, caller-prepared cwd, one-agent-per-session, turn queue, identity, v1 limits |
+
+`bitrouter chat <agent>` is the interactive terminal client for the same
+sessions — inline viewport, `/route` to switch provider mid-session, and a cost
+line that always states whose spend it is. See `references/cli.md`.
 
 ## 7. Gotchas
 
@@ -191,5 +194,6 @@ Read these on demand — don't load them all upfront.
 - **Trajectory settings do not hot-reload.** Changes to `enabled`, `retention_days`, or `outbox_batch_size` are rejected; restart the daemon. Any signed `progress_guard` requires trajectory to be enabled.
 - **`bitrouter providers add/remove/use/test/stats` do not exist.** Provider management is `bitrouter providers list`, `bitrouter providers login <provider>`, and `bitrouter providers logout <provider>`. Edit `bitrouter.yaml` and `bitrouter reload` for config changes.
 - **Model ids vs provider pins:** canonical model ids use slashes (`openai/gpt-4o`). An explicit provider pin uses a colon (`openrouter:openai/gpt-4o`, `claude-code:claude-sonnet-4-6`) and is still supported by the routing table.
-- **`bitrouter launch` supports four harnesses:** `claude`, `codex`, `opencode`, `pi`. `hermes`, `openclaw`, `grok`, and `agy` are refused with a message saying so — they remain catalog harnesses (run them directly, or headlessly via `bitrouter spawn <id>` where an ACP adapter exists), and grok/agy remain **providers** the daemon borrows sessions from. Do not suggest `launch -a hermes`.
+- **`bitrouter/*` is reserved.** BitRouter resolves the whole namespace itself before any provider lookup, so no provider or registry model may declare an id under it. It holds `bitrouter/auto` (policy-driven routing, see `references/adaptive-routing.md`) and `bitrouter/fusion` (multi-model deliberation). An unrecognised slug is a `400`, not a `404`, and the colon form `bitrouter:auto` is rejected with a pointer to the slash spelling. Send `bitrouter/auto`, not `@auto` — the generic `@preset[:variant]` form still works for every preset, including `auto`, but the slug is the documented spelling.
+- **`bitrouter launch` supports every catalog harness with an interactive binary:** `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`. `grok` and `agy` are **own-auth**: they launch with their own subscription auth and are never routed or metered (the startup line says so), and they additionally remain **providers** the daemon borrows sessions from. `launch` always hands the harness the real terminal — there is no hosted-terminal mode.
 - **No `bitrouter doctor`.** Diagnostics are: `bitrouter status`, `bitrouter route <model>`, `bitrouter models`, `bitrouter providers list`, log file at `~/.bitrouter/bitrouter.log`.

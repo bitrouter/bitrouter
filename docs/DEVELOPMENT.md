@@ -12,6 +12,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
+| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
@@ -25,6 +26,18 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`, `down` / `engine` / `up`); subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
+| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
+
+**`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
+is the boundary, and it is enforced by the build rather than by review: the
+renderer draws only what arrives over the ACP wire, so daemon-wide data — the
+metering store, the control socket, request history — is unreachable from it
+rather than merely unused. Anything it cannot learn from the protocol (the
+session log's path, for one) is passed in by the caller. The previous terminal
+UI lived inside the application, could reach any function in it, and accreted
+verbs with no command-line equivalent until it was deleted; a module boundary
+was a promise, this one is a compiler error. It also depends on neither
+`bitrouter-sdk` — only the ACP schema types, `ratatui`, and `crossterm`.
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
 
 The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate while both ACP and the API ride inside the SDK, and only the CLI lives in the binary itself.
@@ -127,16 +140,13 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ### Observability surfaces (`apps/bitrouter/src/tui/`)
 
-Two surfaces share one renderer and one data layer:
+One surface, with `render.rs` / `snapshot.rs` as its formatting and data layers:
 
 - `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
-- `bitrouter launch --tui` — the same readout on a status row pinned under a harness hosted in a VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`).
 
-The emulator exists because harnesses differ on whether they take the alternate screen, and an alt-screen app clobbers a `DECSTBM`-reserved line — so guaranteeing the row means owning the screen. That cost is why `--tui` is opt-in: scrollback moves from the user's terminal to BitRouter.
+The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 
-`spawn::prepare` builds the child once; `exec_inherited` and `exec_hosted` differ only in how it is run, which is what makes "identical env and args" structural rather than a test promise. Terminal-identity env may differ, bounded by `HOSTED_ENV_SET` / `HOSTED_ENV_MAY_ADD` / `HOSTED_ENV_UNSET`.
-
-Verification is layered — input conformance against `cat -v`, replay of recorded harness output, and a manual pass for what needs hands. See [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md), which also states what the automated layers structurally cannot catch.
+`spawn::prepare` still builds the child once and `exec_inherited` runs it; the `Prepared` seam is kept independent of hosting.
 
 ## Where To Extend The System
 

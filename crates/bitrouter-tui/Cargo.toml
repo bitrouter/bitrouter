@@ -1,0 +1,23 @@
+[package]
+name = "bitrouter-tui"
+description = "Terminal renderer for an ACP agent session: messages, tool calls, permissions, and the router's own surfaces."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+
+# NOTE: this crate must never depend on `bitrouter` (the application). That
+# absence is the boundary — see the module docs in src/lib.rs. Everything it
+# renders arrives over ACP; anything it cannot learn that way is passed in by
+# the caller.
+[dependencies]
+agent-client-protocol-schema.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+crossterm.workspace = true
+similar.workspace = true
+unicode-width.workspace = true
