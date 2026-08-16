@@ -250,7 +250,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:2322f5cab95e9f41161ced547e7da5e9bf3e3f79de5c9c7e92b7cdc07a85bd04";
+    "sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -562,16 +562,16 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
         ]),
         narrow_read_action: NextActionClass::InspectOrRead,
         algorithm_versions: BTreeMap::from([
-            ("instruction_features".into(), 1),
-            ("history_pairing".into(), 1),
+            ("instruction_features".into(), 2),
+            ("history_pairing".into(), 2),
             ("tool_result_failure".into(), 1),
-            ("visible_causal_history".into(), 1),
-            ("role_scoring".into(), 1),
+            ("visible_causal_history".into(), 2),
+            ("role_scoring".into(), 2),
             ("task_complexity".into(), 1),
             ("risk_mapping".into(), 1),
             ("task_family_boundary_matching".into(), 1),
         ]),
-        task_classifier_algorithm_version: 2,
+        task_classifier_algorithm_version: 3,
         task_family_scorecard: TaskFamilyScorecard {
             weights: BTreeMap::from([
                 ("agent:general".into(), 2),
@@ -2659,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn predictor_contract_digest_covers_every_task_classifier_component() -> anyhow::Result<()> {
+    fn predictor_contract_digest_covers_every_behavior_component() -> anyhow::Result<()> {
         let mut changed_lexicon = compiled_predictor_behavior().clone();
         changed_lexicon
             .instruction_terms
@@ -2679,6 +2679,25 @@ mod tests {
             predictor_behavior_digest(&changed_mapping)?,
             compiled_scorecard_digest()
         );
+
+        for component in [
+            "instruction_features",
+            "history_pairing",
+            "visible_causal_history",
+            "role_scoring",
+        ] {
+            let mut changed = compiled_predictor_behavior().clone();
+            let version = changed
+                .algorithm_versions
+                .get_mut(component)
+                .ok_or_else(|| anyhow::anyhow!("{component} algorithm version is missing"))?;
+            *version += 1;
+            assert_ne!(
+                predictor_behavior_digest(&changed)?,
+                compiled_scorecard_digest(),
+                "{component} version must be digest-bound"
+            );
+        }
 
         let mut task_changes = Vec::new();
         let mut changed = compiled_predictor_behavior().clone();

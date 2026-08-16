@@ -344,7 +344,7 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
-            Some("sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6")
+            Some("sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0")
         );
         assert_eq!(
             decision.prediction_confidence_kind.as_deref(),
@@ -708,12 +708,17 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), 15);
-    for decision in decisions.iter().step_by(2).take(7) {
-        assert_eq!(
-            decision.request_key,
-            "agent_route/v1|unknown|unknown|normal"
-        );
-        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
+    for (decision, (key, tier)) in decisions.iter().step_by(2).take(7).zip([
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|verify|normal", "economy"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+    ]) {
+        assert_eq!(decision.request_key, key);
+        assert_eq!(decision.selected_tier.as_deref(), Some(tier));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
             Some("complete")
@@ -850,14 +855,30 @@ async fn native_literal_histories_receive_exact_template_decisions() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("native HTTP traffic emits policy decisions");
     assert_eq!(decisions.len(), 16);
+    let root_expectations = [
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|verify|normal", "economy"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+    ];
     for (
-        (name, first_key, second_key, _, _, first_tier, first_model, second_tier, second_model),
-        pair,
-    ) in scenarios.iter().zip(decisions.chunks_exact(4))
+        (
+            (name, first_key, second_key, _, _, first_tier, first_model, second_tier, second_model),
+            pair,
+        ),
+        (root_key, root_tier),
+    ) in scenarios
+        .iter()
+        .zip(decisions.chunks_exact(4))
+        .zip(root_expectations)
     {
         for root in [&pair[0], &pair[2]] {
-            assert_eq!(root.request_key, "agent_route/v1|unknown|unknown|normal");
-            assert_eq!(root.selected_tier.as_deref(), Some("balanced"));
+            assert_eq!(root.request_key, root_key, "{name} root route");
+            assert_eq!(
+                root.selected_tier.as_deref(),
+                Some(root_tier),
+                "{name} root tier"
+            );
             assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
         }
         assert_eq!(pair[1].request_key, *first_key, "{name} first source");
@@ -964,7 +985,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             );
             assert_eq!(
                 record.predictor_contract_digest,
-                "sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6",
+                "sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0",
                 "{history:?} {}",
                 fixture.id
             );
@@ -1611,10 +1632,10 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             pivot: None,
             history: SemanticHistory::Opening,
             task_family: "unknown",
-            role: "unknown",
+            role: "finalize",
             risk: "normal",
-            primary_route: "agent_route/v1|unknown|unknown|normal",
-            matched_route: "agent_route/v1|unknown|unknown|normal",
+            primary_route: "agent_route/v1|unknown|finalize|normal",
+            matched_route: "agent_route/v1|unknown|finalize|normal",
             tier: "balanced",
         },
         TaskAwareRouteCase {

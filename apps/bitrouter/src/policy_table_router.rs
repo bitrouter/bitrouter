@@ -1409,10 +1409,10 @@ mod tests {
 
     #[test]
     fn opening_request_routes_to_its_tier() {
-        // No model turn yet → `opening` → flagship.
+        // The explicit fix instruction predicts implementation → cheap.
         assert_eq!(
             route("inbound", vec![user("fix the bug")], vec![]),
-            "vendor/flagship"
+            "vendor/cheap"
         );
     }
 
@@ -1534,9 +1534,9 @@ mod tests {
         let mut p = prompt("inbound");
         p.messages = vec![user("fix the bug")];
         assert!(router().apply(&mut p), "first pass routes");
-        assert_eq!(p.model, "vendor/flagship");
+        assert_eq!(p.model, "vendor/cheap");
         assert!(!router().apply(&mut p), "second pass is a no-op");
-        assert_eq!(p.model, "vendor/flagship");
+        assert_eq!(p.model, "vendor/cheap");
     }
 
     #[test]
@@ -1611,7 +1611,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(900_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6")
+            Some("sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -1882,9 +1882,8 @@ mod tests {
 
     #[test]
     fn latest_user_turn_routes_by_predictive_role_not_stale_tool_state() {
-        // The new user instruction supersedes stale tool state. Without a
-        // completed execution turn it remains on the policy default instead
-        // of consulting the observed read-tool projection.
+        // The decisive new user instruction routes to implementation instead
+        // of consulting the stale observed read-tool projection.
         let routed = route(
             "inbound",
             vec![
@@ -1895,7 +1894,7 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!(routed, "vendor/flagship");
+        assert_eq!(routed, "vendor/cheap");
     }
 
     #[test]
@@ -2641,7 +2640,7 @@ mod tests {
     }
 
     #[test]
-    fn task_aware_policy_unknown_prediction_uses_unified_v1_key() {
+    fn task_aware_policy_unknown_family_uses_unified_v1_key() {
         let mut cfg = config();
         cfg.fingerprints.clear();
         cfg.default_tier = None;
@@ -2653,16 +2652,16 @@ mod tests {
 
         assert_eq!(
             decision.route_projection,
-            "agent_route/v1|unknown|unknown|normal"
+            "agent_route/v1|unknown|finalize|normal"
         );
     }
 
     #[test]
-    fn unknown_prediction_uses_an_explicit_v1_route_before_default() -> anyhow::Result<()> {
+    fn unknown_family_uses_an_explicit_v1_route_before_default() -> anyhow::Result<()> {
         let mut cfg = config();
         cfg.fingerprints.clear();
         cfg.fingerprints.insert(
-            "agent_route/v1|unknown|unknown|normal".into(),
+            "agent_route/v1|unknown|finalize|normal".into(),
             "economy".into(),
         );
         cfg.default_tier = Some("strong".into());
@@ -2675,11 +2674,11 @@ mod tests {
 
         assert_eq!(
             explicit.route_projection,
-            "agent_route/v1|unknown|unknown|normal"
+            "agent_route/v1|unknown|finalize|normal"
         );
         assert_eq!(
             explicit.request_key,
-            "agent_route/v1|unknown|unknown|normal"
+            "agent_route/v1|unknown|finalize|normal"
         );
         assert_eq!(explicit.selected_tier.as_deref(), Some("economy"));
 

@@ -3021,7 +3021,7 @@ policies:
     predictor:
       algorithm: deterministic_scorecard
       version: 1
-      config_digest: "sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6"
+      config_digest: "sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0"
       confidence_kind: heuristic_margin
 certificates:
   coding:
