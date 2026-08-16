@@ -836,10 +836,11 @@ fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>
         evidence_counts.insert(*family, matched_count);
     }
 
-    let debugging_intent = contains_any_task_terms(
+    let debugging_intent_position = first_bounded_term_position(
         text,
         behavior_terms(&behavior.task_family_intent_terms, "debugging"),
     );
+    let debugging_intent = debugging_intent_position.is_some();
     let debugging_failure = contains_any_task_terms(
         text,
         behavior_terms(&behavior.task_family_failure_terms, "debugging"),
@@ -877,10 +878,17 @@ fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>
         evidence_counts.insert(workflow_family, 0);
     }
 
-    let review_precedence = contains_any_task_terms(
-        text,
-        behavior_terms(&behavior.task_family_precedence_terms, "review"),
-    );
+    let review_precedence = match (
+        first_bounded_term_position(
+            text,
+            behavior_terms(&behavior.task_family_precedence_terms, "review"),
+        ),
+        debugging_intent_position,
+    ) {
+        (Some(review), Some(debugging)) => review < debugging,
+        (Some(_), None) => true,
+        _ => false,
+    };
     if supported_review && review_precedence {
         let score = scores
             .get(&TaskFamily::CodeReview)
@@ -1843,11 +1851,11 @@ fn classify_action(name: &str, arguments: &str, observed: &WorkflowStateIR) -> O
     if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "command"))
         && let Some(command) = command_argument(arguments)
     {
-        if command_is_test(&command) {
-            return ObservedAction::Test;
-        }
         if command_is_read(&command) {
             return ObservedAction::Read;
+        }
+        if command_is_test(&command) {
+            return ObservedAction::Test;
         }
     }
     match observed.state_kind {
@@ -1871,15 +1879,24 @@ fn command_argument(arguments: &str) -> Option<String> {
 }
 
 fn command_is_test(command: &str) -> bool {
-    contains_any(command, &compiled_predictor_behavior().command_test_terms)
+    compiled_predictor_behavior()
+        .command_test_terms
+        .iter()
+        .any(|head| command_has_head(command, head))
 }
 
 fn command_is_read(command: &str) -> bool {
-    let command = command.trim_start();
     compiled_predictor_behavior()
         .command_read_prefixes
         .iter()
-        .any(|prefix| command.starts_with(prefix))
+        .any(|prefix| command_has_head(command, prefix.trim_end()))
+}
+
+fn command_has_head(command: &str, head: &str) -> bool {
+    let command = command.trim_start();
+    command.strip_prefix(head).is_some_and(|remaining| {
+        remaining.is_empty() || remaining.chars().next().is_some_and(char::is_whitespace)
+    })
 }
 
 fn add_score(
@@ -2999,6 +3016,35 @@ mod tests {
 
             assert_eq!(prediction.task_family, expected, "{instruction}");
         }
+    }
+
+    #[test]
+    fn task_family_prefers_the_first_review_or_debugging_intent() {
+        let family = |instruction| {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            predict_next_step(&observed(&prompt), &prompt).task_family
+        };
+
+        assert_eq!(family("Review the bug fix."), TaskFamily::CodeReview);
+        assert_eq!(
+            family("Fix the bug found in code review."),
+            TaskFamily::CodeDebugging
+        );
+    }
+
+    #[test]
+    fn shell_action_uses_the_bounded_command_head_before_test_text() {
+        let observed = observed(&prompt(Vec::new()));
+        let action = |command| {
+            classify_action(
+                "bash",
+                &serde_json::json!({ "cmd": command }).to_string(),
+                &observed,
+            )
+        };
+
+        assert_eq!(action("rg 'cargo test' README.md"), ObservedAction::Read);
+        assert_eq!(action("cargo test -p bitrouter"), ObservedAction::Test);
     }
 
     #[test]
