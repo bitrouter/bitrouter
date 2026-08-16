@@ -477,6 +477,38 @@ unregistered. v1 registers three or four.
 
 ## 8. Decision 6 — the crate boundary moves to where it was aimed
 
+> **PARTLY SUPERSEDED 2026-08-16.** `picker.rs` moved back into
+> `crates/bitrouter-tui`, and `cost.rs` split rather than staying whole. The
+> rule this section states — the boundary is drawn on BitRouter-specific
+> *knowledge*, not on the fact of rendering — is unchanged and is what the
+> reversal applies. What was wrong was the classification, on evidence this
+> section did not check:
+>
+> - **`picker.rs` names no BitRouter knowledge.** `ProviderInfo` is an
+>   `agent-client-protocol-schema` type (`src/v1/agent.rs`, and it survives
+>   into `v2`), and the crate already resolves `unstable_llm_providers`, so the
+>   type was in scope there the whole time. The argument below — *"`providers/*`
+>   is BitRouter's, no generic agent serves it"* — is about who implements the
+>   **server** side, which is not what the charter asks. `Cargo.lock` carries
+>   one schema version, so the move was a `git mv` plus one import line.
+> - **The "caller composes it" rationale was already satisfied by a parameter.**
+>   `Picker::open(available, …)` takes the capability answer as an argument; the
+>   module's *location* never contributed to it.
+> - **`cost.rs` splits cleanly**, contrary to the claim below that it cannot.
+>   That claim holds against the split rev 2 proposed — `from_usage` reads the
+>   constant — but not against the one that ships: `Cost::new(amount, currency,
+>   scope)` renders in the crate, while `COST_SCOPE_META_KEY`, the wire spelling
+>   and `from_usage` stay in the app. That is §4.9's existing idiom, where what
+>   the protocol does not carry arrives from the caller.
+>
+> Also in that change: `tui/lifecycle.rs`'s crossterm half moved to the crate
+> (terminal custody was split across the boundary with an ordering contract
+> documented on both sides), and `snapshot.rs`'s `Scope` was deleted — with
+> `as_wire`'s only caller gone it had no reader, and `Snapshot.scope` never had
+> one. **`status --watch` therefore still draws an unlabelled spend figure**,
+> which is the honesty rule below applied to `chat` and not to the bar. Fixing
+> that is a change to what the bar draws, and is not in this amendment.
+
 `bitrouter-tui`'s doc says it *"must never depend on `bitrouter`"* and that the
 build enforces it. True — but it enforces the boundary against the **crate**,
 not against **BitRouter-specific knowledge**, of which the crate has plenty:
