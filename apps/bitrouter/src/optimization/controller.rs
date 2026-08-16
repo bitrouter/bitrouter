@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -20,12 +21,27 @@ const HISTORY_OPTIMIZER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationOptions {
-    pub candidate_tier: String,
+    pub policy: String,
+    pub candidate_tier: Option<String>,
     pub challenger_exposure_ppm: u32,
     pub minimum_tasks_per_arm: u32,
     pub maximum_challenger_tasks: u32,
     pub minimum_pass_rate_ppm: u32,
     pub evaluator_config_digest: Option<String>,
+}
+
+impl Default for OptimizationOptions {
+    fn default() -> Self {
+        Self {
+            policy: "auto".into(),
+            candidate_tier: None,
+            challenger_exposure_ppm: 100_000,
+            minimum_tasks_per_arm: 3,
+            maximum_challenger_tasks: 20,
+            minimum_pass_rate_ppm: 900_000,
+            evaluator_config_digest: None,
+        }
+    }
 }
 
 impl OptimizationOptions {
@@ -36,6 +52,12 @@ impl OptimizationOptions {
             minimum_pass_rate_ppm: self.minimum_pass_rate_ppm,
             evaluator_config_digest: self.evaluator_config_digest.clone(),
         }
+    }
+
+    fn candidate_tier(&self) -> Result<&str> {
+        self.candidate_tier
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("optimization candidate tier was not resolved"))
     }
 }
 
@@ -69,6 +91,42 @@ pub struct OptimizationStep {
     pub action: ControllerAction,
     pub successor: Option<PolicyLock>,
     pub evidence: OptimizationEvidence,
+}
+
+#[derive(Debug)]
+pub struct PreparedOptimizationStep {
+    pub step: OptimizationStep,
+    pub treatment: Option<RouteExploration>,
+    pub config_path: PathBuf,
+    pub policy_path: PathBuf,
+    pub parent_policy_digest: String,
+    pub config_before: String,
+    pub policy_mode: bitrouter_sdk::config::PolicyRuntimeMode,
+}
+
+#[derive(Debug)]
+pub struct OptimizationPublication {
+    pub action: ControllerAction,
+    pub parent_policy_digest: String,
+    pub active_policy_digest: String,
+    pub eval_snapshot_root: String,
+    pub published: bool,
+    pub config_activated: bool,
+    pub config_path: PathBuf,
+    pub config_before: String,
+    pub config_after: String,
+    pub update: Option<crate::policy_lock::PolicyFileUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OptimizationStatus {
+    pub policy: String,
+    pub policy_mode: bitrouter_sdk::config::PolicyRuntimeMode,
+    pub active_policy_digest: String,
+    pub parent_policy_digest: Option<String>,
+    pub eval_snapshot_root: Option<String>,
+    pub observed_subject_digest: Option<String>,
+    pub active_experiment: Option<RouteExploration>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -149,7 +207,7 @@ pub fn select_opportunity(
         else {
             continue;
         };
-        if champion_tier == &input.options.candidate_tier
+        if champion_tier == input.options.candidate_tier()?
             || request_key.ends_with("|guarded")
             || route.independent_units.is_empty()
             || input
@@ -163,7 +221,7 @@ pub fn select_opportunity(
             input.policy_name,
             &request_key,
             champion_tier,
-            &input.options.candidate_tier,
+            input.options.candidate_tier()?,
             input.options.challenger_exposure_ppm,
             &gate,
         )?;
@@ -225,7 +283,7 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         input.policy_name,
         &target.request_key,
         &target.champion_tier,
-        &input.options.candidate_tier,
+        input.options.candidate_tier()?,
         input.options.challenger_exposure_ppm,
         &gate,
     )?;
@@ -257,7 +315,7 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         experiment_id,
         target_request_key: target.request_key.clone(),
         champion_tier: target.champion_tier.clone(),
-        challenger_tier: input.options.candidate_tier.clone(),
+        challenger_tier: input.options.candidate_tier()?.into(),
         challenger_exposure_ppm: input.options.challenger_exposure_ppm,
         gate,
     });
@@ -625,6 +683,314 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
+pub async fn prepare_files(
+    config_path: &Path,
+    mut options: OptimizationOptions,
+) -> Result<PreparedOptimizationStep> {
+    let config_before = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&config_before)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let active = crate::policy_lock::load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    if !active.document.policies.contains_key(&options.policy) {
+        anyhow::bail!("optimization policy '{}' is missing", options.policy);
+    }
+    if options.candidate_tier.is_none() {
+        options.candidate_tier = Some(
+            active.document.policies[&options.policy]
+            .adequacy
+            .explore_tier
+            .clone()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "optimization policy '{}' has no adequacy.explore_tier; pass --candidate-tier",
+                    options.policy
+                )
+            })?,
+        );
+    }
+    let database_url = crate::db::anchor_url(
+        &config.database.url,
+        config_path.parent().unwrap_or_else(|| Path::new(".")),
+    );
+    let database = crate::db::connect(&database_url).await?;
+    crate::db::run_migrations(&database).await?;
+    let store = crate::eval::store::EvalStore::new(database);
+    let frozen_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let manifest = store.freeze_snapshot(&frozen_at).await?;
+    let eval = EvalEvidenceSnapshot::load(&store, &manifest.evidence_root).await?;
+    let step = prepare_step(OptimizationStepInput {
+        eval: &eval,
+        active_policy: &active.document,
+        active_policy_digest: &active.digest,
+        policy_name: &options.policy,
+        options: &options,
+    })?;
+    let treatment = active
+        .document
+        .policies
+        .get(&options.policy)
+        .and_then(|policy| policy.optimization.as_ref())
+        .and_then(|state| state.active.clone())
+        .or_else(|| {
+            step.successor
+                .as_ref()
+                .and_then(|successor| successor.policies.get(&options.policy))
+                .and_then(|policy| policy.optimization.as_ref())
+                .and_then(|state| state.active.clone())
+        });
+    Ok(PreparedOptimizationStep {
+        step,
+        treatment,
+        config_path: config_path.to_path_buf(),
+        policy_path: active.path,
+        parent_policy_digest: active.digest,
+        config_before,
+        policy_mode: config.policy.mode,
+    })
+}
+
+pub async fn publish_prepared(
+    prepared: PreparedOptimizationStep,
+) -> Result<OptimizationPublication> {
+    let PreparedOptimizationStep {
+        step,
+        treatment: _,
+        config_path,
+        policy_path,
+        parent_policy_digest,
+        config_before,
+        policy_mode,
+    } = prepared;
+    let Some(successor) = step.successor else {
+        return Ok(OptimizationPublication {
+            action: step.action,
+            parent_policy_digest: parent_policy_digest.clone(),
+            active_policy_digest: parent_policy_digest,
+            eval_snapshot_root: step.evidence.eval_snapshot_root,
+            published: false,
+            config_activated: false,
+            config_path,
+            config_before: config_before.clone(),
+            config_after: config_before,
+            update: None,
+        });
+    };
+
+    let _config_guard = crate::policy_lock::acquire_publication_lock(&config_path)?;
+    let _policy_guard = crate::policy_lock::acquire_publication_lock(&policy_path)?;
+    let current_config = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    if current_config != config_before {
+        anyhow::bail!(
+            "config changed since optimization preparation; refusing to publish {}",
+            config_path.display()
+        );
+    }
+    let parsed = bitrouter_sdk::config::parse(&current_config)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let active = crate::policy_lock::load_for_config(&parsed, Some(&config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    if active.path != policy_path || active.digest != parent_policy_digest {
+        anyhow::bail!(
+            "policy lock changed since it was loaded (expected {}, found {}); refusing to overwrite",
+            parent_policy_digest,
+            active.digest
+        );
+    }
+    let config_after = if policy_mode == bitrouter_sdk::config::PolicyRuntimeMode::Frozen {
+        crate::policy_lock::edit_config_mode(
+            &config_before,
+            bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+        )?
+    } else {
+        config_before.clone()
+    };
+    let candidate_config = bitrouter_sdk::config::parse(&config_after)
+        .context("validating optimization config activation")?;
+    crate::policy_lock::validate_for_config(&candidate_config, &successor)?;
+    if config_after != config_before {
+        crate::policy_lock::write_text_atomic_unlocked(
+            &config_path,
+            &config_before,
+            &config_after,
+        )?;
+    }
+
+    let child_digest = crate::policy_lock::semantic_digest(&successor)?;
+    let history_dir = crate::policy_lock::default_history_dir(&policy_path);
+    let record = match crate::policy_lock::publish_candidate_unlocked(
+        &policy_path,
+        &parent_policy_digest,
+        &successor,
+        &history_dir,
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            let recovery = recover_failed_publication(
+                &config_path,
+                &config_before,
+                &config_after,
+                &policy_path,
+                &parent_policy_digest,
+                &child_digest,
+                &history_dir,
+            )
+            .await;
+            return match recovery {
+                Ok(()) => {
+                    Err(error.context("policy publication failed; restored config and policy"))
+                }
+                Err(recovery) => Err(error.context(format!(
+                    "policy publication failed and recovery also failed: {recovery:#}"
+                ))),
+            };
+        }
+    };
+    let update = crate::policy_lock::PolicyFileUpdate {
+        path: policy_path,
+        digest: record.child_digest.clone(),
+        document: successor,
+        changes: Vec::new(),
+        conflicts: Vec::new(),
+    };
+    Ok(OptimizationPublication {
+        action: step.action,
+        parent_policy_digest,
+        active_policy_digest: record.child_digest,
+        eval_snapshot_root: step.evidence.eval_snapshot_root,
+        published: true,
+        config_activated: config_after != config_before,
+        config_path,
+        config_before,
+        config_after,
+        update: Some(update),
+    })
+}
+
+async fn recover_failed_publication(
+    config_path: &Path,
+    config_before: &str,
+    config_after: &str,
+    policy_path: &Path,
+    parent_digest: &str,
+    child_digest: &str,
+    history_dir: &Path,
+) -> Result<()> {
+    let policy_restore = match crate::policy_lock::load(policy_path).await {
+        Ok(current) if current.digest == parent_digest => Ok(()),
+        Ok(current) if current.digest == child_digest => {
+            crate::policy_lock::rollback_to_digest_unlocked(
+                policy_path,
+                child_digest,
+                parent_digest,
+                history_dir,
+            )
+            .map(|_| ())
+        }
+        Ok(current) => Err(anyhow::anyhow!(
+            "active policy changed during publication recovery (found {})",
+            current.digest
+        )),
+        Err(error) => Err(error.context("loading policy during publication recovery")),
+    };
+    let config_restore = match std::fs::read_to_string(config_path) {
+        Ok(current) if current == config_before => Ok(()),
+        Ok(current) if current == config_after => {
+            crate::policy_lock::write_text_atomic_unlocked(config_path, config_after, config_before)
+        }
+        Ok(_) => Err(anyhow::anyhow!(
+            "config changed during optimization publication recovery"
+        )),
+        Err(error) => Err(error).context("reading config during publication recovery"),
+    };
+    match (policy_restore, config_restore) {
+        (Ok(()), Ok(())) => Ok(()),
+        (policy_restore, config_restore) => anyhow::bail!(
+            "publication recovery was incomplete (policy: {}; config: {})",
+            policy_restore
+                .err()
+                .map(|error| format!("{error:#}"))
+                .unwrap_or_else(|| "ok".into()),
+            config_restore
+                .err()
+                .map(|error| format!("{error:#}"))
+                .unwrap_or_else(|| "ok".into()),
+        ),
+    }
+}
+
+pub async fn restore_config_after_policy_restore(
+    publication: &OptimizationPublication,
+) -> Result<()> {
+    if publication.config_before == publication.config_after {
+        return Ok(());
+    }
+    let update = publication
+        .update
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("optimization publication has no policy update"))?;
+    let active = crate::policy_lock::load(&update.path).await?;
+    if active.digest != publication.parent_policy_digest {
+        anyhow::bail!(
+            "policy restore did not reach parent {} (found {})",
+            publication.parent_policy_digest,
+            active.digest
+        );
+    }
+    let _config_guard = crate::policy_lock::acquire_publication_lock(&publication.config_path)?;
+    crate::policy_lock::write_text_atomic_unlocked(
+        &publication.config_path,
+        &publication.config_after,
+        &publication.config_before,
+    )
+    .context("restoring config after policy recovery")
+}
+
+pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<OptimizationStatus> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw)
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+    let active = crate::policy_lock::load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let policy = active
+        .document
+        .policies
+        .get(policy_name)
+        .ok_or_else(|| anyhow::anyhow!("optimization policy '{policy_name}' is missing"))?;
+    Ok(OptimizationStatus {
+        policy: policy_name.into(),
+        policy_mode: config.policy.mode,
+        active_policy_digest: active.digest,
+        parent_policy_digest: active
+            .document
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.parent_digest.clone()),
+        eval_snapshot_root: active
+            .document
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.eval_snapshot_root.clone()),
+        observed_subject_digest: active
+            .document
+            .artifact
+            .as_ref()
+            .map(|artifact| artifact.evidence_root.clone()),
+        active_experiment: policy
+            .optimization
+            .as_ref()
+            .and_then(|state| state.active.clone()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -664,7 +1030,8 @@ mod tests {
 
     fn options() -> OptimizationOptions {
         OptimizationOptions {
-            candidate_tier: "economy".into(),
+            policy: "auto".into(),
+            candidate_tier: Some("economy".into()),
             challenger_exposure_ppm: 100_000,
             minimum_tasks_per_arm: 3,
             maximum_challenger_tasks: 20,
@@ -1410,5 +1777,385 @@ mod tests {
                 decision.policy_digest = digest.into();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use anyhow::{Context, Result};
+    use bitrouter_sdk::config::{PolicyModelTarget, PolicyRuntimeMode};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+    use crate::eval::EvalService;
+    use crate::eval::admission::SubmissionPrincipal;
+    use crate::eval::store::EvalStore;
+    use crate::eval::types::{
+        EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
+        EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+    };
+    use crate::optimization::controller::{
+        ControllerAction, OptimizationOptions, prepare_files, publish_prepared, read_status,
+    };
+    use crate::policy_lock::{
+        CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
+        RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,
+    };
+
+    const REQUEST_KEY: &str = "agent_trace/v2|edit|normal";
+    const SHA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    struct Harness {
+        _directory: tempfile::TempDir,
+        root: PathBuf,
+        config_path: PathBuf,
+        policy_path: PathBuf,
+        database_url: String,
+    }
+
+    impl Harness {
+        async fn new(mode: PolicyRuntimeMode) -> Result<Self> {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().to_path_buf();
+            let config_path = root.join("bitrouter.yaml");
+            let policy_path = root.join("policy-lock.yaml");
+            let database_path = root.join("eval.db");
+            let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+            let mode = match mode {
+                PolicyRuntimeMode::Frozen => "frozen",
+                PolicyRuntimeMode::Adaptive => "adaptive",
+            };
+            std::fs::write(
+                &config_path,
+                format!(
+                    "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: {mode}\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n    policy: auto\n"
+                ),
+            )?;
+            let mut policy = PolicyDefinition::default();
+            policy.tiers = BTreeMap::from([
+                (
+                    "strong".into(),
+                    PolicyModelTarget::Model("strong-model".into()),
+                ),
+                (
+                    "economy".into(),
+                    PolicyModelTarget::Model("economy-model".into()),
+                ),
+            ]);
+            policy.default_tier = Some("strong".into());
+            policy.routes.insert(REQUEST_KEY.into(), "strong".into());
+            policy.adequacy.explore_tier = Some("economy".into());
+            let certificate = PolicyCertificate {
+                owner: RouteOwner::Compiler,
+                selected_tier: "strong".into(),
+                baseline_tier: None,
+                source: CertificateSource::TaskNative,
+                eligible_episodes: 1,
+                independent_tasks: 1,
+                quality: None,
+                economics: None,
+                latency: None,
+                critical_violations: 0,
+                verdict: PromotionVerdict::Retain,
+                evaluator_config_digest: None,
+                compiler_config_digest: SHA.into(),
+                evidence_digest: SHA.into(),
+                legacy: None,
+            };
+            let lock = PolicyLock {
+                policies: BTreeMap::from([("auto".into(), policy)]),
+                certificates: BTreeMap::from([(
+                    "auto".into(),
+                    BTreeMap::from([(REQUEST_KEY.into(), certificate)]),
+                )]),
+                ..PolicyLock::default()
+            };
+            std::fs::write(&policy_path, deterministic_yaml(&lock)?)?;
+            let db = crate::db::connect(&database_url).await?;
+            crate::db::run_migrations(&db).await?;
+            drop(db);
+            Ok(Self {
+                _directory: directory,
+                root,
+                config_path,
+                policy_path,
+                database_url,
+            })
+        }
+
+        async fn admit_champion_history(&self) -> Result<()> {
+            let policy_digest = load(&self.policy_path).await?.digest;
+            let db = crate::db::connect(&self.database_url).await?;
+            crate::db::run_migrations(&db).await?;
+            let store = EvalStore::new(db);
+            let service =
+                EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+            for (scope, id, cost) in [
+                (EvalScope::Request, "request-1", Some("900")),
+                (EvalScope::Task, "task-1", None),
+            ] {
+                let evidence = cost.map_or_else(Vec::new, |cost| {
+                    vec![EvidenceItem {
+                        evidence_id: format!("evidence-{id}"),
+                        kind: "request.outcome".into(),
+                        digest: SHA.into(),
+                        redacted: true,
+                        attributes: BTreeMap::from([("cost_micro_usd".into(), cost.into())]),
+                    }]
+                });
+                let digest = evidence_digest(&evidence)?;
+                let eval_id = format!("eval-{id}");
+                let subject = EvalSubject {
+                    schema_version: EVAL_SCHEMA_VERSION,
+                    eval_id: eval_id.clone(),
+                    scope,
+                    subject_id: id.into(),
+                    policy_digest: policy_digest.clone(),
+                    preset: Some("auto".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: vec![EvalDecisionRef {
+                        decision_id: format!("decision-{id}"),
+                        policy: "auto".into(),
+                        request_key: REQUEST_KEY.into(),
+                        selected_tier: "strong".into(),
+                        selected_effort: None,
+                        baseline_tier: None,
+                        baseline_effort: None,
+                        policy_digest: policy_digest.clone(),
+                        experiment: None,
+                    }],
+                    requested_dimensions: BTreeSet::new(),
+                    evidence,
+                    evidence_digest: digest.clone(),
+                    observed_at: "2026-08-17T00:00:00Z".into(),
+                };
+                store.insert_subject(&subject).await?;
+                let result = EvaluationResult {
+                    schema_version: EVAL_SCHEMA_VERSION,
+                    eval_id,
+                    evidence_digest: digest,
+                    evaluator: EvaluatorIdentity {
+                        authority_id: "local".into(),
+                        evaluator_id: "history".into(),
+                        kind: EvaluatorKind::TaskNative,
+                        version: "1".into(),
+                        config_digest: SHA.into(),
+                    },
+                    verdict: if scope == EvalScope::Request {
+                        EvalVerdict::Inconclusive
+                    } else {
+                        EvalVerdict::Pass
+                    },
+                    metrics: BTreeMap::new(),
+                    hard_violations: Vec::new(),
+                    confidence_ppm: None,
+                    evidence_refs: Vec::new(),
+                    decision_credit: BTreeMap::new(),
+                    idempotency_key: format!("result-{id}"),
+                    submitted_at: "2026-08-17T00:00:01Z".into(),
+                };
+                service
+                    .submit(result, SubmissionPrincipal::LocalOperator)
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn snapshot_count(&self) -> Result<i64> {
+            let database = crate::db::connect(&self.database_url).await?;
+            let row = database
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "SELECT COUNT(*) AS count FROM eval_snapshots",
+                ))
+                .await?
+                .context("eval_snapshots count query returned no row")?;
+            row.try_get("", "count").map_err(anyhow::Error::from)
+        }
+    }
+
+    #[tokio::test]
+    async fn champion_history_publishes_one_exploration_descendant() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        let parent = load(&harness.policy_path).await?;
+
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(prepared.step.action, ControllerAction::Explore);
+        let publication = publish_prepared(prepared).await?;
+
+        let active = load(&harness.policy_path).await?;
+        assert_eq!(publication.parent_policy_digest, parent.digest);
+        assert_eq!(publication.active_policy_digest, active.digest);
+        assert!(publication.published);
+        assert_eq!(
+            active.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .and_then(|state| state.active.as_ref())
+                .map(|exploration| exploration.target_request_key.as_str()),
+            Some(REQUEST_KEY)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn omitted_candidate_tier_uses_the_policy_explore_tier() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        let mut options = OptimizationOptions::default();
+        options.candidate_tier = None;
+
+        let prepared = prepare_files(&harness.config_path, options).await?;
+
+        assert_eq!(
+            prepared
+                .treatment
+                .as_ref()
+                .map(|exploration| exploration.challenger_tier.as_str()),
+            Some("economy")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn insufficient_rerun_holds_without_rewriting_policy_bytes() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        let before = std::fs::read(&harness.policy_path)?;
+
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(prepared.step.action, ControllerAction::Hold);
+        let publication = publish_prepared(prepared).await?;
+
+        assert!(!publication.published);
+        assert_eq!(std::fs::read(&harness.policy_path)?, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_prepared_parent_loses_to_competing_policy_publication() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        let candidate = prepared
+            .step
+            .successor
+            .clone()
+            .context("expected exploration successor")?;
+        let active = load(&harness.policy_path).await?;
+        publish_candidate(
+            &harness.policy_path,
+            &active.digest,
+            &candidate,
+            &default_history_dir(&harness.policy_path),
+        )?;
+        let competing_bytes = std::fs::read(&harness.policy_path)?;
+
+        let error = publish_prepared(prepared)
+            .await
+            .err()
+            .context("stale publish succeeded")?;
+
+        assert!(error.to_string().contains("changed since it was loaded"));
+        assert_eq!(std::fs::read(&harness.policy_path)?, competing_bytes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_mutating_run_activates_a_frozen_config() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Frozen).await?;
+        harness.admit_champion_history().await?;
+
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+
+        let raw = std::fs::read_to_string(&harness.config_path)?;
+        assert_eq!(
+            bitrouter_sdk::config::parse(&raw)?.policy.mode,
+            PolicyRuntimeMode::Adaptive
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publication_failure_restores_exact_config_bytes() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Frozen).await?;
+        harness.admit_champion_history().await?;
+        let original_config = std::fs::read(&harness.config_path)?;
+        let original_policy = std::fs::read(&harness.policy_path)?;
+        std::fs::write(
+            default_history_dir(&harness.policy_path),
+            b"not a directory",
+        )?;
+
+        let error = publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await
+        .err()
+        .context("publication unexpectedly succeeded")?;
+
+        assert!(error.to_string().contains("policy"));
+        assert_eq!(std::fs::read(&harness.config_path)?, original_config);
+        assert_eq!(std::fs::read(&harness.policy_path)?, original_policy);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_is_byte_read_only() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Frozen).await?;
+        harness.admit_champion_history().await?;
+        let config_before = std::fs::read(&harness.config_path)?;
+        let policy_before = std::fs::read(&harness.policy_path)?;
+        let snapshots_before = harness.snapshot_count().await?;
+
+        let status = read_status(&harness.config_path, "auto").await?;
+
+        assert_eq!(status.policy, "auto");
+        assert_eq!(std::fs::read(&harness.config_path)?, config_before);
+        assert_eq!(std::fs::read(&harness.policy_path)?, policy_before);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
+        assert!(!default_history_dir(&harness.policy_path).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn controller_creates_no_paired_optimizer_artifacts() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        read_status(&harness.config_path, "auto").await?;
+
+        let mut pending = vec![harness.root.clone()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    pending.push(entry.path());
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                assert!(!name.starts_with("bitrouter.optimize."), "{name}");
+                assert_ne!(name, "bitrouter.eval.md");
+                assert_ne!(name, "contract.md");
+                assert_ne!(name, "runs");
+                assert_ne!(name, "worktrees");
+                assert_ne!(name, "private.db");
+                assert!(!name.contains("evaluator"), "{name}");
+            }
+        }
+        Ok(())
     }
 }

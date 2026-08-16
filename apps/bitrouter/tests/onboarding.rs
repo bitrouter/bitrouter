@@ -169,7 +169,7 @@ fn init_yes_cloud_login_without_key_is_reported_and_skipped() {
 }
 
 #[test]
-fn init_yes_optimization_requires_routes_before_scaffolding() -> anyhow::Result<()> {
+fn init_yes_rejects_removed_workflow_optimization_before_scaffolding() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
     let cfg = home.path().join("bitrouter.yaml");
@@ -198,12 +198,13 @@ fn init_yes_optimization_requires_routes_before_scaffolding() -> anyhow::Result<
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("--optimize-strong") || stdout.contains("--optimize-strong"),
+        stderr.contains("workflow optimization onboarding was removed")
+            || stdout.contains("workflow optimization onboarding was removed"),
         "unexpected optimization preflight error: stdout={stdout}; stderr={stderr}"
     );
     assert!(
         !cfg.exists(),
-        "route preflight must fail before creating the source config"
+        "removed optimization onboarding must fail before creating the source config"
     );
     Ok(())
 }

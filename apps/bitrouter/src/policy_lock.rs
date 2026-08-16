@@ -46,8 +46,6 @@ pub const EVIDENCE_POLICY_LOCKFILE_VERSION: u32 = 2;
 pub const POLICY_LOCKFILE_VERSION: u32 = 3;
 pub const POLICY_COMPILER_ID: &str = "bitrouter-policy-compiler";
 pub const POLICY_COMPILER_VERSION: u32 = 1;
-pub(crate) const OPTIMIZATION_EXPERIMENT_COMPILER_ID: &str =
-    "bitrouter-optimization-private-experiment";
 const EMPTY_SHA256: &str =
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -1183,13 +1181,6 @@ fn publish_bytes_unlocked(
     history_dir: &Path,
     action: &str,
 ) -> Result<PromotionRecord> {
-    if target
-        .artifact
-        .as_ref()
-        .is_some_and(|artifact| artifact.compiler.id == OPTIMIZATION_EXPERIMENT_COMPILER_ID)
-    {
-        anyhow::bail!("private optimization experiment policy locks cannot be published");
-    }
     let parent_bytes = std::fs::read(active_path)
         .with_context(|| format!("reading active policy lock {}", active_path.display()))?;
     let parent_raw =
@@ -1587,7 +1578,7 @@ pub struct PolicyFileUpdate {
 
 /// Create one named adaptive policy and bind it to a preset. The candidate
 /// main config and lock are fully cross-validated before either file is
-/// published. The BitRouter process starts in frozen mode.
+/// published. Explicit policy initialization starts in adaptive mode.
 pub async fn initialize_files(
     config_path: &Path,
     policy_name: &str,
@@ -1748,7 +1739,7 @@ pub async fn initialize_files_unlocked(
         preset_name,
         policy_name,
         preset_model,
-        PolicyRuntimeMode::Frozen,
+        PolicyRuntimeMode::Adaptive,
     )?;
     let candidate_config =
         bitrouter_sdk::config::parse(&edited_config).context("validating candidate config")?;
@@ -2210,6 +2201,68 @@ fn readonly_database_url(url: &str, config_path: &Path) -> Result<String> {
         params.push_str("mode=ro");
     }
     Ok(format!("sqlite://{}?{params}", absolute.display()))
+}
+
+pub async fn validate_routable_model(
+    source: &bitrouter_sdk::config::Config,
+    route: &str,
+) -> Result<()> {
+    let (provider, model) = route
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("policy tier route '{route}' must be provider-qualified"))?;
+    if provider.is_empty() || model.is_empty() || model.starts_with('@') {
+        anyhow::bail!("policy tier route '{route}' is not a concrete provider model");
+    }
+    let mut resolved = source.clone();
+    crate::merge_registry_into(&mut resolved).await;
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let provider_config = resolved.providers.get(provider).ok_or_else(|| {
+        anyhow::anyhow!(
+            "policy provider '{provider}' is not available from the config or provider registry"
+        )
+    })?;
+    if !provider_config.active || provider_config.api_base.trim().is_empty() {
+        anyhow::bail!(
+            "policy provider '{provider}' is not active and routable; configure its credential or provider entry first"
+        );
+    }
+    bitrouter_sdk::config::routing_table::resolve_route_chain(
+        &resolved,
+        route,
+        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+    )
+    .with_context(|| format!("resolving policy tier route '{route}'"))?;
+    Ok(())
+}
+
+pub async fn validate_routable_effort(
+    source: &bitrouter_sdk::config::Config,
+    route: &str,
+    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> Result<()> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+    let mut resolved = source.clone();
+    crate::merge_registry_into(&mut resolved).await;
+    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let chain = bitrouter_sdk::config::routing_table::resolve_route_chain(
+        &resolved,
+        route,
+        &bitrouter_sdk::language_model::RoutingPrefs::default(),
+    )
+    .with_context(|| format!("resolving policy tier route '{route}'"))?;
+    if !chain.iter().any(|target| {
+        target
+            .reasoning_effort
+            .as_ref()
+            .is_some_and(|support| support.levels.contains(&effort))
+    }) {
+        anyhow::bail!(
+            "policy tier route '{route}' has no target with positive support for effort '{effort}'"
+        );
+    }
+    Ok(())
 }
 
 fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
@@ -4666,7 +4719,7 @@ inherit_defaults: true
     }
 
     #[tokio::test]
-    async fn initialize_writes_a_frozen_policy_and_preserves_the_config() {
+    async fn initialize_writes_an_adaptive_policy_and_preserves_the_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -4694,7 +4747,7 @@ presets:
         let config_raw = tokio::fs::read_to_string(&config_path).await.unwrap();
         assert!(config_raw.contains("# owned by the routing team"));
         let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
-        assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
+        assert_eq!(config.policy.mode, PolicyRuntimeMode::Adaptive);
         assert_eq!(
             config.presets["coding"].policy.as_deref(),
             Some("terminal-bench")
@@ -4855,6 +4908,13 @@ presets:
             "coding",
             None,
             "moonshotai/kimi-k2.7-code",
+        )
+        .await
+        .unwrap();
+        let initialized = tokio::fs::read_to_string(&config_path).await.unwrap();
+        tokio::fs::write(
+            &config_path,
+            initialized.replace("mode: adaptive", "mode: frozen"),
         )
         .await
         .unwrap();
