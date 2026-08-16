@@ -61,11 +61,11 @@ fn run_report_is_content_free_and_names_the_controller_transition() -> Result<()
 
 #[test]
 fn status_report_is_a_read_only_controller_view() -> Result<()> {
-    let view = report("optimize.status", "hold");
+    let view = report("optimize.status", "exploring");
 
     let rendered = String::from_utf8(Output::new(Format::Human).render_to_vec(&view))?;
 
-    assert!(rendered.contains("optimization is holding"));
+    assert!(rendered.contains("optimization is exploring"));
     assert!(rendered.contains("agent_trace/v2|edit|normal"));
     assert!(!rendered.contains("review"));
     assert!(!rendered.contains("bitrouter optimize publish"));

@@ -3636,9 +3636,9 @@ fn optimization_status_report(
     status: bitrouter::optimization::controller::OptimizationStatus,
 ) -> OptimizationControllerReport {
     let decision = if status.active_experiment.is_some() {
-        "hold"
+        "exploring"
     } else {
-        "converged"
+        "idle"
     };
     OptimizationControllerReport {
         action: "optimize.status",
@@ -5673,6 +5673,56 @@ mod tests {
                 && config == Path::new("bitrouter.yaml")
         ));
         Ok(())
+    }
+
+    #[test]
+    fn optimize_status_without_active_exploration_is_idle() {
+        let report = optimization_status_report(
+            bitrouter::optimization::controller::OptimizationStatus {
+                policy: "auto".into(),
+                policy_mode: bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+                active_policy_digest:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                parent_policy_digest: None,
+                eval_snapshot_root: None,
+                observed_subject_digest: None,
+                active_experiment: None,
+            },
+        );
+
+        assert_eq!(report.action, "optimize.status");
+        assert_eq!(report.decision, "idle");
+    }
+
+    #[test]
+    fn optimize_status_with_active_exploration_is_exploring() {
+        let report = optimization_status_report(
+            bitrouter::optimization::controller::OptimizationStatus {
+                policy: "auto".into(),
+                policy_mode: bitrouter_sdk::config::PolicyRuntimeMode::Adaptive,
+                active_policy_digest:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                parent_policy_digest: None,
+                eval_snapshot_root: None,
+                observed_subject_digest: None,
+                active_experiment: Some(bitrouter::optimization::exploration::RouteExploration {
+                    experiment_id: "experiment-1".into(),
+                    target_request_key: "agent_trace/v2|edit|normal".into(),
+                    champion_tier: "strong".into(),
+                    challenger_tier: "economy".into(),
+                    challenger_exposure_ppm: 100_000,
+                    gate: bitrouter::optimization::exploration::OptimizationGate {
+                        minimum_tasks_per_arm: 3,
+                        maximum_challenger_tasks: 20,
+                        minimum_pass_rate_ppm: 900_000,
+                        evaluator_config_digest: None,
+                    },
+                }),
+            },
+        );
+
+        assert_eq!(report.action, "optimize.status");
+        assert_eq!(report.decision, "exploring");
     }
 
     #[tokio::test]

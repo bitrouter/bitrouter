@@ -110,7 +110,7 @@ Two opt-in, restart-only subsystems record routed-request history: `trajectory` 
 
 ### History-driven optimization (Local)
 
-Run `policy init auto --preset auto --economy provider:model`, use a coding agent or Terminal Bench normally through `bitrouter/auto`, submit external Eval results, then call `optimize run --policy auto` and `optimize status --policy auto`. Repeat until `converged`. `run` authorizes publication without manual approval. Champion-only history cold-starts signed exploration; later steps promote, retreat, hold, or converge. Only complete task/episode cohorts gate quality and complete-unit cost; request data only ranks opportunities. Evaluators preserve and never invent or edit router-authored experiment references. See `references/workflow-optimization.md`.
+Run `bitrouter policy init auto --preset auto --economy provider:model`, use a coding agent or Terminal Bench normally through `bitrouter/auto`, submit external Eval results, then call `bitrouter optimize run --policy auto` and optionally `bitrouter optimize status --policy auto`. Repeat until `optimize run` reports `converged`; status only observes whether the signed policy is `exploring` or `idle`. `run` authorizes publication without manual approval. Champion-only history cold-starts signed exploration; later steps promote, retreat, hold, or converge. Only complete task/episode cohorts gate quality and complete-unit cost; request data only ranks opportunities. Evaluators preserve and never invent or edit router-authored experiment references. See `references/workflow-optimization.md`.
 
 **Subscription / OAuth providers.** Different — local login, not env vars:
 

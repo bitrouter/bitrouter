@@ -77,21 +77,27 @@ are:
 - `hold`: evidence remains inconclusive within budget;
 - `converged`: no eligible unrejected route/treatment remains.
 
-Repeat normal traced agent or Terminal Bench use, external Eval submission,
-`optimize run`, and `optimize status` until `converged`. A retreat records its
-treatment context so the same rejected experiment is not retried unless its
-tier target or gate changes.
+Repeat normal traced agent or Terminal Bench use, external Eval submission, and
+`optimize run` until that command reports `converged`. `optimize status` is an
+optional, database-read-only observation of the signed policy: it reports
+`exploring` when an experiment is active and `idle` otherwise. Idle does not
+prove convergence because promotion and retreat also clear the active
+experiment. A retreat records its treatment context so the same rejected
+experiment is not retried unless its tier target or gate changes.
 
 Controller flags tune exposure and gates when needed:
 
 ```text
---candidate-tier economy
+--candidate-tier TIER
 --exploration-ppm 100000
 --minimum-tasks 3
 --maximum-tasks 20
 --minimum-pass-rate-ppm 900000
 --evaluator-config-digest sha256:...
 ```
+
+Omit `--candidate-tier` to use the signed policy's
+`adequacy.explore_tier`; pass `TIER` only to override that value for the step.
 
 Without an explicit evaluator configuration digest, the candidate cohort must
 contain exactly one conclusive evaluator configuration. Conflicting or

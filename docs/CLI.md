@@ -428,9 +428,12 @@ policy:
 `policy init` creates the named policy in `adaptive` mode so an explicit
 `optimize run` can publish its controller decision. Live routes still use only
 the signed lock; Eval rows never change request routing on their own. Operators
-can set `mode: frozen` to prohibit publication while continuing to record
-observations and evaluator results. Dry-run compilation and candidate export
-remain available. The mode controls write authority, not request-time learning.
+can set `mode: frozen` to prohibit low-level or direct publication while
+continuing to record observations and evaluator results. Invoking `optimize
+run` is explicit authorization to activate adaptive mode and autonomously
+publish its successor when the controller decides to do so. Dry-run compilation
+and candidate export remain available. The mode controls write authority, not
+request-time learning.
 
 `policy publish` promotes the exact compiled v3 candidate after validating its
 parent digest, certificates, and current config. A stale candidate or frozen
@@ -443,7 +446,7 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 ### `bitrouter optimize`
 
 ```text
-bitrouter optimize run [--policy auto] [--candidate-tier economy] \
+bitrouter optimize run [--policy auto] [--candidate-tier TIER] \
   [--exploration-ppm 100000] [--minimum-tasks 3] [--maximum-tasks 20] \
   [--minimum-pass-rate-ppm 900000] \
   [--evaluator-config-digest sha256:...] \
@@ -463,14 +466,19 @@ bitrouter optimize run --policy auto --config bitrouter.yaml
 bitrouter optimize status --policy auto --config bitrouter.yaml
 ```
 
-Repeat normal traced work, external Eval submission, `optimize run`, and
-`optimize status` until the controller reports `converged`. Calling
-`optimize run` grants autonomous authority for exactly one deterministic
-controller step: it may publish `explore`, `promote`, or `retreat`, or leave the
-lock unchanged for `hold` or `converged`. There is no separate review or
-publish approval. Publication uses the current policy digest as a
-compare-and-swap parent and reloads a reachable daemon; a stale parent or
-failed reload leaves or restores the prior active state.
+Repeat normal traced work, external Eval submission, and `optimize run` until
+that command reports the controller decision `converged`. Use `optimize status`
+to observe the signed policy state without changing files or the database: it
+reports `exploring` while an experiment is active and `idle` otherwise, but
+does not infer convergence from Eval history. Calling `optimize run` grants
+autonomous authority for exactly one deterministic controller step: it may
+publish `explore`, `promote`, or `retreat`, or leave the lock unchanged for
+`hold` or `converged`. There is no separate review or publish approval.
+Publication uses the current policy digest as a compare-and-swap parent and
+reloads a reachable daemon; a stale parent or failed reload leaves or restores
+the prior active state. When `--candidate-tier` is omitted, the controller uses
+the signed policy's `adequacy.explore_tier`; pass `--candidate-tier TIER` only
+to override it for that step.
 
 The first run can cold-start signed exploration from champion-only history.
 That history ranks opportunities by request frequency and cost contribution,

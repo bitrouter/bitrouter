@@ -27,7 +27,7 @@ known good route, continue gathering evidence, or report convergence.
 ```text
 bitrouter optimize run \
   [--policy auto] \
-  [--candidate-tier economy] \
+  [--candidate-tier TIER] \
   [--exploration-ppm 100000] \
   [--minimum-tasks 3] \
   [--maximum-tasks 20] \
@@ -44,6 +44,12 @@ currently admitted local Eval material. It publishes the successor atomically
 and reloads a reachable daemon. It never runs a benchmark. An invocation on a
 frozen policy explicitly activates adaptive mode as part of the recoverable
 publication operation.
+
+When `--candidate-tier` is omitted, `run` resolves the challenger from the
+signed policy's `adequacy.explore_tier`. `status` reads only the signed policy
+and reports `exploring` while an experiment is active or `idle` otherwise; it
+does not read Eval history or infer convergence. Only `run` reports the
+controller decision `converged`.
 
 The previous `setup`, `resolve`, `review`, `publish`, and `rollback` workflow
 experiment commands are removed. `bitrouter.optimize.yaml`,

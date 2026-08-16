@@ -93,12 +93,14 @@ bitrouter optimize run --policy auto --config bitrouter.yaml
 bitrouter optimize status --policy auto --config bitrouter.yaml
 ```
 
-Repeat normal traced work, external Eval submission, `run`, and `status` until
-the controller reports `converged`. Calling `optimize run` authorizes exactly
-one autonomous controller step and any atomic publication it decides; there is
-no manual review or publish approval. Champion-only history can rank request
-opportunities and cold-start signed exploration, but cannot promote an
-unexecuted challenger. Later runs promote, retreat, hold, or converge.
+Repeat normal traced work, external Eval submission, and `optimize run` until
+that command reports `converged`. `optimize status` only observes whether the
+signed policy is `exploring` or `idle`; idle does not establish convergence.
+Calling `optimize run` authorizes exactly one autonomous controller step and
+any atomic publication it decides; there is no manual review or publish
+approval. Champion-only history can rank request opportunities and cold-start
+signed exploration, but cannot promote an unexecuted challenger. Later runs
+promote, retreat, hold, or converge.
 
 Only complete `task` and `episode` cohorts gate quality and cost. Request
 subjects rank opportunities only. Promotion requires the quality gate and a
@@ -119,8 +121,9 @@ operator can `eval snapshot freeze`, `policy compile`, `policy diff`, and
 `publish` promotes the exact candidate produced by `compile`; its embedded
 parent digest is the compare-and-swap token, so stale and concurrent publishers
 cannot overwrite a newer lock. These commands are not approval stages for
-`optimize run`. A frozen process rejects publication without changing the
-active file.
+`optimize run`. Frozen mode rejects low-level/direct publication without
+changing the active file; invoking `optimize run` explicitly authorizes
+activation of adaptive mode and autonomous publication of its successor.
 
 Eval storage is ownership-scoped without adding tenant fields to the wire
 contract: local CLI records belong to `local`, while authenticated REST records
