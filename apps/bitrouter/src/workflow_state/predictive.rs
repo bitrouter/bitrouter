@@ -818,13 +818,9 @@ fn behavior_families<'a>(
     families.get(key).map(Vec::as_slice).unwrap_or_default()
 }
 
-fn classify_task_family(
-    prompt: &Prompt,
-    normalized_plain_text_history: bool,
-) -> (TaskFamily, f32, Vec<PredictiveEvidence>) {
+fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>) {
     let behavior = compiled_predictor_behavior();
     let scorecard = task_family_scorecard();
-    let text = task_family_instruction_text(prompt, normalized_plain_text_history);
     let mut scores = BTreeMap::<TaskFamily, i16>::new();
     let mut evidence_counts = BTreeMap::<TaskFamily, u8>::new();
 
@@ -832,7 +828,7 @@ fn classify_task_family(
         let key = family.key();
         let matched_count = behavior_terms(&behavior.task_family_terms, key)
             .iter()
-            .filter(|term| contains_task_term(&text, term))
+            .filter(|term| contains_task_term(text, term))
             .count()
             .min(u8::MAX as usize) as u8;
         let weight = scorecard.weights.get(key).copied().unwrap_or_default();
@@ -841,11 +837,11 @@ fn classify_task_family(
     }
 
     let debugging_intent = contains_any_task_terms(
-        &text,
+        text,
         behavior_terms(&behavior.task_family_intent_terms, "debugging"),
     );
     let debugging_failure = contains_any_task_terms(
-        &text,
+        text,
         behavior_terms(&behavior.task_family_failure_terms, "debugging"),
     );
     if debugging_intent && debugging_failure {
@@ -859,10 +855,10 @@ fn classify_task_family(
             .and_modify(|count| *count = (*count).max(scorecard.minimum_evidence_count));
     }
     let review_intent = contains_any_task_terms(
-        &text,
+        text,
         behavior_terms(&behavior.task_family_intent_terms, "review"),
     );
-    let code_subject = contains_any_task_terms(&text, &behavior.task_family_code_subject_terms);
+    let code_subject = contains_any_task_terms(text, &behavior.task_family_code_subject_terms);
     let supported_review = review_intent && code_subject;
     if supported_review {
         add_task_family_bonus(&mut scores, TaskFamily::CodeReview, scorecard.review_bonus);
@@ -873,7 +869,7 @@ fn classify_task_family(
 
     let workflow_family = TaskFamily::AgentWorkflowExecution;
     let workflow_anchor = contains_any_task_terms(
-        &text,
+        text,
         behavior_terms(&behavior.task_family_anchor_terms, workflow_family.key()),
     );
     if !workflow_anchor {
@@ -882,7 +878,7 @@ fn classify_task_family(
     }
 
     let review_precedence = contains_any_task_terms(
-        &text,
+        text,
         behavior_terms(&behavior.task_family_precedence_terms, "review"),
     );
     if supported_review && review_precedence {
@@ -956,10 +952,6 @@ fn accepted_task_family(
         scorecard.confidence_ppm as f32 / 1_000_000.0,
         evidence,
     )
-}
-
-fn task_family_instruction_text(prompt: &Prompt, normalized_plain_text_history: bool) -> String {
-    latest_causal_instruction_text(prompt, normalized_plain_text_history)
 }
 
 fn contains_any_task_terms<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
@@ -1161,6 +1153,12 @@ struct InstructionFeatures {
     contradictory: bool,
 }
 
+#[derive(Debug)]
+struct CausalInstruction {
+    text: String,
+    message_index: Option<usize>,
+}
+
 impl InstructionFeatures {
     fn has_signal(&self) -> bool {
         self.broad
@@ -1185,8 +1183,10 @@ struct HistoryFeatures {
 
 pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> PredictiveRouteIR {
     let scorecard = compiled_scorecard_v1();
-    let history = history_features(prompt, observed);
-    let instruction = instruction_features(prompt, observed.normalized_action_history.is_some());
+    let causal_instruction =
+        causal_instruction(prompt, observed.normalized_action_history.is_some());
+    let history = history_features(prompt, observed, causal_instruction.message_index);
+    let instruction = instruction_features(&causal_instruction.text);
     let observed_projection = observed.route_projection();
     let mut evidence = Vec::new();
 
@@ -1227,7 +1227,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     }
 
     let (task_family, task_family_confidence, task_family_evidence) =
-        classify_task_family(prompt, observed.normalized_action_history.is_some());
+        classify_task_family(&causal_instruction.text);
 
     let mut scores = [0_i16; ROLE_COUNT];
     let opening = observed.state_kind == WorkflowStateKind::Opening && !history.has_trajectory;
@@ -1453,7 +1453,13 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         + u8::from(observed.confidence > 0.0);
     let (role, top_score, runner_up) = choose_role(scores);
     let margin = top_score.saturating_sub(runner_up);
-    if top_score < scorecard.minimum_top_score
+    let direct_instruction = instruction.has_signal()
+        && !history.has_trajectory
+        && causal_instruction
+            .message_index
+            .is_some_and(|index| index > 0)
+        && has_complete_visible_causal_history(prompt);
+    if (!direct_instruction && top_score < scorecard.minimum_top_score)
         || margin < scorecard.minimum_margin
         || coverage < scorecard.minimum_coverage
     {
@@ -1494,6 +1500,12 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     };
     let route_risk = if history.failure_count >= scorecard.repeated_failure_count {
         RouteRisk::Guarded
+    } else if causal_instruction
+        .message_index
+        .is_some_and(|index| index > 0)
+        && observed.recovery_signal == RecoverySignal::LikelyRecovery
+    {
+        RouteRisk::Normal
     } else {
         observed_projection.risk
     };
@@ -1516,29 +1528,25 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     }
 }
 
-fn instruction_features(
-    prompt: &Prompt,
-    normalized_plain_text_history: bool,
-) -> InstructionFeatures {
+fn instruction_features(text: &str) -> InstructionFeatures {
     let behavior = compiled_predictor_behavior();
-    let text = latest_causal_instruction_text(prompt, normalized_plain_text_history);
-    let broad = contains_any(&text, behavior_terms(&behavior.instruction_terms, "broad"));
-    let mutate = contains_any(&text, behavior_terms(&behavior.instruction_terms, "mutate"));
-    let verify = contains_any(&text, behavior_terms(&behavior.instruction_terms, "verify"));
-    let poll = contains_any(&text, behavior_terms(&behavior.instruction_terms, "poll"));
-    let read_requested = contains_any(&text, behavior_terms(&behavior.instruction_terms, "read"));
+    let broad = contains_any(text, behavior_terms(&behavior.instruction_terms, "broad"));
+    let mutate = contains_any(text, behavior_terms(&behavior.instruction_terms, "mutate"));
+    let verify = contains_any(text, behavior_terms(&behavior.instruction_terms, "verify"));
+    let poll = contains_any(text, behavior_terms(&behavior.instruction_terms, "poll"));
+    let read_requested = contains_any(text, behavior_terms(&behavior.instruction_terms, "read"));
     let finalize = !mutate
         && !verify
         && !read_requested
         && contains_any(
-            &text,
+            text,
             behavior_terms(&behavior.instruction_terms, "finalize"),
         );
-    let concrete = has_concrete_evidence(&text);
+    let concrete = has_concrete_evidence(text);
     let narrow_read = read_requested && concrete && !broad && !mutate && !verify && !poll;
     let contradictory = mutate
         && contains_any(
-            &text,
+            text,
             behavior_terms(&behavior.instruction_terms, "contradiction"),
         );
 
@@ -1554,11 +1562,11 @@ fn instruction_features(
     }
 }
 
-fn latest_causal_instruction_text(prompt: &Prompt, normalized_plain_text_history: bool) -> String {
+fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> CausalInstruction {
     let mut latest_user = None;
     let mut latest_system = None;
     let mut awaiting_plain_text_action_result = false;
-    for message in &prompt.messages {
+    for (message_index, message) in prompt.messages.iter().enumerate() {
         match message.role {
             Role::Assistant if normalized_plain_text_history && is_assistant_action(message) => {
                 awaiting_plain_text_action_result = true;
@@ -1568,22 +1576,25 @@ fn latest_causal_instruction_text(prompt: &Prompt, normalized_plain_text_history
             }
             Role::User => {
                 if let Some(text) = message_text(message) {
-                    latest_user = Some(text);
+                    latest_user = Some((text, message_index));
                 }
             }
             Role::System => {
                 if let Some(text) = message_text(message) {
-                    latest_system = Some(text);
+                    latest_system = Some((text, message_index));
                 }
             }
             _ => {}
         }
     }
-    latest_user
+    let (text, message_index) = latest_user
         .or(latest_system)
-        .or_else(|| prompt.system.clone())
-        .unwrap_or_default()
-        .to_ascii_lowercase()
+        .map(|(text, message_index)| (text, Some(message_index)))
+        .unwrap_or_else(|| (prompt.system.clone().unwrap_or_default(), None));
+    CausalInstruction {
+        text: text.to_ascii_lowercase(),
+        message_index,
+    }
 }
 
 fn message_text(message: &bitrouter_sdk::language_model::types::Message) -> Option<String> {
@@ -1607,7 +1618,11 @@ fn contains_any<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
     terms.iter().any(|term| text.contains(term.as_ref()))
 }
 
-fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatures {
+fn history_features(
+    prompt: &Prompt,
+    observed: &WorkflowStateIR,
+    instruction_index: Option<usize>,
+) -> HistoryFeatures {
     let mut calls = Vec::<(String, ObservedAction, bool)>::new();
     let mut failure_count = 0_u8;
     let mut mutation_count = 0_u8;
@@ -1616,7 +1631,8 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
     let mut unmatched_result = false;
     let mut result_count = 0_u8;
 
-    for content in prompt.messages.iter().flat_map(|message| &message.content) {
+    let history_messages = &prompt.messages[instruction_index.unwrap_or(0)..];
+    for content in history_messages.iter().flat_map(|message| &message.content) {
         match content {
             Content::ToolCall {
                 id,
@@ -1664,6 +1680,7 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
         };
     }
     if calls.is_empty()
+        && normalized_action_after_instruction(prompt, instruction_index)
         && let Some(normalized) = observed.normalized_action_history.as_ref()
     {
         let last_action = normalized.last_action.map(|action| match action {
@@ -1688,11 +1705,11 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
         };
     }
     let unmatched_call = calls.iter().any(|(_, _, matched)| !matched);
-    let first_role = prompt.messages.first().map(|message| message.role);
+    let first_role = history_messages.first().map(|message| message.role);
     let server_side_context_gap = observed.evidence.iter().any(|evidence| {
         evidence.kind == "server_side_context_gap" && evidence.level == EvidenceLevel::Missing
     });
-    let completeness = if prompt.messages.is_empty()
+    let completeness = if history_messages.is_empty()
         || (server_side_context_gap && !has_complete_visible_causal_history(prompt))
     {
         PredictiveHistoryCompleteness::Unknown
@@ -1716,6 +1733,14 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
             && mutation_count > 0,
         has_trajectory: !calls.is_empty() || result_count > 0,
     }
+}
+
+fn normalized_action_after_instruction(prompt: &Prompt, instruction_index: Option<usize>) -> bool {
+    instruction_index.is_some_and(|instruction_index| {
+        prompt.messages[instruction_index.saturating_add(1)..]
+            .iter()
+            .any(is_assistant_action)
+    })
 }
 
 pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
@@ -2930,6 +2955,114 @@ mod tests {
         let prediction = predict_next_step(&ir, &prompt);
 
         assert_eq!(prediction.task_family, TaskFamily::CodeDebugging);
+    }
+
+    #[test]
+    fn summarizes_after_an_old_read_without_reopening_implementation() {
+        let prompt = prompt(vec![
+            Message::text(
+                Role::User,
+                "Read src/parser.rs and inspect the parser error.",
+            ),
+            assistant_call("read-1", "read_file", r#"{"path":"src/parser.rs"}"#),
+            tool_result(
+                "read-1",
+                ToolResultOutput::Text {
+                    value: "the parser source is available".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Summarize the parser findings for me."),
+        ]);
+
+        let summary_after_old_read = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(
+            summary_after_old_read.next_step_role,
+            NextStepRole::Finalize
+        );
+    }
+
+    #[test]
+    fn implements_a_new_request_after_an_old_successful_test() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Fix src/parser.rs and pass its parser tests."),
+            assistant_call("edit-1", "Edit", r#"{"file_path":"src/parser.rs"}"#),
+            tool_result(
+                "edit-1",
+                ToolResultOutput::Text {
+                    value: "parser updated".to_owned(),
+                },
+            ),
+            assistant_call("test-1", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-1",
+                ToolResultOutput::Text {
+                    value: "all parser tests passed".to_owned(),
+                },
+            ),
+            Message::text(
+                Role::User,
+                "Implement the new parser diagnostics in src/parser.rs.",
+            ),
+        ]);
+
+        let implementation_after_old_success = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(
+            implementation_after_old_success.next_step_role,
+            NextStepRole::Implement
+        );
+    }
+
+    #[test]
+    fn starts_a_new_epoch_without_guarding_on_old_failures() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            assistant_call("test-1", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-1",
+                ToolResultOutput::ErrorText {
+                    value: "parser assertion failed".to_owned(),
+                },
+            ),
+            assistant_call("test-2", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-2",
+                ToolResultOutput::ErrorText {
+                    value: "parser assertion failed again".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+        ]);
+
+        let new_epoch_after_old_failures = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(new_epoch_after_old_failures.route_risk, RouteRisk::Normal);
+    }
+
+    #[test]
+    fn ignores_an_old_normalized_action_after_a_new_instruction() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Inspect the parser source."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"git diff -- src/parser.rs"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "The parser source was inspected."),
+            Message::text(Role::User, "Summarize the parser findings."),
+        ]);
+        let mut ir = observed(&prompt);
+        ir.normalized_action_history = Some(crate::workflow_state::ir::NormalizedActionHistory {
+            last_action: Some(NormalizedActionKind::Read),
+            last_failed: false,
+            failure_count: 0,
+            mutation_count: 0,
+            complete: true,
+        });
+
+        let normalized_pivot = predict_next_step(&ir, &prompt);
+
+        assert_eq!(normalized_pivot.next_step_role, NextStepRole::Finalize);
     }
 
     #[test]
