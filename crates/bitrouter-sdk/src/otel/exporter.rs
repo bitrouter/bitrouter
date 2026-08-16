@@ -1,7 +1,8 @@
 //! OpenTelemetry exporter implementation with multi-tenant attribution.
 //!
 //! Span hierarchy per request (the SERVER span at HTTP ingress is created by
-//! the host's `tower-http` `TraceLayer` and is the parent of `chat` below):
+//! [`crate::otel::http_layer`], or by a host that builds its own, and is the
+//! parent of `chat` below):
 //!
 //! ```text
 //! chat <inbound-model>          (INTERNAL — full request lifetime; the gen_ai generation)
@@ -423,13 +424,36 @@ impl OtelExporter {
             return;
         }
 
-        // Prefer the host ingress SERVER span, then inbound W3C trace context.
-        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-        let bridge_cx = tracing::Span::current().context();
-        let parent_context = if bridge_cx.span().span_context().is_valid() {
-            bridge_cx
-        } else {
-            global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
+        // Parent resolution, in precedence order. Two of these are ingress
+        // spans created by a host; the third is the wire.
+        //
+        // 1. `Context::current()` — an OTel-native ingress span, which is what
+        //    `otel::http_layer` now publishes for the request future. No
+        //    `tracing` subscriber is involved, so no `RUST_LOG` filter can
+        //    suppress it.
+        // 2. The `tracing` ↔ OTel bridge. **Kept deliberately, and not
+        //    dead code**: a host that builds its own ingress span as a
+        //    `tracing` span and installs `otel::subscriber` reaches us only
+        //    here. `bitrouter-cloud` is exactly that host — it runs its own
+        //    `TraceLayer` because a public multi-tenant edge must not honour
+        //    caller-supplied trace context, and it would silently export
+        //    orphaned `chat` roots if this arm were removed. See
+        //    `docs/OTEL_TIERING_SPEC.md` D3/D4.
+        // 3. The inbound `traceparent`, for a deployment with no ingress span
+        //    of its own.
+        let parent_context = {
+            let native_cx = Context::current();
+            if native_cx.span().span_context().is_valid() {
+                native_cx
+            } else {
+                use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+                let bridge_cx = tracing::Span::current().context();
+                if bridge_cx.span().span_context().is_valid() {
+                    bridge_cx
+                } else {
+                    global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
+                }
+            }
         };
 
         let model = ctx.model().to_string();
@@ -932,8 +956,27 @@ impl ObserveHook for OtelExporter {
             // `PipelineContext::absorb_settlement` folds the settlement bus
             // back into `ctx` before this hook runs, so they're visible here.
             // Generic by design — the emitter names the keys, we just stamp.
+            //
+            // Generic, but not unbounded: the schema's own vocabulary is
+            // reserved (`crate::otel::schema::ExtensionRegion`). A deployment
+            // that stamped `bitrouter.*` or `gen_ai.*` from here would make the
+            // span schema deployment-dependent, which is the one property it
+            // exists to have. Reserved keys are dropped rather than stamped.
             if let Some(extra) = ctx.get_event::<SpanAttributes>() {
                 for (key, value) in &extra.0 {
+                    if crate::otel::schema::is_reserved_attribute_key(key) {
+                        // DEBUG, not WARN: this is per-request and on the hot
+                        // path, and a deployment that trips it trips it on
+                        // every request. The pinned target is how an operator
+                        // reaches it — see `docs/CLI.md`.
+                        tracing::debug!(
+                            target: "bitrouter::observe::span_attributes",
+                            key = %key,
+                            "dropped a forwarded span attribute: the key is inside the span \
+                             schema's reserved region"
+                        );
+                        continue;
+                    }
                     match value {
                         serde_json::Value::String(s) => {
                             span.set_attribute(KeyValue::new(key.clone(), s.clone()));
@@ -1941,7 +1984,6 @@ mod hop_tests {
         assert_eq!(str_attr(root_chat, "namespace"), Some("acme"));
         assert_eq!(f64_attr(root_chat, "$ai_total_cost_usd"), Some(0.00123456));
         assert_eq!(bool_attr(root_chat, "fallback"), Some(true));
-        assert_eq!(i64_attr(root_chat, "bitrouter.retry_count"), Some(2));
         assert!(
             root_chat
                 .attributes
@@ -1949,6 +1991,76 @@ mod hop_tests {
                 .all(|kv| kv.key.as_str() != "skipped_null"),
             "null values are not stamped onto the span"
         );
+        // `bitrouter.retry_count` is inside the vocabulary the span schema
+        // owns, so the open extension region does not reach it. It is dropped,
+        // not stamped — otherwise `bitrouter.*` would mean whatever each
+        // deployment decided it meant.
+        assert_eq!(
+            i64_attr(root_chat, "bitrouter.retry_count"),
+            None,
+            "a forwarded key inside the reserved region must not reach the wire"
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_span_attributes_cannot_redefine_the_schema_vocabulary() {
+        // The `SpanAttributes` hatch takes keys verbatim, which is what makes
+        // it useful and what makes it dangerous: nothing in its type stops a
+        // deployment overwriting an attribute the schema declares. Each key
+        // below is reserved for a different reason — a `bitrouter.*` prefix, a
+        // `gen_ai.*` prefix, and a declared key that carries neither prefix.
+        let (exporter, captured) = make_test_exporter();
+        let target = fresh_target("openai");
+        let mut ctx = PipelineContext::new(fresh_request());
+        ctx.execution_result = Some(fresh_result(&target));
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+
+        let mut attrs = serde_json::Map::new();
+        attrs.insert("bitrouter.provider_id".into(), serde_json::json!("spoofed"));
+        attrs.insert(
+            "gen_ai.usage.input_tokens".into(),
+            serde_json::json!(999_999),
+        );
+        attrs.insert("$screen_name".into(), serde_json::json!("spoofed"));
+        attrs.insert("deployment.tier".into(), serde_json::json!("enterprise"));
+        ctx.emit(SpanAttributes(attrs));
+
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+
+        // The exporter's own values survive untouched. Asserting the value
+        // alone would not catch a dropped guard: a duplicate key appended
+        // after the exporter's own write reads back as the first one, so count
+        // the occurrences too.
+        for key in [
+            "bitrouter.provider_id",
+            "gen_ai.usage.input_tokens",
+            "$screen_name",
+        ] {
+            let occurrences = root_chat
+                .attributes
+                .iter()
+                .filter(|kv| kv.key.as_str() == key)
+                .count();
+            assert_eq!(occurrences, 1, "{key} must be stamped exactly once");
+        }
+        assert_eq!(str_attr(root_chat, "bitrouter.provider_id"), Some("openai"));
+        assert_eq!(i64_attr(root_chat, "gen_ai.usage.input_tokens"), Some(11));
+        assert_eq!(
+            str_attr(root_chat, "$screen_name"),
+            Some("openai/test-model")
+        );
+        // …and the key outside the reserved region still rides for free.
+        assert_eq!(str_attr(root_chat, "deployment.tier"), Some("enterprise"));
     }
 
     #[tokio::test]
@@ -2253,10 +2365,23 @@ mod hop_tests {
             f64_attr(root_chat, "gen_ai.response.time_to_first_chunk"),
             Some(ttft_ms as f64 / 1000.0)
         );
-        assert_eq!(
-            i64_attr(hop_chat, "bitrouter.upstream_duration_ms"),
-            Some(upstream_duration_ms),
-            "streaming provider span closes with the finalized result"
+        // The streaming provider span closes with a real upstream duration.
+        //
+        // Not asserted equal to the root's: the two come from different
+        // clocks. The hop's is measured by `ObservedUpstreamStream` from
+        // `provider_started_at` when the body reaches its terminal part; the
+        // root's is the executor's own `started.elapsed()` in the finalized
+        // `ExecutionResult`. They cover overlapping-but-different intervals,
+        // so exact equality held only while both happened to round to the same
+        // millisecond — which stops being true as soon as the test binary is
+        // under enough parallel load, and failed roughly one run in three once
+        // it was.
+        let hop_upstream_duration_ms = i64_attr(hop_chat, "bitrouter.upstream_duration_ms")
+            .expect("streaming provider span closes with an upstream duration");
+        assert!(
+            (hop_upstream_duration_ms - upstream_duration_ms).abs() <= 5,
+            "hop upstream duration {hop_upstream_duration_ms}ms and finalized upstream duration \
+             {upstream_duration_ms}ms measure the same call and must stay within a few ms"
         );
     }
 
@@ -2605,5 +2730,340 @@ mod hop_tests {
                 .unwrap_or(false),
             "exception.message should carry the upstream error text"
         );
+    }
+
+    /// Check every exported span against `otel::schema`.
+    ///
+    /// Three assertions, and the asymmetry between them is deliberate:
+    ///
+    /// - every exported span resolves to a declaration — an emitted span the
+    ///   schema does not know about is the failure that makes the committed
+    ///   artifact a lie;
+    /// - every attribute and event it carries is declared on that span;
+    /// - every [`Requirement::Required`] attribute is present.
+    ///
+    /// It does **not** assert the converse — that every declared attribute
+    /// appears — because most are conditional, and a caller cannot exercise
+    /// every condition in one request. Declared-but-never-emitted is
+    /// staleness, caught in review of the committed artifact; emitted-but-not-
+    /// declared is a wire surface nobody agreed to, caught here.
+    /// The OTel value's discriminant, as `otel::schema` spells it. Keeps the
+    /// OTel type on this side of the boundary.
+    fn observed_type(value: &Value) -> &'static str {
+        match value {
+            Value::String(_) => "string",
+            Value::I64(_) => "int",
+            Value::F64(_) => "double",
+            Value::Bool(_) => "bool",
+            Value::Array(opentelemetry::Array::String(_)) => "string_array",
+            _ => "other",
+        }
+    }
+
+    fn assert_conforms_to_span_schema(spans: &[SpanData]) {
+        use crate::otel::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+
+        assert!(
+            !spans.is_empty(),
+            "conformance over an empty span set passes vacuously"
+        );
+
+        for span in spans {
+            let kind = match span.span_kind {
+                SpanKind::Server => SchemaKind::Server,
+                SpanKind::Client => SchemaKind::Client,
+                SpanKind::Internal => SchemaKind::Internal,
+                ref other => panic!(
+                    "span `{}` exported with kind {other:?}, which the schema does not describe",
+                    span.name
+                ),
+            };
+            let def = span_def_for(&span.name, kind).unwrap_or_else(|| {
+                panic!(
+                    "exported span `{}` ({:?}) matches no declaration in otel::schema",
+                    span.name, span.span_kind
+                )
+            });
+
+            for kv in span.attributes.iter() {
+                let declared = def
+                    .attributes
+                    .iter()
+                    .find(|a| a.key == kv.key.as_str())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "`{}` carries `{}`, which otel::schema does not declare on it — \
+                             declare it (and regenerate crates/bitrouter-sdk/span-schema.json) \
+                             or stop emitting it",
+                            def.name, kv.key
+                        )
+                    });
+                assert!(
+                    crate::otel::schema::value_type_matches(declared.ty, observed_type(&kv.value)),
+                    "`{}` emits `{}` as {}, but otel::schema declares {:?} — the committed \
+                     artifact promises the declared type to anyone implementing against it",
+                    def.name,
+                    kv.key,
+                    observed_type(&kv.value),
+                    declared.ty
+                );
+            }
+            for attr in def
+                .attributes
+                .iter()
+                .filter(|a| matches!(a.requirement, Requirement::Required))
+            {
+                assert!(
+                    span.attributes.iter().any(|kv| kv.key.as_str() == attr.key),
+                    "`{}` is missing `{}`, which otel::schema declares as required",
+                    def.name,
+                    attr.key
+                );
+            }
+
+            for event in span.events.iter() {
+                let event_def = def
+                    .events
+                    .iter()
+                    .find(|e| e.name == event.name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "`{}` emits event `{}`, which otel::schema does not declare on it",
+                            def.name, event.name
+                        )
+                    });
+                for kv in event.attributes.iter() {
+                    assert!(
+                        event_def
+                            .attributes
+                            .iter()
+                            .any(|a| a.key == kv.key.as_str()),
+                        "event `{}` on `{}` carries undeclared attribute `{}`",
+                        event_def.name,
+                        def.name,
+                        kv.key
+                    );
+                }
+                for attr in event_def
+                    .attributes
+                    .iter()
+                    .filter(|a| matches!(a.requirement, Requirement::Required))
+                {
+                    assert!(
+                        event
+                            .attributes
+                            .iter()
+                            .any(|kv| kv.key.as_str() == attr.key),
+                        "event `{}` on `{}` is missing required attribute `{}`",
+                        event_def.name,
+                        def.name,
+                        attr.key
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_otel_ingress_context_parents_the_root_chat_span() {
+        // D3's handoff, at the exporter's end: a host that publishes an OTel
+        // SERVER span on the context — which `otel::http_layer` now does —
+        // gets the root `chat` span parented under it, with no `tracing`
+        // subscriber involved anywhere.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+
+        let ingress = exporter
+            .tracer
+            .span_builder("GET /v1/chat/completions")
+            .with_kind(SpanKind::Server)
+            .start(&exporter.tracer);
+        let ingress_cx = Context::current_with_span(ingress);
+        let ingress_span_id = ingress_cx.span().span_context().span_id();
+
+        {
+            let _guard = ingress_cx.clone().attach();
+            exporter.after_phase(Phase::PreRequest, &ctx).await;
+        }
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        ingress_cx.span().end();
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            root_chat.parent_span_id, ingress_span_id,
+            "root `chat` parents on the OTel-native ingress span"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_ingress_span_still_parents_chat() {
+        // The `tracing` ↔ OTel bridge is no longer how *BitRouter's* ingress
+        // span reaches the exporter, but it is still how a host that builds
+        // its own `tracing` SERVER span reaches it — `bitrouter-cloud` is
+        // exactly that host, and it would export orphaned `chat` roots if
+        // this arm of `start_request_span` were dropped as dead code.
+        //
+        // Nothing else in the tree covers this path now that
+        // `observe_hierarchy.rs` tests the native one, so it is covered here.
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::otel::subscriber::tracing_subscriber_layer(&exporter));
+        let ingress_span_id = {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            let server_span = tracing::info_span!(
+                target: "bitrouter::observe::http",
+                "http_request",
+                otel.kind = "server"
+            );
+            let entered = server_span.enter();
+            let span_id = server_span.context().span().span_context().span_id();
+            exporter.after_phase(Phase::PreRequest, &ctx).await;
+            exporter
+                .on_request_end(&ctx, &RequestOutcome::Completed)
+                .await;
+            drop(entered);
+            span_id
+        };
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert!(
+            ingress_span_id != opentelemetry::trace::SpanId::INVALID,
+            "the bridge produced a real span context to parent on"
+        );
+        assert_eq!(
+            root_chat.parent_span_id, ingress_span_id,
+            "root `chat` still parents on a bridged `tracing` ingress span"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_request_conforms_to_the_committed_span_schema() {
+        // The widest single lifecycle available in-crate: a streamed request
+        // through the real pipeline, so `route`, the hop CLIENT span, `settle`
+        // and the root generation are all produced by the code paths that
+        // produce them in production rather than by direct hook calls. Content
+        // capture is on so the `gen_ai.*.messages` attributes are exercised,
+        // and the stream carries a named tool call so the `tool_call.started`
+        // event is too.
+        let cfg = OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..OtelConfig::default()
+        };
+        let (exporter, captured) = make_test_exporter_with(cfg);
+        let exporter = Arc::new(exporter);
+        let target = fresh_target("openai");
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("test-model", vec![target]);
+
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::new(vec![MockResponse::Stream(
+                vec![
+                    StreamPart::ResponseStarted {
+                        id: "chatcmpl-conformance".into(),
+                        source_protocol: ApiProtocol::ChatCompletions,
+                    },
+                    StreamPart::ReasoningDelta {
+                        text: "thinking".into(),
+                    },
+                    StreamPart::TextDelta {
+                        text: "hello".into(),
+                    },
+                    StreamPart::ToolCallDelta {
+                        id: "call-1".into(),
+                        name: Some("get_weather".into()),
+                        arguments: String::new(),
+                    },
+                    StreamPart::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ],
+            )])))
+            .observe_hook(OtelObserveHook::new(exporter.clone()));
+        let pipeline = Arc::new(builder.build().expect("pipeline builds"));
+
+        let mut request = fresh_request();
+        request.prompt.stream = true;
+        let stream = pipeline
+            .clone()
+            .execute_stream(request)
+            .await
+            .expect("stream starts");
+        let parts: Vec<_> = stream.collect().await;
+        assert!(parts.iter().all(Result::is_ok));
+        pipeline.drain_pending_settlements().await;
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        // Guard against the whole check passing on a thinner tree than the
+        // schema describes: the three span shapes this lifecycle must produce.
+        for (name, kind) in [
+            ("chat test-model", SpanKind::Internal),
+            ("chat test-model", SpanKind::Client),
+            ("settle", SpanKind::Internal),
+        ] {
+            assert!(
+                spans.iter().any(|s| s.name == name && s.span_kind == kind),
+                "expected a `{name}` {kind:?} span in the conformance run"
+            );
+        }
+        assert_conforms_to_span_schema(&spans);
+    }
+
+    #[tokio::test]
+    async fn failed_request_conforms_to_the_committed_span_schema() {
+        // The error half of the schema — `error.type` and the `exception`
+        // event on both the hop and the root — is only reachable on a failure,
+        // so it gets its own lifecycle.
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        let target = fresh_target("openai");
+        ctx.route_chain = Some(vec![target.clone()]);
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.after_phase(Phase::Route, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        let err = BitrouterError::Upstream {
+            status: 503,
+            message: "upstream down".into(),
+        };
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Failed(&err))
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Failed(err))
+            .await;
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        assert!(
+            spans.iter().any(|s| s.name == "route"),
+            "expected the `route` span in the conformance run"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.events.iter().any(|e| e.name == "exception")),
+            "expected an `exception` event in the conformance run"
+        );
+        assert_conforms_to_span_schema(&spans);
     }
 }

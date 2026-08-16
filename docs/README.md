@@ -13,6 +13,13 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md) — why the OTLP
   exporter moved into `bitrouter-sdk` behind the `otel` feature, and which
   names, gates, and signatures are load-bearing as a result.
+- [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) — proposed splitting that
+  module into schema / emission / export tiers. **Decided: the schema half
+  shipped, the dependency move is withdrawn.** Phases 0 (the committed
+  span-schema artifact) and 1 (the `tracing` bridge stays) have landed; phase 2
+  (an OTel-native ingress span) is the remaining work; the tier relocation was
+  withdrawn on measured benefit, not on feasibility. Read its *cloud question*
+  section before reopening any of it.
 - `*_PLAN.md` — ordered execution plans derived from a spec, with per-task
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.

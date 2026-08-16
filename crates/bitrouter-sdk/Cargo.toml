@@ -10,6 +10,11 @@ rust-version.workspace = true
 # CI artifacts for the `sdk-public-api` job, not crate content: consumers who
 # download the crate have no use for the public-dependency manifest or its
 # toolchain pins.
+#
+# `span-schema.json` is deliberately NOT on this list even though it is
+# generated the same way. It is the interop surface itself — the declaration a
+# deployment implements when it renders BitRouter's telemetry through something
+# other than `otel`'s OTLP exporter — so it ships with the crate.
 exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [dependencies]
@@ -39,6 +44,10 @@ base64.workspace = true
 # `server` feature
 axum = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
+# Response-body wrapper in `otel::http_layer` (`SpanBody`), which holds the
+# ingress SERVER span open until the body is drained or dropped rather than
+# ending it when the response head is produced.
+http-body = { workspace = true, optional = true }
 
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
@@ -85,20 +94,19 @@ tonic = { workspace = true, optional = true }
 # NOT the workspace pin: that carries `env-filter`, which drags matchers /
 # regex-automata / regex-syntax in. `otel::subscriber` needs only LookupSpan.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
-# NOT the workspace pin: that carries `features = ["trace"]`, which the weak
-# `tower-http?/trace` on `server` exists to gate. Already in the SDK's tree via
-# reqwest, so this activation costs zero new crates.
-tower-http = { version = "0.6", default-features = false, optional = true }
 
 [features]
 default = []
-# axum HTTP server + SSE handlers + admin endpoints. The weak
-# `tower-http?/trace` activates tower-http's `trace` feature *only if*
-# `dep:tower-http` was already activated (by `__otel-core`) — it never pulls
-# tower-http in on its own. That feature intersection is what lets
-# `otel::http_layer` (the axum router wrapper) be gated on
-# `all(__otel-core, server)` while `otel::subscriber` stays axum-free.
-server = ["dep:axum", "dep:tower", "tokio/signal", "tower-http?/trace"]
+# axum HTTP server + SSE handlers + admin endpoints.
+#
+# This used to carry a weak `tower-http?/trace`, whose only job was to activate
+# tower-http's `trace` feature when `__otel-core` had already pulled the
+# dependency in — an exact feature *intersection*, needed because
+# `otel::http_layer` built its ingress span with tower-http's `TraceLayer`.
+# The layer is now an axum middleware creating an OTel span directly, so both
+# the dependency and the mechanic are gone. `otel::http_layer` is still gated
+# on `all(__otel-core, server)`; that part is unchanged.
+server = ["dep:axum", "dep:tower", "dep:http-body", "tokio/signal"]
 # yaml config loading (serde-saphyr + tokio::fs)
 config_file = ["dep:serde-saphyr", "tokio/fs"]
 # rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
@@ -162,7 +170,6 @@ __otel-core = [
     "dep:tracing-opentelemetry",
     "dep:tracing-subscriber",
     "dep:dashmap",
-    "dep:tower-http",
 ]
 
 [target.'cfg(unix)'.dependencies]

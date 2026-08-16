@@ -2806,12 +2806,23 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
 
     let http_app = app.clone();
     let http_listen = listen.clone();
+    // The ingress SERVER span is created from the exporter's own tracer — the
+    // SDK installs no global `TracerProvider`, so there is nothing to reach
+    // for implicitly. With OTel disabled there is no ingress span at all,
+    // which is the honest behaviour: the previous `TraceLayer` ran regardless
+    // and built `tracing` spans that went nowhere.
+    let otel_router_wrapper = assembled
+        .otel_exporter
+        .as_deref()
+        .map(bitrouter_sdk::otel::http_layer::router_wrapper);
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
     let http = async move {
-        // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
-        // trace-context propagation) so the inbound HTTP request becomes
-        // the SERVER span parent of the bitrouter `chat` INTERNAL span.
-        let otel_wrapper = bitrouter_sdk::otel::http_layer::router_wrapper();
+        // Open an OTel SERVER span per inbound request and publish it on the
+        // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
+        let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
+            Some(wrapper) => wrapper(router),
+            None => router,
+        };
         let shutdown = async move {
             let _ = http_shutdown_rx.await;
         };

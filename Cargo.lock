@@ -752,6 +752,7 @@ dependencies = [
  "futures",
  "futures-core",
  "http",
+ "http-body",
  "httpdate",
  "opentelemetry",
  "opentelemetry-http",
@@ -774,7 +775,6 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tower",
- "tower-http",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -5393,7 +5393,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

@@ -174,7 +174,17 @@ consumers (e.g. `bitrouter-cloud`) that want only the tracing bridge.
 | `otel::subscriber`   | `__otel-core`                 | `tracing_subscriber_layer` — the `tracing` ↔ OTel bridge.        |
 | `otel::http_layer`   | `__otel-core` **and** `server` | `router_wrapper` + the inbound SERVER span callbacks.            |
 
-### The weak-feature mechanic
+### The weak-feature mechanic — RETIRED
+
+> **Superseded.** `otel::http_layer` no longer uses `tower-http`'s
+> `TraceLayer`: it builds the ingress SERVER span as an OpenTelemetry span
+> directly (see [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) D3). With the
+> only consumer gone, `dep:tower-http` and the weak `tower-http?/trace` were
+> both removed from `crates/bitrouter-sdk/Cargo.toml`. The section is kept
+> because the mechanic is genuinely subtle and may be wanted again; nothing in
+> it describes the current manifest. The `all(__otel-core, server)` gate on
+> the router wrapper is unchanged — that part never depended on the mechanic,
+> only on what the mechanic protected.
 
 `server` carries `tower-http?/trace`. The `?` makes it **weak**: it activates
 tower-http's `trace` feature *only if* the SDK's own `dep:tower-http` was
@@ -196,8 +206,9 @@ recorded inline in `crates/bitrouter-sdk/Cargo.toml`:
 - `tracing-subscriber` — the workspace pin carries `env-filter`, which drags
   in matchers / regex-automata / regex-syntax. `otel::subscriber` needs only
   `LookupSpan`.
-- `tower-http` — the workspace pin carries `features = ["trace"]`, which is
-  the very thing the weak feature exists to gate.
+- ~~`tower-http` — the workspace pin carries `features = ["trace"]`, which is
+  the very thing the weak feature exists to gate.~~ Removed with the mechanic
+  above; the SDK no longer depends on `tower-http` at all.
 
 ### `tracing_subscriber_layer`'s return type
 
@@ -234,8 +245,11 @@ to **tracing-core**, which is where the trait is defined and where a breaking
 change to it would originate. Both commitments are accepted; the hard
 constraint below covers `opentelemetry*` only.
 
-`tower-http` is deliberately *not* on this list: `TraceLayer` never leaves
-`router_wrapper`'s closure body, so it stays a private dependency.
+~~`tower-http` is deliberately *not* on this list: `TraceLayer` never leaves
+`router_wrapper`'s closure body, so it stays a private dependency.~~ Moot: the
+SDK no longer depends on `tower-http` at all (see the retired mechanic above).
+`router_wrapper`'s signature did change — it now takes `&OtelExporter` — but
+that adds no foreign type to the public API, so the list is unaffected.
 
 Every claim in this section is checked, not asserted. The rendered listing the
 `sdk-public-api` job builds contains exactly one line mentioning `tracing` in

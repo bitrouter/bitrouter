@@ -18,12 +18,32 @@ use crate::otel::exporter::OtelExporter;
 /// subscriber alongside any `fmt` / file layers.
 ///
 /// `tracing_opentelemetry::OpenTelemetryLayer` captures its tracer at
-/// construction, and `tracing-opentelemetry` only implements
-/// `PreSampledTracer` for `opentelemetry_sdk::trace::Tracer` /
-/// `opentelemetry::trace::noop::NoopTracer` (not for the `BoxedTracer` you
-/// would get from `global::tracer`) — so this helper takes the exporter
-/// directly and hands the bridge its concrete SDK tracer. The host binary
-/// calls this after building the exporter.
+/// construction, so this helper takes the exporter directly and hands the
+/// bridge its concrete SDK tracer. The host binary calls this after building
+/// the exporter.
+///
+/// **Why the parameter is `&OtelExporter` and not an API-crate handle.** An
+/// earlier version of this comment blamed a `PreSampledTracer` bound. That
+/// rationale is dead: the trait does not exist in the pinned
+/// `tracing-opentelemetry` 0.33, whose `with_tracer` asks only for
+/// `Tracer: opentelemetry::trace::Tracer + 'static` with
+/// `Tracer::Span: Send + Sync` — a bound `opentelemetry::global::BoxedTracer`
+/// satisfies (`type Span = BoxedSpan`). The signature is *not* forced by a
+/// trait bound.
+///
+/// What does force it is initialisation order. A `BoxedTracer` resolves its
+/// delegate eagerly — `global::tracer_provider()` clones an `Arc` snapshot out
+/// of the `RwLock` at call time, with no proxy and no re-resolution, unlike
+/// `@opentelemetry/api`'s late-binding `ProxyTracer`. `OtelExporter` builds a
+/// *per-exporter* provider and never calls `global::set_tracer_provider`
+/// (zero call sites in this workspace, deliberately: installing globally would
+/// clobber any other consumer of the OTel globals in the process — see the
+/// same reasoning on `OtelMetrics`). So a `BoxedTracer` taken here today would
+/// wrap a `NoopTracer` for its whole lifetime and drop every span, silently.
+///
+/// Switching to an API-crate handle is therefore not a signature change; it is
+/// a decision to install the global provider, with the silent-failure mode
+/// that implies. See `docs/OTEL_TIERING_SPEC.md` D4.
 ///
 /// The return type is `impl Layer<S>` rather than the concrete
 /// `OpenTelemetryLayer<S, Tracer>` so that no `opentelemetry*` type appears

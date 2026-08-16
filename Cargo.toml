@@ -79,6 +79,10 @@ tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 http = "1"
+# Response-body wrapper for `otel::http_layer`, which holds the ingress SERVER
+# span open until the body is drained or dropped. Already in the tree via axum,
+# so this activation costs zero new crates.
+http-body = "1"
 httpdate = "1"
 pin-project-lite = "0.2"
 async-stream = "0.3"
@@ -86,7 +90,6 @@ async-stream = "0.3"
 # http server (sdk `server` feature)
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
 
 # http client
 reqwest = { version = "0.13", default-features = false, features = [
