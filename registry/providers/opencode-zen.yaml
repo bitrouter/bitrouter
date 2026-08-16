@@ -286,6 +286,22 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
+  - id: google/gemini-3.6-flash
+    provider_model_id: gemini-3.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 7.5
+  - id: x-ai/grok-4.6
+    provider_model_id: grok-4.6
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 community: false

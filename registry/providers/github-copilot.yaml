@@ -63,6 +63,10 @@ models:
     provider_model_id: grok-4.5
   - id: moonshotai/kimi-k3
     provider_model_id: kimi-k3
+  - id: google/gemini-3.6-flash
+    provider_model_id: gemini-3.6-flash
+  - id: x-ai/grok-4.6
+    provider_model_id: grok-4.6
 status: active
 weight: 1
 community: false

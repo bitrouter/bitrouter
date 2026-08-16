@@ -77,6 +77,14 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 9
+  - id: google/gemini-3.6-flash
+    provider_model_id: gemini-3.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 7.5
 auto_sync:
   feed: models_dev
   key: google-vertex

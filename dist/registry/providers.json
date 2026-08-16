@@ -3232,6 +3232,48 @@
             }
           },
           "provider_model_id": "qwen/qwen3.8-max"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-pro-0813",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-3.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "google/gemini-3.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.6"
         }
       ],
       "name": "bitrouter",
@@ -3907,6 +3949,16 @@
           "api_protocol": "openai",
           "id": "moonshotai/kimi-k3",
           "provider_model_id": "kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-3.6-flash",
+          "provider_model_id": "gemini-3.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.6",
+          "provider_model_id": "grok-4.6"
         }
       ],
       "name": "github-copilot",
@@ -6112,6 +6164,34 @@
             }
           },
           "provider_model_id": "claude-opus-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-3.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "gemini-3.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "grok-4.6"
         }
       ],
       "name": "opencode-zen",
@@ -7083,6 +7163,61 @@
             }
           },
           "provider_model_id": "anthropic/claude-opus-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "deepseek/deepseek-v4-pro-0813",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.022,
+              "no_cache": 0.66
+            },
+            "output_tokens": {
+              "text": 1.98
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "google/gemini-3.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0.041667,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider_model_id": "google/gemini-3.6-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "x-ai/grok-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.6"
         }
       ],
       "name": "openrouter",
@@ -8122,6 +8257,14 @@
           ],
           "id": "x-ai/grok-build-0.1",
           "provider_model_id": "grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "id": "x-ai/grok-4.6",
+          "provider_model_id": "grok-4.6"
         }
       ],
       "name": "supergrok",
@@ -8840,6 +8983,23 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.125,
+              "no_cache": 0.7
+            },
+            "output_tokens": {
+              "text": 1.9
+            }
+          },
+          "provider_model_id": "deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "tinfoil",
@@ -8922,6 +9082,23 @@
             }
           },
           "provider_model_id": "gemini-3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "google",
+          "id": "google/gemini-3.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "gemini-3.6-flash",
           "rate_limits": {
             "requests_per_minute": 60
           }
