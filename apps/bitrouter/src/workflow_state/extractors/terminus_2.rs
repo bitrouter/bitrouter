@@ -134,6 +134,12 @@ struct ParsedAction {
     format: ActionFormat,
 }
 
+impl ParsedAction {
+    fn executes_commands(&self) -> bool {
+        !self.commands.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TerminusSessionIdentity {
     pub parent_session_id: String,
@@ -297,8 +303,11 @@ fn parse_assistant_action(
         })
 }
 
-pub(crate) fn is_assistant_action(message: &bitrouter_sdk::language_model::types::Message) -> bool {
-    message.role == Role::Assistant && parse_assistant_action(message).is_some()
+pub(crate) fn assistant_action_executes_commands(
+    message: &bitrouter_sdk::language_model::types::Message,
+) -> bool {
+    message.role == Role::Assistant
+        && parse_assistant_action(message).is_some_and(|action| action.executes_commands())
 }
 
 fn normalized_action_history(prompt: &Prompt) -> Option<NormalizedActionHistory> {
@@ -326,16 +335,15 @@ pub(crate) fn normalized_action_history_from(
         let Some(action) = parse_assistant_action(message) else {
             continue;
         };
+        if !action.executes_commands() {
+            continue;
+        }
         action_seen = true;
-        let normalized_action = if action.task_complete && action.commands.is_empty() {
-            NormalizedActionKind::Other
-        } else {
-            match classify_commands(&action.commands) {
-                CommandIntent::Test => NormalizedActionKind::Test,
-                CommandIntent::Edit => NormalizedActionKind::Mutate,
-                CommandIntent::Review => NormalizedActionKind::Read,
-                CommandIntent::Other => NormalizedActionKind::Other,
-            }
+        let normalized_action = match classify_commands(&action.commands) {
+            CommandIntent::Test => NormalizedActionKind::Test,
+            CommandIntent::Edit => NormalizedActionKind::Mutate,
+            CommandIntent::Review => NormalizedActionKind::Read,
+            CommandIntent::Other => NormalizedActionKind::Other,
         };
         if normalized_action == NormalizedActionKind::Mutate {
             history.mutation_count = history.mutation_count.saturating_add(1).min(MAX_SIGNALS);

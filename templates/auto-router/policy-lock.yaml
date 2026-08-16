@@ -5,7 +5,7 @@ artifact:
   compiler:
     id: bitrouter-template-compiler
     version: 2
-    config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+    config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
 policies:
   auto:
     key_strategy: agent_trace
@@ -52,7 +52,7 @@ policies:
     predictor:
       algorithm: deterministic_scorecard
       version: 1
-      config_digest: "sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0"
+      config_digest: "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37"
       confidence_kind: heuristic_margin
     adequacy:
       escalation_tier: strong
@@ -75,7 +75,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:f6b1973a4feef01ba176dec996bb7c4a4ba564098d2ff755849240971f8fb912"
     "agent_route/v1|unknown|orchestrate|context":
       owner: compiler
@@ -86,7 +86,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:ad99c9a48867bc6c6546442bfd5dd7124e13de2593e9a45a0e0b8c3949428983"
     "agent_route/v1|unknown|orchestrate|guarded":
       owner: compiler
@@ -97,7 +97,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:4419c5ec80ea37e7ae3b55e44dfd12b5049bbbabd8b9a69c6e35e532e49406dc"
     "agent_route/v1|unknown|implement|normal":
       owner: compiler
@@ -108,7 +108,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:aab23e2db96d311334dd475443897641f9be2595bec6a3b28094750f37ffb835"
     "agent_route/v1|unknown|implement|context":
       owner: compiler
@@ -119,7 +119,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:902d573348b30333af2133745540fce281a63116fa5eb1ede4d49907a6298067"
     "agent_route/v1|unknown|implement|guarded":
       owner: compiler
@@ -130,7 +130,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:bbbac8ec07030f790c4bb0a88cebe3cb9860b939f2ea6448b35dcf4f861d3503"
     "agent_route/v1|unknown|mechanical|normal":
       owner: compiler
@@ -141,7 +141,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:24171ecafdd13e81723de3f32c24c9b7d075ab13f45e22f5037039ff45482f15"
     "agent_route/v1|unknown|mechanical|context":
       owner: compiler
@@ -152,7 +152,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:26c1f224ee0ecb7a36bb10531c775fbbc34c7c52d7a80a97f44f9b5cb2b25f28"
     "agent_route/v1|unknown|mechanical|guarded":
       owner: compiler
@@ -163,7 +163,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:c1cfc1af5a0d4ff919973ee72d20a61e5ade7d43e56fab03f5c287d0806fb028"
     "agent_route/v1|unknown|verify|normal":
       owner: compiler
@@ -174,7 +174,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:dde13f0918181f95edb9657a4383e609f9665193387682eacb1dc947ae99f8d0"
     "agent_route/v1|unknown|verify|context":
       owner: compiler
@@ -185,7 +185,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:df21301870cfc84d565ba0ec234ee52e9380dc7feb8f7a4c9e42dd6340f64ec5"
     "agent_route/v1|unknown|verify|guarded":
       owner: compiler
@@ -196,7 +196,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:8a5a0fdc678ce0744f233cc329b1944e1d065f826a0996b83f52091feea4e18e"
     "agent_route/v1|unknown|finalize|normal":
       owner: compiler
@@ -207,7 +207,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:cdf80bcd26adf365417cf3352f640cfedcb4944da721084e2d2534648d6c1a7d"
     "agent_route/v1|unknown|finalize|context":
       owner: compiler
@@ -218,7 +218,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:04369944cc4edcff0277f2cec5cfd3e11120a64ecc73064ddc8650c5803c151b"
     "agent_route/v1|unknown|finalize|guarded":
       owner: compiler
@@ -229,7 +229,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:ad3befdaf7cf987c72b570e5ac0069ddcd6f365eab540155b42dd9eb9b4ad9bd"
     "agent_route/v1|agent:web_research|mechanical|normal":
       owner: compiler
@@ -240,7 +240,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:28a8d556b82ead8b12024a2a99e0426bfb55624ac2eafcf25fd3426eab331dc0"
     "agent_route/v1|code:debugging|implement|guarded":
       owner: compiler
@@ -251,7 +251,7 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:fc848ffb640d3f2c5154bd61a4b1546f19168e5aeecf0ae9f9489b0f6aceeb38"
     "agent_route/v1|code:review|verify|normal":
       owner: compiler
@@ -262,5 +262,5 @@ certificates:
       independent_tasks: 0
       critical_violations: 0
       verdict: experiment
-      compiler_config_digest: "sha256:c8869adc78b53bfd059867706029cdd77e52e10b633a6de13f94b33096663916"
+      compiler_config_digest: "sha256:56075a0bb2d82957a9a524c7b5b1858c00eefe980f94256262fa5ee43f5c264f"
       evidence_digest: "sha256:646508a9ea3ee85615de32713c802fc5a445dfececdb0b50d5b2fdf31bd40f07"

@@ -344,7 +344,7 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
-            Some("sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0")
+            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
         );
         assert_eq!(
             decision.prediction_confidence_kind.as_deref(),
@@ -944,7 +944,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Verify,
             NextActionClass::ExecuteOrTest,
             "normal",
-            "agent_route/v1|unknown|verify|normal",
+            "agent_route/v1|code:debugging|verify|normal",
             &["concrete_mutation_requested", "mutation_result_available"],
             "economy",
         ),
@@ -953,7 +953,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Implement,
             NextActionClass::Mutate,
             "guarded",
-            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|code:debugging|implement|guarded",
             &["concrete_mutation_requested", "test_failed_once"],
             "strong",
         ),
@@ -962,7 +962,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Finalize,
             NextActionClass::AnswerOrSummarize,
             "normal",
-            "agent_route/v1|unknown|finalize|normal",
+            "agent_route/v1|code:debugging|finalize|normal",
             &["concrete_mutation_requested", "progress_near_done"],
             "balanced",
         ),
@@ -985,7 +985,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             );
             assert_eq!(
                 record.predictor_contract_digest,
-                "sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0",
+                "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37",
                 "{history:?} {}",
                 fixture.id
             );
@@ -1112,7 +1112,7 @@ fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
                 plain_fixture.id
             );
             assert_eq!(
-                plain_decision.request_key, plain.predictive_route_key,
+                plain_decision.route_projection, plain.predictive_route_key,
                 "{history:?} {}",
                 plain_fixture.id
             );

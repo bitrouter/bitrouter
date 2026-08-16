@@ -381,8 +381,8 @@ pub struct PolicyTableConfig {
     /// while this map is empty.
     pub tiers: HashMap<String, PolicyModelTarget>,
     /// Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.
-    /// A key absent from this map falls back to
-    /// [`default_tier`](Self::default_tier).
+    /// Lookup first tries the exact key, then the same role/risk under the
+    /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
     /// Tier applied to any fingerprint not listed in
     /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint

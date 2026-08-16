@@ -1611,7 +1611,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(900_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:90f9f34bd24402da9506b690964984e265010a58a66f7fe5097964bee33c5aa0")
+            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),

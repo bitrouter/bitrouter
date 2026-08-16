@@ -1905,7 +1905,7 @@
           }
         },
         "fingerprints": {
-          "description": "Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.\nA key absent from this map falls back to\n[`default_tier`](Self::default_tier).",
+          "description": "Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.\nLookup first tries the exact key, then the same role/risk under the\n`unknown` task-family baseline, then [`default_tier`](Self::default_tier).",
           "type": "object",
           "additionalProperties": {
             "type": "string"

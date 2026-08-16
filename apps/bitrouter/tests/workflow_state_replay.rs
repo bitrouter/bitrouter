@@ -1072,7 +1072,7 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "agent_route/v1|unknown|verify|normal".to_string(),
+                "agent_route/v1|code:debugging|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
