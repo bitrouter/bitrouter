@@ -3142,6 +3142,8 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
+    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
+    use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
@@ -3656,6 +3658,66 @@ mod tests {
             clause.clause_id == "tool_safety.floor"
                 && clause.disposition == RouteIntentClauseDisposition::Applied
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn guarded_route_producer_emits_complete_experiment_evidence() -> anyhow::Result<()> {
+        let start = guarded_start("request-1", 1)?;
+        let mut input = guarded_route_input("route-experiment", "guard-experiment");
+        input.experiment = Some(EvalExperimentRef {
+            experiment_id: POLICY_DIGEST.into(),
+            arm: ExperimentArm::Challenger,
+            assignment_unit: ExperimentAssignmentUnit::Task,
+            assignment_id_digest:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            challenger_propensity_ppm: 100_000,
+        });
+
+        let batch = build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
+        let evidence = &batch.route_event.evidence;
+        assert_eq!(
+            evidence.categorical.get("route.experiment_id"),
+            Some(&POLICY_DIGEST.into())
+        );
+        assert_eq!(
+            evidence.categorical.get("route.experiment_arm"),
+            Some(&"challenger".into())
+        );
+        assert_eq!(
+            evidence.categorical.get("route.experiment_assignment_unit"),
+            Some(&"task".into())
+        );
+        assert_eq!(
+            evidence.digests.get("route.experiment_assignment_id"),
+            Some(&"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into())
+        );
+        assert_eq!(
+            evidence
+                .structural
+                .get("route.experiment_challenger_propensity_ppm"),
+            Some(&100_000)
+        );
+        let guard = batch
+            .guard_event
+            .ok_or_else(|| anyhow::anyhow!("fixture must trigger the configured progress guard"))?;
+        let settlement = settlement_at("episode-1", "request-1", 4, "settled-experiment");
+        let envelope =
+            build_operational_evaluation(&[start, batch.route_event, guard, settlement.event])?;
+        let experiment = envelope.subject.decisions[0]
+            .experiment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("evaluation must retain producer experiment evidence")
+            })?;
+        assert_eq!(experiment.experiment_id, POLICY_DIGEST);
+        assert_eq!(experiment.arm, ExperimentArm::Challenger);
+        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(
+            experiment.assignment_id_digest,
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         Ok(())
     }
 

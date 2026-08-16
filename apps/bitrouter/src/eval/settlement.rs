@@ -716,6 +716,17 @@ mod tests {
                 .map(|experiment| experiment.arm),
             Some(ExperimentArm::Challenger)
         );
+        let experiment = subject.decisions[0]
+            .experiment
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("settlement must preserve experiment metadata"))?;
+        assert_eq!(experiment.experiment_id, DIGEST);
+        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(
+            experiment.assignment_id_digest,
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         assert!(subject.evidence.iter().all(|item| item.redacted));
         let evidence = subject
             .evidence

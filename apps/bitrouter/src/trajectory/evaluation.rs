@@ -836,7 +836,36 @@ mod tests {
         })?;
         assert_eq!(experiment.arm, ExperimentArm::Challenger);
         assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(experiment.experiment_id, POLICY_DIGEST);
+        assert_eq!(
+            experiment.assignment_id_digest,
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
         assert_eq!(experiment.challenger_propensity_ppm, 100_000);
+
+        let mut partial = typed_route(
+            std::slice::from_ref(&start),
+            3,
+            "route-partial-experiment",
+            "request-experiment",
+            "agent_trace/v2|planning|normal",
+            "planning",
+            ("economy", false),
+        )?;
+        partial
+            .evidence
+            .categorical
+            .insert("route.experiment_id".into(), POLICY_DIGEST.into());
+        resign(&mut partial)?;
+        assert!(decode_eval_decision(&partial).is_err());
+
+        let mut malformed = route.clone();
+        malformed
+            .evidence
+            .categorical
+            .insert("route.experiment_arm".into(), "invalid".into());
+        resign(&mut malformed)?;
+        assert!(decode_eval_decision(&malformed).is_err());
         Ok(())
     }
 

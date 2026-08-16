@@ -45,3 +45,43 @@
 ## Findings
 
 No unresolved findings.
+
+## Review-fix chronology (after `5115c7e4`)
+
+The following evidence belongs to the review-fix commit, not the original Task 1 chronology.
+
+### Review-fix behavior
+
+- Missing stable assignment identity now explicitly resolves to the signed champion tier, and signed exploration validation requires the target route to map to that champion.
+- Validation tests now independently cover zero exposure, a missing tier, zero gate budgets, and a 257-entry rejection ledger.
+- Added a progress-guard clamp regression and expanded settlement/trajectory assertions to verify all five experiment fields.
+- The guarded-route producer now has an end-to-end test through operational trajectory evaluation; decoder tests also cover partial and malformed experiment evidence.
+
+### Review-fix RED evidence
+
+1. `cargo test -p bitrouter policy_table_router::tests::exploration_without_stable_identity_uses_signed_champion_control --all-features`
+   - Failed before the fix: the selected tier was `economy` from the route table instead of signed control `strong`.
+2. `cargo test -p bitrouter policy_lock::tests::optimization_target_must_match_the_signed_champion_route --all-features`
+   - Failed before the fix because a target route mapped to `economy` while the signed champion was `strong` was accepted.
+3. Existing propagation behavior predated the review-fix tests, so new tests initially passed. To establish test sensitivity without inventing chronology, I made two temporary local mutations and restored each immediately:
+   - Replaced settlement propagation with `experiment: None`; `cargo test -p bitrouter eval::settlement::tests::settlement_creates_a_redacted_request_subject --all-features` failed with `None` instead of `Some(Challenger)`.
+   - Removed the guarded-route producer's assignment copy; `cargo test -p bitrouter trajectory::store::tests::guarded_route_producer_emits_complete_experiment_evidence --all-features` failed because `route.experiment_id` was absent.
+
+### Review-fix GREEN evidence
+
+- `cargo test -p bitrouter policy_table_router::tests --all-features` — 49 passed.
+- `cargo test -p bitrouter policy_lock::tests --all-features` — 48 passed.
+- `cargo test -p bitrouter eval::settlement::tests --all-features` — 4 passed.
+- `cargo test -p bitrouter trajectory::store::tests::guarded_route_producer_emits_complete_experiment_evidence --all-features` — 1 passed.
+- `cargo test -p bitrouter trajectory::evaluation::tests --all-features` — 8 passed.
+- `cargo fmt -- --check` and `cargo clippy --all-features --quiet` — passed after the review fixes.
+- `cargo test --all-features` — passed; main library suite reported 1,085 passed, 0 failed, and the workspace/integration/doc-test suites completed successfully.
+
+### Review-fix files changed
+
+- `apps/bitrouter/src/policy_table_router.rs`
+- `apps/bitrouter/src/policy_lock.rs`
+- `apps/bitrouter/src/eval/settlement.rs`
+- `apps/bitrouter/src/trajectory/store.rs`
+- `apps/bitrouter/src/trajectory/evaluation.rs`
+- `.superpowers/sdd/2026-08-17-history-driven-routing-optimization/task-1-report.md`

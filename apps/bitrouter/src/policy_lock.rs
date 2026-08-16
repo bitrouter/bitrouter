@@ -24,6 +24,8 @@ use sha2::{Digest, Sha256};
 use crate::adequacy::store::AdequacyStore;
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
+#[cfg(test)]
+use crate::optimization::exploration::RouteRejection;
 use crate::optimization::exploration::{
     OptimizationGate, PolicyOptimizationState, RouteExploration,
 };
@@ -506,6 +508,11 @@ fn validate_route_exploration(
                 "policy '{policy_name}' optimization {label} must reference a defined tier"
             )
         }
+    }
+    if policy.routes.get(&exploration.target_request_key) != Some(&exploration.champion_tier) {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization target_request_key must map to champion_tier"
+        )
     }
     if exploration.champion_tier == exploration.challenger_tier {
         anyhow::bail!("policy '{policy_name}' optimization treatments must differ")
@@ -2922,6 +2929,82 @@ mod tests {
             ..PolicyLock::default()
         };
         assert!(validate_document(&lock).is_err());
+    }
+
+    fn valid_optimization_policy() -> PolicyDefinition {
+        let mut policy = PolicyDefinition::default();
+        policy
+            .tiers
+            .insert("strong".into(), PolicyModelTarget::Model("strong".into()));
+        policy
+            .tiers
+            .insert("economy".into(), PolicyModelTarget::Model("economy".into()));
+        policy
+            .routes
+            .insert("agent_trace/v2|edit|normal".into(), "strong".into());
+        policy
+    }
+
+    fn valid_exploration() -> RouteExploration {
+        RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_trace/v2|edit|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 100_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        }
+    }
+
+    #[test]
+    fn optimization_target_must_match_the_signed_champion_route() {
+        let mut policy = valid_optimization_policy();
+        policy
+            .routes
+            .insert("agent_trace/v2|edit|normal".into(), "economy".into());
+
+        assert!(validate_route_exploration("auto", &policy, &valid_exploration()).is_err());
+    }
+
+    #[test]
+    fn optimization_rejects_each_independent_invalid_mutation() {
+        let policy = valid_optimization_policy();
+
+        let mut zero_exposure = valid_exploration();
+        zero_exposure.challenger_exposure_ppm = 0;
+        assert!(validate_route_exploration("auto", &policy, &zero_exposure).is_err());
+
+        let mut missing_tier = valid_exploration();
+        missing_tier.challenger_tier = "missing".into();
+        assert!(validate_route_exploration("auto", &policy, &missing_tier).is_err());
+
+        let mut zero_gate = valid_exploration();
+        zero_gate.gate.minimum_tasks_per_arm = 0;
+        assert!(validate_route_exploration("auto", &policy, &zero_gate).is_err());
+    }
+
+    #[test]
+    fn optimization_rejections_are_capped_at_256_records() {
+        let rejection = RouteRejection {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            evidence_root:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            reason: "insufficient quality".into(),
+        };
+        let mut policy = valid_optimization_policy();
+        policy.optimization = Some(PolicyOptimizationState {
+            active: None,
+            rejections: vec![rejection; 257],
+        });
+
+        assert!(validate_optimization_state("auto", &policy).is_err());
     }
 
     #[test]
