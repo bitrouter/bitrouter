@@ -3573,26 +3573,15 @@ async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
                 bitrouter::optimization::controller::publish_prepared(prepared).await?;
             report.active_policy_digest = publication.active_policy_digest.clone();
             report.published = publication.published;
-            if let Some(update) = publication.update.as_ref() {
+            if publication.update.is_some() {
                 let endpoint = resolve_client_socket_from(&source, socket.as_deref()).await?;
                 report.reload_attempted = daemon::endpoint_in_use(&endpoint);
-                if let Err(error) =
-                    reload_published_policy_or_restore(&source, update, socket.as_deref()).await
-                {
-                    let config_restore =
-                        bitrouter::optimization::controller::restore_config_after_policy_restore(
-                            &publication,
-                        )
-                        .await;
-                    return match config_restore {
-                        Ok(()) => Err(error.context(
-                            "daemon rejected optimization publication; restored exact config bytes",
-                        )),
-                        Err(recovery) => Err(error.context(format!(
-                            "daemon rejected optimization publication and config recovery failed: {recovery:#}"
-                        ))),
-                    };
-                }
+                reload_optimization_publication_or_restore(
+                    &source,
+                    &publication,
+                    socket.as_deref(),
+                )
+                .await?;
             }
             output.emit(&report)?;
             Ok(())
@@ -3626,7 +3615,13 @@ fn optimization_run_report(
         challenger: cohort.map(|assessment| arm_report(&assessment.challenger)),
         cost_delta_micro_usd: cohort.and_then(|assessment| assessment.cost_delta_micro_usd),
         evaluator_config_digest: cohort
-            .and_then(|assessment| assessment.evaluator_config_digest.clone()),
+            .and_then(|assessment| assessment.evaluator_config_digest.clone())
+            .or_else(|| {
+                prepared
+                    .treatment
+                    .as_ref()
+                    .and_then(|treatment| treatment.gate.evaluator_config_digest.clone())
+            }),
         published: false,
         reload_attempted: false,
     }
@@ -3935,6 +3930,128 @@ async fn reload_published_policy_or_restore(
         };
     }
     Ok(())
+}
+
+async fn reload_optimization_publication_or_restore(
+    source: &bitrouter::paths::ConfigSource,
+    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    reload_optimization_publication_or_restore_with(
+        publication,
+        move || reload_policy_if_reachable(source, socket_override),
+        || Ok(()),
+    )
+    .await
+}
+
+async fn reload_optimization_publication_or_restore_with<Reload, ReloadFuture, BeforeRecovery>(
+    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    reload: Reload,
+    before_recovery: BeforeRecovery,
+) -> Result<()>
+where
+    Reload: Fn() -> ReloadFuture,
+    ReloadFuture: std::future::Future<Output = Result<()>>,
+    BeforeRecovery: FnOnce() -> Result<()>,
+{
+    let initial_error = match reload().await {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let initial_detail = format!("{initial_error:#}");
+    if let Err(seam_error) = before_recovery() {
+        return Err(initial_error.context(format!(
+            "daemon rejected optimization publication and recovery setup failed: {seam_error:#}"
+        )));
+    }
+    let Some(update) = publication.update.as_ref() else {
+        return Err(anyhow::anyhow!(
+            "daemon rejected optimization publication ({initial_detail}); recovery has no policy update"
+        ));
+    };
+    let _config_guard =
+        bitrouter::policy_lock::acquire_publication_lock(&publication.config_path).map_err(
+            |recovery| {
+                anyhow::anyhow!(
+                    "daemon rejected optimization publication ({initial_detail}); acquiring config recovery lock failed: {recovery:#}"
+                )
+            },
+        )?;
+    let _policy_guard = bitrouter::policy_lock::acquire_publication_lock(&update.path).map_err(
+        |recovery| {
+            anyhow::anyhow!(
+                "daemon rejected optimization publication ({initial_detail}); acquiring policy recovery lock failed: {recovery:#}"
+            )
+        },
+    )?;
+    let current_config = std::fs::read_to_string(&publication.config_path)
+        .with_context(|| format!("reading {}", publication.config_path.display()))
+        .map_err(|recovery| {
+            anyhow::anyhow!(
+                "daemon rejected optimization publication ({initial_detail}); config recovery failed: {recovery:#}"
+            )
+        })?;
+    if current_config != publication.config_after {
+        return Err(initial_error.context(
+            "daemon rejected optimization publication; recovery is stale because config changed",
+        ));
+    }
+    let active = bitrouter::policy_lock::load(&update.path)
+        .await
+        .map_err(|recovery| {
+            anyhow::anyhow!(
+                "daemon rejected optimization publication ({initial_detail}); loading policy recovery target failed: {recovery:#}"
+            )
+        })?;
+    if active.digest != publication.active_policy_digest
+        || update.digest != publication.active_policy_digest
+    {
+        return Err(initial_error.context(format!(
+            "daemon rejected optimization publication; recovery is stale because policy advanced to {}",
+            active.digest
+        )));
+    }
+    let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
+    bitrouter::policy_lock::rollback_to_digest_unlocked(
+        &update.path,
+        &publication.active_policy_digest,
+        &publication.parent_policy_digest,
+        &history_dir,
+    )
+    .context("restoring parent policy after optimizer reload rejection")
+    .map_err(|recovery| {
+        anyhow::anyhow!(
+            "daemon rejected optimization publication ({initial_detail}); policy recovery failed: {recovery:#}"
+        )
+    })?;
+    if let Err(config_error) = bitrouter::policy_lock::write_text_atomic_unlocked(
+        &publication.config_path,
+        &publication.config_after,
+        &publication.config_before,
+    ) {
+        let policy_compensation = bitrouter::policy_lock::rollback_to_digest_unlocked(
+            &update.path,
+            &publication.parent_policy_digest,
+            &publication.active_policy_digest,
+            &history_dir,
+        );
+        return Err(initial_error.context(format!(
+            "daemon rejected optimization publication and config recovery failed ({config_error:#}); policy compensation: {}",
+            policy_compensation
+                .err()
+                .map(|error| format!("{error:#}"))
+                .unwrap_or_else(|| "ok".into())
+        )));
+    }
+    if let Err(reload_error) = reload().await {
+        return Err(initial_error.context(format!(
+            "daemon rejected optimization publication; restored the parent config and policy but recovery reload failed: {reload_error:#}"
+        )));
+    }
+    Err(initial_error.context(
+        "daemon rejected optimization publication; restored and reloaded the parent config and policy",
+    ))
 }
 
 fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result<&Path> {
@@ -5726,23 +5843,154 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reload_recovery_restores_exact_pre_step_config_after_policy() -> anyhow::Result<()> {
+    async fn optimize_explore_json_reports_the_explicit_evaluator_pin() -> anyhow::Result<()> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use bitrouter::eval::EvalService;
+        use bitrouter::eval::admission::SubmissionPrincipal;
+        use bitrouter::eval::store::EvalStore;
+        use bitrouter::eval::types::{
+            EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
+            EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+        };
+
+        const PIN: &str = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        let database_path = directory.path().join("eval.db");
+        let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+        std::fs::write(
+            &config_path,
+            "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n",
+        )?;
+        let database = bitrouter::db::connect(&database_url).await?;
+        bitrouter::db::run_migrations(&database).await?;
+        drop(database);
+        let initialized = bitrouter::policy_lock::initialize_files(
+            &config_path,
+            "auto",
+            "auto",
+            Some("strong-model"),
+            "economy-model",
+        )
+        .await?;
+        let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
+        let service = EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+        for (scope, subject_id, cost) in [
+            (EvalScope::Request, "request-report-pin", Some("900")),
+            (EvalScope::Task, "task-report-pin", None),
+        ] {
+            let evidence = cost.map_or_else(Vec::new, |cost| {
+                vec![EvidenceItem {
+                    evidence_id: format!("evidence-{subject_id}"),
+                    kind: "request.outcome".into(),
+                    digest: PIN.into(),
+                    redacted: true,
+                    attributes: BTreeMap::from([("cost_micro_usd".into(), cost.into())]),
+                }]
+            });
+            let digest = evidence_digest(&evidence)?;
+            let eval_id = format!("eval-{subject_id}");
+            let subject = EvalSubject {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: eval_id.clone(),
+                scope,
+                subject_id: subject_id.into(),
+                policy_digest: initialized.digest.clone(),
+                preset: Some("auto".into()),
+                cohort: None,
+                holdout: false,
+                decisions: vec![EvalDecisionRef {
+                    decision_id: format!("decision-{subject_id}"),
+                    policy: "auto".into(),
+                    request_key: "agent_trace/v2|edit|normal".into(),
+                    selected_tier: "strong".into(),
+                    selected_effort: None,
+                    baseline_tier: None,
+                    baseline_effort: None,
+                    policy_digest: initialized.digest.clone(),
+                    experiment: None,
+                }],
+                requested_dimensions: BTreeSet::new(),
+                evidence,
+                evidence_digest: digest.clone(),
+                observed_at: "2026-08-17T00:00:00Z".into(),
+            };
+            store.insert_subject(&subject).await?;
+            service
+                .submit(
+                    EvaluationResult {
+                        schema_version: EVAL_SCHEMA_VERSION,
+                        eval_id,
+                        evidence_digest: digest,
+                        evaluator: EvaluatorIdentity {
+                            authority_id: "local".into(),
+                            evaluator_id: "history".into(),
+                            kind: EvaluatorKind::TaskNative,
+                            version: "1".into(),
+                            config_digest: PIN.into(),
+                        },
+                        verdict: if scope == EvalScope::Request {
+                            EvalVerdict::Inconclusive
+                        } else {
+                            EvalVerdict::Pass
+                        },
+                        metrics: BTreeMap::new(),
+                        hard_violations: Vec::new(),
+                        confidence_ppm: None,
+                        evidence_refs: Vec::new(),
+                        decision_credit: BTreeMap::new(),
+                        idempotency_key: format!("result-{subject_id}"),
+                        submitted_at: "2026-08-17T00:00:01Z".into(),
+                    },
+                    SubmissionPrincipal::LocalOperator,
+                )
+                .await?;
+        }
+        let prepared = bitrouter::optimization::controller::prepare_files(
+            &config_path,
+            bitrouter::optimization::controller::OptimizationOptions {
+                evaluator_config_digest: Some(PIN.into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let report = optimization_run_report("auto", &prepared);
+        let json = serde_json::to_value(report)?;
+
+        assert_eq!(json["decision"], "explore");
+        assert_eq!(json["evaluator_config_digest"], PIN);
+        Ok(())
+    }
+
+    struct RecoveryFixture {
+        _directory: tempfile::TempDir,
+        config_path: PathBuf,
+        policy_path: PathBuf,
+        config_before: String,
+        config_after: String,
+        parent_digest: String,
+        child_document: bitrouter::policy_lock::PolicyLock,
+        publication: bitrouter::optimization::controller::OptimizationPublication,
+    }
+
+    fn recovery_fixture() -> anyhow::Result<RecoveryFixture> {
         let directory = tempfile::tempdir()?;
         let config_path = directory.path().join("bitrouter.yaml");
         let policy_path = directory.path().join("policy-lock.yaml");
         let config_before =
-            "# keep operator bytes\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\n";
+            "# keep operator bytes\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\n"
+                .to_string();
         let config_after = bitrouter::policy_lock::edit_config_mode(
-            config_before,
+            &config_before,
             config::PolicyRuntimeMode::Adaptive,
         )?;
         std::fs::write(&config_path, &config_after)?;
-
         let parent = bitrouter::policy_lock::PolicyLock::default();
         let parent_digest =
             bitrouter::policy_lock::write_atomic_unlocked(&policy_path, None, &parent)?;
-        let mut candidate = parent;
-        let artifact = candidate
+        let mut child_document = parent;
+        let artifact = child_document
             .artifact
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("default compiled policy has no artifact"))?;
@@ -5752,22 +6000,16 @@ mod tests {
         let record = bitrouter::policy_lock::publish_candidate_unlocked(
             &policy_path,
             &parent_digest,
-            &candidate,
+            &child_document,
             &history,
         )?;
         let update = bitrouter::policy_lock::PolicyFileUpdate {
             path: policy_path.clone(),
             digest: record.child_digest.clone(),
-            document: candidate,
+            document: child_document.clone(),
             changes: Vec::new(),
             conflicts: Vec::new(),
         };
-        bitrouter::policy_lock::rollback_to_digest(
-            &policy_path,
-            &record.child_digest,
-            &parent_digest,
-            &history,
-        )?;
         let publication = bitrouter::optimization::controller::OptimizationPublication {
             action: bitrouter::optimization::controller::ControllerAction::Explore,
             parent_policy_digest: parent_digest.clone(),
@@ -5777,19 +6019,195 @@ mod tests {
             published: true,
             config_activated: true,
             config_path: config_path.clone(),
-            config_before: config_before.into(),
-            config_after,
+            config_before: config_before.clone(),
+            config_after: config_after.clone(),
             update: Some(update),
         };
+        Ok(RecoveryFixture {
+            _directory: directory,
+            config_path,
+            policy_path,
+            config_before,
+            config_after,
+            parent_digest,
+            child_document,
+            publication,
+        })
+    }
 
-        bitrouter::optimization::controller::restore_config_after_policy_restore(&publication)
-            .await?;
+    #[tokio::test]
+    async fn optimizer_reload_recovery_restores_one_disk_and_live_parent_pair() -> anyhow::Result<()>
+    {
+        let fixture = recovery_fixture()?;
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let live = Arc::new(std::sync::Mutex::new((
+            config::PolicyRuntimeMode::Frozen,
+            fixture.parent_digest.clone(),
+        )));
+        let reload = {
+            let attempts = attempts.clone();
+            let live = live.clone();
+            let config_path = fixture.config_path.clone();
+            let policy_path = fixture.policy_path.clone();
+            move || {
+                let attempts = attempts.clone();
+                let live = live.clone();
+                let config_path = config_path.clone();
+                let policy_path = policy_path.clone();
+                async move {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        anyhow::bail!("injected daemon rejection of child policy")
+                    }
+                    let raw = std::fs::read_to_string(config_path)?;
+                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
+                    *live
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
+                        (mode, digest);
+                    Ok(())
+                }
+            }
+        };
 
-        assert_eq!(std::fs::read_to_string(config_path)?, config_before);
+        let error = reload_optimization_publication_or_restore_with(
+            &fixture.publication,
+            reload,
+            || Ok(()),
+        )
+        .await
+        .err()
+        .context("injected daemon rejection unexpectedly succeeded")?;
+
+        assert!(format!("{error:#}").contains("injected daemon rejection"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(
-            bitrouter::policy_lock::load(&policy_path).await?.digest,
-            parent_digest
+            std::fs::read_to_string(&fixture.config_path)?,
+            fixture.config_before
         );
+        assert_eq!(
+            bitrouter::policy_lock::load(&fixture.policy_path)
+                .await?
+                .digest,
+            fixture.parent_digest
+        );
+        assert_eq!(
+            *live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
+            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_reload_recovery_never_overwrites_a_concurrent_policy_winner()
+    -> anyhow::Result<()> {
+        let fixture = recovery_fixture()?;
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let winner_digest = Arc::new(std::sync::Mutex::new(None::<String>));
+        let live = Arc::new(std::sync::Mutex::new((
+            config::PolicyRuntimeMode::Frozen,
+            fixture.parent_digest.clone(),
+        )));
+        let reload = {
+            let attempts = attempts.clone();
+            move || {
+                let attempts = attempts.clone();
+                async move {
+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    anyhow::bail!("injected daemon rejection before concurrent publication")
+                }
+            }
+        };
+        let before_recovery = {
+            let policy_path = fixture.policy_path.clone();
+            let child_digest = fixture.publication.active_policy_digest.clone();
+            let mut winner = fixture.child_document.clone();
+            let winner_digest = winner_digest.clone();
+            let live = live.clone();
+            move || {
+                let artifact = winner
+                    .artifact
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("winner artifact is missing"))?;
+                artifact.parent_digest = Some(child_digest.clone());
+                artifact.source_snapshot_time_unix_ms = 2;
+                let record = bitrouter::policy_lock::publish_candidate(
+                    &policy_path,
+                    &child_digest,
+                    &winner,
+                    &bitrouter::policy_lock::default_history_dir(&policy_path),
+                )?;
+                *winner_digest
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("winner digest lock poisoned"))? =
+                    Some(record.child_digest.clone());
+                *live
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
+                    (config::PolicyRuntimeMode::Adaptive, record.child_digest);
+                Ok(())
+            }
+        };
+
+        let error = reload_optimization_publication_or_restore_with(
+            &fixture.publication,
+            reload,
+            before_recovery,
+        )
+        .await
+        .err()
+        .context("stale recovery unexpectedly succeeded")?;
+        let winner_digest = winner_digest
+            .lock()
+            .map_err(|_| anyhow::anyhow!("winner digest lock poisoned"))?
+            .clone()
+            .context("concurrent winner was not published")?;
+
+        assert!(error.to_string().contains("recovery is stale"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_to_string(&fixture.config_path)?,
+            fixture.config_after
+        );
+        assert_eq!(
+            bitrouter::policy_lock::load(&fixture.policy_path)
+                .await?
+                .digest,
+            winner_digest
+        );
+        assert_eq!(
+            *live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
+            (config::PolicyRuntimeMode::Adaptive, winner_digest)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_reload_recovery_reports_rejection_and_recovery_failures()
+    -> anyhow::Result<()> {
+        let fixture = recovery_fixture()?;
+        let config_path = fixture.config_path.clone();
+
+        let error = reload_optimization_publication_or_restore_with(
+            &fixture.publication,
+            || async { anyhow::bail!("injected daemon rejection for combined error") },
+            move || {
+                std::fs::remove_file(&config_path)?;
+                Ok(())
+            },
+        )
+        .await
+        .err()
+        .context("recovery with a missing config unexpectedly succeeded")?;
+        let detail = format!("{error:#}");
+
+        assert!(detail.contains("injected daemon rejection for combined error"));
+        assert!(detail.contains("reading"));
+        assert!(detail.contains("bitrouter.yaml"));
         Ok(())
     }
 

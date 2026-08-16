@@ -493,9 +493,7 @@ fn validate_route_exploration(
     exploration: &RouteExploration,
 ) -> Result<()> {
     validate_sha256_digest(&exploration.experiment_id, "optimization experiment_id")?;
-    if !RouteProjection::is_canonical_learning_key(&exploration.target_request_key)
-        || !policy.routes.contains_key(&exploration.target_request_key)
-    {
+    if !RouteProjection::is_canonical_learning_key(&exploration.target_request_key) {
         anyhow::bail!(
             "policy '{policy_name}' optimization target_request_key must name a canonical route"
         )
@@ -510,9 +508,13 @@ fn validate_route_exploration(
             )
         }
     }
-    if policy.routes.get(&exploration.target_request_key) != Some(&exploration.champion_tier) {
+    let champion_route = policy
+        .routes
+        .get(&exploration.target_request_key)
+        .or(policy.default_tier.as_ref());
+    if champion_route != Some(&exploration.champion_tier) {
         anyhow::bail!(
-            "policy '{policy_name}' optimization target_request_key must map to champion_tier"
+            "policy '{policy_name}' optimization target_request_key must resolve to champion_tier"
         )
     }
     if exploration.champion_tier == exploration.challenger_tier {
@@ -689,7 +691,14 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
         }
         if let Some(certificates) = certificates {
             for (request_key, certificate) in certificates {
-                if !policy.routes.contains_key(request_key) {
+                if !policy.routes.contains_key(request_key)
+                    && !is_default_derived_optimizer_certificate(
+                        document,
+                        policy,
+                        request_key,
+                        certificate,
+                    )
+                {
                     anyhow::bail!(
                         "policy '{policy_name}' certificate '{request_key}' has no explicit route"
                     );
@@ -736,6 +745,53 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_default_derived_optimizer_certificate(
+    document: &PolicyLock,
+    policy: &PolicyDefinition,
+    request_key: &str,
+    certificate: &PolicyCertificate,
+) -> bool {
+    let Some(artifact) = document.artifact.as_ref() else {
+        return false;
+    };
+    if artifact.compiler.id != "bitrouter-history-optimizer"
+        || artifact.migration.is_some()
+        || certificate.compiler_config_digest != artifact.compiler.config_digest
+        || certificate.evidence_digest != artifact.evidence_root
+        || !RouteProjection::is_canonical_learning_key(request_key)
+        || policy.default_tier.as_ref() != Some(&certificate.selected_tier)
+        || certificate.owner != RouteOwner::Compiler
+        || certificate.source != CertificateSource::Mixed
+    {
+        return false;
+    }
+    let optimization = policy.optimization.as_ref();
+    match certificate.verdict {
+        PromotionVerdict::Experiment => optimization
+            .and_then(|state| state.active.as_ref())
+            .is_some_and(|active| {
+                active.target_request_key == request_key
+                    && active.champion_tier == certificate.selected_tier
+                    && certificate.baseline_tier.is_none()
+            }),
+        PromotionVerdict::Blocked => optimization.is_some_and(|state| {
+            state.active.is_none()
+                && certificate.baseline_tier.as_ref() == Some(&certificate.selected_tier)
+                && artifact
+                    .eval_snapshot_root
+                    .as_ref()
+                    .is_some_and(|evidence_root| {
+                        state.rejections.iter().any(|rejection| {
+                            rejection.target_request_key.as_deref() == Some(request_key)
+                                && rejection.evidence_root == *evidence_root
+                                && rejection.treatment_context_digest.is_some()
+                        })
+                    })
+        }),
+        PromotionVerdict::Retain | PromotionVerdict::Promote | PromotionVerdict::Demote => false,
+    }
 }
 
 fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
@@ -3086,6 +3142,7 @@ mod tests {
         let rejection = RouteRejection {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: None,
             treatment_context_digest: Some(
                 "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".into(),
             ),

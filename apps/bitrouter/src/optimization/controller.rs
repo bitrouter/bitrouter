@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::EvalEvidenceSnapshot;
 use crate::eval::store::EvalSnapshot;
-use crate::eval::types::EvalScope;
+use crate::eval::types::{EvalScope, EvalSubject};
 use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::optimization::exploration::{
     OptimizationGate, PolicyOptimizationState, RouteExploration, RouteRejection,
@@ -157,7 +157,16 @@ pub fn select_opportunity(
         .policies
         .get(input.policy_name)
         .ok_or_else(|| anyhow::anyhow!("optimization policy '{}' is missing", input.policy_name))?;
+    if policy.optimization.as_ref().is_some_and(|state| {
+        state
+            .rejections
+            .iter()
+            .any(|rejection| rejection.treatment_context_digest.is_none())
+    }) {
+        return Ok(None);
+    }
     let mut aggregate = BTreeMap::<String, OpportunityAggregate>::new();
+    let mut request_subjects = BTreeMap::<(String, String), &EvalSubject>::new();
     for record in &input.eval.records {
         if record.subject.policy_digest != input.active_policy_digest {
             continue;
@@ -171,31 +180,50 @@ pub fn select_opportunity(
             let route = aggregate.entry(decision.request_key.clone()).or_default();
             match record.subject.scope {
                 EvalScope::Request => {
-                    route.request_count = route
-                        .request_count
-                        .checked_add(1)
-                        .context("counting request opportunity observations")?;
-                    for evidence in &record.subject.evidence {
-                        if evidence.kind != "request.outcome" {
-                            continue;
-                        }
-                        if let Some(value) = evidence.attributes.get("cost_micro_usd") {
-                            let cost = value.parse::<u64>().with_context(|| {
-                                format!("parsing request cost for '{}'", decision.request_key)
-                            })?;
-                            route.observed_cost_micro_usd = route
-                                .observed_cost_micro_usd
-                                .checked_add(cost)
-                                .context("summing request opportunity cost")?;
-                            route.found_cost = true;
-                        }
-                    }
+                    let key = (
+                        record.subject.subject_id.clone(),
+                        decision.request_key.clone(),
+                    );
+                    request_subjects
+                        .entry(key)
+                        .and_modify(|selected| {
+                            if (
+                                record.subject.eval_id.as_str(),
+                                record.subject.evidence_digest.as_str(),
+                            ) < (selected.eval_id.as_str(), selected.evidence_digest.as_str())
+                            {
+                                *selected = &record.subject;
+                            }
+                        })
+                        .or_insert(&record.subject);
                 }
                 EvalScope::Task | EvalScope::Episode => {
                     route
                         .independent_units
                         .insert((record.subject.scope, record.subject.subject_id.clone()));
                 }
+            }
+        }
+    }
+    for ((_, request_key), subject) in request_subjects {
+        let route = aggregate.entry(request_key.clone()).or_default();
+        route.request_count = route
+            .request_count
+            .checked_add(1)
+            .context("counting unique request opportunity observations")?;
+        for evidence in &subject.evidence {
+            if evidence.kind != "request.outcome" {
+                continue;
+            }
+            if let Some(value) = evidence.attributes.get("cost_micro_usd") {
+                let cost = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parsing request cost for '{request_key}'"))?;
+                route.observed_cost_micro_usd = route
+                    .observed_cost_micro_usd
+                    .checked_add(cost)
+                    .context("summing unique request opportunity cost")?;
+                route.found_cost = true;
             }
         }
     }
@@ -472,6 +500,7 @@ fn active_successor(
             }
             state.rejections.push(RouteRejection {
                 experiment_id: exploration.experiment_id.clone(),
+                target_request_key: Some(exploration.target_request_key.clone()),
                 treatment_context_digest: Some(treatment_context_digest),
                 evidence_root: input.eval.evidence_root.clone(),
                 reason: rejection_reason(assessment).into(),
@@ -698,22 +727,22 @@ pub async fn prepare_files(
     let active = crate::policy_lock::load_for_config(&config, Some(config_path))
         .await?
         .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    if !active.document.policies.contains_key(&options.policy) {
-        anyhow::bail!("optimization policy '{}' is missing", options.policy);
-    }
-    if options.candidate_tier.is_none() {
-        options.candidate_tier = Some(
-            active.document.policies[&options.policy]
-            .adequacy
-            .explore_tier
-            .clone()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "optimization policy '{}' has no adequacy.explore_tier; pass --candidate-tier",
-                    options.policy
-                )
-            })?,
-        );
+    let policy = active
+        .document
+        .policies
+        .get(&options.policy)
+        .ok_or_else(|| anyhow::anyhow!("optimization policy '{}' is missing", options.policy))?;
+    let has_active_exploration = policy
+        .optimization
+        .as_ref()
+        .is_some_and(|state| state.active.is_some());
+    if options.candidate_tier.is_none() && !has_active_exploration {
+        options.candidate_tier = Some(policy.adequacy.explore_tier.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "optimization policy '{}' has no adequacy.explore_tier; pass --candidate-tier",
+                options.policy
+            )
+        })?);
     }
     let database_url = crate::db::anchor_url(
         &config.database.url,
@@ -998,33 +1027,6 @@ async fn recover_failed_publication(
                 .unwrap_or_else(|| "ok".into()),
         ),
     }
-}
-
-pub async fn restore_config_after_policy_restore(
-    publication: &OptimizationPublication,
-) -> Result<()> {
-    if publication.config_before == publication.config_after {
-        return Ok(());
-    }
-    let update = publication
-        .update
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("optimization publication has no policy update"))?;
-    let active = crate::policy_lock::load(&update.path).await?;
-    if active.digest != publication.parent_policy_digest {
-        anyhow::bail!(
-            "policy restore did not reach parent {} (found {})",
-            publication.parent_policy_digest,
-            active.digest
-        );
-    }
-    let _config_guard = crate::policy_lock::acquire_publication_lock(&publication.config_path)?;
-    crate::policy_lock::write_text_atomic_unlocked(
-        &publication.config_path,
-        &publication.config_after,
-        &publication.config_before,
-    )
-    .context("restoring config after policy recovery")
 }
 
 pub async fn read_status(config_path: &Path, policy_name: &str) -> Result<OptimizationStatus> {
@@ -1431,6 +1433,7 @@ mod tests {
             active: None,
             rejections: vec![RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
+                target_request_key: Some("agent_trace/v2|finalization|normal".into()),
                 treatment_context_digest: Some(rejected_context),
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "higher cost".into(),
@@ -1450,6 +1453,105 @@ mod tests {
         assert_eq!(selected.request_key, "agent_trace/v2|verify|normal");
         assert_eq!(selected.observed_cost_micro_usd, 900);
         assert_eq!(selected.independent_units, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn unmigratable_legacy_rejection_conservatively_suppresses_new_opportunities() -> Result<()> {
+        let legacy: RouteRejection = serde_json::from_str(
+            r#"{
+                "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "evidence_root":"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "reason":"legacy rejected treatment"
+            }"#,
+        )?;
+        assert!(legacy.target_request_key.is_none());
+        assert!(legacy.treatment_context_digest.is_none());
+        let mut lock = lock();
+        lock.policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?
+            .optimization = Some(PolicyOptimizationState {
+            active: None,
+            rejections: vec![legacy],
+        });
+        let snapshot = snapshot();
+        let options = options();
+
+        let selected = select_opportunity(OptimizationStepInput {
+            eval: &snapshot,
+            active_policy: &lock,
+            active_policy_digest: ACTIVE_DIGEST,
+            policy_name: "auto",
+            options: &options,
+        })?;
+
+        assert!(selected.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn request_result_multiplicity_does_not_change_opportunity_ranking() -> Result<()> {
+        let repeated = request_record(
+            "agent_trace/v2|edit|normal",
+            "shared-request-subject",
+            Some(600),
+        );
+        let mut duplicate_result = repeated.clone();
+        duplicate_result.result_id = "result-shared-request-subject-duplicate".into();
+        duplicate_result.subject.eval_id = "eval-z-shared-request-subject".into();
+        duplicate_result.result.eval_id = duplicate_result.subject.eval_id.clone();
+        duplicate_result.subject.evidence[0]
+            .attributes
+            .insert("cost_micro_usd".into(), "900".into());
+        duplicate_result.result.idempotency_key =
+            "idempotency-shared-request-subject-duplicate".into();
+        let mut records = vec![
+            repeated,
+            duplicate_result,
+            request_record(
+                "agent_trace/v2|verify|normal",
+                "larger-request-subject",
+                Some(1_000),
+            ),
+            unit_record("agent_trace/v2|edit|normal", "edit-task"),
+            unit_record("agent_trace/v2|verify|normal", "verify-task"),
+        ];
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: records.clone(),
+        };
+        let lock = lock();
+        let options = options();
+
+        let selected = select_opportunity(OptimizationStepInput {
+            eval: &snapshot,
+            active_policy: &lock,
+            active_policy_digest: ACTIVE_DIGEST,
+            policy_name: "auto",
+            options: &options,
+        })?
+        .ok_or_else(|| anyhow::anyhow!("expected one opportunity"))?;
+
+        assert_eq!(selected.request_key, "agent_trace/v2|verify|normal");
+        assert_eq!(selected.observed_cost_micro_usd, 1_000);
+        records.reverse();
+        let reversed = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records,
+        };
+        assert_eq!(
+            select_opportunity(OptimizationStepInput {
+                eval: &reversed,
+                active_policy: &lock,
+                active_policy_digest: ACTIVE_DIGEST,
+                policy_name: "auto",
+                options: &options,
+            })?,
+            Some(selected)
+        );
         Ok(())
     }
 
@@ -1650,6 +1752,7 @@ mod tests {
         state.rejections = (0..256)
             .map(|index| RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
+                target_request_key: None,
                 treatment_context_digest: Some(format!("sha256:{index:064x}")),
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "prior rejection".into(),
@@ -1713,6 +1816,7 @@ mod tests {
             .rejections
             .push(RouteRejection {
                 experiment_id: EXPERIMENT_ID.into(),
+                target_request_key: None,
                 treatment_context_digest: Some(context.clone()),
                 evidence_root: CONFIG_DIGEST.into(),
                 reason: "prior attempt".into(),
@@ -1869,8 +1973,9 @@ mod file_tests {
     use crate::eval::admission::SubmissionPrincipal;
     use crate::eval::store::EvalStore;
     use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
-        EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+        EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject,
+        EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
+        ExperimentArm, ExperimentAssignmentUnit, evidence_digest,
     };
     use crate::optimization::controller::{
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
@@ -1879,6 +1984,7 @@ mod file_tests {
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,
+        validate_document,
     };
 
     const REQUEST_KEY: &str = "agent_trace/v2|edit|normal";
@@ -1955,6 +2061,37 @@ mod file_tests {
             let db = crate::db::connect(&database_url).await?;
             crate::db::run_migrations(&db).await?;
             drop(db);
+            Ok(Self {
+                _directory: directory,
+                root,
+                config_path,
+                policy_path,
+                database_url,
+            })
+        }
+
+        async fn new_initialized() -> Result<Self> {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().to_path_buf();
+            let config_path = root.join("bitrouter.yaml");
+            let policy_path = root.join("policy-lock.yaml");
+            let database_path = root.join("eval.db");
+            let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+            std::fs::write(
+                &config_path,
+                "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n",
+            )?;
+            let db = crate::db::connect(&database_url).await?;
+            crate::db::run_migrations(&db).await?;
+            drop(db);
+            crate::policy_lock::initialize_files(
+                &config_path,
+                "auto",
+                "auto",
+                Some("strong-model"),
+                "economy-model",
+            )
+            .await?;
             Ok(Self {
                 _directory: directory,
                 root,
@@ -2043,6 +2180,77 @@ mod file_tests {
             Ok(())
         }
 
+        async fn admit_challenger_hard_failure(&self) -> Result<()> {
+            let active = load(&self.policy_path).await?;
+            let exploration = active.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .and_then(|state| state.active.as_ref())
+                .context("initialized exploration is not active")?;
+            let evidence = Vec::new();
+            let digest = evidence_digest(&evidence)?;
+            let eval_id = "eval-challenger-hard-failure".to_string();
+            let subject = EvalSubject {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: eval_id.clone(),
+                scope: EvalScope::Task,
+                subject_id: "task-challenger-hard-failure".into(),
+                policy_digest: active.digest.clone(),
+                preset: Some("auto".into()),
+                cohort: None,
+                holdout: false,
+                decisions: vec![EvalDecisionRef {
+                    decision_id: "decision-challenger-hard-failure".into(),
+                    policy: "auto".into(),
+                    request_key: exploration.target_request_key.clone(),
+                    selected_tier: exploration.challenger_tier.clone(),
+                    selected_effort: None,
+                    baseline_tier: None,
+                    baseline_effort: None,
+                    policy_digest: active.digest.clone(),
+                    experiment: Some(EvalExperimentRef {
+                        experiment_id: exploration.experiment_id.clone(),
+                        arm: ExperimentArm::Challenger,
+                        assignment_unit: ExperimentAssignmentUnit::Task,
+                        assignment_id_digest: SHA.into(),
+                        challenger_propensity_ppm: exploration.challenger_exposure_ppm,
+                    }),
+                }],
+                requested_dimensions: BTreeSet::new(),
+                evidence,
+                evidence_digest: digest.clone(),
+                observed_at: "2026-08-17T00:00:02Z".into(),
+            };
+            let store = EvalStore::new(crate::db::connect(&self.database_url).await?);
+            store.insert_subject(&subject).await?;
+            EvalService::new(store, bitrouter_sdk::config::EvalConfig::default())
+                .submit(
+                    EvaluationResult {
+                        schema_version: EVAL_SCHEMA_VERSION,
+                        eval_id,
+                        evidence_digest: digest,
+                        evaluator: EvaluatorIdentity {
+                            authority_id: "local".into(),
+                            evaluator_id: "history".into(),
+                            kind: EvaluatorKind::TaskNative,
+                            version: "1".into(),
+                            config_digest: SHA.into(),
+                        },
+                        verdict: EvalVerdict::Fail,
+                        metrics: BTreeMap::new(),
+                        hard_violations: vec!["quality.security".into()],
+                        confidence_ppm: None,
+                        evidence_refs: Vec::new(),
+                        decision_credit: BTreeMap::new(),
+                        idempotency_key: "result-challenger-hard-failure".into(),
+                        submitted_at: "2026-08-17T00:00:03Z".into(),
+                    },
+                    SubmissionPrincipal::LocalOperator,
+                )
+                .await?;
+            Ok(())
+        }
+
         async fn snapshot_count(&self) -> Result<i64> {
             let database = crate::db::connect(&self.database_url).await?;
             let row = database
@@ -2125,6 +2333,77 @@ mod file_tests {
     }
 
     #[tokio::test]
+    async fn initialized_default_route_explores_and_retreats_without_materializing_a_route()
+    -> Result<()> {
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        let initialized = load(&harness.policy_path).await?;
+        assert!(initialized.document.policies["auto"].routes.is_empty());
+        assert!(initialized.document.certificates.is_empty());
+
+        let explore = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(explore.step.action, ControllerAction::Explore);
+        assert!(
+            explore
+                .step
+                .successor
+                .as_ref()
+                .is_some_and(|successor| successor.policies["auto"].routes.is_empty())
+        );
+        publish_prepared(explore).await?;
+        let exploring = load(&harness.policy_path).await?;
+        assert!(exploring.document.policies["auto"].routes.is_empty());
+        assert_eq!(
+            exploring
+                .document
+                .certificate("auto", REQUEST_KEY)
+                .map(|certificate| certificate.verdict),
+            Some(PromotionVerdict::Experiment)
+        );
+
+        harness.admit_challenger_hard_failure().await?;
+        let retreat = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(retreat.step.action, ControllerAction::Retreat);
+        assert!(
+            retreat
+                .step
+                .successor
+                .as_ref()
+                .is_some_and(|successor| successor.policies["auto"].routes.is_empty())
+        );
+        publish_prepared(retreat).await?;
+        let retreated = load(&harness.policy_path).await?;
+        assert!(retreated.document.policies["auto"].routes.is_empty());
+        assert!(
+            retreated.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .is_some_and(|state| state.active.is_none() && state.rejections.len() == 1)
+        );
+        assert_eq!(
+            retreated
+                .document
+                .certificate("auto", REQUEST_KEY)
+                .map(|certificate| certificate.verdict),
+            Some(PromotionVerdict::Blocked)
+        );
+        let mut forged = retreated.document.clone();
+        let copied = forged.certificates["auto"][REQUEST_KEY].clone();
+        forged
+            .certificates
+            .get_mut("auto")
+            .context("retreated certificates are missing")?
+            .insert("agent_trace/v2|test|normal".into(), copied);
+        let forged_error = validate_document(&forged)
+            .expect_err("a blocked certificate cannot be copied to another default-derived key");
+        assert!(
+            forged_error.to_string().contains("no explicit route"),
+            "unexpected forged certificate error: {forged_error:#}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn omitted_candidate_tier_uses_the_policy_explore_tier() -> Result<()> {
         let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
         harness.admit_champion_history().await?;
@@ -2135,6 +2414,49 @@ mod file_tests {
 
         let prepared = prepare_files(&harness.config_path, options).await?;
 
+        assert_eq!(
+            prepared
+                .treatment
+                .as_ref()
+                .map(|exploration| exploration.challenger_tier.as_str()),
+            Some("economy")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_exploration_does_not_resolve_an_unused_candidate_tier() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(
+                &harness.config_path,
+                OptimizationOptions {
+                    candidate_tier: Some("economy".into()),
+                    ..Default::default()
+                },
+            )
+            .await?,
+        )
+        .await?;
+        let active = load(&harness.policy_path).await?;
+        let mut without_default = active.document;
+        without_default
+            .policies
+            .get_mut("auto")
+            .context("test policy is missing")?
+            .adequacy
+            .explore_tier = None;
+        publish_candidate(
+            &harness.policy_path,
+            &active.digest,
+            &without_default,
+            &default_history_dir(&harness.policy_path),
+        )?;
+
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+
+        assert_eq!(prepared.step.action, ControllerAction::Hold);
         assert_eq!(
             prepared
                 .treatment

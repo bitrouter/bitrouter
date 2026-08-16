@@ -41,15 +41,35 @@ pub struct CohortAssessment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SubjectKey {
+    scope: EvalScope,
+    subject_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct NormalizedReference {
+    unit: ExperimentAssignmentUnit,
+    digest: String,
+    arm: ExperimentArm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct UnitKey {
+    subject_scope: EvalScope,
     unit: ExperimentAssignmentUnit,
     digest: String,
     subject_id: String,
 }
 
 #[derive(Default)]
+struct SubjectGroup<'a> {
+    malformed: bool,
+    references: BTreeSet<NormalizedReference>,
+    records: Vec<&'a EvalEvidenceRecord>,
+}
+
 struct UnitGroup<'a> {
-    arms: BTreeSet<ExperimentArm>,
+    arm: ExperimentArm,
     records: Vec<&'a EvalEvidenceRecord>,
 }
 
@@ -91,77 +111,86 @@ pub fn assess_cohort(
     active_policy_digest: &str,
     exploration: &RouteExploration,
 ) -> Result<CohortAssessment> {
-    let mut groups = BTreeMap::<UnitKey, UnitGroup<'_>>::new();
-    let mut excluded_requests = 0_u32;
-    let mut excluded_control = 0_u32;
-    let mut excluded_challenger = 0_u32;
+    let mut subjects = BTreeMap::<SubjectKey, SubjectGroup<'_>>::new();
+    let mut excluded_request_subjects = BTreeSet::<SubjectKey>::new();
     for record in &snapshot.records {
-        let referenced_arms = record
+        let target_decisions = record
             .subject
             .decisions
             .iter()
-            .filter_map(|decision| {
-                (decision.request_key == exploration.target_request_key)
-                    .then_some(decision.experiment.as_ref())
-                    .flatten()
-                    .map(|experiment| experiment.arm)
-            })
-            .collect::<BTreeSet<_>>();
-        if referenced_arms.is_empty() {
-            continue;
-        }
-        let matching = record
-            .subject
-            .decisions
-            .iter()
-            .filter_map(|decision| {
-                let experiment = decision.experiment.as_ref()?;
-                (decision.policy_digest == active_policy_digest
-                    && decision.request_key == exploration.target_request_key
-                    && experiment.experiment_id == exploration.experiment_id)
-                    .then_some(experiment)
-            })
+            .filter(|decision| decision.request_key == exploration.target_request_key)
             .collect::<Vec<_>>();
+        if target_decisions.is_empty() {
+            continue;
+        }
         if record.subject.scope == EvalScope::Request {
-            excluded_requests = excluded_requests
-                .checked_add(1)
-                .context("counting excluded request eval subjects")?;
+            excluded_request_subjects.insert(SubjectKey {
+                scope: record.subject.scope,
+                subject_id: record.subject.subject_id.clone(),
+            });
             continue;
         }
-        if record.subject.policy_digest != active_policy_digest || matching.is_empty() {
-            for arm in referenced_arms {
-                let excluded = match arm {
-                    ExperimentArm::Control => &mut excluded_control,
-                    ExperimentArm::Challenger => &mut excluded_challenger,
-                };
-                *excluded = excluded
-                    .checked_add(1)
-                    .context("counting policy or experiment exclusions")?;
-            }
-            continue;
+        let group = subjects
+            .entry(SubjectKey {
+                scope: record.subject.scope,
+                subject_id: record.subject.subject_id.clone(),
+            })
+            .or_default();
+        if record.subject.policy_digest != active_policy_digest {
+            group.malformed = true;
         }
-        for experiment in matching {
-            let group = groups
-                .entry(UnitKey {
-                    unit: experiment.assignment_unit,
-                    digest: experiment.assignment_id_digest.clone(),
-                    subject_id: record.subject.subject_id.clone(),
-                })
-                .or_default();
-            group.arms.insert(experiment.arm);
-            if !group
-                .records
-                .iter()
-                .any(|existing| existing.result_id == record.result_id)
+        for decision in target_decisions {
+            let Some(experiment) = decision.experiment.as_ref() else {
+                group.malformed = true;
+                continue;
+            };
+            if decision.policy_digest != active_policy_digest
+                || experiment.experiment_id != exploration.experiment_id
+                || experiment.challenger_propensity_ppm != exploration.challenger_exposure_ppm
             {
-                group.records.push(record);
+                group.malformed = true;
+                continue;
             }
+            group.references.insert(NormalizedReference {
+                unit: experiment.assignment_unit,
+                digest: experiment.assignment_id_digest.clone(),
+                arm: experiment.arm,
+            });
         }
+        if !group
+            .records
+            .iter()
+            .any(|existing| existing.result_id == record.result_id)
+        {
+            group.records.push(record);
+        }
+    }
+    let excluded_requests = u32::try_from(excluded_request_subjects.len())
+        .context("counting excluded request eval subjects")?;
+    let mut groups = BTreeMap::<UnitKey, UnitGroup<'_>>::new();
+    for (subject, group) in subjects {
+        if group.malformed || group.references.len() != 1 {
+            continue;
+        }
+        let Some(reference) = group.references.into_iter().next() else {
+            continue;
+        };
+        groups.insert(
+            UnitKey {
+                subject_scope: subject.scope,
+                unit: reference.unit,
+                digest: reference.digest,
+                subject_id: subject.subject_id,
+            },
+            UnitGroup {
+                arm: reference.arm,
+                records: group.records,
+            },
+        );
     }
 
     let inferred_configs = groups
         .values()
-        .filter(|group| group.arms.len() == 1)
         .filter_map(|group| match conclusive_record(&group.records, None) {
             ConclusiveRecord::Consistent(record) => Some(record),
             ConclusiveRecord::None | ConclusiveRecord::Conflict => None,
@@ -176,33 +205,13 @@ pub fn assess_cohort(
             None => (None, false),
         };
 
-    let mut control = ArmAssessment {
-        excluded: excluded_control,
-        ..ArmAssessment::default()
-    };
-    let mut challenger = ArmAssessment {
-        excluded: excluded_challenger,
-        ..ArmAssessment::default()
-    };
+    let mut control = ArmAssessment::default();
+    let mut challenger = ArmAssessment::default();
     let mut control_cost = CostAggregate::default();
     let mut challenger_cost = CostAggregate::default();
     for group in groups.values_mut() {
-        group.records.sort_by(|left, right| {
-            left.result
-                .submitted_at
-                .cmp(&right.result.submitted_at)
-                .then_with(|| left.result_id.cmp(&right.result_id))
-        });
-        if group.arms.len() != 1 {
-            for arm in &group.arms {
-                arm_assessment_mut(*arm, &mut control, &mut challenger).excluded += 1;
-            }
-            continue;
-        }
-        let arm = match group.arms.iter().next().copied() {
-            Some(arm) => arm,
-            None => continue,
-        };
+        sort_records_by_submitted_at(&mut group.records)?;
+        let arm = group.arm;
         let assessment = arm_assessment_mut(arm, &mut control, &mut challenger);
         assessment.observed = assessment
             .observed
@@ -322,6 +331,27 @@ pub fn assess_cohort(
         cost_delta_micro_usd,
         verdict,
     })
+}
+
+fn sort_records_by_submitted_at(records: &mut Vec<&EvalEvidenceRecord>) -> Result<()> {
+    let mut normalized = records
+        .iter()
+        .copied()
+        .map(|record| {
+            let submitted_at = chrono::DateTime::parse_from_rfc3339(&record.result.submitted_at)
+                .with_context(|| {
+                    format!("result '{}' submitted_at must be RFC3339", record.result_id)
+                })?;
+            Ok((submitted_at, record))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    normalized.sort_by(|(left_time, left), (right_time, right)| {
+        left_time
+            .cmp(right_time)
+            .then_with(|| left.result_id.cmp(&right.result_id))
+    });
+    *records = normalized.into_iter().map(|(_, record)| record).collect();
+    Ok(())
 }
 
 fn conclusive_record<'a>(
@@ -691,7 +721,92 @@ mod tests {
         assert_eq!(assessment.challenger.pass, 1);
         assert_eq!(assessment.control.eligible, 1);
         assert_eq!(assessment.excluded_requests, 1);
-        assert_eq!(assessment.challenger.excluded, 4);
+        assert_eq!(assessment.challenger.excluded, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn one_subject_cannot_multiply_one_arm_with_different_assignment_digests() -> Result<()> {
+        let mut malformed = record(spec(
+            "same-arm-multiple-digests",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        ));
+        malformed.subject.decisions.push(decision(
+            "decision-2",
+            ExperimentArm::Challenger,
+            POLICY_DIGEST,
+            EXPERIMENT_ID,
+            "different-assignment",
+        ));
+
+        let assessment = assess_cohort(
+            &snapshot(vec![malformed]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.control.observed, 0);
+        assert_eq!(assessment.challenger.observed, 0);
+        assert_eq!(assessment.control.excluded, 0);
+        assert_eq!(assessment.challenger.excluded, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn one_subject_cannot_straddle_arms_with_different_assignment_digests() -> Result<()> {
+        let mut malformed = record(spec(
+            "opposite-arm-multiple-digests",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        ));
+        malformed.subject.decisions.push(decision(
+            "decision-2",
+            ExperimentArm::Control,
+            POLICY_DIGEST,
+            EXPERIMENT_ID,
+            "different-assignment",
+        ));
+
+        let assessment = assess_cohort(
+            &snapshot(vec![malformed]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.control.observed, 0);
+        assert_eq!(assessment.challenger.observed, 0);
+        assert_eq!(assessment.control.excluded, 0);
+        assert_eq!(assessment.challenger.excluded, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_assignment_propensity_cannot_enter_either_arm() -> Result<()> {
+        let mut malformed = record(spec(
+            "wrong-propensity",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        ));
+        malformed.subject.decisions[0]
+            .experiment
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("test experiment reference is missing"))?
+            .challenger_propensity_ppm = 499_999;
+
+        let assessment = assess_cohort(
+            &snapshot(vec![malformed]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.control.observed, 0);
+        assert_eq!(assessment.challenger.observed, 0);
+        assert_eq!(assessment.control.excluded, 0);
+        assert_eq!(assessment.challenger.excluded, 0);
         Ok(())
     }
 
@@ -917,6 +1032,32 @@ mod tests {
     }
 
     #[test]
+    fn identical_subject_ids_in_different_scopes_remain_independent() -> Result<()> {
+        let task = spec(
+            "cross-scope-subject",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        );
+        let mut episode = task.clone();
+        episode.scope = EvalScope::Episode;
+        episode.result_suffix = "episode";
+        episode.trajectory_cost = Some(600);
+
+        let assessment = assess_cohort(
+            &snapshot(vec![record(task), record(episode)]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.challenger.observed, 2);
+        assert_eq!(assessment.challenger.eligible, 2);
+        assert_eq!(assessment.challenger.pass, 2);
+        assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(650));
+        Ok(())
+    }
+
+    #[test]
     fn consistent_conclusive_duplicates_use_the_latest_complete_subject_record() -> Result<()> {
         let mut older = spec(
             "consistent-duplicate",
@@ -942,5 +1083,60 @@ mod tests {
         assert_eq!(assessment.challenger.excluded, 0);
         assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(600));
         Ok(())
+    }
+
+    #[test]
+    fn latest_complete_cost_orders_rfc3339_instants_then_result_id() -> Result<()> {
+        let mut stale = spec(
+            "offset-crossing-cost",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            1_200,
+        );
+        stale.result_suffix = "stale";
+        stale.submitted_at = "2026-08-17T02:00:00+02:00";
+        let mut tied_earlier_id = stale.clone();
+        tied_earlier_id.result_suffix = "a";
+        tied_earlier_id.submitted_at = "2026-08-17T01:00:00Z";
+        tied_earlier_id.trajectory_cost = Some(700);
+        let mut tied_later_id = stale.clone();
+        tied_later_id.result_suffix = "z";
+        tied_later_id.submitted_at = "2026-08-17T02:00:00+01:00";
+        tied_later_id.trajectory_cost = Some(600);
+
+        let assessment = assess_cohort(
+            &snapshot(vec![
+                record(tied_later_id),
+                record(stale),
+                record(tied_earlier_id),
+            ]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(600));
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_result_timestamp_returns_a_checked_error() {
+        let mut malformed = spec(
+            "malformed-submitted-at",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        );
+        malformed.submitted_at = "not-rfc3339";
+
+        let error = assess_cohort(
+            &snapshot(vec![record(malformed)]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )
+        .err();
+
+        assert!(
+            error.is_some_and(|error| error.to_string().contains("submitted_at must be RFC3339"))
+        );
     }
 }

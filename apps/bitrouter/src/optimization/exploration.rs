@@ -35,18 +35,24 @@ impl RouteExploration {
     /// Missing stable identity deliberately produces no evidence and lets the
     /// caller retain the champion route.
     pub fn assignment(&self, identity: &WorkflowIdentity) -> Result<Option<EvalExperimentRef>> {
-        let (assignment_unit, assignment_id) = match (
-            identity.benchmark_run_id.as_deref(),
-            identity.trial_id.as_deref(),
-            identity.parent_session_id.as_deref(),
-        ) {
-            (Some(run), Some(trial), _) if !run.is_empty() && !trial.is_empty() => {
-                (ExperimentAssignmentUnit::Task, format!("{run}\0{trial}"))
-            }
-            (_, None, Some(parent)) if !parent.is_empty() => {
-                (ExperimentAssignmentUnit::Episode, parent.to_owned())
-            }
-            _ => return Ok(None),
+        let benchmark_identity = identity
+            .benchmark_run_id
+            .as_deref()
+            .filter(|run| !run.is_empty())
+            .zip(
+                identity
+                    .trial_id
+                    .as_deref()
+                    .filter(|trial| !trial.is_empty()),
+            )
+            .map(|(run, trial)| (ExperimentAssignmentUnit::Task, format!("{run}\0{trial}")));
+        let parent_identity = identity
+            .parent_session_id
+            .as_deref()
+            .filter(|parent| !parent.is_empty())
+            .map(|parent| (ExperimentAssignmentUnit::Episode, parent.to_owned()));
+        let Some((assignment_unit, assignment_id)) = benchmark_identity.or(parent_identity) else {
+            return Ok(None);
         };
         let assignment_id_digest = digest(&assignment_id);
         let bucket_digest = Sha256::digest(
@@ -79,6 +85,13 @@ impl RouteExploration {
 #[serde(deny_unknown_fields)]
 pub struct RouteRejection {
     pub experiment_id: String,
+    /// Canonical route rejected by current optimizer locks. Older locks remain
+    /// readable without it, but cannot authorize a route-less certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_request_key: Option<String>,
+    /// Absent only in legacy locks. Because their rejected treatment cannot be
+    /// reconstructed safely, cold-start selection treats such a ledger as no
+    /// new opportunity until an operator changes or replaces the policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub treatment_context_digest: Option<String>,
     pub evidence_root: String,
@@ -176,6 +189,39 @@ mod tests {
                 .assignment(&identity_without_trial_or_parent)?
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn partial_benchmark_identity_falls_back_to_a_non_empty_parent_episode() -> Result<()> {
+        for benchmark_run_id in [None, Some(String::new())] {
+            let identity = WorkflowIdentity {
+                benchmark_run_id,
+                trial_id: Some("orphan-trial".into()),
+                parent_session_id: Some("parent-session".into()),
+                ..WorkflowIdentity::default()
+            };
+
+            let assignment = experiment()
+                .assignment(&identity)?
+                .ok_or_else(|| anyhow::anyhow!("the parent episode identity must be usable"))?;
+
+            assert_eq!(
+                assignment.assignment_unit,
+                ExperimentAssignmentUnit::Episode
+            );
+            assert_eq!(
+                assignment.assignment_id_digest,
+                "sha256:a1bdc27ac7582a7459555e91884123666722003a729ba3fbfc29676fc4f724c7"
+            );
+        }
+
+        let unusable = WorkflowIdentity {
+            trial_id: Some("orphan-trial".into()),
+            parent_session_id: Some(String::new()),
+            ..WorkflowIdentity::default()
+        };
+        assert!(experiment().assignment(&unusable)?.is_none());
         Ok(())
     }
 }
