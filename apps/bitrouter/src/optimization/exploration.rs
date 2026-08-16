@@ -79,6 +79,7 @@ impl RouteExploration {
 #[serde(deny_unknown_fields)]
 pub struct RouteRejection {
     pub experiment_id: String,
+    pub treatment_context_digest: String,
     pub evidence_root: String,
     pub reason: String,
 }

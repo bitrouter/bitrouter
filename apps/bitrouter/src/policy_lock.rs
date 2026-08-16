@@ -469,6 +469,10 @@ fn validate_optimization_state(policy_name: &str, policy: &PolicyDefinition) -> 
             "optimization rejection experiment_id",
         )?;
         validate_sha256_digest(
+            &rejection.treatment_context_digest,
+            "optimization rejection treatment_context_digest",
+        )?;
+        validate_sha256_digest(
             &rejection.evidence_root,
             "optimization rejection evidence_root",
         )?;
@@ -3018,6 +3022,8 @@ mod tests {
         let rejection = RouteRejection {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            treatment_context_digest:
+                "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".into(),
             evidence_root:
                 "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
             reason: "insufficient quality".into(),
