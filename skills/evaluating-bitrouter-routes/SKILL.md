@@ -6,8 +6,8 @@ description: Use when evaluating BitRouter route decisions or Eval Exchange subj
 # Evaluate BitRouter Routes
 
 Evaluate outcomes outside BitRouter's serving path. Produce an immutable result
-and stop after BitRouter reports its admission status; an operator owns
-snapshots, candidate compilation, diffs, and publication.
+and stop after BitRouter reports its admission status. Do not run the optimizer
+or use low-level policy publication from the evaluator workflow.
 
 Read [the Eval Exchange reference](references/eval-exchange.md) before forming
 a subject or result. It is the exact current wire and authority contract.
@@ -35,8 +35,10 @@ Choose `evaluator.kind` from the actual source:
 ## Build the evaluator packet
 
 1. Copy every decision's `decision_id`, `policy`, `request_key`,
-   `selected_tier`, `baseline_tier`, and `policy_digest` from router-authored
-   evidence.
+   `selected_tier`, `baseline_tier`, `policy_digest`, and optional `experiment`
+   object from router-authored evidence. Preserve the experiment object
+   verbatim; never invent or edit its id, arm, assignment unit, assignment-id
+   digest, or challenger propensity.
 2. Redact evidence before it leaves its private source. Retain raw messages,
    tool arguments, code, and evaluator output with the evaluator; place safe,
    content-addressed evidence items in the subject.
@@ -45,6 +47,9 @@ Choose `evaluator.kind` from the actual source:
    verdict.
 4. Set `confidence_ppm` to the evaluator's confidence that its verdict is
    correct. Use `null` when the evaluator or rubric does not supply confidence.
+   For a task or episode cost result, submit the complete unit cost as
+   `cost.usd_micros` with unit `micro_usd`; never substitute one request's
+   price for the complete task or episode.
 5. Write a draft subject with an empty `evidence_digest`, then seal it:
 
    ```bash
@@ -73,8 +78,10 @@ Choose `evaluator.kind` from the actual source:
 
 2. Treat an `admitted` response as eligible evidence. Preserve `held_out`,
    `rejected`, and `disputed` responses as non-training records.
-3. Hand the sealed subject, result, submission response, and private evidence
-   references to the operator. Stop before snapshot, compile, diff, or publish.
+3. Hand off the sealed subject, result, submission response, and private
+   evidence references, then stop. A later `bitrouter optimize run` invocation
+   is a separate autonomous authorization; do not review, publish, or run it as
+   part of evaluation.
 
 ## Keep the packet consistent
 
@@ -84,5 +91,7 @@ Choose `evaluator.kind` from the actual source:
   causal policy (for example, a matched control plus one changed route family)
   or withhold credit.
 - Preserve the router-authored baseline and selected tiers.
+- Preserve router-authored experiment references exactly.
+  Optimizer membership never comes from the evaluator-owned `cohort` string.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.

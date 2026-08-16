@@ -179,32 +179,19 @@ fn init_yes_rejects_removed_workflow_optimization_before_scaffolding() -> anyhow
     let out = run_cli(
         home.path(),
         data.path(),
-        &[
-            "init",
-            "--yes",
-            "--optimize",
-            "--optimize-workflow-command",
-            "/usr/bin/true",
-            "--optimize-success",
-            "the workflow exits",
-            "--after",
-            "exit",
-            "-c",
-            cfg_arg,
-        ],
+        &["init", "--yes", "--optimize", "-c", cfg_arg],
         &[],
     );
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("workflow optimization onboarding was removed")
-            || stdout.contains("workflow optimization onboarding was removed"),
-        "unexpected optimization preflight error: stdout={stdout}; stderr={stderr}"
+        stderr.contains("unexpected argument '--optimize'"),
+        "unexpected parser error: stdout={stdout}; stderr={stderr}"
     );
     assert!(
         !cfg.exists(),
-        "removed optimization onboarding must fail before creating the source config"
+        "removed optimization flag must fail before creating the source config"
     );
     Ok(())
 }

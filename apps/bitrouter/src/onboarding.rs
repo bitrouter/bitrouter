@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login as cloud_login};
@@ -190,32 +190,6 @@ pub struct OnboardingFlags {
     pub model: Option<String>,
     /// (Step 3) Write a starter `bitrouter.yaml`.
     pub write_config: bool,
-    /// Optional generic workflow optimization onboarding.
-    pub optimization: Option<OnboardingOptimization>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OnboardingOptimization {
-    /// Exact argv when already supplied; interactive onboarding fills it in.
-    pub workflow_command: Option<Vec<String>>,
-    /// Ignored/generated dependency or fixture roots frozen for each variant.
-    pub workflow_inputs: Vec<PathBuf>,
-    /// Observable success criteria; interactive onboarding fills it in.
-    pub success_contract: Option<String>,
-    pub strong: Option<String>,
-    pub strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub economy: Option<String>,
-    pub economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub normalized_price_overrides: Vec<String>,
-    pub preference: OnboardingOptimizationPreference,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OnboardingOptimizationPreference {
-    QualityFirst,
-    Balanced,
-    SavingsFirst,
 }
 
 impl Default for OnboardingFlags {
@@ -235,7 +209,6 @@ impl Default for OnboardingFlags {
             after: None,
             model: None,
             write_config: false,
-            optimization: None,
         }
     }
 }
@@ -274,19 +247,6 @@ pub struct OnboardingReport {
     pub after: String,
     /// The paste-in snippet for `after: serve`; `null` otherwise.
     pub snippet: Option<Snippet>,
-    /// Version-controlled optimization files configured during onboarding.
-    pub optimization: Option<OptimizationOnboardingReport>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct OptimizationOnboardingReport {
-    pub intent: String,
-    pub lock: String,
-    pub evaluator: String,
-    pub strong: String,
-    pub economy: String,
-    pub normalized_price_overrides: Vec<String>,
-    pub preference: OnboardingOptimizationPreference,
 }
 
 impl CliReport for OnboardingReport {
@@ -312,21 +272,6 @@ impl CliReport for OnboardingReport {
             },
         )?;
         h.field("after", &self.after)?;
-        if let Some(optimization) = &self.optimization {
-            h.field("optimization intent", &optimization.intent)?;
-            h.field("optimization lock", &optimization.lock)?;
-            h.field("quality evaluator", &optimization.evaluator)?;
-            h.field("strong route", &optimization.strong)?;
-            h.field("economy route", &optimization.economy)?;
-            h.field(
-                "normalized prices",
-                if optimization.normalized_price_overrides.is_empty() {
-                    "provider catalog".to_string()
-                } else {
-                    optimization.normalized_price_overrides.join(", ")
-                },
-            )?;
-        }
         if let Some(snippet) = &self.snippet {
             h.blank()?;
             h.line(&format!("paste-in wiring ({}):", snippet.base_url))?;
@@ -458,7 +403,6 @@ fn empty_report() -> OnboardingReport {
         harnesses_installed: Vec::new(),
         after: AfterAction::Exit.as_str().to_string(),
         snippet: None,
-        optimization: None,
     }
 }
 
@@ -467,9 +411,6 @@ fn empty_report() -> OnboardingReport {
 // =====================================================================
 
 async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
-    if let Some(optimization) = flags.optimization.as_ref() {
-        preflight_headless_optimization_routes(&flags.config, optimization).await?;
-    }
     let signals = probe();
     // Already-present credentials always count (spec §4: "consume
     // already-present credentials + flag-supplied keys").
@@ -510,15 +451,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         }
     }
 
-    let optimization = match flags.optimization.clone() {
-        Some(optimization) => Some(
-            configure_optimization(&flags.config, optimization, &installed)
-                .await
-                .context("configuring workflow optimization during onboarding")?,
-        ),
-        None => None,
-    };
-
     // --- Step 3: finish ---
     let after = flags.after.unwrap_or(AfterAction::Exit);
     let mut report = OnboardingReport {
@@ -528,7 +460,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
-        optimization,
     };
 
     match after {
@@ -555,15 +486,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         AfterAction::Serve => finish_serve(report, output).await,
         AfterAction::Exit => emit(output, &report),
     }
-}
-
-async fn preflight_headless_optimization_routes(
-    _config: &Path,
-    _requested: &OnboardingOptimization,
-) -> Result<()> {
-    anyhow::bail!(
-        "workflow optimization onboarding was removed; initialize a policy, then run `bitrouter optimize run`"
-    )
 }
 
 /// Apply the flag-supplied credentials shared by both the headless runner and
@@ -697,27 +619,6 @@ async fn run_interactive(
     // --- Step 2: harness ---
     let installed = interactive_harness(&flags).await?;
 
-    // --- Optional workflow optimization ---
-    let optimization_request = interactive_optimization(&flags)?;
-    let optimization = if let Some(optimization_request) = optimization_request {
-        if !flags.config.is_file() {
-            match crate::commands::write_starter_config(&flags.config, flags.force).await? {
-                ScaffoldOutcome::Wrote => note(&format!(
-                    "wrote starter config to {}",
-                    flags.config.display()
-                )),
-                ScaffoldOutcome::Skipped => {}
-            }
-        }
-        Some(
-            configure_optimization(&flags.config, optimization_request, &installed)
-                .await
-                .context("configuring workflow optimization during onboarding")?,
-        )
-    } else {
-        None
-    };
-
     // --- Step 3: finish ---
     let after = interactive_after(&flags, &installed)?;
 
@@ -728,7 +629,6 @@ async fn run_interactive(
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
-        optimization,
     };
 
     match after {
@@ -884,25 +784,6 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
         }
     }
     Ok(installed)
-}
-
-fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<OnboardingOptimization>> {
-    if flags.optimization.is_some() {
-        anyhow::bail!(
-            "workflow optimization onboarding was removed; initialize a policy, then run `bitrouter optimize run`"
-        );
-    }
-    Ok(None)
-}
-
-async fn configure_optimization(
-    _config: &Path,
-    _requested: OnboardingOptimization,
-    _installed: &[String],
-) -> Result<OptimizationOnboardingReport> {
-    anyhow::bail!(
-        "workflow optimization onboarding was removed; initialize a policy, then run `bitrouter optimize run`"
-    )
 }
 
 fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
@@ -1261,7 +1142,6 @@ mod tests {
             harnesses_installed: vec!["claude".to_string()],
             after: "launch".to_string(),
             snippet: None,
-            optimization: None,
         };
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "onboarding");
@@ -1278,6 +1158,39 @@ mod tests {
         // `snippet` is present-but-null when there is nothing to paste.
         assert!(v.get("snippet").is_some());
         assert!(v["snippet"].is_null());
+        assert!(
+            v.get("optimization").is_none(),
+            "onboarding must not expose the removed optimization workflow"
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_init_writes_no_removed_optimization_artifacts() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = directory.path().join("bitrouter.yaml");
+        run_headless(
+            OnboardingFlags {
+                config: config.clone(),
+                yes: true,
+                after: Some(AfterAction::Exit),
+                ..OnboardingFlags::default()
+            },
+            &Output::new(crate::output::Format::Json),
+        )
+        .await?;
+
+        assert!(config.is_file(), "normal starter config was not written");
+        for removed in [
+            "bitrouter.optimize.yaml",
+            "bitrouter.optimize.lock.yaml",
+            "bitrouter.eval.md",
+        ] {
+            assert!(
+                !directory.path().join(removed).exists(),
+                "removed onboarding artifact {removed} was written"
+            );
+        }
+        Ok(())
     }
 
     #[test]

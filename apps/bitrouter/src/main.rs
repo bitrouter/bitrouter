@@ -276,41 +276,6 @@ enum Command {
         /// write).
         #[arg(long)]
         write_config: bool,
-        /// Configure the version-controlled workflow optimization loop.
-        #[arg(long)]
-        optimize: bool,
-        /// Exact workflow executable for headless optimization onboarding.
-        #[arg(long)]
-        optimize_workflow_command: Option<String>,
-        /// One exact workflow argument; repeat to preserve argv boundaries.
-        #[arg(long, allow_hyphen_values = true)]
-        optimize_workflow_arg: Vec<String>,
-        /// Ignored or generated workflow input to freeze into both variants;
-        /// repeat for dependency roots such as node_modules or .venv.
-        #[arg(long)]
-        optimize_workflow_input: Vec<PathBuf>,
-        /// Observable workflow success contract text.
-        #[arg(long)]
-        optimize_success: Option<String>,
-        /// Provider-qualified strong route for optimization onboarding.
-        #[arg(long)]
-        optimize_strong: Option<String>,
-        /// Policy-owned effort for the optimization strong route.
-        #[arg(long, requires = "optimize_strong")]
-        optimize_strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-        /// Provider-qualified economy route for optimization onboarding.
-        #[arg(long)]
-        optimize_economy: Option<String>,
-        /// Policy-owned effort for the optimization economy route.
-        #[arg(long, requires = "optimize_economy")]
-        optimize_economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-        /// Frozen normalized-showback price override. Repeat for unpriced
-        /// subscription routes.
-        #[arg(long = "optimize-normalized-price")]
-        optimize_normalized_prices: Vec<String>,
-        /// Qualitative optimization trade-off; latency is observe-only.
-        #[arg(long, value_enum, default_value_t = OptimizePreferenceArg::Balanced)]
-        optimize_preference: OptimizePreferenceArg,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -1130,23 +1095,6 @@ enum EvalAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum OptimizePreferenceArg {
-    QualityFirst,
-    Balanced,
-    SavingsFirst,
-}
-
-impl From<OptimizePreferenceArg> for bitrouter::onboarding::OnboardingOptimizationPreference {
-    fn from(value: OptimizePreferenceArg) -> Self {
-        match value {
-            OptimizePreferenceArg::QualityFirst => Self::QualityFirst,
-            OptimizePreferenceArg::Balanced => Self::Balanced,
-            OptimizePreferenceArg::SavingsFirst => Self::SavingsFirst,
-        }
-    }
-}
-
 #[derive(Subcommand)]
 enum OptimizeAction {
     /// Perform one deterministic controller transition from admitted Eval history.
@@ -1562,46 +1510,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             after,
             model,
             write_config,
-            optimize,
-            optimize_workflow_command,
-            optimize_workflow_arg,
-            optimize_workflow_input,
-            optimize_success,
-            optimize_strong,
-            optimize_strong_effort,
-            optimize_economy,
-            optimize_economy_effort,
-            optimize_normalized_prices,
-            optimize_preference,
         } => {
-            let optimization = if optimize
-                || optimize_workflow_command.is_some()
-                || optimize_strong.is_some()
-                || optimize_strong_effort.is_some()
-                || optimize_economy.is_some()
-                || optimize_economy_effort.is_some()
-                || optimize_success.is_some()
-                || !optimize_workflow_input.is_empty()
-                || !optimize_normalized_prices.is_empty()
-            {
-                Some(bitrouter::onboarding::OnboardingOptimization {
-                    workflow_command: optimize_workflow_command.map(|command| {
-                        std::iter::once(command)
-                            .chain(optimize_workflow_arg)
-                            .collect()
-                    }),
-                    workflow_inputs: optimize_workflow_input,
-                    success_contract: optimize_success,
-                    strong: optimize_strong,
-                    strong_effort: optimize_strong_effort,
-                    economy: optimize_economy,
-                    economy_effort: optimize_economy_effort,
-                    normalized_price_overrides: optimize_normalized_prices,
-                    preference: optimize_preference.into(),
-                })
-            } else {
-                None
-            };
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
                 yes,
@@ -1617,7 +1526,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 after,
                 model,
                 write_config,
-                optimization,
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -5467,6 +5375,32 @@ mod tests {
     }
 
     #[test]
+    fn init_onboarding_rejects_removed_optimization_flags() {
+        use clap::Parser;
+
+        for removed_args in [
+            &["--optimize"][..],
+            &["--optimize-workflow-command", "./run-eval"][..],
+            &["--optimize-workflow-arg", "--smoke"][..],
+            &["--optimize-workflow-input", ".venv"][..],
+            &["--optimize-success", "tests pass"][..],
+            &["--optimize-strong", "openai:gpt-5"][..],
+            &["--optimize-strong-effort", "high"][..],
+            &["--optimize-economy", "openai:gpt-5-mini"][..],
+            &["--optimize-economy-effort", "low"][..],
+            &["--optimize-normalized-price", "openai:gpt-5=100"][..],
+            &["--optimize-preference", "balanced"][..],
+        ] {
+            let mut command = vec!["bitrouter", "init"];
+            command.extend_from_slice(removed_args);
+            assert!(
+                Cli::try_parse_from(command).is_err(),
+                "removed init arguments {removed_args:?} still parse"
+            );
+        }
+    }
+
+    #[test]
     fn providers_login_api_key_flag_parses() {
         use clap::Parser;
         let cli = Cli::try_parse_from([
@@ -5738,73 +5672,6 @@ mod tests {
             }) if policy == "auto"
                 && config == Path::new("bitrouter.yaml")
         ));
-        Ok(())
-    }
-
-    #[test]
-    fn init_optimization_routes_have_no_model_specific_defaults() -> anyhow::Result<()> {
-        use clap::Parser;
-
-        let parsed = Cli::try_parse_from(["bitrouter", "init", "--optimize"])?;
-        match parsed.command {
-            Some(Command::Init {
-                optimize_strong,
-                optimize_strong_effort,
-                optimize_economy,
-                optimize_economy_effort,
-                ..
-            }) => {
-                assert!(optimize_strong.is_none());
-                assert!(optimize_strong_effort.is_none());
-                assert!(optimize_economy.is_none());
-                assert!(optimize_economy_effort.is_none());
-            }
-            _ => anyhow::bail!("expected init command"),
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn init_optimization_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
-        use clap::Parser;
-
-        let parsed = Cli::try_parse_from([
-            "bitrouter",
-            "init",
-            "--optimize",
-            "--optimize-strong",
-            "openai-codex:gpt-5.6-sol",
-            "--optimize-strong-effort",
-            "high",
-            "--optimize-economy",
-            "openai-codex:gpt-5.6-sol",
-            "--optimize-economy-effort",
-            "low",
-        ])?;
-        match parsed.command {
-            Some(Command::Init {
-                optimize_strong,
-                optimize_strong_effort,
-                optimize_economy,
-                optimize_economy_effort,
-                ..
-            }) => {
-                assert_eq!(optimize_strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
-                assert_eq!(
-                    optimize_strong_effort,
-                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
-                );
-                assert_eq!(
-                    optimize_economy.as_deref(),
-                    Some("openai-codex:gpt-5.6-sol")
-                );
-                assert_eq!(
-                    optimize_economy_effort,
-                    Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
-                );
-            }
-            _ => anyhow::bail!("expected init command"),
-        }
         Ok(())
     }
 
