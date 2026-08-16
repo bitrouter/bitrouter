@@ -14,7 +14,7 @@ Bare `bitrouter` (no subcommand) is the onboarding front door: it runs the netwo
 | `bitrouter restart [--config PATH] [--log PATH] [--socket PATH]` | Stop, wait up to 30s for in-flight requests to drain, then start. Escalates to SIGKILL on timeout. |
 | `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. SIGHUP reloads daemon-side config but cannot forward newly exported shell variables. |
 | `bitrouter status [--config PATH] [--socket PATH]` | `systemctl status`-style block: pid / listen / model count / socket. Reports `stopped` (exit 0) when no daemon is reachable. |
-| `bitrouter status --watch` (`-w`) | Live view: newest-first request stream (time, model, provider actually used, tokens, cost, latency, status) + today's spend and trailing-minute rate. Refreshes every 1s; reads the metering store directly, so it works with no daemon (`history only`). Keys: `j`/`k` move, `g` live edge, `G` oldest, `r` reload, `e` `$EDITOR` on `bitrouter.yaml`, `?` help, `q` quit. **Piped, it prints one snapshot and exits** — use that form from an agent. Unix only. |
+| `bitrouter status --requests` (`-r`) | Newest-first table of settled requests (time, model, provider actually used, tokens, cost, latency, status) + today's spend and trailing-minute rate. Reads the metering store directly, so it works with no daemon (`history only`). Prints once and exits, identical piped or not — safe to call from an agent. Portable. Replaces the removed `--watch` live view; use `watch -n1` to repeat it. |
 
 ## Inspection
 

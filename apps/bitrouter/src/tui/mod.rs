@@ -1,70 +1,40 @@
-//! `bitrouter status --watch` — the live view of what the router is doing.
+//! `bitrouter status --requests` — what the router has actually done.
 //!
-//! Read-only by construction, with one deliberate exception (`r` → reload).
-//! The previous TUI in this codebase died by accreting mutation verbs until it
-//! became an agent orchestrator, so the rule here is external: **if there is
-//! no CLI subcommand for it, there is no keystroke for it**, and every
-//! mutating key echoes the command it ran. Growing the surface then requires
-//! adding a CLI command first, which gets normal review.
+//! A table of settled requests read straight from the metering store, plus a
+//! spend rollup. Printed once and exited, never drawn: this module holds a
+//! data layer and a text formatter, and nothing here takes the terminal.
 //!
-//! See `docs/OBSERVABILITY_TUI_SPEC.md`.
+//! # Why there is no live view any more
+//!
+//! There was one — a ratatui table refreshing once a second, with `r` (reload)
+//! and `e` (`$EDITOR`) bound to real `DaemonCommand`s. It was removed because
+//! it was the last thing in this binary that drew widgets, and it is the one
+//! surface whose data — daemon-wide request rows across every caller, most of
+//! which never speak ACP — cannot move to `bitrouter-tui` without importing a
+//! daemon-wide model into a session-scoped crate. Deleting it is what lets
+//! `apps/bitrouter` drop `ratatui` entirely, so that **only the renderer crate
+//! can draw**, checked by the build rather than by review.
+//!
+//! What it did that this does not: refresh on its own, and scroll. `watch -n1
+//! bitrouter status --requests` covers the first, and a pager the second. The
+//! two mutating keys were already `bitrouter reload` and `$EDITOR` on
+//! `bitrouter.yaml`, which is what the help pane said they were.
+//!
+//! See `docs/OBSERVABILITY_TUI_SPEC.md`, whose live-view half this supersedes.
 
 pub mod lifecycle;
 pub mod render;
 pub mod snapshot;
-/// The interactive view. Unix-only, gated here and nowhere else.
-#[cfg(unix)]
-pub mod watch;
 
 use std::path::Path;
 
-use anyhow::Result;
-
 use crate::metering::store::TimeWindow;
 
-/// Run `bitrouter status --watch`.
+/// One plain-text snapshot of the request stream and the spend rollup.
 ///
-/// A non-terminal stdout prints one snapshot and exits instead of refusing:
-/// `bitrouter status --watch --json | jq` is how people will script against
-/// this, and a view that only works interactively is a worse view.
-pub async fn run_watch(
-    source: &crate::paths::ConfigSource,
-    socket: &Path,
-    window: TimeWindow,
-) -> Result<()> {
-    // Unix only, stated rather than half-working. The rest of the binary does
-    // support Windows, but this view's exits depend on SIGTERM/SIGHUP, which
-    // have no equivalent here — and a view that cannot guarantee it restores
-    // the terminal is the one thing worse than no view. Piping still works
-    // everywhere: that path never touches the terminal.
-    #[cfg(not(unix))]
-    {
-        let _ = (source, socket, window);
-        anyhow::bail!(
-            "`status --watch` is unix-only today. Pipe it for a one-shot snapshot \
-             (`bitrouter status --watch | more`), or use `bitrouter status`."
-        );
-    }
-    #[cfg(unix)]
-    {
-        run_watch_unix(source, socket, window).await
-    }
-}
-
-#[cfg(unix)]
-async fn run_watch_unix(
-    source: &crate::paths::ConfigSource,
-    socket: &Path,
-    window: TimeWindow,
-) -> Result<()> {
-    lifecycle::enter()?;
-    lifecycle::install_panic_restore();
-    let result = watch::event_loop(source, socket, window).await;
-    lifecycle::restore();
-    result
-}
-
-/// One plain-text snapshot, for a redirected stdout.
+/// Portable, and identical whether stdout is a terminal or a pipe — which is
+/// what makes `bitrouter status --requests | …` and an agent reading the same
+/// bytes the same thing.
 pub async fn oneshot_text(
     source: &crate::paths::ConfigSource,
     socket: &Path,

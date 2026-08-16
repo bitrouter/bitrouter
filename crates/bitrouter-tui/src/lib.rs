@@ -29,15 +29,33 @@
 //! A control that does not do what it appears to do is worse than an absent
 //! one. A figure whose scope is unknown is worse than a blank.
 //!
-//! The rule is kept by where things live rather than by a capability struct.
-//! This crate draws what a session update actually carried; anything gated on
-//! what an agent can honour — a provider picker, a route line — is composed by
-//! the caller into the footer, because the caller is what knows whether the
-//! control would do anything.
+//! Where a control's honesty depends on something the protocol does not carry,
+//! that something is a **parameter**, not an inference — and there is no
+//! constructor that skips it. [`picker::Picker::open`] takes whether the agent
+//! serves `providers/*` at all; [`cost::Cost::new`] takes whose spend the
+//! figure is. The caller answers, because the caller is what knows; this crate
+//! makes not answering impossible rather than merely discouraged.
+//!
+//! # The line the boundary is drawn on
+//!
+//! *Knowledge*, not medium. Rendering something is never by itself a reason to
+//! move it out; naming something that is not in the protocol always is. So
+//! `providers/list` renders here — [`ProviderInfo`] is an ACP schema type — but
+//! the `_meta` key BitRouter invents to carry cost scope stays in the app, and
+//! `grep -rn "bitrouter/" crates/bitrouter-tui/src` returning nothing is how
+//! that is checked.
+//!
+//! [`ProviderInfo`]: agent_client_protocol_schema::v1::ProviderInfo
 
+pub mod cost;
+pub mod editor;
 pub mod journal;
+pub mod lifecycle;
 pub mod log_tail;
 pub mod permission;
+pub mod picker;
+pub mod plain;
 pub mod render;
+pub mod view;
 pub mod wrap;
 pub mod writer;

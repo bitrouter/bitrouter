@@ -86,7 +86,7 @@ export OPENCODE_ZEN_API_KEY=...        # opencode-zen AND opencode-go (shared)
 
 bitrouter start          # detached daemon, logs to ~/.bitrouter/bitrouter.log
 bitrouter status         # green dot + pid / listen / model count
-bitrouter status --watch # live request stream + spend (pipe it for one snapshot)
+bitrouter status --requests # settled-request table + spend (same piped or not)
 bitrouter update         # self-update the binary (prereleases by default); --check to dry-run
 ```
 
