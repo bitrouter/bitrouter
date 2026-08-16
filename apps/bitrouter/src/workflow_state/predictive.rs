@@ -250,7 +250,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:aa204ef3be199ffa8911e380e3dec214fb1070b28b113fa3c413e38703314ec6";
+    "sha256:2322f5cab95e9f41161ced547e7da5e9bf3e3f79de5c9c7e92b7cdc07a85bd04";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -345,11 +345,11 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
                 ("opening_broad".into(), 9),
                 ("continuing_broad".into(), 5),
                 ("concrete_mutation".into(), 7),
-                ("mutation".into(), 4),
-                ("verification".into(), 4),
+                ("mutation".into(), 5),
+                ("verification".into(), 5),
                 ("narrow_poll".into(), 9),
                 ("narrow_read".into(), 9),
-                ("finalize".into(), 3),
+                ("finalize".into(), 5),
                 ("read_result".into(), 9),
                 ("mutation_result".into(), 9),
                 ("test_failed_once".into(), 9),
@@ -462,9 +462,7 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             ),
             (
                 "read".into(),
-                string_terms(&[
-                    "read ", "show ", "inspect ", "open ", "print ", "locate ", "find ",
-                ]),
+                string_terms(&["read", "show", "inspect", "open", "print", "locate", "find"]),
             ),
             (
                 "finalize".into(),
@@ -963,19 +961,7 @@ fn contains_any_task_terms<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
 }
 
 fn contains_task_term(text: &str, term: &str) -> bool {
-    if term.is_empty() {
-        return false;
-    }
-
-    text.match_indices(term).any(|(start, _)| {
-        let end = start + term.len();
-        task_term_boundary(text[..start].chars().next_back())
-            && task_term_boundary(text[end..].chars().next())
-    })
-}
-
-fn task_term_boundary(character: Option<char>) -> bool {
-    character.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+    bounded_term_position(text, term).is_some()
 }
 
 fn add_task_family_bonus(scores: &mut BTreeMap<TaskFamily, i16>, family: TaskFamily, bonus: i16) {
@@ -1532,22 +1518,32 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
 
 fn instruction_features(text: &str) -> InstructionFeatures {
     let behavior = compiled_predictor_behavior();
-    let broad = contains_any(text, behavior_terms(&behavior.instruction_terms, "broad"));
-    let mutate = contains_any(text, behavior_terms(&behavior.instruction_terms, "mutate"));
-    let verify = contains_any(text, behavior_terms(&behavior.instruction_terms, "verify"));
-    let poll = contains_any(text, behavior_terms(&behavior.instruction_terms, "poll"));
-    let read_requested = contains_any(text, behavior_terms(&behavior.instruction_terms, "read"));
+    let broad = contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "broad"));
+    let mutate_position =
+        first_bounded_term_position(text, behavior_terms(&behavior.instruction_terms, "mutate"));
+    let verify_position =
+        first_bounded_term_position(text, behavior_terms(&behavior.instruction_terms, "verify"));
+    let (mutate, verify) = match (mutate_position, verify_position) {
+        (Some(mutate), Some(verify)) if mutate < verify => (true, false),
+        (Some(_), Some(_)) => (false, true),
+        (Some(_), None) => (true, false),
+        (None, Some(_)) => (false, true),
+        (None, None) => (false, false),
+    };
+    let poll = contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "poll"));
+    let read_requested =
+        contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "read"));
     let finalize = !mutate
         && !verify
         && !read_requested
-        && contains_any(
+        && contains_any_bounded(
             text,
             behavior_terms(&behavior.instruction_terms, "finalize"),
         );
     let concrete = has_concrete_evidence(text);
     let narrow_read = read_requested && concrete && !broad && !mutate && !verify && !poll;
     let contradictory = mutate
-        && contains_any(
+        && contains_any_bounded(
             text,
             behavior_terms(&behavior.instruction_terms, "contradiction"),
         );
@@ -1618,6 +1614,34 @@ fn has_concrete_evidence(text: &str) -> bool {
 
 fn contains_any<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
     terms.iter().any(|term| text.contains(term.as_ref()))
+}
+
+fn contains_any_bounded<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
+    first_bounded_term_position(text, terms).is_some()
+}
+
+fn first_bounded_term_position<T: AsRef<str>>(text: &str, terms: &[T]) -> Option<usize> {
+    terms
+        .iter()
+        .filter_map(|term| bounded_term_position(text, term.as_ref()))
+        .min()
+}
+
+fn bounded_term_position(text: &str, term: &str) -> Option<usize> {
+    if term.is_empty() {
+        return None;
+    }
+
+    text.match_indices(term).find_map(|(start, _)| {
+        let end = start + term.len();
+        (term_boundary(text[..start].chars().next_back())
+            && term_boundary(text[end..].chars().next()))
+        .then_some(start)
+    })
+}
+
+fn term_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
 }
 
 fn history_features(
@@ -2728,6 +2752,43 @@ mod tests {
             assert_eq!(
                 prediction.next_action_class, expected_action,
                 "{instruction}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_role_intent_uses_bounded_terms_and_first_action() {
+        let explicit_roles = [
+            ("Implement a new module.", NextStepRole::Implement),
+            ("Verify the result.", NextStepRole::Verify),
+            ("Summarize the result.", NextStepRole::Finalize),
+            ("Review the bug fix.", NextStepRole::Verify),
+            ("Fix the bug found in code review.", NextStepRole::Implement),
+        ];
+        for (instruction, expected_role) in explicit_roles {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            assert_eq!(
+                predict_next_step(&observed(&prompt), &prompt).next_step_role,
+                expected_role,
+                "{instruction}"
+            );
+        }
+
+        let false_role_reasons = [
+            ("Show the latest result.", "verification_requested"),
+            ("Address the issue.", "mutation_requested"),
+            ("Give an explanation.", "opening_broad_goal"),
+            ("Await the response.", "narrow_poll_requested"),
+        ];
+        for (instruction, absent_reason) in false_role_reasons {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+            assert!(
+                prediction
+                    .evidence
+                    .iter()
+                    .all(|evidence| evidence.code != absent_reason),
+                "{instruction}: {absent_reason}"
             );
         }
     }
