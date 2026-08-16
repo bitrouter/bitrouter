@@ -1039,6 +1039,7 @@ mod tests {
                         baseline_tier: Some("strong".into()),
                         baseline_effort: Some(ReasoningEffort::High),
                         policy_digest: "policy-digest".into(),
+                        experiment: None,
                     }],
                     requested_dimensions: BTreeSet::new(),
                     evidence: Vec::new(),
@@ -1238,6 +1239,7 @@ mod tests {
                 baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                experiment: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
             evidence,
@@ -1459,6 +1461,7 @@ mod tests {
                 baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                experiment: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
             evidence,
@@ -1569,6 +1572,7 @@ mod tests {
                         baseline_tier: Some("strong".into()),
                         baseline_effort: None,
                         policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                        experiment: None,
                     }],
                     requested_dimensions: BTreeSet::from([
                         "quality.pass".into(),

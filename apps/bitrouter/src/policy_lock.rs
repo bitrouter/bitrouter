@@ -24,6 +24,9 @@ use sha2::{Digest, Sha256};
 use crate::adequacy::store::AdequacyStore;
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
 use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
+use crate::optimization::exploration::{
+    OptimizationGate, PolicyOptimizationState, RouteExploration,
+};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
@@ -266,6 +269,9 @@ pub struct PolicyDefinition {
     /// whenever a route uses the predictive `agent_route/v1` namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predictor: Option<PredictorContract>,
+    /// Optional signed routing experiment and bounded rejected-treatment ledger.
+    #[serde(default, skip_serializing_if = "optimization_is_empty")]
+    pub optimization: Option<PolicyOptimizationState>,
     pub adequacy: AdequacyConfig,
 }
 
@@ -280,6 +286,7 @@ impl Default for PolicyDefinition {
             tool_safe_tiers: Vec::new(),
             progress_guard: None,
             predictor: None,
+            optimization: None,
             adequacy: AdequacyConfig::default(),
         }
     }
@@ -439,9 +446,94 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             validate_progress_guard(name, policy, guard)?;
         }
         validate_predictor_contract(name, policy, document.lockfile_version)?;
+        validate_optimization_state(name, policy)?;
     }
     if document.is_compiled() {
         validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_optimization_state(policy_name: &str, policy: &PolicyDefinition) -> Result<()> {
+    let Some(state) = policy.optimization.as_ref() else {
+        return Ok(());
+    };
+    if state.rejections.len() > 256 {
+        anyhow::bail!("policy '{policy_name}' optimization rejections exceed 256 records")
+    }
+    for rejection in &state.rejections {
+        validate_sha256_digest(
+            &rejection.experiment_id,
+            "optimization rejection experiment_id",
+        )?;
+        validate_sha256_digest(
+            &rejection.evidence_root,
+            "optimization rejection evidence_root",
+        )?;
+        if rejection.reason.trim().is_empty() || rejection.reason.len() > 512 {
+            anyhow::bail!("policy '{policy_name}' optimization rejection reason is invalid")
+        }
+    }
+    let Some(exploration) = &state.active else {
+        return Ok(());
+    };
+    validate_route_exploration(policy_name, policy, exploration)
+}
+
+fn optimization_is_empty(value: &Option<PolicyOptimizationState>) -> bool {
+    value.as_ref().is_none_or(PolicyOptimizationState::is_empty)
+}
+
+fn validate_route_exploration(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    exploration: &RouteExploration,
+) -> Result<()> {
+    validate_sha256_digest(&exploration.experiment_id, "optimization experiment_id")?;
+    if !RouteProjection::is_canonical_learning_key(&exploration.target_request_key)
+        || !policy.routes.contains_key(&exploration.target_request_key)
+    {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization target_request_key must name a canonical route"
+        )
+    }
+    for (label, tier) in [
+        ("champion_tier", exploration.champion_tier.as_str()),
+        ("challenger_tier", exploration.challenger_tier.as_str()),
+    ] {
+        if !policy.tiers.contains_key(tier) {
+            anyhow::bail!(
+                "policy '{policy_name}' optimization {label} must reference a defined tier"
+            )
+        }
+    }
+    if exploration.champion_tier == exploration.challenger_tier {
+        anyhow::bail!("policy '{policy_name}' optimization treatments must differ")
+    }
+    if !(1..=1_000_000).contains(&exploration.challenger_exposure_ppm) {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization challenger_exposure_ppm must be between 1 and 1000000"
+        )
+    }
+    validate_optimization_gate(policy_name, &exploration.gate)
+}
+
+fn validate_optimization_gate(policy_name: &str, gate: &OptimizationGate) -> Result<()> {
+    if gate.minimum_tasks_per_arm == 0 || gate.maximum_challenger_tasks == 0 {
+        anyhow::bail!("policy '{policy_name}' optimization sample budgets must be positive")
+    }
+    if gate.maximum_challenger_tasks < gate.minimum_tasks_per_arm {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization maximum_challenger_tasks must cover minimum_tasks_per_arm"
+        )
+    }
+    if !(1..=1_000_000).contains(&gate.minimum_pass_rate_ppm) {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization minimum_pass_rate_ppm must be between 1 and 1000000"
+        )
+    }
+    if let Some(digest) = gate.evaluator_config_digest.as_deref() {
+        validate_sha256_digest(digest, "optimization evaluator_config_digest")?;
     }
     Ok(())
 }
@@ -2500,7 +2592,13 @@ impl PolicyRuntime {
                     .collect();
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
-                    .with_progress_guard(definition.progress_guard.clone());
+                    .with_progress_guard(definition.progress_guard.clone())
+                    .with_exploration(
+                        definition
+                            .optimization
+                            .as_ref()
+                            .and_then(|state| state.active.clone()),
+                    );
                 router = router.with_eval_observer(
                     self.eval_decisions.clone(),
                     name.clone(),
@@ -2633,8 +2731,9 @@ impl ModelSelector for PolicyRuntime {
                 tier_efforts: router.effective_tier_efforts(input_effort),
                 preset: Some(policy_name.to_owned()),
                 projection,
-                candidate_tier: decision.static_tier.clone(),
+                candidate_tier: decision.selected_tier.clone(),
                 policy_digest: policy_digest.to_owned(),
+                experiment: decision.experiment.clone(),
                 policy: guard.clone(),
                 carries_tools: !ctx.prompt().tools.is_empty(),
                 tool_use_tier: router.tool_use_tier(),
@@ -2789,6 +2888,55 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_optimization_state_rejects_malformed_signed_metadata() {
+        let mut policy = PolicyDefinition::default();
+        policy
+            .tiers
+            .insert("strong".into(), PolicyModelTarget::Model("strong".into()));
+        policy
+            .tiers
+            .insert("economy".into(), PolicyModelTarget::Model("economy".into()));
+        policy
+            .routes
+            .insert("agent_trace/v2|edit|normal".into(), "strong".into());
+        policy.optimization = Some(PolicyOptimizationState {
+            active: Some(RouteExploration {
+                experiment_id: "not-a-digest".into(),
+                target_request_key: "agent_trace/v2|edit|normal".into(),
+                champion_tier: "strong".into(),
+                challenger_tier: "economy".into(),
+                challenger_exposure_ppm: 0,
+                gate: OptimizationGate {
+                    minimum_tasks_per_arm: 0,
+                    maximum_challenger_tasks: 0,
+                    minimum_pass_rate_ppm: 0,
+                    evaluator_config_digest: None,
+                },
+            }),
+            rejections: Vec::new(),
+        });
+        let lock = PolicyLock {
+            policies: BTreeMap::from([("auto".into(), policy)]),
+            ..PolicyLock::default()
+        };
+        assert!(validate_document(&lock).is_err());
+    }
+
+    #[test]
+    fn empty_optimization_state_is_omitted_from_deterministic_yaml() -> anyhow::Result<()> {
+        let mut lock = PolicyLock::default();
+        let mut policy = PolicyDefinition::default();
+        policy
+            .tiers
+            .insert("strong".into(), PolicyModelTarget::Model("strong".into()));
+        policy.optimization = Some(PolicyOptimizationState::default());
+        lock.policies.insert("auto".into(), policy);
+
+        assert!(!deterministic_yaml(&lock)?.contains("optimization:"));
+        Ok(())
+    }
 
     #[test]
     fn trajectory_request_start_uses_pipeline_elapsed_time() -> anyhow::Result<()> {

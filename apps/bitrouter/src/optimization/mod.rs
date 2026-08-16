@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 pub mod discovery;
 pub mod evaluator;
+pub mod exploration;
 pub mod orchestrator;
 pub mod runner;
 pub mod setup;

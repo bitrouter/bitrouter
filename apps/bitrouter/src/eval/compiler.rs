@@ -356,6 +356,7 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
+            experiment: None,
         });
         subject
             .requested_dimensions
@@ -421,6 +422,7 @@ mod tests {
                 baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                experiment: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
             evidence_digest: evidence_digest(&evidence)?,

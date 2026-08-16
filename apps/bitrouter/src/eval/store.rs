@@ -721,6 +721,7 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
                 policy_digest: subject.policy_digest.clone(),
+                experiment: None,
             }];
             store.insert_subject(&subject).await?;
             let inserted = store.insert_result(&result(EvalVerdict::Pass)).await?;

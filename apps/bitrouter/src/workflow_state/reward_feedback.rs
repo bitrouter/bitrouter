@@ -110,6 +110,7 @@ pub async fn import_semantic_reward_feedback(
                 baseline_tier: Some(baseline_tier.to_string()),
                 baseline_effort: candidate.static_effort,
                 policy_digest,
+                experiment: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
             evidence_digest: evidence_digest(&evidence)?,

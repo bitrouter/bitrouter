@@ -19,6 +19,7 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
+use crate::eval::types::EvalExperimentRef;
 use crate::workflow_state::ir::RouteProjection;
 
 mod episode_entity {
@@ -208,6 +209,7 @@ pub(crate) struct GuardedRouteInput {
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
+    pub experiment: Option<EvalExperimentRef>,
     pub policy: ProgressGuardPolicy,
     pub carries_tools: bool,
     pub tool_use_tier: Option<String>,
@@ -2156,6 +2158,7 @@ fn build_guarded_route_batch(
             policy_digest: &input.policy_digest,
         },
     )?;
+    evaluation.intent.experiment = input.experiment.clone();
     let before_tool_floor = evaluation.intent.selected_tier.clone();
     let tool_floor_applied = input.carries_tools
         && before_tool_floor.as_ref().is_some_and(|tier| {
@@ -2230,6 +2233,28 @@ fn build_guarded_route_batch(
             categorical.insert("route.selected_effort".to_owned(), effort.to_string());
         }
     }
+    if let Some(experiment) = &evaluation.intent.experiment {
+        categorical.insert(
+            "route.experiment_id".to_owned(),
+            experiment.experiment_id.clone(),
+        );
+        categorical.insert(
+            "route.experiment_arm".to_owned(),
+            match experiment.arm {
+                crate::eval::types::ExperimentArm::Control => "control",
+                crate::eval::types::ExperimentArm::Challenger => "challenger",
+            }
+            .to_owned(),
+        );
+        categorical.insert(
+            "route.experiment_assignment_unit".to_owned(),
+            match experiment.assignment_unit {
+                crate::eval::types::ExperimentAssignmentUnit::Task => "task",
+                crate::eval::types::ExperimentAssignmentUnit::Episode => "episode",
+            }
+            .to_owned(),
+        );
+    }
     for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
         let prefix = format!("route.clause_{index:02}");
         categorical.insert(format!("{prefix}.id"), clause.clause_id.clone());
@@ -2291,6 +2316,16 @@ fn build_guarded_route_batch(
         captured_at: start.captured_at.clone(),
         content_digest: String::new(),
     };
+    if let Some(experiment) = &evaluation.intent.experiment {
+        route_event.evidence.structural.insert(
+            "route.experiment_challenger_propensity_ppm".to_owned(),
+            u64::from(experiment.challenger_propensity_ppm),
+        );
+        route_event.evidence.digests.insert(
+            "route.experiment_assignment_id".to_owned(),
+            experiment.assignment_id_digest.clone(),
+        );
+    }
     route_event.content_digest = route_event.semantic_digest()?;
 
     let guard_event = if evaluation.activated {
@@ -5601,6 +5636,7 @@ mod tests {
                 .unwrap_or_else(|| unreachable!()),
             candidate_tier: Some("economy".into()),
             policy_digest: POLICY_DIGEST.into(),
+            experiment: None,
             policy: ProgressGuardPolicy {
                 escalation_tier: "strong".into(),
                 protected_tiers: BTreeSet::from(["strong".into()]),

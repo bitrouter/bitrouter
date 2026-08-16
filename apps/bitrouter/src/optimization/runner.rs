@@ -1424,6 +1424,7 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
                 policy_digest: policy_digest.into(),
+                experiment: None,
             }],
             requested_dimensions: Default::default(),
             evidence_digest: evidence_digest(&evidence)?,

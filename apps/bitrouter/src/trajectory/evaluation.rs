@@ -4,9 +4,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::types::{
-    DecisionCredit, EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
-    EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, MetricUnit, MetricValue,
-    canonical_digest, evidence_digest, validate_result_for_subject,
+    DecisionCredit, EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope,
+    EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
+    ExperimentArm, ExperimentAssignmentUnit, MetricUnit, MetricValue, canonical_digest,
+    evidence_digest, validate_result_for_subject,
 };
 
 use super::health::reduce;
@@ -280,6 +281,7 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
         .map(|value| value.parse())
         .transpose()
         .map_err(anyhow::Error::msg)?;
+    let experiment = decode_experiment_ref(event)?;
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
@@ -293,7 +295,82 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
             .cloned(),
         baseline_effort,
         policy_digest,
+        experiment,
     }))
+}
+
+fn decode_experiment_ref(event: &TrajectoryEvent) -> Result<Option<EvalExperimentRef>> {
+    let categorical = &event.evidence.categorical;
+    let digests = &event.evidence.digests;
+    let structural = &event.evidence.structural;
+    let present = [
+        categorical.contains_key("route.experiment_id"),
+        categorical.contains_key("route.experiment_arm"),
+        categorical.contains_key("route.experiment_assignment_unit"),
+        digests.contains_key("route.experiment_assignment_id"),
+        structural.contains_key("route.experiment_challenger_propensity_ppm"),
+    ];
+    if present.iter().all(|present| !present) {
+        return Ok(None);
+    }
+    if present.iter().any(|present| !present) {
+        anyhow::bail!("trajectory evaluation route has partial experiment evidence")
+    }
+    let required = |key: &str| {
+        categorical
+            .get(key)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing {key}"))
+    };
+    let experiment_id = required("route.experiment_id")?;
+    let assignment_id_digest = digests
+        .get("route.experiment_assignment_id")
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!("trajectory evaluation route is missing assignment digest")
+        })?;
+    validate_sha256_digest(&experiment_id, "trajectory experiment id")?;
+    validate_sha256_digest(&assignment_id_digest, "trajectory assignment id")?;
+    let arm = match required("route.experiment_arm")?.as_str() {
+        "control" => ExperimentArm::Control,
+        "challenger" => ExperimentArm::Challenger,
+        _ => anyhow::bail!("trajectory evaluation route has invalid experiment arm"),
+    };
+    let assignment_unit = match required("route.experiment_assignment_unit")?.as_str() {
+        "task" => ExperimentAssignmentUnit::Task,
+        "episode" => ExperimentAssignmentUnit::Episode,
+        _ => anyhow::bail!("trajectory evaluation route has invalid experiment assignment unit"),
+    };
+    let challenger_propensity_ppm = u32::try_from(
+        *structural
+            .get("route.experiment_challenger_propensity_ppm")
+            .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing propensity"))?,
+    )
+    .context("trajectory experiment propensity exceeds u32")?;
+    if !(1..=1_000_000).contains(&challenger_propensity_ppm) {
+        anyhow::bail!("trajectory experiment propensity must be between 1 and 1000000")
+    }
+    Ok(Some(EvalExperimentRef {
+        experiment_id,
+        arm,
+        assignment_unit,
+        assignment_id_digest,
+        challenger_propensity_ppm,
+    }))
+}
+
+fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
+    let Some(hex_digest) = value.strip_prefix("sha256:") else {
+        anyhow::bail!("{field} must be a sha256 digest")
+    };
+    if hex_digest.len() != 64
+        || !hex_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!("{field} must contain 64 lowercase hexadecimal digits")
+    }
+    Ok(())
 }
 
 fn operational_metrics(
@@ -453,7 +530,9 @@ mod tests {
     use super::{
         build_operational_evaluation, decision_credit, decode_eval_decision, operational_metrics,
     };
-    use crate::eval::types::{EvalScope, EvalVerdict, MetricUnit};
+    use crate::eval::types::{
+        EvalScope, EvalVerdict, ExperimentArm, ExperimentAssignmentUnit, MetricUnit,
+    };
     use crate::trajectory::health::reduce;
     use crate::trajectory::types::{
         HistoryCompleteness, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind,
@@ -715,6 +794,49 @@ mod tests {
         );
         assert_eq!(settled_b.result.metrics["cost.usd_micros"].value, 90);
         assert_eq!(settled_b.result.metrics["latency.ms"].value, 200);
+        Ok(())
+    }
+
+    #[test]
+    fn route_experiment_evidence_round_trips_and_legacy_route_stays_valid() -> anyhow::Result<()> {
+        let start = request_start(1, "start-experiment", "request-experiment", 20)?;
+        let mut route = typed_route(
+            std::slice::from_ref(&start),
+            2,
+            "route-experiment",
+            "request-experiment",
+            "agent_trace/v2|planning|normal",
+            "planning",
+            ("economy", false),
+        )?;
+        assert_eq!(
+            decode_eval_decision(&route)?.and_then(|decision| decision.experiment),
+            None
+        );
+
+        route.evidence.categorical.extend(BTreeMap::from([
+            ("route.experiment_id".into(), POLICY_DIGEST.into()),
+            ("route.experiment_arm".into(), "challenger".into()),
+            ("route.experiment_assignment_unit".into(), "task".into()),
+        ]));
+        route
+            .evidence
+            .structural
+            .insert("route.experiment_challenger_propensity_ppm".into(), 100_000);
+        route.evidence.digests.insert(
+            "route.experiment_assignment_id".into(),
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+        );
+        resign(&mut route)?;
+
+        let decision = decode_eval_decision(&route)?
+            .ok_or_else(|| anyhow::anyhow!("route intent must decode to an eval decision"))?;
+        let experiment = decision.experiment.ok_or_else(|| {
+            anyhow::anyhow!("experiment evidence must survive the trajectory codec")
+        })?;
+        assert_eq!(experiment.arm, ExperimentArm::Challenger);
+        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         Ok(())
     }
 
