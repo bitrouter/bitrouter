@@ -1910,18 +1910,20 @@ mod file_tests {
                     "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: {mode}\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n    policy: auto\n"
                 ),
             )?;
-            let mut policy = PolicyDefinition::default();
-            policy.tiers = BTreeMap::from([
-                (
-                    "strong".into(),
-                    PolicyModelTarget::Model("strong-model".into()),
-                ),
-                (
-                    "economy".into(),
-                    PolicyModelTarget::Model("economy-model".into()),
-                ),
-            ]);
-            policy.default_tier = Some("strong".into());
+            let mut policy = PolicyDefinition {
+                tiers: BTreeMap::from([
+                    (
+                        "strong".into(),
+                        PolicyModelTarget::Model("strong-model".into()),
+                    ),
+                    (
+                        "economy".into(),
+                        PolicyModelTarget::Model("economy-model".into()),
+                    ),
+                ]),
+                default_tier: Some("strong".into()),
+                ..Default::default()
+            };
             policy.routes.insert(REQUEST_KEY.into(), "strong".into());
             policy.adequacy.explore_tier = Some("economy".into());
             let certificate = PolicyCertificate {
@@ -2126,8 +2128,10 @@ mod file_tests {
     async fn omitted_candidate_tier_uses_the_policy_explore_tier() -> Result<()> {
         let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
         harness.admit_champion_history().await?;
-        let mut options = OptimizationOptions::default();
-        options.candidate_tier = None;
+        let options = OptimizationOptions {
+            candidate_tier: None,
+            ..Default::default()
+        };
 
         let prepared = prepare_files(&harness.config_path, options).await?;
 
