@@ -1,5 +1,19 @@
 # Spec: the observability TUI — `bitrouter status --watch` and `launch --tui`
 
+> **SUPERSEDED 2026-08-16 — the live view is gone.** The `launch --tui` half was
+> already superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The
+> `status --watch` half is now superseded too: the self-refreshing ratatui table
+> this spec designs was removed, and `bitrouter status --requests` prints the
+> same snapshot as text. §6's argument against a cargo feature is retained and
+> still correct, but it no longer applies to `ratatui` — `apps/bitrouter` does
+> not depend on it at all, which is a stronger version of the same goal.
+>
+> What survives and is still authoritative: the data layer (§7, `snapshot.rs`),
+> the stream row and footer formats (§8.1), and the honesty rules — including
+> the one this spec states and the removed view never kept, that a spend figure
+> must say whose spend it is. `status --requests` still does not label its
+> scope; see `crate::chat::cost` for the rule applied properly.
+
 Status: **`status --watch` implemented and authoritative; the `launch --tui`
 half is superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)** · Author: Claude
 (with Spikel) · Date: 2026-08-10

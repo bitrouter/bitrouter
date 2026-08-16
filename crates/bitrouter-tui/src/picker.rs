@@ -1,14 +1,18 @@
 //! The provider picker: choose where this session's traffic goes, mid-session.
 //!
-//! This is the one thing no harness and no other ACP client can offer, because
-//! it is the router's own surface. That is also why it lives here and not in
-//! `bitrouter-tui`: `providers/*` is BitRouter's, no generic agent serves it,
-//! and a crate whose boundary is "knows ACP and nothing else" had no business
-//! drawing it. It is plain app code with no registry entry — the registry keys
-//! on `ToolKind`, and a picker is not a tool call.
+//! Drawn from `providers/list` and nothing else. [`ProviderInfo`] is an ACP
+//! schema type — it ships in `agent-client-protocol-schema` under
+//! `unstable_llm_providers` and survives into v2 — so a renderer for it knows
+//! only the protocol, which is this crate's whole entry requirement. That no
+//! agent *but* BitRouter serves `providers/*` today is a fact about who
+//! implements the method, not about what this module reads.
 //!
-//! It is also the easiest control to get dishonestly wrong, in two ways this
-//! module refuses:
+//! Whether the control should appear at all is the caller's to decide and is
+//! passed in: [`Picker::open`] takes `available`, and there is no way to draw
+//! a picker without answering it.
+//!
+//! It is the easiest control to get dishonestly wrong, in two ways this module
+//! refuses:
 //!
 //! - **Against an agent with no `providers/*`, there is no picker.** Not a
 //!   greyed-out one, not an empty list: [`Picker::open`] returns `None` and
@@ -22,7 +26,7 @@
 //!   painted the new provider on selection would report a switch that never
 //!   happened.
 
-use agent_client_protocol::schema::v1::ProviderInfo;
+use agent_client_protocol_schema::v1::ProviderInfo;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -106,7 +110,7 @@ impl Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{
+    use agent_client_protocol_schema::v1::{
         LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo,
     };
 
