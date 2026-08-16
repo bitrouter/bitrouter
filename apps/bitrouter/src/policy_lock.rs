@@ -2990,6 +2990,30 @@ mod tests {
     }
 
     #[test]
+    fn optimization_rejects_zero_maximum_challenger_tasks() {
+        let policy = valid_optimization_policy();
+        let mut exploration = valid_exploration();
+        exploration.gate.maximum_challenger_tasks = 0;
+
+        let error = validate_route_exploration("auto", &policy, &exploration)
+            .expect_err("zero maximum challenger tasks must fail the positive-budget validation");
+        assert!(
+            error
+                .to_string()
+                .contains("sample budgets must be positive")
+        );
+    }
+
+    #[test]
+    fn optimization_rejects_zero_minimum_pass_rate() {
+        let policy = valid_optimization_policy();
+        let mut exploration = valid_exploration();
+        exploration.gate.minimum_pass_rate_ppm = 0;
+
+        assert!(validate_route_exploration("auto", &policy, &exploration).is_err());
+    }
+
+    #[test]
     fn optimization_rejections_are_capped_at_256_records() {
         let rejection = RouteRejection {
             experiment_id:

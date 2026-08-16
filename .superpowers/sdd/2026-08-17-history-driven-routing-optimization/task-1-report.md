@@ -85,3 +85,24 @@ The following evidence belongs to the review-fix commit, not the original Task 1
 - `apps/bitrouter/src/trajectory/store.rs`
 - `apps/bitrouter/src/trajectory/evaluation.rs`
 - `.superpowers/sdd/2026-08-17-history-driven-routing-optimization/task-1-report.md`
+
+## Gate-boundary test follow-up (after `731887be`)
+
+This test-only follow-up adds independently mutation-sensitive coverage for the two remaining zero-valued gate fields: `maximum_challenger_tasks` and `minimum_pass_rate_ppm`. Production validation behavior was already present and was not changed.
+
+### Follow-up RED evidence
+
+- The new tests initially passed against existing behavior: `cargo test -p bitrouter optimization_rejects_zero --all-features` reported 2 passed. To verify sensitivity honestly, I made temporary local mutations and restored each immediately.
+- Removing only the `maximum_challenger_tasks == 0` arm of the positive-budget validation initially still allowed an error from the later ordering rule. I therefore tightened the new test to require the intended `sample budgets must be positive` rejection. With that temporary mutation, `cargo test -p bitrouter policy_lock::tests::optimization_rejects_zero_maximum_challenger_tasks --all-features` failed at the expected error-message assertion.
+- Temporarily widening the pass-rate range to allow zero caused `cargo test -p bitrouter policy_lock::tests::optimization_rejects_zero_minimum_pass_rate --all-features` to fail because `validate_route_exploration` returned `Ok(())` instead of an error.
+
+### Follow-up GREEN evidence
+
+- `cargo test -p bitrouter policy_lock::tests --all-features` — 50 passed.
+- `cargo fmt -- --check` — passed.
+- `cargo clippy --all-features --quiet` — passed.
+
+### Follow-up files changed
+
+- `apps/bitrouter/src/policy_lock.rs` (tests only)
+- `.superpowers/sdd/2026-08-17-history-driven-routing-optimization/task-1-report.md`
