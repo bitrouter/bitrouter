@@ -7,7 +7,9 @@ use bitrouter_sdk::config::parse_agent_route_key;
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
-use crate::workflow_state::extractors::terminus_2::is_assistant_action;
+use crate::workflow_state::extractors::terminus_2::{
+    is_assistant_action, normalized_action_history_from,
+};
 use crate::workflow_state::ir::{
     EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
     RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
@@ -1680,8 +1682,10 @@ fn history_features(
         };
     }
     if calls.is_empty()
-        && normalized_action_after_instruction(prompt, instruction_index)
-        && let Some(normalized) = observed.normalized_action_history.as_ref()
+        && observed.normalized_action_history.is_some()
+        && let Some(normalized) = instruction_index.and_then(|instruction_index| {
+            normalized_action_history_from(prompt, instruction_index.saturating_add(1))
+        })
     {
         let last_action = normalized.last_action.map(|action| match action {
             NormalizedActionKind::Read => ObservedAction::Read,
@@ -1733,14 +1737,6 @@ fn history_features(
             && mutation_count > 0,
         has_trajectory: !calls.is_empty() || result_count > 0,
     }
-}
-
-fn normalized_action_after_instruction(prompt: &Prompt, instruction_index: Option<usize>) -> bool {
-    instruction_index.is_some_and(|instruction_index| {
-        prompt.messages[instruction_index.saturating_add(1)..]
-            .iter()
-            .any(is_assistant_action)
-    })
 }
 
 pub(crate) fn has_complete_visible_causal_history(prompt: &Prompt) -> bool {
@@ -1971,6 +1967,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::workflow_state::extractors::generic::GenericPromptExtractor;
+    use crate::workflow_state::extractors::terminus_2::Terminus2Extractor;
     use crate::workflow_state::extractors::{
         ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
     };
@@ -2040,6 +2037,18 @@ mod tests {
         let headers = HeaderMap::new();
         let raw_body = serde_json::json!({});
         GenericPromptExtractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::ChatCompletions,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt,
+        })
+    }
+
+    fn terminus_observed(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+        let headers = HeaderMap::new();
+        let raw_body = serde_json::json!({});
+        Terminus2Extractor.extract(&ExtractorInput {
             harness_hint: None,
             protocol_hint: ProtocolKind::ChatCompletions,
             headers: &headers,
@@ -3063,6 +3072,38 @@ mod tests {
         let normalized_pivot = predict_next_step(&ir, &prompt);
 
         assert_eq!(normalized_pivot.next_step_role, NextStepRole::Finalize);
+    }
+
+    #[test]
+    fn normalized_history_excludes_old_failures_when_current_epoch_has_an_action() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: parser test failed."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: parser test failed again."),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "The current observation completed."),
+        ]);
+        let ir = terminus_observed(&prompt);
+
+        let normalized_current_epoch = predict_next_step(&ir, &prompt);
+
+        assert_eq!(
+            normalized_current_epoch.next_step_role,
+            NextStepRole::Finalize
+        );
+        assert_eq!(normalized_current_epoch.route_risk, RouteRisk::Normal);
     }
 
     #[test]

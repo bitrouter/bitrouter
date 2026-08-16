@@ -302,6 +302,13 @@ pub(crate) fn is_assistant_action(message: &bitrouter_sdk::language_model::types
 }
 
 fn normalized_action_history(prompt: &Prompt) -> Option<NormalizedActionHistory> {
+    normalized_action_history_from(prompt, 0)
+}
+
+pub(crate) fn normalized_action_history_from(
+    prompt: &Prompt,
+    start_index: usize,
+) -> Option<NormalizedActionHistory> {
     const MAX_SIGNALS: u8 = 3;
     let mut history = NormalizedActionHistory {
         last_action: None,
@@ -312,7 +319,7 @@ fn normalized_action_history(prompt: &Prompt) -> Option<NormalizedActionHistory>
     };
     let mut action_seen = false;
 
-    for (index, message) in prompt.messages.iter().enumerate() {
+    for (index, message) in prompt.messages.iter().enumerate().skip(start_index) {
         if message.role != Role::Assistant {
             continue;
         }
