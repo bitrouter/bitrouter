@@ -154,7 +154,7 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --watch                # live request stream + spend
+bitrouter status --requests             # settled request stream + spend snapshot
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys list               # manage API keys
@@ -217,7 +217,7 @@ Frontier models from OpenAI, Anthropic, Google, and xAI also route over a subscr
 
 ## Harness integrations
 
-Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For the four harnesses below, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI with its traffic already pointed at the daemon, and never edits the harness's config files.
+Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For catalog harnesses with an interactive binary, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI and never edits the harness's config files. Routed harnesses point at the daemon by env/args or a throwaway config; own-auth subscription clients launch directly and are not routed or metered by that child process.
 
 | Harness | Launch with | How BitRouter routes it |
 | ------- | ----------- | ----------------------- |
@@ -225,30 +225,23 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 | OpenAI Codex | `bitrouter launch -a codex` | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
 | OpenCode | `bitrouter launch -a opencode` | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
 | Pi-Agent | `bitrouter launch -a pi` | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
+| Hermes Agent | `bitrouter launch -a hermes` | Synthesized `HERMES_HOME` with a loopback custom provider |
+| OpenClaw | `bitrouter launch -a openclaw` | Synthesized `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` profile |
+| Grok CLI | `bitrouter launch -a grok` | Own-auth SuperGrok client; launched directly, not redirected |
+| Antigravity | `bitrouter launch -a agy` | Own-auth Google client; launched directly, not redirected |
 
-`launch` supports these four because every promise it makes — routing, gateway injection, and the hosted terminal below — has to be re-verified per harness against upstream releases nobody controls. Four is a surface that stays honest.
-
-**Other runtimes still work**, just not through `launch`:
-
-| Runtime | How to use it |
-| ------- | ------------- |
-| Hermes Agent | Run it directly, or use the native [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
-| OpenClaw | Run it directly, or use the native [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw) plugin |
-| Grok CLI | Run it directly on your SuperGrok session — the daemon borrows that session separately as the `supergrok` **provider** |
-| Antigravity | Run it directly on your Google session — borrowed separately as the `google-ai` **provider** |
-
-Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Headless ACP sub-agents use `bitrouter spawn` instead. The full provider/model catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry); launchable harnesses are the interactive entries listed above and by `bitrouter launch --help`.
 
 ### See what it's costing you
 
-`bitrouter status --watch` is a live view of the router: a newest-first stream of settled requests — the provider that **actually** served, tokens, cost, latency — over today's spend and request rate. It reads the metering store directly, so it works even with the daemon stopped. Piped, it prints one snapshot and exits, so it scripts.
+`bitrouter status --requests` prints a newest-first snapshot of settled requests — the provider that **actually** served, tokens, cost, latency — over today's spend and request rate. It reads the metering store directly, so it works even with the daemon stopped. Repeat it with `watch -n1` when you want a live terminal view.
 
 ```bash
-bitrouter status --watch          # live
-bitrouter status --watch | less   # one snapshot
+bitrouter status --requests           # one snapshot
+watch -n1 bitrouter status --requests # live refresh
 ```
 
-`bitrouter launch --tui` puts that same readout on a status row pinned under the harness, so cost is visible without leaving the agent. It is **opt-in**, and worth knowing why: hosting the harness inside BitRouter's terminal moves scrollback from your terminal to BitRouter, so terminal search stops finding agent output. Plain `launch` stays the daily driver.
+For ACP-native sessions, `bitrouter chat <agent>` shows per-turn cost inline and labels whose spend the number represents. Plain `launch` keeps the harness in your terminal; when local metering records routed requests during the run, the exit line reports either this session's spend or, without launch attribution, spend since launch for all callers.
 
 ## Features
 

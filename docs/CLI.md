@@ -101,7 +101,7 @@ Prints pid, listen address, number of routable models, and control socket path. 
 
 `--requests` (`-r`) prints what the router has actually done instead: a newest-first table of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a line stating daemon state and over today's spend and the trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (the state line says `history only` rather than showing an empty list that looks like idleness).
 
-The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for a live view. Bare `bitrouter status` is unchanged.
+The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for live refresh. Bare `bitrouter status` is unchanged.
 
 Portable — there is no terminal-only path left to gate.
 
@@ -344,7 +344,7 @@ On a failed turn, or a session whose agent could not be shut down cleanly, `chat
 bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
-Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
+Launches a coding-agent harness as an **interactive native-TUI** child process. Routed harnesses get their gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**; own-auth harnesses run directly with their native subscription login. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
 
 Before handing over, `launch` prints one line stating what the harness actually got — whether it is routed, and whether the tools/skills gateways reached it. That ceiling is the harness's, not BitRouter's: `pi` exposes no MCP mechanism to inject into.
 
@@ -353,9 +353,9 @@ launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skil
 launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
 ```
 
-`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
+`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp`, `openclaw`, and `antigravity` also resolve). An unknown id fails up front with the available list. Routed entries use their own mechanism; own-auth entries do not redirect:
 
-| Harness | How it reaches BitRouter |
+| Harness | How `launch` handles it |
 | --- | --- |
 | `claude` | child env (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` for `--model`) |
 | `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
@@ -374,11 +374,11 @@ The synthesized files are throwaway, written under the working tree's self-ignor
 
 **`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
 
-The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
+Routed agents authenticate to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). Own-auth clients use their native subscription login instead. A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `launch` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
-After the wrapped agent exits, `launch` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
+After the wrapped agent exits, `launch` prints one spend line to stderr only when the local metering database recorded requests during the run. With a launch attribution token it is labelled `session spend`; without one it falls back to the time window and labels the figure `spend since launch (all callers)`. It stays silent when nothing was recorded in the window — e.g. when the run targeted Cloud or an own-auth child did not route through the local daemon.
 
 `bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
 

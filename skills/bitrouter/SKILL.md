@@ -179,8 +179,9 @@ Read these on demand — don't load them all upfront.
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, caller-prepared cwd, one-agent-per-session, turn queue, identity, v1 limits |
 
 `bitrouter chat <agent>` is the interactive terminal client for the same
-sessions — inline viewport, `/route` to switch provider mid-session, and a cost
-line that always states whose spend it is. See `references/cli.md`.
+sessions — an inline renderer with real scrollback, `/route` to switch provider
+mid-session, and a cost line that always states whose spend it is. See
+`references/cli.md`.
 
 ## 7. Gotchas
 

@@ -14,24 +14,22 @@
 > must say whose spend it is. `status --requests` still does not label its
 > scope; see `crate::chat::cost` for the rule applied properly.
 
-Status: **`status --watch` implemented and authoritative; the `launch --tui`
-half is superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)** · Author: Claude
-(with Spikel) · Date: 2026-08-10
+Status: **superseded; kept as a design record** · Author: Claude (with Spikel)
+· Date: 2026-08-10
 Issues: #782 (hosted bar) · #797 (live view) · #795 (attribution) · #796 (startup line)
 Supersedes the CLI framing of #782 (`bitrouter top`, `bitrouter tui` deprecation).
 
-> **This spec is half live.** Everything about `bitrouter status --watch` — §1,
-> §§4–8, §10.1, §13.2–13.3 — describes what ships today and remains the
-> authority for that view.
->
-> Everything about `bitrouter launch --tui` — the hosted mode, the emulator,
-> the PTY host, the pinned status bar, and the fidelity matrix that gated them
-> — is **superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)**. The flag,
+> The original `bitrouter status --watch` view is no longer in the CLI; use
+> `bitrouter status --requests` for the settled-request snapshot and an external
+> `watch -n1` loop for refresh. Everything about `bitrouter launch --tui` — the
+> hosted mode, the emulator, the PTY host, the pinned status bar, and the
+> fidelity matrix that gated them — is superseded by
+> [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The flag,
 > `tui/{host,pty,term,conformance}.rs`, `tui/fixtures/`,
 > `scripts/record-vt-fixture.sh`, and `TUI_FIDELITY_MATRIX.md` are deleted; the
-> replacement is an inline-viewport ACP client, not a terminal emulator. The
-> hosted sections below are kept as the record of a decision that was reversed,
-> and are marked where they start.
+> replacement is an inline ACP client backed by the `bitrouter-tui` differential
+> writer, not a terminal emulator. The sections below are kept as the record of
+> decisions that were reversed.
 
 **Context.** #749 ratified that BitRouter is a self-improving LLM router, not an
 agent-orchestrator, and #786 executed that: `apps/bitrouter/src/tui/` (~11.5k
@@ -40,12 +38,12 @@ along with nine dependencies. This spec defines what replaces them — a router
 UX ("what did this cost, which model served it, why did it go there"), not an
 orchestration UX.
 
-Two surfaces, one implementation:
+Original design surfaces, both historical:
 
 | Surface | What it is | Issue |
 |---|---|---|
-| `bitrouter status --watch` | a live, self-refreshing view of the gateway | #797 |
-| `bitrouter launch --tui` | a harness hosted in an emulator with that view's status bar pinned underneath | #782 |
+| `bitrouter status --watch` | removed live, self-refreshing gateway view; replaced by `status --requests` snapshots | #797 |
+| `bitrouter launch --tui` | removed harness-hosting emulator; replaced by `bitrouter chat` for ACP sessions | #782 |
 
 ---
 

@@ -1705,7 +1705,19 @@ mod tests {
             )
             .expect("client");
             let err = c.servers(None, 2).await.unwrap_err();
-            assert!(err.to_string().contains("timed out"), "{err:#}");
+            let timed_out = err.chain().any(|cause| {
+                if cause
+                    .downcast_ref::<tokio::time::error::Elapsed>()
+                    .is_some()
+                {
+                    return true;
+                }
+                let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
+                    return false;
+                };
+                error.is_timeout()
+            });
+            assert!(timed_out, "{err:#}");
         }
 
         #[tokio::test]

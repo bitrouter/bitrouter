@@ -106,9 +106,9 @@ pub fn footer(snapshot: &Snapshot) -> String {
     line
 }
 
-/// The whole snapshot as plain text — what a redirected or piped
-/// `status --watch` prints once before exiting, so the view stays scriptable
-/// instead of refusing to run without a terminal.
+/// The whole snapshot as plain text — what `status --requests` prints for
+/// terminals and pipes, so the view stays scriptable instead of depending on an
+/// interactive watcher.
 pub fn oneshot(snapshot: &Snapshot) -> String {
     let mut out = String::new();
     out.push_str(&snapshot.state_line());

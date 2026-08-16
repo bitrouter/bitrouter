@@ -13,8 +13,8 @@ least portable plugin component (Grok hooks are block-only, Antigravity has a
 different event catalog + output schema, and even `SessionStart` output only
 surfaces on some harnesses), so anchoring the plugin on a hook would fragment
 the exact thing BitRouter exists to unify. Cost reporting is therefore the
-launcher's job, not the plugin's: `bitrouter launch` prints a session spend
-summary when the harness exits, which is harness-agnostic by construction.
+launcher's job, not the plugin's: when local metering records routed requests,
+`bitrouter launch` prints an exit spend line after the harness exits.
 
 | Component | Claude Code | Codex |
 |---|---|---|
@@ -23,8 +23,8 @@ summary when the harness exits, which is harness-agnostic by construction.
 
 Two cost signals ride alongside but are **not plugin components** — they're
 `bitrouter` CLI behaviors that exist independent of the plugin: the MCP
-tool-result **cost footer** (part of `mcp serve`), and the **launch exit
-spend summary** (printed by `bitrouter launch` on any harness it wraps).
+tool-result **cost footer** (part of `mcp serve`), and the metered **launch exit
+spend line**.
 
 ## Install
 
@@ -59,15 +59,17 @@ Cost shows up **on-demand and at the launch boundary** (no ambient hook):
 
 - **Every origin-MCP `complete` / `status` call:** a cost footer appended to
   the tool result (spend today + request count).
-- **Every `bitrouter launch` exit:** a one-line session spend summary
-  (`launch: session spend $… (N requests) · today $…`), printed after the
-  harness exits.
+- **Metered `bitrouter launch` exits:** one spend line after the harness exits,
+  labelled `session spend` when launch attribution is available, or
+  `spend since launch (all callers)` without it. No local metering rows means no
+  launch spend line.
 
 Notes:
 
 - **Live / per-turn / ambient cost exists nowhere today** — not in the
   plugin (no monitor, no session hook, because hooks don't port across
-  harnesses) and not in the launcher, which reports spend **once, on exit**.
+  harnesses) and not in the launcher, which reports spend **once, on exit** only
+  when local metering has rows for the launch window.
   Don't promise a running cost display.
 - v1 reports **spend**, not savings — the counterfactual "vs frontier list
   price" line lands together with the `bitrouter cloud usage` pricing

@@ -1,22 +1,28 @@
 //! `bitrouter launch` — launch a coding-agent harness (Claude Code, Codex, …)
-//! as an interactive native-TUI child process with its API base URL pointed at
-//! the local BitRouter daemon. This is the interactive surface; headless
-//! ACP sub-agents are `bitrouter spawn` (see [`crate::acp_cli`]). Both draw
-//! their routing knowledge from the shared [`crate::harness`] catalog.
+//! as an interactive native-TUI child process. Routed harnesses get their API
+//! base URL pointed at the local BitRouter daemon; own-auth harnesses launch
+//! directly with their native subscription login. This is the interactive
+//! surface; headless ACP sub-agents are `bitrouter spawn` (see
+//! [`crate::acp_cli`]). Both draw their routing knowledge from the shared
+//! [`crate::harness`] catalog.
 //!
-//! The agent's traffic then routes through BitRouter without ever touching the
-//! agent's own config files: instead of mutating `~/.claude/config.json` or
-//! `~/.codex/config.toml` (the
-//! "config takeover" model used by some switcher tools — invasive, needs
-//! backup/restore and crash recovery), we set per-process environment variables
-//! or one-shot CLI config overrides. Nothing on disk changes, and if BitRouter
-//! is down the user simply runs the agent directly.
+//! Routed traffic goes through BitRouter without ever touching the agent's own
+//! config files: instead of mutating `~/.claude/config.json` or
+//! `~/.codex/config.toml` (the "config takeover" model used by some switcher
+//! tools — invasive, needs backup/restore and crash recovery), we set
+//! per-process environment variables or one-shot CLI config overrides. Nothing
+//! on disk changes, and if BitRouter is down the user simply runs the agent
+//! directly.
 //!
 //! Harnesses that expose neither an env var nor a CLI override (opencode, pi,
 //! hermes, openclaw) are routed by *synthesizing* a throwaway config under the
 //! repo's `.bitrouter/launch/` and pointing the harness at it with an env var
 //! — still never touching the user's own config
 //! ([`crate::harness::Harness::launch_overlay`]).
+//!
+//! Own-auth clients (`grok`, `agy`) are the exception: they are interactive-only
+//! subscription clients, so `launch` does not redirect or meter that child
+//! process.
 //!
 //! CLI shape follows `cargo run`'s separator convention so there is no
 //! ambiguity about which flags belong to which program:

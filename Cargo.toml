@@ -42,8 +42,8 @@ rustix = { version = "1", default-features = false }
 
 # ACP SDK crates
 agent-client-protocol = "1.2"
-# Shared by `bitrouter status --watch` (in the app) and `bitrouter-tui` (the
-# ACP session renderer), so the version lives here rather than in either.
+# Workspace-pinned for `bitrouter-tui`, the ACP session renderer. The app crate
+# depends on that renderer rather than drawing directly with `ratatui`.
 ratatui = { version = "0.29", features = [
     # Paragraph::line_count — wrap-aware tail-follow needs the rendered
     # height, not the logical line count.

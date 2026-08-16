@@ -65,7 +65,7 @@ The exact strings are in §E, ready to paste.
 | # | Decision | Spec |
 |---|---|---|
 | 1 | `launch --tui`, the PTY host, the VT adapter, and the fidelity matrix are deleted. `launch` (inherited) stays. | §3 |
-| 2 | `status --watch` is untouched. | §2 |
+| 2 | At proposal time, `status --watch` was untouched. It has since been removed; `status --requests` is the settled-request snapshot. | §2 |
 | 3 | The differentiated work is in `down.rs`, not the TUI. | §5 |
 | 4 | Session cost comes from the metering store, emitted as ACP `UsageUpdate.cost`. | §7 |
 | 5 | TUI is **its own crate**, `crates/bitrouter-tui`, depending on neither the `bitrouter` app crate nor its config. | §9 — **amended, see below** |
@@ -104,9 +104,9 @@ sent, and `bitrouter-gui` is the standing warning about underwriting a design
 on a second consumer that never arrives. Negotiate capabilities because ACP
 says to, and let generality fall out.
 
-**Decision 10 — not `snapshot.rs`.** That layer is the `status --watch` shape:
-daemon-wide request rows, rate metrics, control-socket state. §8.3 forbids the
-TUI from rendering nearly all of it. Reusing it would import a daemon-wide data
+**Decision 10 — not `snapshot.rs`.** That layer was the daemon-wide live-view
+shape: request rows, rate metrics, control-socket state. §8.3 forbids the TUI
+from rendering nearly all of it. Reusing it would import a daemon-wide data
 model into a session-scoped view — the exact mistake §8.3 exists to prevent.
 The TUI's data comes from its own ACP session. `Scope` is a two-variant enum;
 it moves to the wire (task 4.1), it is not a reason to share a data layer.
@@ -181,8 +181,9 @@ TUI; ACP v2.
     `docs/OBSERVABILITY_TUI_SPEC.md`
   - Do: delete the matrix; remove its bullet from `docs/README.md`; mark the
     `launch --tui` half of `OBSERVABILITY_TUI_SPEC.md` superseded by
-    `ACP_TUI_SPEC.md`, leaving the `status --watch` half authoritative; delete
-    the false *"all eight catalog harnesses"* claim at its :439 and decision 8.
+    `ACP_TUI_SPEC.md` (the `status --watch` half was superseded later by
+    `status --requests`); delete the false *"all eight catalog harnesses"*
+    claim at its :439 and decision 8.
   - Done when: `rg -n 'TUI_FIDELITY_MATRIX|all eight catalog harnesses' docs/`
     returns nothing.
   - Verify: `rg -n 'TUI_FIDELITY_MATRIX|eight catalog harnesses' docs/ ; echo "exit=$?"`
@@ -378,22 +379,24 @@ depends on the TUI existing.
   - Verify: `cargo run -p bitrouter -- chat --help 2>&1 | head -25`
   - Commit: `feat(cli): add the chat verb for ACP sessions`
 
-- [x] **4.5 Inline viewport over the session's own updates**
+- [x] **4.5 Inline renderer over the session's own updates**
   - Depends on: 4.3, 4.4
   - Files: `crates/bitrouter-tui/src/`
-  - Do: `ratatui::Viewport::Inline` — no alternate screen, no lifecycle restore,
-    no panic hook (§8). State is built **from the ACP `session/update` stream**;
-    do not reach for `snapshot.rs` or any local store (decision 10, amended).
+  - Do: render inline through the differential writer over `Backend` — no
+    alternate screen, but session-long raw mode still has lifecycle restore and a
+    panic hook. State is built **from the ACP `session/update` stream**; do not
+    reach for `snapshot.rs` or any local store (decision 10, amended).
   - Done when: the session runs, output lands in real scrollback, and `Ctrl-C`
     leaves a readable transcript.
   - Verify: `cargo nextest run -p bitrouter-tui 2>&1 | tail -20`
-  - Commit: `feat(tui): inline viewport for ACP sessions`
+  - Commit: `feat(tui): inline renderer for ACP sessions`
   - **Superseded** by [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md) §4, shipped
     2026-08-14. What this task built was append-only against a protocol whose
     entities are patchable, so one tool call printed a line per status change.
-    `Viewport::Inline` is replaced by a differential writer; *inline* itself
-    survives, and so does the done-when above. The `Ctrl-C` named there is now
-    one of four bindings — `Esc`, `Ctrl-C`, `Ctrl-D`, `Ctrl-L` — because `chat`
+    The original `Viewport::Inline` mechanism is replaced by a differential
+    writer; *inline* itself survives, and so does the done-when above. The
+    `Ctrl-C` named there is now one of four bindings — `Esc`, `Ctrl-C`,
+    `Ctrl-D`, `Ctrl-L` — because `chat`
     holds raw mode for the session; see that spec's §9 and
     [`CLI.md`](CLI.md).
 
@@ -466,7 +469,7 @@ Paste one at a time, in order. Each is well under the 4,000-char limit.
 **Phase 1**
 
 ```
-Work through Phase 1 of docs/ACP_TUI_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when every Phase 1 task 1.1-1.7 is checked in the file AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing with no failures. Print the full Phase 1 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Do not touch status --watch, do not start Phase 2, do not change any file outside the paths named in Phase 1 tasks. Stop after 25 turns.
+Work through Phase 1 of docs/ACP_TUI_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when every Phase 1 task 1.1-1.7 is checked in the file AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing with no failures. Print the full Phase 1 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Do not reintroduce status --watch, do not start Phase 2, do not change any file outside the paths named in Phase 1 tasks. Stop after 25 turns.
 ```
 
 **Phase 2**

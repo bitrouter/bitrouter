@@ -5,19 +5,20 @@
 //!
 //! - **interactive** (`bitrouter launch`) — the harness's own native TUI
 //!   (`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`,
-//!   `agy`), launched as a child with its LLM traffic pointed at the daemon —
-//!   by env/args where that suffices, otherwise through a synthesized config
-//!   file ([`Harness::launch_overlay`]); the human drives it directly.
+//!   `agy`), launched as a child the human drives directly. Routed harnesses
+//!   point LLM traffic at the daemon by env/args where that suffices, otherwise
+//!   through a synthesized config file ([`Harness::launch_overlay`]);
+//!   own-auth harnesses launch directly.
 //! - **ACP** (`bitrouter spawn`) — a headless ACP adapter
 //!   (`@zed-industries/claude-code-acp`, …) driven as a sub-agent by a program.
 //!
-//! The crucial fact this module encodes once: **both facets route through the
-//! daemon with the same [`Routing`]**, because the interactive binary and the
-//! ACP adapter of a given harness share a config/env surface (verified against
-//! adapter source — see `docs/SPAWN_SPEC.md` §6). So the routing knowledge that used
-//! to live in `spawn::AgentSpec` *and* would have been duplicated onto the ACP
-//! side lives here exactly once, and `launch`, `spawn`, and `agents install`
-//! all read it.
+//! The crucial fact this module encodes once: a harness has one catalog routing
+//! mode, reused by every facet that can apply it. Env/args and config-synthesis
+//! harnesses route through the daemon; own-auth clients keep their native
+//! subscription session and are not redirected by `launch`. So the routing
+//! knowledge that used to live in `spawn::AgentSpec` *and* would have been
+//! duplicated onto the ACP side lives here exactly once, and `launch`, `spawn`,
+//! and `agents install` all read it.
 
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
@@ -55,12 +56,13 @@ pub struct Harness {
     /// The interactive native-TUI binary for `bitrouter launch`, when the
     /// harness has one. `None` for adapter-only harnesses (gemini).
     pub interactive_binary: Option<&'static str>,
-    /// How this harness's LLM traffic is pointed at the daemon.
+    /// How this harness's LLM traffic is wired for launch/spawn.
     pub routing: Routing,
 }
 
-/// How a harness's LLM traffic is redirected to the BitRouter gateway. One
-/// value per harness, applied identically to both facets.
+/// How a harness's LLM traffic is wired. One value per harness; routed variants
+/// redirect to the BitRouter gateway, while own-auth variants deliberately do
+/// not.
 #[derive(Debug, Clone, Copy)]
 pub enum Routing {
     /// Env-var redirection: set `base_url_env` to the gateway URL and
@@ -362,10 +364,9 @@ impl Harness {
     }
 
     /// Whether this harness routes through pure env/args injection (the
-    /// headless-spawn facet). Config-synthesis harnesses (opencode, pi)
-    /// route only through [`Self::launch_overlay`] — headless callers launch
-    /// them direct
-    /// with a note.
+    /// headless-spawn facet). Config-synthesis harnesses (opencode, pi,
+    /// hermes, openclaw) route only through [`Self::launch_overlay`] —
+    /// headless callers launch them direct with a note.
     pub fn env_args_routable(&self) -> bool {
         matches!(self.routing, Routing::Env { .. } | Routing::CodexArgs)
     }

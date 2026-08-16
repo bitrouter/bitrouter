@@ -16,7 +16,7 @@ bitrouter launch -a claude
 bitrouter launch -a claude -- -p "summarize this repo"
 ```
 
-Reversible, per-process, and config-file-free: `spawn` launches Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, `spawn` auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. After the session exits, `spawn` prints a one-line spend summary for the wrapped run.
+Reversible, per-process, and config-file-free: `launch` starts Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, `launch` auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. When local metering records routed requests during the run, `launch` prints an exit spend line.
 
 ## What the wiring actually is
 
@@ -59,7 +59,7 @@ tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. A session spend summary is printed by `bitrouter launch` on exit (a launch feature, independent of the plugin).
+The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. When local metering records routed requests during a launch, `bitrouter launch` prints an exit spend line (a launch feature, independent of the plugin).
 
 ## Notes & gotchas
 

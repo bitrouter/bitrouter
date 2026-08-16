@@ -67,4 +67,4 @@ For live requests, check the BitRouter request logs — the `request finished` l
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). A session spend summary is printed by `bitrouter launch` on exit (a launch feature, independent of the plugin). See `references/agent-plugin.md`.
+The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). When local metering records routed requests during a launch, `bitrouter launch` prints an exit spend line (a launch feature, independent of the plugin). See `references/agent-plugin.md`.

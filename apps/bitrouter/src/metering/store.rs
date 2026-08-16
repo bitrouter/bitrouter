@@ -288,12 +288,12 @@ pub struct SpendSummary {
     pub requests: u64,
 }
 
-/// One settled request as the live view renders it.
+/// One settled request as the status snapshot renders it.
 ///
 /// Deliberately **not** [`MeteringUsageRecord`]: that type is the stable
 /// export artifact consumed by `workflow-state bundle`, and it carries neither
 /// the timestamp, the latency, nor the estimated charge — the three fields
-/// every row of the live stream shows. Widening it would change an export
+/// every status row shows. Widening it would change an export
 /// contract to serve a display; this is a different read with a different
 /// shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -496,15 +496,15 @@ impl MeteringStore {
         })
     }
 
-    /// The newest `limit` settled requests within `window`, newest first —
-    /// the live view's request stream. `launch_id` scopes it to one
+    /// The newest `limit` settled requests within `window`, newest first — the
+    /// status snapshot's request rows. `launch_id` scopes it to one
     /// `bitrouter launch` session; `None` is every caller.
     ///
     /// Descending with a `LIMIT` on purpose. [`Self::export_usage`] is an
-    /// unbounded ascending scan, which is right for a one-shot export and
-    /// wrong to run once a second against a day-long window: the view only
-    /// ever renders one screen plus a scrollback margin, so the database
-    /// should never hand it more than that.
+    /// unbounded ascending scan, which is right for a one-shot export and wrong
+    /// for repeated status polling against a day-long window: the snapshot only
+    /// renders one bounded table, so the database should never hand it more
+    /// than that.
     pub async fn recent_requests(
         &self,
         window: TimeWindow,
@@ -535,8 +535,8 @@ impl MeteringStore {
     /// [`Self::get_rate`] is scoped to one `api_key_id`, which cannot serve a
     /// machine-wide readout: under the `skip_auth: true` default every request
     /// is attributed to the synthetic `local` caller, but a daemon also serves
-    /// real `brk_` keys and pre-auth `anonymous` ones, and the live view means
-    /// "this daemon", not "this key".
+    /// real `brk_` keys and pre-auth `anonymous` ones, and the status snapshot
+    /// means "this daemon", not "this key".
     pub async fn get_total_rate(&self) -> Result<RateMetrics> {
         let start = window_start(TimeWindow::LastMinute).to_rfc3339();
         let rows: Vec<(i64, i64)> = requests::Entity::find()

@@ -33,13 +33,13 @@ gateway MCP servers.
 
 ## 1. Motivation
 
-BitRouter has two agent-launching surfaces that grew independently:
+At proposal time, BitRouter had two agent-launching surfaces that had grown
+independently:
 
-- `bitrouter spawn` — launches an **interactive native-TUI harness** (Claude
-  Code, Codex) env-wrapped so its LLM traffic routes through the daemon.
-  Encodes per-harness routing knowledge (`ANTHROPIC_BASE_URL` /
-  `ANTHROPIC_AUTH_TOKEN`, Codex `-c` provider overrides), daemon auto-start,
-  install-on-missing, auth precedence, exit cost summary.
+- the old `bitrouter spawn --agent <claude|codex>` form — launched an
+  **interactive native-TUI harness** env-wrapped so its LLM traffic routed
+  through the daemon. That path is now the deprecated alias for
+  `bitrouter launch`.
 - `bitrouter acp serve|prompt` — launches a **headless ACP session** via the
   substrate (records, OTel spans), but
   its LLM traffic goes wherever the harness's own config points — **not**
@@ -54,19 +54,19 @@ resident ACP broker are different process topologies.
 
 | Role | Verb | Protocol | UI | Routed via daemon |
 |---|---|---|---|---|
-| Main orchestrator agent | `bitrouter launch` | none (native) | harness's own TUI | yes (already default) |
+| Main orchestrator agent | `bitrouter launch` | none (native) | harness's own TUI | routed harnesses yes; own-auth harnesses no |
 | Sub-agent | `bitrouter spawn` | ACP | none (managed by caller) | **yes (new default)** |
 
 An orchestrator has no manager — the human drives it through its own TUI, so
 it doesn't need ACP. Sub-agents are driven by a program (the orchestrator via
 CLI/NDJSON, a GUI via `--serve`), so ACP is their
-native substrate. Every level of the tree routes generations through the
-daemon:
+native substrate. Routed catalog entries at every level send generations
+through the daemon:
 
 ```
 human
- └─ bitrouter launch claude            # native TUI, env-wrapped
-     └─ (agent runs) bitrouter spawn codex -p "…"   # ACP session, NDJSON
+ └─ bitrouter launch claude            # native TUI, routed env-wrapped
+     └─ (agent runs) bitrouter spawn codex -p "…"   # routed ACP session, NDJSON
          └─ bitrouter spawn gemini -p "…"           # ACP all the way down
 ```
 
@@ -100,18 +100,21 @@ Non-goals (v1, tracked as follow-ups):
 
 ## 3. CLI surface
 
-### 3.1 `bitrouter launch` (rename of today's `spawn`)
+### 3.1 `bitrouter launch` (interactive successor to old `spawn --agent`)
 
 ```
 bitrouter launch --agent claude [--base-url URL] [--no-install] [--no-start] [--check] [-- <args>]
 ```
 
-Behavior is exactly today's `bitrouter spawn` (env-wrap, daemon ensure,
-install offer, exit cost summary, exit-code propagation). Only the name
-changes. `bitrouter spawn --agent <claude|codex>` remains as a **deprecated
-alias for two alpha releases** (it is unambiguous: the old form requires
-`--agent` with the closed enum; the new form takes a positional id), emitting
-a one-line deprecation notice on stderr pointing at `launch`.
+Behavior preserves the old interactive launcher contract for routed harnesses:
+env/config overlay, daemon ensure, install offer where supported, exit spend
+line when local metering records requests, and exit-code propagation. It is no
+longer only a rename: the shipped catalog also includes config-synthesis
+harnesses and own-auth interactive clients, described in §6.4.
+`bitrouter spawn --agent <claude|codex>` remains as a **deprecated alias** (it is
+unambiguous: the old form requires `--agent` with the closed enum; the new form
+takes a positional id), emitting a one-line deprecation notice on stderr pointing
+at `launch`.
 
 ### 3.2 `bitrouter spawn` (new: sub-agent creation, subsumes `acp serve|prompt`)
 

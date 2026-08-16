@@ -4,9 +4,11 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
-[`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. Leaves
-`bitrouter status --watch` (#797) untouched. Builds on #613 (per-session ACP
-substrate) and the ACP rightsizing of #745–#749.
+[`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. At proposal time it
+left `bitrouter status --watch` (#797) untouched; that live view was later
+removed, and `bitrouter status --requests` is now the settled-request snapshot.
+Builds on #613 (per-session ACP substrate) and the ACP rightsizing of
+#745–#749.
 
 **Context.** #749 ratified that BitRouter is a self-improving LLM router, not
 an agent orchestrator, and #786 executed it — 19,955 lines of fleet/worktree/
@@ -36,7 +38,7 @@ Lay the options out and the middle one is dominated on every axis:
 
 | Surface | Who owns the UX | Harnesses reached | Per-harness cost |
 |---|---|---|---|
-| `launch` (inherited) | the harness | **9** | zero |
+| `launch` (inherited) | the harness | **8** | zero |
 | `launch --tui` (PTY) | the harness, minus one row | **4** | fidelity matrix + manual QA |
 | ACP TUI (this spec) | **BitRouter** | any ACP agent | zero |
 
@@ -56,7 +58,7 @@ decision at n=4, and the stale text is still in source in two places.
 They are a deliberate split, and each is coherent alone:
 
 - Want Claude Code's own plan mode, slash commands, and native affordances?
-  `bitrouter launch` — inherited, zero BitRouter terminal code, all nine
+  `bitrouter launch` — inherited, zero BitRouter terminal code, eight
   harnesses.
 - Want to swap **agent and model** freely with router-measured cost? The ACP
   TUI.
@@ -79,8 +81,9 @@ Nothing needs to sit between them.
 
 - Anything #786 removed: fleets, subagents, worktree isolation, review queues,
   autonomy tiers, multi-pane splits. **Single-session is the line.**
-- Replacing `bitrouter status --watch`. That view is the router lens over the
-  metering store and is untouched by this spec.
+- Replacing the daemon-wide router lens over the metering store. At proposal
+  time that was `bitrouter status --watch`; today it is `status --requests`
+  snapshots outside the ACP session TUI.
 - Replacing `bitrouter launch`. Inherited launch stays, and regains the four
   harnesses `--tui` cost it.
 - A reusable TUI widget crate. See §9 — deferred, with a stated trigger.
@@ -99,8 +102,7 @@ independent of hosting; only `exec_hosted` goes.
 
 Removed dependencies: `alacritty_terminal`, `portable-pty`, `termwiz`,
 `wezterm-input-types` (`termwiz` alone resolves ~107 crates for three imported
-symbols). `ratatui` and `crossterm` stay — `status --watch` and the new TUI
-both need them.
+symbols). `ratatui` and `crossterm` stay for the ACP session TUI.
 
 **Supporting evidence, verified.** These are not the reason to delete it, but
 they establish that the code was not load-bearing:
@@ -311,7 +313,7 @@ upstream harness nor a generic ACP client can do the second half. That is the
 defensible position, and it is the reason this is a router feature rather than
 scope creep back toward the orchestrator.
 
-## 8. Decision 5 — the TUI: ratatui, inline viewport
+## 8. Decision 5 — the TUI: ratatui, inline renderer
 
 > **Superseded in part by [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md)
 > (accepted, shipped 2026-08-14).** Two corrections, both of them ours rather
@@ -339,24 +341,25 @@ scope creep back toward the orchestrator.
 > cancels a turn and ends an idle session, `Ctrl-D` ends an idle session, and
 > `Ctrl-L` repaints. See that spec's §9 and [`CLI.md`](CLI.md).
 
-Built in `apps/bitrouter` (see §9 on why not a crate), rendering the normalized
-stream.
+Current implementation: app code in `apps/bitrouter` owns the ACP session loop
+and supplies normalized protocol updates; drawing lives in `crates/bitrouter-tui`
+as a differential writer over `ratatui::backend::Backend`.
 
-**Inline, not alternate screen.** `ratatui::Viewport::Inline(n)`: prompt and
-status render in a small inline region, agent output scrolls into the
-terminal's **real scrollback**, and `Ctrl-C` leaves a readable transcript
-behind. This is the design stance worth taking from `pi-tui`'s
-`TuiMainScreen`/`TuiAltScreen` split — and it is the exact opposite of what a
-PTY host does.
+**Inline, not alternate screen.** The renderer keeps agent output in the
+terminal's **real scrollback** and repaints rows in place; it does not use
+`ratatui::Viewport::Inline`. This is the design stance worth taking from
+`pi-tui`'s `TuiMainScreen`/`TuiAltScreen` split — and it is the exact opposite of
+what a PTY host does.
 
-It also deletes a category of failure: no alt-screen enter/leave, no
-`lifecycle.rs` restore dance, no panic hook whose job is recovering a terminal
-BitRouter took custody of.
+It deletes the alt-screen category of failure: no alt-screen enter/leave, and
+`Ctrl-C` leaves a readable transcript behind. It does still take terminal
+custody for session-long raw mode, so lifecycle restore and the panic hook remain
+part of the shipped design.
 
 **Views (v1):** streaming message log (message/thought chunks), tool-call cards
 with status and diff, permission modal (`session/request_permission`), a
-provider/model picker over `providers/*`, and a status line carrying
-router-measured cost.
+provider/model picker over `providers/*`, and a footer carrying route, mode,
+title, permission state, and router-measured cost.
 
 **Client duties are small:** handle `session/update` and
 `session/request_permission`; call `initialize`, `session/new`,
@@ -372,8 +375,8 @@ strategy change that also permits a subtraction. Anyone reading §3 as "delete
 
 **Not `bitrouter tui`.** Three reasons, the third decisive: it resurrects the
 deleted orchestrator's name and expectations; it names the medium rather than
-the function; and **`status --watch` is also a TUI**, so the name would be
-permanently ambiguous inside BitRouter's own surface.
+the function; and it keeps vocabulary tied to a removed live-status surface
+rather than to the current `status --requests` / `chat` split.
 
 The real fork was verb-vs-flag:
 
@@ -408,7 +411,7 @@ removed with #745 and would resurrect a second dead name.
 
 ### 8.2 Diagnostics: three streams, one file
 
-An inline viewport shares the terminal, so every other writer is a corruption
+An inline renderer shares the terminal, so every other writer is a corruption
 source. There are **three** streams, not one:
 
 | Stream | Destination today | Collides? |
@@ -440,7 +443,7 @@ This also unblocks §11.2: a structured launch failure cannot be rendered if the
 text explaining it was never captured. Switching `inherit` → a captured pipe is
 the same change.
 
-### 8.3 Scope: session-only, over the shared snapshot layer
+### 8.3 Scope: session-only, over the ACP wire
 
 > **AMENDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** The scope
 > *rule* below is unchanged and remains authoritative. Its *mechanism* is not:
@@ -450,39 +453,25 @@ the same change.
 > keep out. `Scope` moves onto the wire instead (plan task 4.1).
 
 **The rule:** the TUI shows **session-scoped** data only. Anything daemon-wide
-belongs to `status --watch`. This is the *same* line as single-session in §2 —
-one scope rule governing both, not two to remember — and it is checkable in
-review.
+belongs outside this ACP session view; the current CLI surface for settled
+daemon-wide rows is `status --requests`. This is the same scope line as
+single-session in §2 — one rule governing both, not two to remember — and it is
+checkable in review.
 
 The merge question largely dissolves because §7 puts router-measured cost on
-the wire per session; the TUI never needs `status --watch` to answer "what is
-this costing me."
+the wire per session; the TUI does not need the daemon-wide request snapshot to
+answer "what is this costing me."
 
-**Do not build a second data layer — the scope seam already exists.**
-[`snapshot.rs:54`](../apps/bitrouter/src/tui/snapshot.rs:54) defines
-`Scope::{DaemonWide, Launch}`, with `spend_summary_for_launch` and
-`recent_requests(…, Some(launch))`; `launch_id` is plumbed end to end from
-`caller.launch_id()` to the metering column
-([`recorder.rs:190`](../apps/bitrouter/src/metering/recorder.rs:190)).
-
-The honesty problem is solved there too
-([`snapshot.rs:117`](../apps/bitrouter/src/tui/snapshot.rs:117)):
-
-> *Prefer launch scope, but only once it has something to show. Minting a token
-> is a request, not a guarantee: the harness has to send it back, and some do
-> not. Falling back — and saying so via `Scope` — keeps the bar honest either
-> way, instead of showing an empty session forever or, worse, showing the
-> daemon's numbers as if they were the session's.*
-
-That is the fix for the fidelity matrix's defect #1, already written. So:
-**share `snapshot.rs` and `Scope`; keep `watch.rs` and this TUI as separate
-renderers over it.** That yields what merging would actually buy — one data
-layer, consistent numbers, honest attribution — without merging the views.
+**Do not share the daemon snapshot layer.** The current implementation carries
+cost scope on the ACP wire and renders it through `crates/bitrouter-tui`. The
+app decides whether a reported figure is session-scoped or wider, and the TUI
+has no local metering-store reader, control-socket reader, or `snapshot.rs`
+dependency.
 
 **Carry the caveat.** For a subscription harness that ignores the injected
-credential (Claude Code on Max), requests never reach the daemon, so session
-cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
-visibly rather than silently. Inherit that behaviour; do not reinvent it.
+credential, requests never reach the daemon, so session cost is **structurally
+unknowable**. The TUI must render the wider/daemon-wide scope visibly rather
+than silently treating it as this session's spend.
 
 ## 9. Decision 6 — no crate yet, with a stated trigger
 
@@ -499,8 +488,10 @@ visibly rather than silently. Inherit that behaviour; do not reinvent it.
 > crate enforces mechanically. The reasoning below is retained because the
 > trigger conditions it names are still the right things to watch.
 
-Build in `apps/bitrouter/src/tui/`. Do **not** extract `crates/bitrouter-tui`
-in this work.
+The rejected plan was to build in `apps/bitrouter/src/tui/` and not extract
+`crates/bitrouter-tui` in this work. The current implementation did extract the
+renderer crate; the historical argument below is retained only to explain why
+the boundary trigger mattered.
 
 - The reuse argument is void: `bitrouter-gui` is deprecated and unscheduled, so
   the shared view model has exactly one consumer.
@@ -610,7 +601,7 @@ look broken in ways that read as its own bug.
 | Prerequisites 0–2 (§11) | ✅ | |
 | File-writing tracing subscriber + captured child stderr (§8.2) | ✅ | |
 | New verb sharing `RoutingOptions` via `#[command(flatten)]` (§8.1) | ✅ | |
-| TUI renders over the shared `snapshot.rs` / `Scope` layer (§8.3) | ✅ | |
+| TUI renders cost scope from the ACP wire, not `snapshot.rs` (§8.3) | ✅ | |
 | TUI: message log, tool cards, permission modal, cost line (§8) | ✅ | |
 | TUI: provider/model picker (§6) | ✅ | |
 | Inline surfacing of the log tail on abnormal exit (§8.2) | ✅ | |
@@ -673,8 +664,8 @@ land with:
 - [`README.md`](README.md) — delete the `TUI_FIDELITY_MATRIX.md` entry and the
   "eight harnesses" line describing it.
 - [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) — mark the
-  `launch --tui` half superseded by this spec; leave the `status --watch` half
-  authoritative.
+  `launch --tui` half superseded by this spec. A later docs pass also marks the
+  `status --watch` half superseded by `status --requests`.
 - [`harness.rs:401`](../apps/bitrouter/src/harness.rs:401) — rewrite the
   `launch_supported` doc comment, which currently justifies the four-harness
   cut partly by *"(under `--tui`) a hosted terminal."*
@@ -702,20 +693,18 @@ land with:
 3. ~~**Does the TUI get its own command, or a flag?**~~ **Answered — see
    §8.1.** A distinct verb, sharing `spawn`'s options via `RoutingOptions` +
    `#[command(flatten)]` — flag reuse without collapsing SPAWN_SPEC's
-   interactive/headless verb split. Not `bitrouter tui`: it names the medium,
-   inherits the orchestrator's expectations, and is ambiguous against
-   `status --watch`, which is also a TUI. `bitrouter chat <agent>` is the
+   interactive/headless verb split. Not `bitrouter tui`: it names the medium
+   and inherits the orchestrator's expectations. At proposal time it was also
+   ambiguous against the live router TUI that has since been removed.
+   `bitrouter chat <agent>` is the
    working name; **the spelling is the one thing still open here**, subject to
    two constraints — do not name it after the medium, and do not reuse `attach`
    (removed with #745).
 4. ~~**Is `status --watch` a view inside this TUI, or permanently separate?**~~
-   **Answered — see §8.3.** Separate views, shared data layer. The rule: the
-   TUI renders session-scoped data only; daemon-wide belongs to
-   `status --watch` — the same scope line as §2's single-session rule. The seam
-   already exists (`snapshot.rs`'s `Scope::{DaemonWide, Launch}`, `launch_id`
-   plumbed to the metering column), including the honest-fallback behaviour that
-   fixed the fidelity matrix's defect #1. Reuse it; do not build a second data
-   layer, and do not merge the views.
+   **Answered — see §8.3.** Separate views. The rule: the TUI renders
+   session-scoped data only; daemon-wide data belongs outside the ACP session
+   view. The former live view was later removed, and `status --requests` is now
+   the CLI snapshot for settled daemon-wide rows.
 
 **Still open.** Only the verb spelling in §16.3, plus the two `providers/set`
 gaps in §16.1 — which are tracked as work in §11.0 and §6.1 rather than as

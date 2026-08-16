@@ -7,7 +7,7 @@ The user chose **BitRouter Cloud** (managed proxy at `api.bitrouter.ai`, one bil
 Fastest demo path. Send the user here:
 
 1. Visit <https://bitrouter.ai>.
-2. Sign up (email / OAuth — handled by the console's better-auth).
+2. Sign up (email / OAuth in the hosted console).
 3. Top up credits via Stripe checkout on the console's billing page.
 4. Use the in-browser playground to send chat requests against any supported model.
 
@@ -57,19 +57,19 @@ client.messages.create(
 ### Operate the key
 
 - **Rotation / revocation:** Dashboard → API Keys → revoke (per-row). Keys are matched by their `sha256` hash; a revoked key's hash can be reused by a new key without collision.
-- **Billing:** every request decrements the user's Postgres `credit_balances` row by the cost of the actual tokens consumed (not an estimate). Top-up via Stripe in the console — credits are tracked in cents.
+- **Billing:** every request decrements the user's Cloud credit balance by the cost of the actual tokens consumed (not an estimate). Top up via Stripe in the console — credits are tracked in cents.
 - **Overdraft:** the gate allows a small overdraft if many concurrent requests collectively exceed the balance estimate, but the next request after the balance hits zero will be rejected. Top up before running large batches.
 
 ## C. Permissionless wallet — no signup, crypto-native
 
-For users who want to skip account creation entirely. Sign a JWT with a Solana (Ed25519) or EVM (secp256k1) wallet; BitRouter's `bitrouter-node` verifies the signature against the CAIP-10 `iss` claim and routes the request. Payment goes through x402 / MPP escrow on-chain.
+For users who want to skip account creation entirely. Sign a JWT with a Solana (Ed25519) or EVM (secp256k1) wallet; BitRouter Cloud verifies the signature against the CAIP-10 `iss` claim and routes the request. Payment goes through x402 / MPP escrow on-chain.
 
 This is fiddly to script — recommend pointing the user at <https://bitrouter.ai> docs rather than writing the JWT signing flow inline. Key facts the agent should know without going deeper:
 
 - The `iss` claim is CAIP-10: `solana:<base58 pubkey>` or `eip155:1:<0x address>`.
 - The JOSE `alg` is `SOL_EDDSA` (BitRouter-native, distinct from RFC 7515's `EdDSA`).
 - Cross-`alg` forgery (wallet `iss` with `EdDSA`, or thumbprint `iss` with `SOL_EDDSA`) is rejected before signature verification, so don't try to "fix" mismatches by changing the header.
-- Balance lives in a Mongo `charge_balances` collection keyed by wallet — separate from the Stripe-credit Postgres path.
+- Wallet balances are keyed by wallet identity and are separate from account Stripe credits.
 
 ## D. Headless CLI (`bitrouter cloud login`) — recommended for terminal-first users
 
@@ -109,14 +109,14 @@ bitrouter cloud login --scope "inference:invoke usage:read keys:read keys:write 
 
 ### Auto-enable for the local daemon
 
-When the credentials file is present, the local `bitrouter` daemon auto-adds the `bitrouter` provider to the in-memory zero-config providers map (see `apps/bitrouter/src/cloud/mod.rs::enable_in_zero_config`). Every model the account is entitled to becomes routable as `bitrouter:<model-id>` against `http://localhost:4356` — no `bitrouter.yaml` changes, no `BITROUTER_API_KEY` env var.
+When the credentials file is present, the local `bitrouter` daemon auto-adds the `bitrouter` provider to zero-config. Every model the account is entitled to becomes routable as `bitrouter:<model-id>` against `http://localhost:4356` — no `bitrouter.yaml` changes, no `BITROUTER_API_KEY` env var.
 
 Inference credential precedence is explicit: when a target carries a key populated from `BITROUTER_API_KEY` (or an explicit config/override), that key is authoritative and the daemon does not read, refresh, or send requests for the stored OAuth credential. The stored login is the inference fallback only when the target has no key. Management commands under `bitrouter cloud …` continue to use the stored account login independently; their identity does not override provider inference auth.
 
 ```python
 client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
 client.chat.completions.create(
-    model="bitrouter/gpt-4o",      # served via the user's cloud subscription
+    model="bitrouter:openai/gpt-5",  # served via the user's cloud subscription
     messages=[{"role": "user", "content": "hi"}],
 )
 ```

@@ -41,9 +41,9 @@
 //! *Knowledge*, not medium. Rendering something is never by itself a reason to
 //! move it out; naming something that is not in the protocol always is. So
 //! `providers/list` renders here — [`ProviderInfo`] is an ACP schema type — but
-//! the `_meta` key BitRouter invents to carry cost scope stays in the app, and
-//! `grep -rn "bitrouter/" crates/bitrouter-tui/src` returning nothing is how
-//! that is checked.
+//! the namespaced `_meta` key BitRouter uses to carry cost scope stays in the
+//! app. The crate may render typed protocol values; it may not invent or parse
+//! app-specific wire keys.
 //!
 //! [`ProviderInfo`]: agent_client_protocol_schema::v1::ProviderInfo
 

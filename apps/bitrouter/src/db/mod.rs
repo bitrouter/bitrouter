@@ -61,7 +61,8 @@ fn wants_wal(url: &str) -> bool {
 /// sqlx deliberately leaves `journal_mode` alone, so the store otherwise runs
 /// on a rollback journal — where a reader's SHARED lock blocks the writer.
 /// That is fine while only the daemon touches the file, and stops being fine
-/// the moment a second process polls it (the live view does, once a second).
+/// the moment a second process reads it for `status --requests` or external
+/// polling.
 ///
 /// Three properties make this the writer's job and nobody else's:
 ///
@@ -189,8 +190,7 @@ mod tests {
         // switch the journal mode.
         assert!(wants_wal("sqlite://./bitrouter.db"));
         assert!(wants_wal("sqlite://./bitrouter.db?mode=rwc"));
-        // The live view's reader pins mode=ro and physically cannot make the
-        // switch — asking it to would log a failure once a second.
+        // Status readers pin mode=ro and physically cannot make the switch.
         assert!(!wants_wal("sqlite://./bitrouter.db?mode=ro"));
         // No readers to protect / no such pragma.
         assert!(!wants_wal("sqlite::memory:"));

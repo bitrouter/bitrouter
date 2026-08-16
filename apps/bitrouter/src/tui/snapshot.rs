@@ -101,11 +101,11 @@ pub async fn poll(
     // and some do not. Falling back keeps the view from showing an empty
     // session forever.
     //
-    // NOTE: which branch ran is *not* recorded, so the bar cannot say whether
-    // its figures are the session's or every caller's — the honesty rule
-    // `chat`'s cost line keeps (see `crate::chat::cost`) has no equivalent
-    // here yet. Labelling it is a change to what `status --watch` draws, not a
-    // refactor, so it is left to one.
+    // NOTE: which branch ran is *not* recorded, so this daemon-wide snapshot
+    // cannot say whether its figures are the session's or every caller's — the
+    // honesty rule `chat`'s cost line keeps (see `crate::chat::cost`) has no
+    // equivalent here yet. Labelling it would change the status output contract,
+    // not just refactor the data read.
     if let Some(launch) = launch_id {
         let summary = store
             .spend_summary_for_launch(launch, window)
@@ -136,12 +136,10 @@ pub async fn poll(
 
 /// Bound on the control-socket probe.
 ///
-/// `send_command` has no timeout of its own, and this runs inline in the
-/// render loop: a daemon that accepts the connection but never answers — busy,
-/// half-dead, paused under a debugger — would otherwise freeze the view and,
-/// in hosted mode, stop forwarding keystrokes to the child. The surface is
-/// least useful exactly when the daemon is misbehaving, so it must never wait
-/// on one.
+/// `send_command` has no timeout of its own: a daemon that accepts the
+/// connection but never answers — busy, half-dead, paused under a debugger —
+/// would otherwise freeze the status snapshot. The surface is least useful
+/// exactly when the daemon is misbehaving, so it must never wait on one.
 const DAEMON_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
 async fn daemon_state(socket: &Path) -> Option<DaemonState> {

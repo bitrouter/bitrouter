@@ -12,11 +12,11 @@ decisions and changes exactly one mechanism: PLAN §C decision 7's
 `ratatui::Viewport::Inline`, whose inline / no-alternate-screen property §4
 preserves by other means.
 
-**Context.** v1 shipped 1,459 lines — 792 production, 667 test — turning an ACP
-`session/update` stream into terminal lines over a one-row inline viewport. The
-protocol half is right and the discipline is right. What is wrong is that the
-renderer is **append-only** against a protocol whose entities are **patchable**,
-and that it can only ever own one row.
+**Context.** The previous v1 shipped 1,459 lines — 792 production, 667 test —
+turning an ACP `session/update` stream into terminal lines over one-row
+`ratatui::Viewport::Inline`. The protocol half is right and the discipline is
+right. What is wrong is that the renderer is **append-only** against a protocol
+whose entities are **patchable**, and that it can only ever own one row.
 
 > **Rev 3 changelog.** Rev 2 was put through a seven-reviewer adversarial panel
 > which upheld 75 findings, including 7 blockers. Rev 3 fixes all of them.
@@ -83,7 +83,7 @@ it does not follow that the renderer's data model should stay append-only.
 `LIVE_ROWS: u16 = 1` behind a compile-time `assert!(LIVE_ROWS <= 2)`. ratatui
 0.29 keeps `viewport` a private field (`terminal/terminal.rs:70`) and
 `Terminal::resize` reuses the stored height, so there is no in-place way to
-change an inline viewport's height. `TerminalOptions.viewport` is public
+change a `Viewport::Inline` height. `TerminalOptions.viewport` is public
 (`:86`), so a `Terminal` can be reconstructed at a new height — but that clears,
 which is why it is not a workaround.
 
@@ -116,7 +116,9 @@ Nothing here inherits pi's protocol choices.
 - The writer **repaints in place** what is on screen and never corrupts,
   rewrites, or discards what is not.
 - Rendering is extensible **by us, internally** — one trait, one registry.
-- `bitrouter-tui` stops containing BitRouter's extension vocabulary.
+- BitRouter-specific metadata parsing and capability decisions stay in the app;
+  `bitrouter-tui` renders typed protocol values and explicit caller-supplied
+  decisions.
 - The renderer draws every `SessionUpdate` variant the stream already carries.
 
 **Non-goals**
@@ -378,8 +380,8 @@ second.
 - **Preemption:** an immediate render cancels any pending tick render and clears
   the dirty flag, so at most one frame is ever in flight.
 - **Resize** is observed as `crossterm::event::Event::Resize` on §13.1's single
-  stdin owner — the same mechanism `apps/bitrouter/src/tui/watch.rs:158` already
-  uses — and triggers an immediate full redraw.
+  stdin owner, `apps/bitrouter/src/chat/input.rs`, and triggers an immediate
+  full redraw.
 
   > **Not yet wired.** Nothing observes `Event::Resize`, so there is no resize
   > trigger and the scheduler carries no variant for one. A resize is still
@@ -505,34 +507,37 @@ unregistered. v1 registers three or four.
 > (terminal custody was split across the boundary with an ordering contract
 > documented on both sides), and `snapshot.rs`'s `Scope` was deleted — with
 > `as_wire`'s only caller gone it had no reader, and `Snapshot.scope` never had
-> one. **`status --watch` therefore still draws an unlabelled spend figure**,
-> which is the honesty rule below applied to `chat` and not to the bar. Fixing
-> that is a change to what the bar draws, and is not in this amendment.
+> one. Before the watcher was removed, **`status --watch` therefore drew an
+> unlabelled spend figure**, which is the honesty rule below applied to `chat`
+> and not to the bar. The current replacement is `status --requests`; it is a
+> text snapshot, not a ratatui bar.
 
 `bitrouter-tui`'s doc says it *"must never depend on `bitrouter`"* and that the
-build enforces it. True — but it enforces the boundary against the **crate**,
-not against **BitRouter-specific knowledge**, of which the crate has plenty:
-`cost.rs:11` (module doc) and `cost.rs:31` (the constant) both name
-`bitrouter/costScope`, and `picker.rs` renders `providers/*`, which no generic
-agent serves.
+build enforces it. True — but the useful boundary is against **BitRouter-specific
+knowledge**, not just against the **crate**. The shipped split keeps the
+`bitrouter/costScope` `_meta` spelling in the app, while the crate renders typed
+cost scope and ACP `ProviderInfo` values supplied by the app.
 
 - `crates/bitrouter-tui` keeps the writer, journal, `ToolRenderer`, the registry,
-  and the generic ACP renderers. It knows ACP and nothing else.
-- **`cost.rs` moves whole** to `apps/bitrouter` — constant, `Scope`,
-  `from_usage`, `render`, `unreported`, and all five tests. The split rev 2
-  proposed does not compile: `from_usage` reads the constant, and every test
-  builds fixtures through it (`cost.rs:78`, `:141`).
-- **`picker.rs` moves whole** to `apps/bitrouter` as plain app code with no
-  registry entry, and its five tests move with it.
+  the generic ACP renderers, the cost-line renderer, and the provider picker.
+  It may know ACP schema types and typed values supplied by the app; it still
+  must not depend on the `bitrouter` app crate.
+- `cost.rs` stays split at the boundary that compiled: the crate renders
+  `Cost` and `Scope`, while the app owns the `bitrouter/costScope` `_meta`
+  spelling and converts `UsageUpdate` into that typed scope before calling the
+  renderer.
+- `picker.rs` stays in the crate because it renders `ProviderInfo`, an ACP
+  schema type. The app decides whether the `providers/*` surface is available
+  and performs any `providers/set` call after a selection.
 
-The app already depends on `ratatui`, so constructing `Line`s there leaks
-nothing new. It does need ACP schema types it does not currently name directly —
-§19.5.
+There is deliberately no `ratatui` dependency in the app crate; constructing
+terminal rows remains inside `bitrouter-tui`. The app names ACP schema types
+directly where it has to bridge protocol updates into renderer inputs — §19.5.
 
-**A guard, because this moves rendering back where it can reach anything.** The
-moved renderers live in one module that may not reference `Config`, the metering
-store, or the control socket, and take only values already on the ACP wire. §16
-asserts it.
+**A guard, because BitRouter-specific knowledge still crosses the boundary.**
+The renderers may not reference `Config`, the metering store, or the control
+socket, and take only values already on the ACP wire or explicit caller-supplied
+scope/availability decisions. §16 asserts it.
 
 **`Capabilities` is deleted, not collapsed.** It is constructed nowhere outside
 its own tests today — the live gate is the app's `can_reroute()`. `providers`
@@ -594,16 +599,22 @@ existing `Prompt::deny()` path, so a cancelled turn never resolves to consent.
   stdout after teardown has restored the terminal**, not through the writer:
   abnormal exit is exactly when `prev`/`anchor` are least trustworthy. **3 tests
   survive as-is; 1 has its fixture normalized** (§16.4).
-- **`cost.rs`** — moves whole to the app (§8). **5 tests move.**
-- **`picker.rs`** — moves whole to the app (§8). **5 tests move.**
+- **`cost.rs`** — stays in the crate as the renderer for typed `Cost` /
+  `Scope`; app-side `_meta` parsing supplies the scope (§8). **3 tests stay in
+  the crate; app-side scope parsing keeps its own tests.**
+- **`picker.rs`** — stays in the crate because it renders ACP `ProviderInfo`;
+  the app supplies availability and performs `providers/set` after selection
+  (§8). **5 tests stay in the crate.**
 - **`viewport.rs`** — **deleted** with its **3 tests**, which assert behaviour of
   the `Inline` type being removed. §16.3 replaces them.
 - **`transcript.rs`** — becomes `journal.rs` plus renderers. Its **8 tests** are
   ported.
 - **`lib.rs`** — `Capabilities` deleted (§8), so its **2 tests** are deleted.
 
-Against the 31 tests passing today: **7 survive as-is, 1 modified, 10 move,
-8 ported, 3 replaced, 2 deleted.**
+Against the 31 tests passing today, the shipped split keeps the cost/picker
+renderer tests in the crate, ports the transcript coverage to journal/render
+tests, replaces the deleted viewport tests, and deletes only obsolete
+`Capabilities` coverage.
 
 ## 11. Decision 9 — no error isolation, no plugin loading, and the trigger
 
@@ -635,10 +646,10 @@ New and rewritten work:
 | **Total new/rewritten** | **~1,800–2,100** |
 | Tests, at the existing ratio | ~1,500 |
 
-Roughly **3,300–3,600 lines** of new and rewritten code. Surviving and relocated
-production code (permission, log_tail, cost, picker ≈ 390 lines) is not counted
-here. Like its predecessor, this spec is not a subtraction. §4 is the majority of
-the risk.
+Roughly **3,300–3,600 lines** of new and rewritten code. Surviving production
+code retained across the boundary (permission, log_tail, cost, picker ≈ 390
+lines) is not counted here. Like its predecessor, this spec is not a subtraction.
+§4 is the majority of the risk.
 
 ## 13. Prerequisites
 
@@ -670,9 +681,9 @@ nothing was taken from the terminal. Now something is.
 **Reuse what the repo already has.** `apps/bitrouter/src/tui/lifecycle.rs`
 survived Phase 1.2 and provides a handle-free `restore()` (`:44`) plus
 `install_panic_restore()` (`:56`), written so a panic hook or a signal branch can
-call it; `apps/bitrouter/src/tui/watch.rs:185` provides
-`ShutdownSignals::install()` for INT/TERM/HUP. All three exits — normal, panic,
-signal — must call `restore()`, which at minimum disables raw mode.
+call it; the same module now owns `Shutdown::install()` for INT/TERM/HUP. All
+three exits — normal, panic, signal — must call `restore()`, which at minimum
+disables raw mode.
 
 ### 13.3 Non-TTY
 
@@ -683,9 +694,9 @@ unhandled path.
 
 ### 13.4 Caveat, not a blocker
 
-`test (ubuntu-latest)` is currently red on this branch (issue #817, a hang under
-`cargo nextest run --workspace`, deliberately left red by `8f7a3740`). Unrelated
-to this spec, but §16.5's gate cannot go green until it is fixed.
+The final gate still needs the normal CI suite; earlier drafts called out a
+separate `ubuntu-latest` hang, but the plan should now treat §16.5 as the source
+of truth for current verification.
 
 ## 14. Risks
 
@@ -701,7 +712,8 @@ to this spec, but §16.5's gate cannot go green until it is fixed.
    `Paragraph::line_count`.
 4. **`TestBackend` does not model escape bytes**, so a green harness is not
    proof of correct output. §16.3 pairs it with one manual smoke.
-5. **The app-side renderers can reach anything.** §8's guard plus §16's check.
+5. **Boundary drift can reintroduce app knowledge into renderer code.** §8's
+   guard plus §16's check.
 6. **Scope creep toward a toolkit.** §2's non-goals and §11's trigger.
 
 ## 15. Scope by version
@@ -717,7 +729,7 @@ Proposed for v1, **contingent on §19.1**:
 | `Content` and non-text blocks render, capped (§6) | ✅ | |
 | Hunked diffs with path-naming summary (§6) | ✅ | |
 | One trait + one registry + caller footer (§7) | ✅ | |
-| `cost.rs` and `picker.rs` move to the app (§8) | ✅ | |
+| `cost.rs` / `picker.rs` remain in `bitrouter-tui`; app supplies metadata scope and availability (§8) | ✅ | |
 | Five forwarded variants render (§9) | ✅ | |
 | Key bindings: Esc, Ctrl-C, Ctrl-D, Ctrl-L (§9, §4.6) | ✅ | |
 | Single stdin owner, raw mode, single-line editor (§13.1) | ✅ | |
@@ -756,14 +768,12 @@ Proposed for v1, **contingent on §19.1**:
    ```bash
    grep -rn "bitrouter/" crates/bitrouter-tui/src   # must return nothing
    ```
-   Today this returns **four** lines, each with a disposition: `cost.rs:11`
-   (module doc) and `cost.rs:31` (the constant) leave with the file (§8);
-   `log_tail.rs:81` and `:91` are fixture paths in one test, normalized to
-   `/tmp/session-1.log` as part of the work. Additionally:
-   `cargo tree -p bitrouter-tui` shows no `bitrouter`;
-   `crates/bitrouter-tui/src/{cost.rs,picker.rs,viewport.rs}` no longer exist;
-   and the app-side renderer module references no `Config`, metering, or control
-   socket (§8's guard).
+   The crate contains no app-specific route namespace or `_meta` key spelling.
+   Additionally: `cargo tree -p bitrouter-tui` shows no dependency on the
+   `bitrouter` app crate; `crates/bitrouter-tui/src/viewport.rs` no longer
+   exists; `crates/bitrouter-tui/src/{cost.rs,picker.rs}` exist and contain no
+   app-crate imports; and `apps/bitrouter/Cargo.toml` has no direct `ratatui`
+   dependency (§8's guard).
 6. Full workspace `cargo nextest run --all-features`, `cargo clippy
    --all-features`, `cargo fmt -- --check` clean — see §13.4 on sequencing.
 
@@ -826,8 +836,7 @@ This spec **does** change user-facing surface.
    ratatui's `scrolling-regions` feature (§4.4) — a workspace manifest change.
    Recommend deferring (§15) and revisiting if users report losing the cost
    readout.
-5. **How does the app name ACP schema types after §8's move?** The moved
-   renderers need `UsageUpdate` and `ProviderInfo`. Either `apps/bitrouter` takes
-   a direct `agent-client-protocol-schema` dependency with
-   `unstable_llm_providers`, or it reaches them via
-   `agent_client_protocol::schema::v1::*`. Pick one before task 5 in the plan.
+5. ~~**How does the app name ACP schema types after §8's split?**~~ Answered:
+   `apps/bitrouter` imports `UsageUpdate` and `ProviderInfo` through
+   `agent_client_protocol::schema::v1::*`; the renderer crate depends directly
+   on `agent-client-protocol-schema` for the typed `ProviderInfo` it renders.
