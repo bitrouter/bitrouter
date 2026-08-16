@@ -468,10 +468,9 @@ fn validate_optimization_state(policy_name: &str, policy: &PolicyDefinition) -> 
             &rejection.experiment_id,
             "optimization rejection experiment_id",
         )?;
-        validate_sha256_digest(
-            &rejection.treatment_context_digest,
-            "optimization rejection treatment_context_digest",
-        )?;
+        if let Some(digest) = rejection.treatment_context_digest.as_deref() {
+            validate_sha256_digest(digest, "optimization rejection treatment_context_digest")?;
+        }
         validate_sha256_digest(
             &rejection.evidence_root,
             "optimization rejection evidence_root",
@@ -3022,8 +3021,9 @@ mod tests {
         let rejection = RouteRejection {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            treatment_context_digest:
+            treatment_context_digest: Some(
                 "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".into(),
+            ),
             evidence_root:
                 "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
             reason: "insufficient quality".into(),
@@ -3035,6 +3035,24 @@ mod tests {
         });
 
         assert!(validate_optimization_state("auto", &policy).is_err());
+    }
+
+    #[test]
+    fn base_format_optimization_rejection_remains_readable() -> anyhow::Result<()> {
+        let rejection: RouteRejection = serde_json::from_str(
+            r#"{
+                "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "evidence_root":"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "reason":"insufficient quality"
+            }"#,
+        )?;
+        let mut policy = valid_optimization_policy();
+        policy.optimization = Some(PolicyOptimizationState {
+            active: None,
+            rejections: vec![rejection],
+        });
+
+        validate_optimization_state("auto", &policy)
     }
 
     #[test]

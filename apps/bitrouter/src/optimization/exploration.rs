@@ -79,7 +79,8 @@ impl RouteExploration {
 #[serde(deny_unknown_fields)]
 pub struct RouteRejection {
     pub experiment_id: String,
-    pub treatment_context_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treatment_context_digest: Option<String>,
     pub evidence_root: String,
     pub reason: String,
 }

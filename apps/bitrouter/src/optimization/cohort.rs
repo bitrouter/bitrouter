@@ -44,12 +44,19 @@ pub struct CohortAssessment {
 struct UnitKey {
     unit: ExperimentAssignmentUnit,
     digest: String,
+    subject_id: String,
 }
 
 #[derive(Default)]
 struct UnitGroup<'a> {
     arms: BTreeSet<ExperimentArm>,
     records: Vec<&'a EvalEvidenceRecord>,
+}
+
+enum ConclusiveRecord<'a> {
+    None,
+    Consistent(&'a EvalEvidenceRecord),
+    Conflict,
 }
 
 #[derive(Default)]
@@ -138,6 +145,7 @@ pub fn assess_cohort(
                 .entry(UnitKey {
                     unit: experiment.assignment_unit,
                     digest: experiment.assignment_id_digest.clone(),
+                    subject_id: record.subject.subject_id.clone(),
                 })
                 .or_default();
             group.arms.insert(experiment.arm);
@@ -154,14 +162,9 @@ pub fn assess_cohort(
     let inferred_configs = groups
         .values()
         .filter(|group| group.arms.len() == 1)
-        .filter_map(|group| {
-            let mut conclusive = group
-                .records
-                .iter()
-                .copied()
-                .filter(|record| record.result.verdict != EvalVerdict::Inconclusive);
-            let first = conclusive.next()?;
-            conclusive.next().is_none().then_some(first)
+        .filter_map(|group| match conclusive_record(&group.records, None) {
+            ConclusiveRecord::Consistent(record) => Some(record),
+            ConclusiveRecord::None | ConclusiveRecord::Conflict => None,
         })
         .map(|record| record.result.evaluator.config_digest.clone())
         .collect::<BTreeSet<_>>();
@@ -213,6 +216,24 @@ pub fn assess_cohort(
             }
         }
 
+        let hard_violations = group
+            .records
+            .iter()
+            .filter(|record| {
+                exploration
+                    .gate
+                    .evaluator_config_digest
+                    .as_ref()
+                    .is_none_or(|digest| record.result.evaluator.config_digest == *digest)
+            })
+            .flat_map(|record| record.result.hard_violations.iter())
+            .collect::<BTreeSet<_>>();
+        let hard_violation_count = u32::try_from(hard_violations.len()).unwrap_or(u32::MAX);
+        assessment.hard_violations = assessment
+            .hard_violations
+            .checked_add(hard_violation_count)
+            .context("counting hard violations")?;
+
         if ambiguous_evaluator {
             assessment.excluded = assessment
                 .excluded
@@ -221,30 +242,12 @@ pub fn assess_cohort(
             continue;
         }
 
-        let conclusive = group
-            .records
-            .iter()
-            .copied()
-            .filter(|record| record.result.verdict != EvalVerdict::Inconclusive)
-            .filter(|record| {
-                evaluator_config_digest
-                    .as_ref()
-                    .is_none_or(|digest| record.result.evaluator.config_digest == *digest)
-            })
-            .collect::<Vec<_>>();
         let has_wrong_evaluator = evaluator_config_digest.as_ref().is_some_and(|digest| {
             group.records.iter().any(|record| {
                 record.result.verdict != EvalVerdict::Inconclusive
                     && record.result.evaluator.config_digest != *digest
             })
         });
-        if conclusive.len() != 1 {
-            assessment.excluded = assessment
-                .excluded
-                .checked_add(1)
-                .context("counting excluded experiment units")?;
-            continue;
-        }
         if has_wrong_evaluator && exploration.gate.evaluator_config_digest.is_none() {
             assessment.excluded = assessment
                 .excluded
@@ -252,7 +255,17 @@ pub fn assess_cohort(
                 .context("counting ambiguous evaluator units")?;
             continue;
         }
-        let result = &conclusive[0].result;
+        let record = match conclusive_record(&group.records, evaluator_config_digest.as_deref()) {
+            ConclusiveRecord::Consistent(record) => record,
+            ConclusiveRecord::None | ConclusiveRecord::Conflict => {
+                assessment.excluded = assessment
+                    .excluded
+                    .checked_add(1)
+                    .context("counting excluded experiment units")?;
+                continue;
+            }
+        };
+        let result = &record.result;
         assessment.eligible = assessment
             .eligible
             .checked_add(1)
@@ -276,11 +289,6 @@ pub fn assess_cohort(
             }
             EvalVerdict::Inconclusive => {}
         }
-        let violations = u32::try_from(result.hard_violations.len()).unwrap_or(u32::MAX);
-        assessment.hard_violations = assessment
-            .hard_violations
-            .checked_add(violations)
-            .context("counting hard violations")?;
     }
 
     control.pass_rate_ppm = pass_rate(&control)?;
@@ -292,10 +300,10 @@ pub fn assess_cohort(
         _ => None,
     };
     let minimum = exploration.gate.minimum_tasks_per_arm;
-    let verdict = if ambiguous_evaluator {
-        CohortGateVerdict::AmbiguousEvaluator
-    } else if challenger.hard_violations > 0 {
+    let verdict = if challenger.hard_violations > 0 {
         CohortGateVerdict::HardViolation
+    } else if ambiguous_evaluator {
+        CohortGateVerdict::AmbiguousEvaluator
     } else if control.eligible < minimum || challenger.eligible < minimum {
         CohortGateVerdict::InsufficientEvidence
     } else if challenger
@@ -314,6 +322,43 @@ pub fn assess_cohort(
         cost_delta_micro_usd,
         verdict,
     })
+}
+
+fn conclusive_record<'a>(
+    records: &[&'a EvalEvidenceRecord],
+    evaluator_config_digest: Option<&str>,
+) -> ConclusiveRecord<'a> {
+    let mut selected: Option<&EvalEvidenceRecord> = None;
+    for record in records.iter().copied().filter(|record| {
+        record.result.verdict != EvalVerdict::Inconclusive
+            && evaluator_config_digest
+                .is_none_or(|digest| record.result.evaluator.config_digest == digest)
+    }) {
+        let Some(current) = selected else {
+            selected = Some(record);
+            continue;
+        };
+        if current.result.verdict != record.result.verdict
+            || current.result.evaluator.config_digest != record.result.evaluator.config_digest
+            || current
+                .result
+                .hard_violations
+                .iter()
+                .collect::<BTreeSet<_>>()
+                != record
+                    .result
+                    .hard_violations
+                    .iter()
+                    .collect::<BTreeSet<_>>()
+        {
+            return ConclusiveRecord::Conflict;
+        }
+        selected = Some(record);
+    }
+    match selected {
+        Some(record) => ConclusiveRecord::Consistent(record),
+        None => ConclusiveRecord::None,
+    }
 }
 
 fn arm_assessment_mut<'a>(
@@ -724,6 +769,35 @@ mod tests {
     }
 
     #[test]
+    fn hard_violation_precedes_inferred_evaluator_ambiguity() -> Result<()> {
+        let mut hard = spec(
+            "challenger-hard-a",
+            ExperimentArm::Challenger,
+            EvalVerdict::Fail,
+            700,
+        );
+        hard.hard_violation = true;
+        hard.evaluator_digest = EVALUATOR_A;
+        let mut other = spec(
+            "challenger-pass-b",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        );
+        other.evaluator_digest = EVALUATOR_B;
+
+        let assessment = assess_cohort(
+            &snapshot(vec![record(hard), record(other)]),
+            POLICY_DIGEST,
+            &exploration(None),
+        )?;
+
+        assert_eq!(assessment.challenger.hard_violations, 1);
+        assert_eq!(assessment.verdict, CohortGateVerdict::HardViolation);
+        Ok(())
+    }
+
+    #[test]
     fn conflicting_subject_does_not_poison_evaluator_inference() -> Result<()> {
         let exact = spec(
             "challenger-exact",
@@ -809,6 +883,64 @@ mod tests {
             assessment.evaluator_config_digest.as_deref(),
             Some(EVALUATOR_A)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn assignment_digest_collision_keeps_distinct_subjects_independent() -> Result<()> {
+        let mut first = spec(
+            "collision-subject-a",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        );
+        first.assignment_id = "shared-assignment";
+        let mut second = spec(
+            "collision-subject-b",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            650,
+        );
+        second.assignment_id = "shared-assignment";
+
+        let assessment = assess_cohort(
+            &snapshot(vec![record(first), record(second)]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.challenger.observed, 2);
+        assert_eq!(assessment.challenger.eligible, 2);
+        assert_eq!(assessment.challenger.pass, 2);
+        assert_eq!(assessment.challenger.excluded, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn consistent_conclusive_duplicates_use_the_latest_complete_subject_record() -> Result<()> {
+        let mut older = spec(
+            "consistent-duplicate",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        );
+        older.result_suffix = "older";
+        let mut newer = older.clone();
+        newer.result_suffix = "newer";
+        newer.submitted_at = "2026-08-17T00:00:02Z";
+        newer.trajectory_cost = Some(600);
+
+        let assessment = assess_cohort(
+            &snapshot(vec![record(older), record(newer)]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+
+        assert_eq!(assessment.challenger.observed, 1);
+        assert_eq!(assessment.challenger.eligible, 1);
+        assert_eq!(assessment.challenger.pass, 1);
+        assert_eq!(assessment.challenger.excluded, 0);
+        assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(600));
         Ok(())
     }
 }

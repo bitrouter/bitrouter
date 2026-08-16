@@ -160,7 +160,6 @@ pub fn select_opportunity(
             continue;
         }
         let context = treatment_context_digest(
-            input.active_policy_digest,
             input.policy_name,
             &request_key,
             champion_tier,
@@ -169,10 +168,9 @@ pub fn select_opportunity(
             &gate,
         )?;
         if policy.optimization.as_ref().is_some_and(|state| {
-            state
-                .rejections
-                .iter()
-                .any(|rejection| rejection.treatment_context_digest == context)
+            state.rejections.iter().any(|rejection| {
+                rejection.treatment_context_digest.as_deref() == Some(context.as_str())
+            })
         }) {
             continue;
         }
@@ -224,7 +222,6 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
     };
     let gate = input.options.gate();
     let context_digest = treatment_context_digest(
-        input.active_policy_digest,
         input.policy_name,
         &target.request_key,
         &target.champion_tier,
@@ -232,7 +229,7 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         input.options.challenger_exposure_ppm,
         &gate,
     )?;
-    let experiment_id = domain_digest("bitrouter.history-optimizer.experiment.v1", &context_digest);
+    let experiment_id = experiment_id(input.active_policy_digest, &context_digest)?;
     let compiler_config_digest = compiler_config_digest(input.options)?;
     let mut successor = input.active_policy.clone();
     successor.artifact = Some(PolicyArtifact {
@@ -312,7 +309,6 @@ fn prepare_active_step(
         assessment.challenger.observed >= exploration.gate.maximum_challenger_tasks;
     let action = match assessment.verdict {
         CohortGateVerdict::HardViolation => ControllerAction::Retreat,
-        CohortGateVerdict::AmbiguousEvaluator => ControllerAction::Hold,
         CohortGateVerdict::Pass
             if assessment
                 .cost_delta_micro_usd
@@ -323,13 +319,15 @@ fn prepare_active_step(
         CohortGateVerdict::Pass
         | CohortGateVerdict::InsufficientEvidence
         | CohortGateVerdict::QualityFailed
+        | CohortGateVerdict::AmbiguousEvaluator
             if budget_reached =>
         {
             ControllerAction::Retreat
         }
         CohortGateVerdict::Pass
         | CohortGateVerdict::InsufficientEvidence
-        | CohortGateVerdict::QualityFailed => ControllerAction::Hold,
+        | CohortGateVerdict::QualityFailed
+        | CohortGateVerdict::AmbiguousEvaluator => ControllerAction::Hold,
     };
     let target = HistoricalOpportunity {
         request_key: exploration.target_request_key.clone(),
@@ -397,7 +395,6 @@ fn active_successor(
         }
         ControllerAction::Retreat => {
             let treatment_context_digest = treatment_context_digest(
-                input.active_policy_digest,
                 input.policy_name,
                 &exploration.target_request_key,
                 &exploration.champion_tier,
@@ -405,15 +402,16 @@ fn active_successor(
                 exploration.challenger_exposure_ppm,
                 &exploration.gate,
             )?;
-            state
-                .rejections
-                .retain(|rejection| rejection.treatment_context_digest != treatment_context_digest);
+            state.rejections.retain(|rejection| {
+                rejection.treatment_context_digest.as_deref()
+                    != Some(treatment_context_digest.as_str())
+            });
             if state.rejections.len() == 256 {
                 state.rejections.remove(0);
             }
             state.rejections.push(RouteRejection {
                 experiment_id: exploration.experiment_id.clone(),
-                treatment_context_digest,
+                treatment_context_digest: Some(treatment_context_digest),
                 evidence_root: input.eval.evidence_root.clone(),
                 reason: rejection_reason(assessment).into(),
             });
@@ -552,7 +550,6 @@ fn active_compiler_config_digest(exploration: &RouteExploration) -> Result<Strin
 
 #[derive(Serialize)]
 struct TreatmentContext<'a> {
-    parent_policy_digest: &'a str,
     policy_name: &'a str,
     request_key: &'a str,
     champion_tier: &'a str,
@@ -562,7 +559,6 @@ struct TreatmentContext<'a> {
 }
 
 pub fn treatment_context_digest(
-    parent_policy_digest: &str,
     policy_name: &str,
     request_key: &str,
     champion_tier: &str,
@@ -571,13 +567,26 @@ pub fn treatment_context_digest(
     gate: &OptimizationGate,
 ) -> Result<String> {
     canonical_digest(&TreatmentContext {
-        parent_policy_digest,
         policy_name,
         request_key,
         champion_tier,
         challenger_tier,
         challenger_exposure_ppm,
         gate,
+    })
+}
+
+fn experiment_id(parent_policy_digest: &str, treatment_context_digest: &str) -> Result<String> {
+    #[derive(Serialize)]
+    struct ExperimentIdentity<'a> {
+        domain: &'a str,
+        parent_policy_digest: &'a str,
+        treatment_context_digest: &'a str,
+    }
+    canonical_digest(&ExperimentIdentity {
+        domain: "bitrouter.history-optimizer.experiment.v1",
+        parent_policy_digest,
+        treatment_context_digest,
     })
 }
 
@@ -616,11 +625,6 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
-fn domain_digest(domain: &str, value: &str) -> String {
-    let bytes = format!("{domain}\0{value}");
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes.as_bytes())))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -639,7 +643,7 @@ mod tests {
     };
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
-        RouteOwner,
+        RouteOwner, semantic_digest,
     };
 
     use super::{
@@ -655,6 +659,8 @@ mod tests {
         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const EXPERIMENT_ID: &str =
         "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    const OTHER_CONFIG_DIGEST: &str =
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
     fn options() -> OptimizationOptions {
         OptimizationOptions {
@@ -968,7 +974,6 @@ mod tests {
             evaluator_config_digest: None,
         };
         let rejected_context = treatment_context_digest(
-            ACTIVE_DIGEST,
             "auto",
             "agent_trace/v2|finalization|normal",
             "strong",
@@ -983,7 +988,7 @@ mod tests {
             active: None,
             rejections: vec![RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
-                treatment_context_digest: rejected_context,
+                treatment_context_digest: Some(rejected_context),
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "higher cost".into(),
             }],
@@ -1161,6 +1166,34 @@ mod tests {
     }
 
     #[test]
+    fn inferred_evaluator_ambiguity_retreats_at_challenger_budget() -> Result<()> {
+        let mut lock = active_lock();
+        lock.policies
+            .get_mut("auto")
+            .and_then(|policy| policy.optimization.as_mut())
+            .and_then(|state| state.active.as_mut())
+            .ok_or_else(|| anyhow::anyhow!("missing active exploration"))?
+            .gate
+            .evaluator_config_digest = None;
+        let mut snapshot = active_snapshot(3, 20, EvalVerdict::Pass, 1_000, 700);
+        for record in snapshot.records.iter_mut().skip(13) {
+            record.result.evaluator.config_digest = OTHER_CONFIG_DIGEST.into();
+        }
+
+        let step = prepare_step(OptimizationStepInput {
+            eval: &snapshot,
+            active_policy: &lock,
+            active_policy_digest: ACTIVE_DIGEST,
+            policy_name: "auto",
+            options: &options(),
+        })?;
+
+        assert_eq!(step.action, ControllerAction::Retreat);
+        assert!(step.successor.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn hard_violation_retreats_immediately_and_keeps_rejections_bounded() -> Result<()> {
         let mut lock = active_lock();
         let policy = lock
@@ -1174,7 +1207,7 @@ mod tests {
         state.rejections = (0..256)
             .map(|index| RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
-                treatment_context_digest: format!("sha256:{index:064x}"),
+                treatment_context_digest: Some(format!("sha256:{index:064x}")),
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "prior rejection".into(),
             })
@@ -1223,7 +1256,6 @@ mod tests {
             .and_then(|state| state.active.as_ref())
             .ok_or_else(|| anyhow::anyhow!("missing active exploration"))?;
         let context = treatment_context_digest(
-            ACTIVE_DIGEST,
             "auto",
             &exploration.target_request_key,
             &exploration.champion_tier,
@@ -1238,7 +1270,7 @@ mod tests {
             .rejections
             .push(RouteRejection {
                 experiment_id: EXPERIMENT_ID.into(),
-                treatment_context_digest: context.clone(),
+                treatment_context_digest: Some(context.clone()),
                 evidence_root: CONFIG_DIGEST.into(),
                 reason: "prior attempt".into(),
             });
@@ -1265,11 +1297,82 @@ mod tests {
         assert_eq!(
             rejections
                 .iter()
-                .filter(|rejection| rejection.treatment_context_digest == context)
+                .filter(|rejection| {
+                    rejection.treatment_context_digest.as_deref() == Some(context.as_str())
+                })
                 .count(),
             1
         );
         assert_eq!(rejections[0].evidence_root, SNAPSHOT_ROOT);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_treatment_stays_suppressed_across_real_successor_digests() -> Result<()> {
+        let initial = lock();
+        let initial_digest = semantic_digest(&initial)?;
+        let mut history = snapshot();
+        history.records.retain(|record| {
+            record
+                .subject
+                .decisions
+                .iter()
+                .any(|decision| decision.request_key == "agent_trace/v2|review|normal")
+        });
+        set_snapshot_policy_digest(&mut history, &initial_digest);
+        let options = options();
+
+        let explore = prepare_step(OptimizationStepInput {
+            eval: &history,
+            active_policy: &initial,
+            active_policy_digest: &initial_digest,
+            policy_name: "auto",
+            options: &options,
+        })?;
+        assert_eq!(explore.action, ControllerAction::Explore);
+        let exploration_lock = explore
+            .successor
+            .ok_or_else(|| anyhow::anyhow!("explore must create a successor"))?;
+        let exploration_digest = semantic_digest(&exploration_lock)?;
+        let experiment_id = exploration_lock
+            .policies
+            .get("auto")
+            .and_then(|policy| policy.optimization.as_ref())
+            .and_then(|state| state.active.as_ref())
+            .map(|exploration| exploration.experiment_id.clone())
+            .ok_or_else(|| anyhow::anyhow!("missing active experiment"))?;
+
+        let mut experiment_history = active_snapshot(3, 20, EvalVerdict::Fail, 1_000, 700);
+        set_snapshot_policy_digest(&mut experiment_history, &exploration_digest);
+        for record in &mut experiment_history.records {
+            record.subject.decisions[0].request_key = "agent_trace/v2|review|normal".into();
+            if let Some(experiment) = record.subject.decisions[0].experiment.as_mut() {
+                experiment.experiment_id = experiment_id.clone();
+            }
+        }
+        let retreat = prepare_step(OptimizationStepInput {
+            eval: &experiment_history,
+            active_policy: &exploration_lock,
+            active_policy_digest: &exploration_digest,
+            policy_name: "auto",
+            options: &options,
+        })?;
+        assert_eq!(retreat.action, ControllerAction::Retreat);
+        let retreat_lock = retreat
+            .successor
+            .ok_or_else(|| anyhow::anyhow!("retreat must create a successor"))?;
+        let retreat_digest = semantic_digest(&retreat_lock)?;
+
+        set_snapshot_policy_digest(&mut history, &retreat_digest);
+        let selected = select_opportunity(OptimizationStepInput {
+            eval: &history,
+            active_policy: &retreat_lock,
+            active_policy_digest: &retreat_digest,
+            policy_name: "auto",
+            options: &options,
+        })?;
+
+        assert!(selected.is_none());
         Ok(())
     }
 
@@ -1298,5 +1401,14 @@ mod tests {
         assert_eq!(step.action, ControllerAction::Converged);
         assert!(step.successor.is_none());
         Ok(())
+    }
+
+    fn set_snapshot_policy_digest(snapshot: &mut EvalEvidenceSnapshot, digest: &str) {
+        for record in &mut snapshot.records {
+            record.subject.policy_digest = digest.into();
+            for decision in &mut record.subject.decisions {
+                decision.policy_digest = digest.into();
+            }
+        }
     }
 }
