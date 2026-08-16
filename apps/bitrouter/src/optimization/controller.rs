@@ -6,6 +6,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::EvalEvidenceSnapshot;
+use crate::eval::store::EvalSnapshot;
 use crate::eval::types::EvalScope;
 use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_cohort};
 use crate::optimization::exploration::{
@@ -102,6 +103,8 @@ pub struct PreparedOptimizationStep {
     pub parent_policy_digest: String,
     pub config_before: String,
     pub policy_mode: bitrouter_sdk::config::PolicyRuntimeMode,
+    eval_snapshot: EvalSnapshot,
+    database_url: String,
 }
 
 #[derive(Debug)]
@@ -716,12 +719,12 @@ pub async fn prepare_files(
         &config.database.url,
         config_path.parent().unwrap_or_else(|| Path::new(".")),
     );
-    let database = crate::db::connect(&database_url).await?;
-    crate::db::run_migrations(&database).await?;
+    let readonly_database_url = readonly_database_url(&database_url)?;
+    let database = crate::db::connect(&readonly_database_url).await?;
     let store = crate::eval::store::EvalStore::new(database);
     let frozen_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-    let manifest = store.freeze_snapshot(&frozen_at).await?;
-    let eval = EvalEvidenceSnapshot::load(&store, &manifest.evidence_root).await?;
+    let manifest = store.materialize_snapshot(&frozen_at).await?;
+    let eval = EvalEvidenceSnapshot::from_manifest(&store, manifest.clone()).await?;
     let step = prepare_step(OptimizationStepInput {
         eval: &eval,
         active_policy: &active.document,
@@ -750,12 +753,53 @@ pub async fn prepare_files(
         parent_policy_digest: active.digest,
         config_before,
         policy_mode: config.policy.mode,
+        eval_snapshot: manifest,
+        database_url,
     })
+}
+
+fn readonly_database_url(database_url: &str) -> Result<String> {
+    let Some(after_scheme) = database_url
+        .strip_prefix("sqlite://")
+        .or_else(|| database_url.strip_prefix("sqlite:"))
+    else {
+        return Ok(database_url.to_string());
+    };
+    let (path, query) = after_scheme
+        .split_once('?')
+        .map_or((after_scheme, None), |(path, query)| (path, Some(query)));
+    if path.is_empty() || path == ":memory:" {
+        anyhow::bail!("history-driven optimization requires a persistent Eval database");
+    }
+    if !Path::new(path).is_file() {
+        anyhow::bail!("Eval database '{path}' does not exist or is not migrated");
+    }
+    let mut parameters = query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter(|parameter| !parameter.is_empty() && !parameter.starts_with("mode="))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    parameters.push("mode=ro".into());
+    Ok(format!("sqlite://{path}?{}", parameters.join("&")))
 }
 
 pub async fn publish_prepared(
     prepared: PreparedOptimizationStep,
 ) -> Result<OptimizationPublication> {
+    publish_prepared_with_config_writer(prepared, |path, expected, updated| {
+        crate::policy_lock::write_text_atomic_unlocked(path, expected, updated)
+    })
+    .await
+}
+
+async fn publish_prepared_with_config_writer<F>(
+    prepared: PreparedOptimizationStep,
+    config_writer: F,
+) -> Result<OptimizationPublication>
+where
+    F: FnOnce(&Path, &str, &str) -> Result<()>,
+{
     let PreparedOptimizationStep {
         step,
         treatment: _,
@@ -764,6 +808,8 @@ pub async fn publish_prepared(
         parent_policy_digest,
         config_before,
         policy_mode,
+        eval_snapshot,
+        database_url,
     } = prepared;
     let Some(successor) = step.successor else {
         return Ok(OptimizationPublication {
@@ -813,12 +859,25 @@ pub async fn publish_prepared(
     let candidate_config = bitrouter_sdk::config::parse(&config_after)
         .context("validating optimization config activation")?;
     crate::policy_lock::validate_for_config(&candidate_config, &successor)?;
-    if config_after != config_before {
-        crate::policy_lock::write_text_atomic_unlocked(
-            &config_path,
-            &config_before,
-            &config_after,
-        )?;
+    let database = crate::db::connect(&database_url).await?;
+    let store = crate::eval::store::EvalStore::new(database);
+    let persisted = store.persist_snapshot(&eval_snapshot).await?;
+    if persisted.evidence_root != step.evidence.eval_snapshot_root {
+        anyhow::bail!("persisted Eval snapshot does not match the prepared controller evidence");
+    }
+    if config_after != config_before
+        && let Err(error) = config_writer(&config_path, &config_before, &config_after)
+    {
+        let recovery =
+            restore_config_after_activation_error(&config_path, &config_before, &config_after);
+        return match recovery {
+            Ok(()) => {
+                Err(error.context("config activation failed; restored exact pre-step config bytes"))
+            }
+            Err(recovery) => Err(error.context(format!(
+                "config activation failed and config recovery also failed: {recovery:#}"
+            ))),
+        };
     }
 
     let child_digest = crate::policy_lock::semantic_digest(&successor)?;
@@ -870,6 +929,23 @@ pub async fn publish_prepared(
         config_after,
         update: Some(update),
     })
+}
+
+fn restore_config_after_activation_error(
+    config_path: &Path,
+    config_before: &str,
+    config_after: &str,
+) -> Result<()> {
+    let current = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading config recovery target {}", config_path.display()))?;
+    if current == config_before {
+        return Ok(());
+    }
+    if current != config_after {
+        anyhow::bail!("config changed during activation recovery");
+    }
+    crate::policy_lock::write_text_atomic_unlocked(config_path, config_after, config_before)
+        .context("restoring config after activation failure")
 }
 
 async fn recover_failed_publication(
@@ -1783,7 +1859,7 @@ mod tests {
 #[cfg(test)]
 mod file_tests {
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use anyhow::{Context, Result};
     use bitrouter_sdk::config::{PolicyModelTarget, PolicyRuntimeMode};
@@ -1797,7 +1873,8 @@ mod file_tests {
         EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
     };
     use crate::optimization::controller::{
-        ControllerAction, OptimizationOptions, prepare_files, publish_prepared, read_status,
+        ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
+        publish_prepared_with_config_writer, read_status,
     };
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
@@ -1977,20 +2054,63 @@ mod file_tests {
         }
     }
 
+    fn file_tree(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+        let mut files = BTreeMap::new();
+        if !root.exists() {
+            return Ok(files);
+        }
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    files.insert(
+                        entry.path().strip_prefix(root)?.into(),
+                        std::fs::read(entry.path())?,
+                    );
+                }
+            }
+        }
+        Ok(files)
+    }
+
     #[tokio::test]
     async fn champion_history_publishes_one_exploration_descendant() -> Result<()> {
         let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
         harness.admit_champion_history().await?;
         let parent = load(&harness.policy_path).await?;
+        let snapshots_before = harness.snapshot_count().await?;
 
         let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        let prepared_root = prepared.step.evidence.eval_snapshot_root.clone();
         assert_eq!(prepared.step.action, ControllerAction::Explore);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
         let publication = publish_prepared(prepared).await?;
 
         let active = load(&harness.policy_path).await?;
         assert_eq!(publication.parent_policy_digest, parent.digest);
         assert_eq!(publication.active_policy_digest, active.digest);
+        assert_eq!(publication.eval_snapshot_root, prepared_root);
         assert!(publication.published);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before + 1);
+        assert_eq!(
+            active
+                .document
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.eval_snapshot_root.as_deref()),
+            Some(prepared_root.as_str())
+        );
+        let store = EvalStore::new(crate::db::connect(&harness.database_url).await?);
+        assert_eq!(
+            store
+                .snapshot_by_root(&prepared_root)
+                .await?
+                .map(|snapshot| snapshot.evidence_root),
+            Some(prepared_root)
+        );
         assert_eq!(
             active.document.policies["auto"]
                 .optimization
@@ -2029,14 +2149,43 @@ mod file_tests {
             prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
         )
         .await?;
-        let before = std::fs::read(&harness.policy_path)?;
+        let config_before = std::fs::read(&harness.config_path)?;
+        let policy_before = std::fs::read(&harness.policy_path)?;
+        let history_dir = default_history_dir(&harness.policy_path);
+        let history_before = file_tree(&history_dir)?;
+        let snapshots_before = harness.snapshot_count().await?;
 
         let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
         assert_eq!(prepared.step.action, ControllerAction::Hold);
         let publication = publish_prepared(prepared).await?;
 
         assert!(!publication.published);
-        assert_eq!(std::fs::read(&harness.policy_path)?, before);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
+        assert_eq!(std::fs::read(&harness.config_path)?, config_before);
+        assert_eq!(std::fs::read(&harness.policy_path)?, policy_before);
+        assert_eq!(file_tree(&history_dir)?, history_before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn converged_run_is_database_and_file_read_only() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
+        let config_before = std::fs::read(&harness.config_path)?;
+        let policy_before = std::fs::read(&harness.policy_path)?;
+        let history_dir = default_history_dir(&harness.policy_path);
+        let snapshots_before = harness.snapshot_count().await?;
+
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(prepared.step.action, ControllerAction::Converged);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
+        let publication = publish_prepared(prepared).await?;
+
+        assert!(!publication.published);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
+        assert_eq!(std::fs::read(&harness.config_path)?, config_before);
+        assert_eq!(std::fs::read(&harness.policy_path)?, policy_before);
+        assert!(file_tree(&history_dir)?.is_empty());
         Ok(())
     }
 
@@ -2044,7 +2193,9 @@ mod file_tests {
     async fn stale_prepared_parent_loses_to_competing_policy_publication() -> Result<()> {
         let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
         harness.admit_champion_history().await?;
+        let snapshots_before = harness.snapshot_count().await?;
         let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
         let candidate = prepared
             .step
             .successor
@@ -2065,6 +2216,7 @@ mod file_tests {
             .context("stale publish succeeded")?;
 
         assert!(error.to_string().contains("changed since it was loaded"));
+        assert_eq!(harness.snapshot_count().await?, snapshots_before);
         assert_eq!(std::fs::read(&harness.policy_path)?, competing_bytes);
         Ok(())
     }
@@ -2108,6 +2260,37 @@ mod file_tests {
         assert!(error.to_string().contains("policy"));
         assert_eq!(std::fs::read(&harness.config_path)?, original_config);
         assert_eq!(std::fs::read(&harness.policy_path)?, original_policy);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn post_rename_config_activation_failure_restores_exact_parent_state() -> Result<()> {
+        let harness = Harness::new(PolicyRuntimeMode::Frozen).await?;
+        harness.admit_champion_history().await?;
+        let original_config = std::fs::read(&harness.config_path)?;
+        let original_policy = std::fs::read(&harness.policy_path)?;
+        let snapshots_before = harness.snapshot_count().await?;
+        let prepared = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        let prepared_root = prepared.step.evidence.eval_snapshot_root.clone();
+
+        let error = publish_prepared_with_config_writer(prepared, |path, expected, updated| {
+            crate::policy_lock::write_text_atomic_unlocked_with_parent_sync(
+                path,
+                expected,
+                updated,
+                |_| anyhow::bail!("injected parent directory sync failure"),
+            )
+        })
+        .await
+        .err()
+        .context("post-rename config activation unexpectedly succeeded")?;
+
+        assert!(error.to_string().contains("config activation failed"));
+        assert_eq!(std::fs::read(&harness.config_path)?, original_config);
+        assert_eq!(std::fs::read(&harness.policy_path)?, original_policy);
+        assert_eq!(harness.snapshot_count().await?, snapshots_before + 1);
+        let store = EvalStore::new(crate::db::connect(&harness.database_url).await?);
+        assert!(store.snapshot_by_root(&prepared_root).await?.is_some());
         Ok(())
     }
 

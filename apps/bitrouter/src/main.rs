@@ -4029,8 +4029,6 @@ async fn reload_published_policy_or_restore(
     Ok(())
 }
 
-/// Restore the exact reviewed parent after a partially applied optimization
-/// publication. The caller holds both config and policy publication locks.
 fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result<&Path> {
     match source {
         bitrouter::paths::ConfigSource::File(path) => Ok(path),

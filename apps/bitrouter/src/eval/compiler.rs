@@ -34,7 +34,8 @@ impl EvalEvidenceSnapshot {
         Self::from_manifest(store, snapshot).await
     }
 
-    async fn from_manifest(store: &EvalStore, snapshot: EvalSnapshot) -> Result<Self> {
+    /// Materialize compiler evidence from an in-memory immutable manifest.
+    pub async fn from_manifest(store: &EvalStore, snapshot: EvalSnapshot) -> Result<Self> {
         let mut records = Vec::with_capacity(snapshot.entries.len());
         for entry in snapshot.entries {
             let stored = store.result(&entry.result_id).await?.ok_or_else(|| {

@@ -2284,6 +2284,18 @@ pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<(
 
 /// Replace text while the caller holds the target publication lock.
 pub fn write_text_atomic_unlocked(path: &Path, expected: &str, updated: &str) -> Result<()> {
+    write_text_atomic_unlocked_with_parent_sync(path, expected, updated, sync_parent)
+}
+
+pub(crate) fn write_text_atomic_unlocked_with_parent_sync<F>(
+    path: &Path,
+    expected: &str,
+    updated: &str,
+    parent_sync: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
     let current = std::fs::read_to_string(path)
         .with_context(|| format!("reading current config {}", path.display()))?;
     if current != expected {
@@ -2307,7 +2319,7 @@ pub fn write_text_atomic_unlocked(path: &Path, expected: &str, updated: &str) ->
             .with_context(|| format!("syncing config temp file {}", tmp.display()))?;
         replace_file_atomic(&tmp, path)
             .with_context(|| format!("publishing config {}", path.display()))?;
-        sync_parent(path)?;
+        parent_sync(path)?;
         Ok(())
     })();
     if result.is_err() {
