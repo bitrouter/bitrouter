@@ -602,6 +602,7 @@ mod tests {
                     source_protocol: ApiProtocol::Responses,
                     status: status.into(),
                     usage: None,
+                    response_output_commitment: None,
                 })
                 .await
                 .unwrap();

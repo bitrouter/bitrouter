@@ -21,8 +21,8 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart,
-    Tool, ToolChoice, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
+    Modality, Prompt, ProviderMetadata, ReasoningEffort, ResponseFormat, Role, RoutingTarget,
+    Source, StreamPart, Tool, ToolChoice, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
     set_provider_metadata,
 };
 
@@ -178,11 +178,27 @@ pub struct GenerateContentGenerationConfig {
     /// <https://ai.google.dev/api/generate-content#GenerationConfig>
     #[serde(default)]
     frequency_penalty: Option<f64>,
+    /// Qualitative reasoning effort for Gemini 3+ models. Numeric
+    /// `thinkingBudget` remains an opaque sibling because it is a distinct
+    /// Gemini 2.5 control with no lossless qualitative mapping.
+    #[serde(default)]
+    thinking_config: Option<GenerateContentThinkingConfig>,
     /// `responseLogprobs`, `candidateCount`, `thinkingConfig`, … — every
     /// generation-config knob without a typed slot rides via `extra` and is
     /// splatted back into `generationConfig` on render. v0 passed these through.
     /// Skipped from the published schema for the same reason as the top-level
     /// `extra` on [`GenerateContentRequest`].
+    #[serde(flatten)]
+    #[schemars(skip)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Gemini `generationConfig.thinkingConfig`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateContentThinkingConfig {
+    #[serde(default)]
+    thinking_level: Option<ReasoningEffort>,
     #[serde(flatten)]
     #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
@@ -909,8 +925,31 @@ impl InboundAdapter for GenerateContentAdapter {
                     stop_sequences,
                     presence_penalty,
                     frequency_penalty,
+                    thinking_config,
                     mut extra,
                 } = g;
+                let reasoning_effort = match thinking_config {
+                    Some(thinking) => {
+                        let GenerateContentThinkingConfig {
+                            thinking_level,
+                            extra: thinking_extra,
+                        } = thinking;
+                        if thinking_level.is_some() && thinking_extra.contains_key("thinkingBudget")
+                        {
+                            return Err(BitrouterError::bad_request(
+                                "Gemini thinkingLevel and thinkingBudget cannot be used together",
+                            ));
+                        }
+                        if !thinking_extra.is_empty() {
+                            extra.insert(
+                                "thinkingConfig".to_string(),
+                                serde_json::Value::Object(thinking_extra.into_iter().collect()),
+                            );
+                        }
+                        thinking_level
+                    }
+                    None => None,
+                };
                 let response_format = match (
                     response_mime_type.as_deref() == Some("application/json"),
                     response_schema,
@@ -939,7 +978,8 @@ impl InboundAdapter for GenerateContentAdapter {
                         top_p,
                         max_tokens: max_output_tokens,
                         chat_token_limit_field: None,
-                        reasoning_effort: None,
+                        reasoning_effort,
+                        reasoning_effort_source: Default::default(),
                         response_modalities,
                         top_k,
                         seed,
@@ -1109,6 +1149,25 @@ impl OutboundAdapter for GenerateContentAdapter {
         }
         if let Some(fp) = prompt.params.frequency_penalty {
             gen_config.insert("frequencyPenalty".into(), fp.into());
+        }
+        let mut thinking_config = prompt
+            .params
+            .extra_value_for_protocol(&ApiProtocol::GenerateContent, "thinkingConfig")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        if let Some(effort) = &prompt.params.reasoning_effort {
+            if thinking_config.contains_key("thinkingBudget") {
+                return Err(BitrouterError::bad_request(
+                    "Gemini qualitative reasoning effort cannot be combined with thinkingBudget",
+                ));
+            }
+            thinking_config.insert("thinkingLevel".into(), effort.as_str().into());
+        }
+        if !thinking_config.is_empty() {
+            gen_config.insert(
+                "thinkingConfig".into(),
+                serde_json::Value::Object(thinking_config),
+            );
         }
         // Splat remaining Google generation-config extras (responseLogprobs,
         // candidateCount, …) back into the outbound config. Typed fields above

@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use bitrouter_sdk::language_model::types::ReasoningEffort;
+
 pub const EVAL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -30,7 +32,11 @@ pub struct EvalDecisionRef {
     pub policy: String,
     pub request_key: String,
     pub selected_tier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_effort: Option<ReasoningEffort>,
     pub baseline_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_effort: Option<ReasoningEffort>,
     pub policy_digest: String,
 }
 
@@ -490,6 +496,25 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         assert_eq!(left.semantic_digest()?, right.semantic_digest()?);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_decision_without_effort_round_trips_byte_semantically() -> anyhow::Result<()> {
+        let legacy = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "request_key": "agent_trace/v1|edit|normal",
+            "selected_tier": "economy",
+            "baseline_tier": "strong",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+
+        let decoded: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
+
+        assert_eq!(decoded.selected_effort, None);
+        assert_eq!(decoded.baseline_effort, None);
+        assert_eq!(serde_json::to_value(decoded)?, legacy);
         Ok(())
     }
 

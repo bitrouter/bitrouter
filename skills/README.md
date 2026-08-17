@@ -32,13 +32,14 @@ provider config, migration off other gateways, diagnostics, and per-harness wiri
 ```
 skills/run-bitrouter-benchmark/
 ├── SKILL.md          # decision and navigation layer — keep under ~200 lines
-└── references/       # methodology, configuration, operations, acceptance, Q&A
+├── agents/openai.yaml
+└── references/       # Harbor, agents, AWS operations, evidence and publishing
 ```
 
-Runs or audits reproducible BitRouter Terminal-Bench 2.1 experiments with
-Harbor, Terminus 2, a centralized EC2 daemon, and ephemeral EC2 sandboxes. It
-keeps AWS identity, models, provider secrets, source revisions, task/trial scale,
-and prices configurable while fixing the experimental and evidence method.
+Runs installed Harbor benchmarks through an existing or AWS-operated BitRouter
+endpoint. It selects the benchmark, agent, route config, provider/model targets,
+Harbor attempts/concurrency, AWS identity when needed, and publication intent
+without replacing Harbor's scheduler or shipping infrastructure code.
 
 ### `/evaluating-bitrouter-routes`, at [`evaluating-bitrouter-routes/`](evaluating-bitrouter-routes/)
 

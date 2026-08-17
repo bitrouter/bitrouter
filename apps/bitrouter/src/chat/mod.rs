@@ -1,0 +1,84 @@
+//! The app half of `bitrouter chat` — everything the renderer cannot own.
+//!
+//! `bitrouter-tui` draws; it does not read. Keys, raw mode, and the session's
+//! lifetime belong here, because they are properties of *this* process rather
+//! than of anything ACP carries.
+//!
+//! # The three exits
+//!
+//! The session holds raw mode from its first prompt (see [`input::Stdin`]), so
+//! every way out has to give it back. There are three, and each reaches
+//! [`bitrouter_tui::lifecycle::restore`] by a different route:
+//!
+//! | exit | route |
+//! |---|---|
+//! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `Stdin`'s `Drop`, which also covers every `?` out of `chat` |
+//! | panic | `bitrouter_tui::lifecycle::install_panic_restore`, chained in front of the existing hook |
+//! | INT / TERM / HUP | [`crate::tui::lifecycle::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
+//!
+//! ## Checking it by hand
+//!
+//! The unit tests cover the arm and the hook, not the terminal: raw mode needs
+//! a real tty, and a test that took one would take the *developer's*. So the
+//! terminal itself is checked by hand, once per exit. In each case `stty -a`
+//! afterwards must report `echo` and `icanon` (a restored terminal), not
+//! `-echo` and `-icanon`, and the shell must still echo what you type:
+//!
+//! ```text
+//! bitrouter chat <agent>   # then Ctrl-D at the prompt   → stty -a | grep -o '\-\?echo'
+//! bitrouter chat <agent>   # then Ctrl-C at the prompt   → stty -a | grep -o '\-\?echo'
+//! bitrouter chat <agent> & ; kill -TERM %1               → stty -a | grep -o '\-\?echo'
+//! bitrouter chat <agent> & ; kill -HUP  %1               → stty -a | grep -o '\-\?echo'
+//! ```
+//!
+//! The panic exit has no keystroke to trigger it; it is covered by
+//! `lifecycle`'s `the_panic_hook_restores_and_still_reports`, which pins that
+//! `restore` runs *and* that the panic is still reported afterwards.
+
+pub mod cost;
+pub mod input;
+pub mod session;
+
+#[cfg(test)]
+mod tests {
+    /// The guard §8 asks for, because what stays here is rendering-adjacent
+    /// code sitting where it *could* reach anything.
+    ///
+    /// `picker.rs` and the rendering half of `cost.rs` went back to
+    /// `bitrouter-tui`, where the compiler keeps them honest. What is left
+    /// here is the part that genuinely is not ACP — the `_meta` key, the wire
+    /// spelling, this process's stdin — and it gets this instead: the chat
+    /// module may read the ACP wire and the terminal, and nothing else. No
+    /// `Config`, no metering store, no control socket.
+    ///
+    /// Checked against the sources themselves rather than by review, so it
+    /// fails the build that breaks it instead of the review that misses it.
+    #[test]
+    fn the_chat_module_reaches_nothing_daemon_wide() {
+        let sources = [
+            ("cost.rs", include_str!("cost.rs")),
+            ("input.rs", include_str!("input.rs")),
+        ];
+        // Spelled as paths and type names, so a mention in prose — "the
+        // daemon's total", which `cost.rs` explains at length — is not a
+        // false positive.
+        let forbidden = [
+            "crate::daemon",
+            "crate::metering",
+            "crate::policy",
+            "MeteringStore",
+            "bitrouter_sdk::config",
+            "control_socket",
+            "RouteControl",
+        ];
+        for (name, source) in sources {
+            for reach in forbidden {
+                assert!(
+                    !source.contains(reach),
+                    "{name} reaches `{reach}`; the chat module draws what ACP \
+                     carries and what the terminal is, and nothing else"
+                );
+            }
+        }
+    }
+}

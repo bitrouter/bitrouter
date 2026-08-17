@@ -14,7 +14,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::optimization::OptimizationPreference;
 use crate::policy_lock::{
-    LEGACY_POLICY_LOCKFILE_VERSION, PolicyLock, RouteOwner, semantic_digest, validate_document,
+    CertificateSource, POLICY_LOCKFILE_VERSION, PolicyCertificate, PolicyLock, PromotionVerdict,
+    RouteOwner, semantic_digest, validate_document,
 };
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
@@ -22,6 +23,10 @@ use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 pub struct RouteObservation {
     pub request_key: String,
     pub selected_tier: String,
+    #[serde(default)]
+    pub input_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    #[serde(default)]
+    pub selected_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub normalized_cost_micro_usd: Option<u64>,
 }
 
@@ -851,6 +856,10 @@ pub fn workflow_environment(base_url: &str, preset: &str) -> Result<BTreeMap<Str
     }
     let base = base_url.trim_end_matches('/');
     let v1 = format!("{base}/v1");
+    // The `@preset` form, not the public `bitrouter/auto` slug: this wires the
+    // optimizer's harness to the optimizer's own private daemon and is generic
+    // over `preset`. The reserved namespace only names `auto`, so composing it
+    // here would 400 for every other optimization lineage.
     let model = format!("@{preset}");
     Ok(BTreeMap::from([
         ("BITROUTER_BASE_URL".into(), base.into()),
@@ -935,7 +944,9 @@ pub fn collect_variant_evidence(
             || subject.decisions[0].request_key != decision.request_key
             || decision.selected_tier.as_deref()
                 != Some(subject.decisions[0].selected_tier.as_str())
+            || decision.selected_effort != subject.decisions[0].selected_effort
             || decision.baseline_tier != subject.decisions[0].baseline_tier
+            || decision.baseline_effort != subject.decisions[0].baseline_effort
             || subject.decisions[0].policy_digest != expected_policy_digest
         {
             anyhow::bail!("{variant} request {request_id} has an ambiguous decision join");
@@ -974,6 +985,8 @@ pub fn collect_variant_evidence(
         observations.push(RouteObservation {
             request_key: decision.request_key.clone(),
             selected_tier: selected_tier.to_string(),
+            input_effort: decision.input_effort,
+            selected_effort: decision.selected_effort,
             normalized_cost_micro_usd: Some(normalized_cost),
         });
         attributions.push(VariantAttribution {
@@ -1036,12 +1049,14 @@ struct ObservationSummary {
     normalized_cost_micro_usd: u64,
     priced_count: u64,
     selected_tiers: std::collections::BTreeSet<String>,
+    invalid_effort_treatment: bool,
 }
 
 pub fn select_target_request_key(
     active: &PolicyLock,
     policy_name: &str,
     strong_tier: &str,
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     economy_tier: &str,
     preference: OptimizationPreference,
     observations: &[RouteObservation],
@@ -1077,6 +1092,10 @@ pub fn select_target_request_key(
         summary
             .selected_tiers
             .insert(observation.selected_tier.clone());
+        summary.invalid_effort_treatment |= match strong_effort {
+            Some(effort) => observation.selected_effort != Some(effort),
+            None => observation.selected_effort != observation.input_effort,
+        };
         if let Some(cost) = observation.normalized_cost_micro_usd {
             summary.normalized_cost_micro_usd =
                 summary.normalized_cost_micro_usd.saturating_add(cost);
@@ -1089,9 +1108,10 @@ pub fn select_target_request_key(
             summary.count > 0
                 && summary.selected_tiers.len() == 1
                 && summary.selected_tiers.contains(strong_tier)
+                && !summary.invalid_effort_treatment
         })
         .filter(|(request_key, _)| {
-            if active.is_v2() {
+            if active.is_compiled() {
                 active
                     .certificate(policy_name, request_key)
                     .is_none_or(|certificate| certificate.owner == RouteOwner::Compiler)
@@ -1173,22 +1193,66 @@ pub fn build_experiment_lock(
         );
     }
     let mut experiment = active.clone();
-    experiment.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
-    experiment.artifact = None;
-    experiment.certificates.clear();
-    let policy = experiment
-        .policies
-        .get_mut(policy_name)
-        .ok_or_else(|| anyhow::anyhow!("optimization policy '{policy_name}' does not exist"))?;
-    if !policy.tiers.contains_key(economy_tier) {
-        anyhow::bail!("controlled experiment economy tier '{economy_tier}' does not exist");
-    }
-    if policy.routes.get(target_request_key).map(String::as_str) == Some(economy_tier) {
-        anyhow::bail!("controlled experiment target already routes to the economy tier");
-    }
-    policy
-        .routes
-        .insert(target_request_key.to_string(), economy_tier.to_string());
+    experiment.lockfile_version = POLICY_LOCKFILE_VERSION;
+    let artifact = experiment
+        .artifact
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("controlled experiment requires compiled policy lineage"))?;
+    artifact.compiler.id = crate::policy_lock::OPTIMIZATION_EXPERIMENT_COMPILER_ID.to_owned();
+    artifact.parent_digest = Some(expected_active_digest.to_owned());
+    let compiler_config_digest = artifact.compiler.config_digest.clone();
+    let baseline_tier = {
+        let policy = experiment
+            .policies
+            .get_mut(policy_name)
+            .ok_or_else(|| anyhow::anyhow!("optimization policy '{policy_name}' does not exist"))?;
+        if !policy.tiers.contains_key(economy_tier) {
+            anyhow::bail!("controlled experiment economy tier '{economy_tier}' does not exist");
+        }
+        if policy.routes.get(target_request_key).map(String::as_str) == Some(economy_tier) {
+            anyhow::bail!("controlled experiment target already routes to the economy tier");
+        }
+        let baseline_tier = policy
+            .routes
+            .get(target_request_key)
+            .cloned()
+            .or_else(|| policy.default_tier.clone());
+        policy
+            .routes
+            .insert(target_request_key.to_string(), economy_tier.to_string());
+        baseline_tier
+    };
+    use sha2::Digest;
+    let evidence_digest = format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(format!(
+            "bitrouter.optimization.experiment.v1\0{expected_active_digest}\0{policy_name}\0{target_request_key}\0{economy_tier}"
+        )))
+    );
+    experiment
+        .certificates
+        .entry(policy_name.to_owned())
+        .or_default()
+        .insert(
+            target_request_key.to_owned(),
+            PolicyCertificate {
+                owner: RouteOwner::Operator,
+                selected_tier: economy_tier.to_owned(),
+                baseline_tier,
+                source: CertificateSource::Operator,
+                eligible_episodes: 0,
+                independent_tasks: 0,
+                quality: None,
+                economics: None,
+                latency: None,
+                critical_violations: 0,
+                verdict: PromotionVerdict::Experiment,
+                evaluator_config_digest: None,
+                compiler_config_digest,
+                evidence_digest,
+                legacy: None,
+            },
+        );
     validate_document(&experiment)?;
     Ok(experiment)
 }
@@ -1200,6 +1264,7 @@ mod tests {
     use std::time::Duration;
 
     use bitrouter_sdk::config::AdequacyConfig;
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
 
     #[cfg(not(windows))]
     use super::workflow_harness_overlay;
@@ -1221,14 +1286,13 @@ mod tests {
         EvaluatorRoute, OptimizationIntent, OptimizationPreference, ResolvedEvaluator,
         WorkflowCommand,
     };
-    use crate::policy_lock::{PolicyDefinition, PolicyLock, semantic_digest, validate_document};
+    use crate::policy_lock::{
+        PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner, deterministic_yaml,
+        publish_candidate, semantic_digest, validate_document,
+    };
 
     fn active_lock() -> PolicyLock {
-        let mut lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            ..Default::default()
-        };
+        let mut lock = PolicyLock::default();
         lock.policies.insert(
             "auto".into(),
             PolicyDefinition {
@@ -1258,16 +1322,22 @@ mod tests {
             RouteObservation {
                 request_key: "agent_trace/v2|edit|normal".into(),
                 selected_tier: "strong".into(),
+                input_effort: None,
+                selected_effort: None,
                 normalized_cost_micro_usd: Some(900),
             },
             RouteObservation {
                 request_key: "agent_trace/v2|edit|normal".into(),
                 selected_tier: "strong".into(),
+                input_effort: None,
+                selected_effort: None,
                 normalized_cost_micro_usd: Some(800),
             },
             RouteObservation {
                 request_key: "agent_trace/v2|test|normal".into(),
                 selected_tier: "strong".into(),
+                input_effort: None,
+                selected_effort: None,
                 normalized_cost_micro_usd: Some(4_000),
             },
         ]
@@ -1281,7 +1351,9 @@ mod tests {
         crate::workflow_state::decision::PolicyDecisionRecord {
             captured_at: None,
             request_id: Some("req-1".into()),
+            ingress_request_id_sha256: None,
             input_model: "@auto".into(),
+            input_effort: None,
             key_strategy: "agent_trace".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             ledger_key: None,
@@ -1289,13 +1361,27 @@ mod tests {
             policy_digest: Some(policy_digest.into()),
             preset_variant: Some("auto".into()),
             baseline_tier: Some("strong".into()),
+            baseline_effort: None,
             legacy_fingerprint: "legacy".into(),
             workflow_state: "edit".into(),
             workflow_identity: Default::default(),
             static_tier: Some("strong".into()),
             static_model: Some("bitrouter:openai/gpt-5.6".into()),
+            static_effort: None,
             selected_tier: Some("strong".into()),
             selected_model: Some("bitrouter:openai/gpt-5.6".into()),
+            selected_effort: None,
+            continuation_proposed_tier: None,
+            continuation_proposed_model: None,
+            continuation_proposed_effort: None,
+            continuation_adjustment: None,
+            predicted_role: None,
+            predicted_action: None,
+            prediction_confidence_ppm: None,
+            predictor_contract_digest: None,
+            prediction_confidence_kind: None,
+            prediction_reason_codes: Vec::new(),
+            observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,
             trajectory_completeness: None,
@@ -1334,7 +1420,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: "agent_trace/v2|edit|normal".into(),
                 selected_tier: "strong".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest: policy_digest.into(),
             }],
             requested_dimensions: Default::default(),
@@ -1380,6 +1468,7 @@ mod tests {
                 &active,
                 "auto",
                 "strong",
+                None,
                 "economy",
                 OptimizationPreference::QualityFirst,
                 &observations,
@@ -1391,6 +1480,7 @@ mod tests {
                 &active,
                 "auto",
                 "strong",
+                None,
                 "economy",
                 OptimizationPreference::Balanced,
                 &observations,
@@ -1402,6 +1492,7 @@ mod tests {
                 &active,
                 "auto",
                 "strong",
+                None,
                 "economy",
                 OptimizationPreference::SavingsFirst,
                 &observations,
@@ -1412,7 +1503,61 @@ mod tests {
     }
 
     #[test]
-    fn experiment_lock_is_nonpublishable_and_changes_exactly_one_route() -> anyhow::Result<()> {
+    fn scalar_baseline_accepts_and_preserves_caller_owned_effort() -> anyhow::Result<()> {
+        let active = active_lock();
+        let mut observations = observations();
+        for observation in &mut observations {
+            observation.input_effort = Some(ReasoningEffort::High);
+            observation.selected_effort = Some(ReasoningEffort::High);
+        }
+
+        assert_eq!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &observations,
+            )?,
+            "agent_trace/v2|edit|normal"
+        );
+
+        observations[0].selected_effort = Some(ReasoningEffort::Low);
+        assert_eq!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &observations,
+            )?,
+            "agent_trace/v2|test|normal"
+        );
+        for observation in &mut observations {
+            observation.selected_effort = Some(ReasoningEffort::Low);
+        }
+        assert!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &observations,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experiment_lock_preserves_compiled_lineage_and_changes_exactly_one_route()
+    -> anyhow::Result<()> {
         let active = active_lock();
         let active_digest = semantic_digest(&active)?;
         let experiment = build_experiment_lock(
@@ -1424,9 +1569,20 @@ mod tests {
         )?;
 
         validate_document(&experiment)?;
-        assert_eq!(experiment.lockfile_version, 1);
-        assert!(experiment.artifact.is_none());
-        assert!(experiment.certificates.is_empty());
+        assert_eq!(
+            experiment.lockfile_version,
+            crate::policy_lock::POLICY_LOCKFILE_VERSION
+        );
+        assert_eq!(
+            experiment
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.parent_digest.as_deref()),
+            Some(active_digest.as_str())
+        );
+        let certificate = &experiment.certificates["auto"]["agent_trace/v2|edit|normal"];
+        assert_eq!(certificate.owner, RouteOwner::Operator);
+        assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
         assert_eq!(
             experiment.policies["auto"].routes["agent_trace/v2|edit|normal"],
             "economy"
@@ -1437,6 +1593,22 @@ mod tests {
                 .contains_key("agent_trace/v2|test|normal")
         );
         assert_ne!(semantic_digest(&experiment)?, active_digest);
+        let dir = tempfile::tempdir()?;
+        let active_path = dir.path().join("policy-lock.yaml");
+        std::fs::write(&active_path, deterministic_yaml(&active)?)?;
+        let publish_error = publish_candidate(
+            &active_path,
+            &active_digest,
+            &experiment,
+            &dir.path().join("history"),
+        )
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("private experiment lock was publishable"))?;
+        assert!(
+            publish_error
+                .to_string()
+                .contains("private optimization experiment")
+        );
         Ok(())
     }
 
@@ -1446,6 +1618,8 @@ mod tests {
         let observations = vec![RouteObservation {
             request_key: "agent_trace/v2|edit|normal".into(),
             selected_tier: "economy".into(),
+            input_effort: None,
+            selected_effort: None,
             normalized_cost_micro_usd: Some(10),
         }];
         assert!(
@@ -1453,6 +1627,7 @@ mod tests {
                 &active,
                 "auto",
                 "strong",
+                None,
                 "economy",
                 OptimizationPreference::Balanced,
                 &observations,
@@ -1464,6 +1639,9 @@ mod tests {
     #[test]
     fn selection_skips_operator_owned_v1_routes() -> anyhow::Result<()> {
         let mut active = active_lock();
+        active.lockfile_version = crate::policy_lock::LEGACY_POLICY_LOCKFILE_VERSION;
+        active.artifact = None;
+        active.certificates.clear();
         active
             .policies
             .get_mut("auto")
@@ -1475,6 +1653,7 @@ mod tests {
                 &active,
                 "auto",
                 "strong",
+                None,
                 "economy",
                 OptimizationPreference::Balanced,
                 &observations(),
@@ -1609,9 +1788,23 @@ mod tests {
                 maximum_output_bytes: 8 * 1024,
             })
             .await?;
-            assert!(routed.stdout.contains("model_provider=\"bitrouter\""));
-            assert!(routed.stdout.contains("model=\"@auto\""));
-            assert!(routed.stdout.contains("exec\nrun the eval"));
+            assert_eq!(routed.exit_code, Some(0));
+            assert!(!routed.timed_out);
+            assert!(
+                routed.stdout.contains("model_provider=\"bitrouter\""),
+                "routed argv:\n{}",
+                routed.stdout
+            );
+            assert!(
+                routed.stdout.contains("model=\"@auto\""),
+                "routed argv:\n{}",
+                routed.stdout
+            );
+            assert!(
+                routed.stdout.contains("exec\nrun the eval"),
+                "routed argv:\n{}",
+                routed.stdout
+            );
         }
         Ok(())
     }
@@ -1802,7 +1995,9 @@ mod tests {
             policy: "auto".into(),
             preset: "auto".into(),
             strong: "openai-codex:gpt-5.6-sol".into(),
+            strong_effort: None,
             economy: "bitrouter:deepseek/deepseek-v4-flash-0731".into(),
+            economy_effort: None,
             normalized_price_overrides: vec!["openai-codex:gpt-5.6-sol=5,0.5,6.25,30".into()],
             preference: OptimizationPreference::Balanced,
             evaluator: ResolvedEvaluator {

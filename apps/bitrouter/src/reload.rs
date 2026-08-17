@@ -59,6 +59,11 @@ pub struct AppReloader {
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
+    /// The live `policy_table:` transform, when one was wired at assembly.
+    /// Reload rebuilds its spec from the fresh config and swaps it in —
+    /// without this the daemon kept serving the tiers it started with, and
+    /// only `restart` applied an edit.
+    policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
     /// Serializes the complete multi-subsystem reload transaction. The routing
     /// table's own lock is narrower and cannot protect policy prepare/commit.
     reload_lock: tokio::sync::Mutex<()>,
@@ -78,8 +83,47 @@ impl AppReloader {
             routing_table,
             upstream_executor,
             policy_runtime: None,
+            policy_table_router: None,
             reload_lock: tokio::sync::Mutex::new(()),
             source,
+        }
+    }
+
+    /// Attach the live `policy_table:` transform so a reload re-applies its
+    /// tiers.
+    pub fn with_policy_table_router(
+        mut self,
+        router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
+    ) -> Self {
+        self.policy_table_router = router;
+        self
+    }
+
+    /// Rebuild the `policy_table:` spec from the fresh config and install it
+    /// into the live transform.
+    ///
+    /// Mirrors the assembly-time derivation exactly — including the
+    /// `policy.mode` overlay on the adequacy section — so a reloaded table and
+    /// a restarted one are the same table. An empty `tiers:` map yields an
+    /// inert spec rather than leaving the previous one in force: removing
+    /// every tier must actually stop the rewriting.
+    fn replace_policy_table(&self, fresh: &bitrouter_sdk::config::Config) -> anyhow::Result<()> {
+        let Some(router) = &self.policy_table_router else {
+            return Ok(());
+        };
+        let mut effective = fresh.policy_table.clone();
+        effective.adequacy = fresh
+            .policy
+            .mode
+            .apply_to_adequacy(&fresh.policy_table.adequacy);
+        let table = crate::policy_table_router::PolicyTable::from_config(&effective)
+            .unwrap_or_else(crate::policy_table_router::PolicyTable::inert);
+        if router.replace_table(table) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "policy table lock was poisoned; the daemon is still serving the previous tiers"
+            ))
         }
     }
 
@@ -110,6 +154,7 @@ impl AppReloader {
             Some(runtime) => Some(runtime.prepare_for_config(&fresh, Some(path)).await?),
             None => None,
         };
+        self.replace_policy_table(&fresh)?;
         self.replace_routing_and_timeouts(fresh).await?;
         if let (Some(runtime), Some(prepared)) = (&self.policy_runtime, prepared) {
             runtime.commit(prepared);
@@ -122,6 +167,7 @@ impl AppReloader {
             Some(runtime) => Some(runtime.prepare_for_config(&fresh, None).await?),
             None => None,
         };
+        self.replace_policy_table(&fresh)?;
         self.replace_routing_and_timeouts(fresh).await?;
         if let (Some(runtime), Some(prepared)) = (&self.policy_runtime, prepared) {
             runtime.commit(prepared);
@@ -319,6 +365,7 @@ providers:
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -344,6 +391,94 @@ providers:
             bitrouter_sdk::BitrouterError::UpstreamTimeout => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
+    }
+
+    /// `bitrouter reload` used to return `{"status":"reloaded"}` while the
+    /// daemon kept serving the tiers it started with — only `restart` applied
+    /// a `policy_table:` edit. The transform is baked into the built `App` and
+    /// cannot be re-registered, so nothing swapped its spec.
+    #[tokio::test]
+    async fn reload_rebuilds_the_policy_table_and_routes_to_the_new_provider() -> anyhow::Result<()>
+    {
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
+
+        let (path, dir) = temp_config_path();
+        // Two providers, each serving a model of its own. The policy table's
+        // one tier decides which of them a bare `m` request reaches.
+        let config_with_tier = |tier_model: &str| {
+            format!(
+                r#"inherit_defaults: false
+providers:
+  alpha:
+    api_base: https://alpha.example.com/v1
+    api_key: k
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - {{ id: m }}
+  beta:
+    api_base: https://beta.example.com/v1
+    api_key: k
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - {{ id: m }}
+policy_table:
+  tiers:
+    only: {tier_model}
+  default_tier: only
+"#
+            )
+        };
+
+        std::fs::write(&path, config_with_tier("alpha:m"))?;
+        let initial = config::parse(&config_with_tier("alpha:m"))?;
+
+        // The pieces the daemon holds: the routing table, and the live
+        // transform built from the same config.
+        let table = crate::policy_table_router::PolicyTable::from_config(&initial.policy_table)
+            .ok_or_else(|| anyhow::anyhow!("the initial config defines a tier"))?;
+        let router = Arc::new(crate::policy_table_router::PolicyTableRouter::new(table));
+        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
+        let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default())?);
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            routing_table.clone(),
+            executor,
+            ReloadSource::File(path.clone()),
+        )
+        .with_policy_table_router(Some(router.clone()));
+
+        // Issue a request before the reload: the tier sends it to alpha.
+        let provider_serving = async |model: &str| -> anyhow::Result<String> {
+            let chain = routing_table
+                .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
+                .await?;
+            chain
+                .first()
+                .map(|target| target.provider_name.clone())
+                .ok_or_else(|| anyhow::anyhow!("no routable target for `{model}`"))
+        };
+        let mut before = prompt();
+        router.apply(&mut before);
+        assert_eq!(before.model, "alpha:m", "the starting tier");
+        assert_eq!(provider_serving(&before.model).await?, "alpha");
+
+        // Re-point the tier and reload — no restart.
+        std::fs::write(&path, config_with_tier("beta:m"))?;
+        reloader.reload().await?;
+
+        // The same request must now reach the *new* provider.
+        let mut after = prompt();
+        router.apply(&mut after);
+        std::fs::remove_dir_all(dir).ok();
+        assert_eq!(
+            after.model, "beta:m",
+            "reload must rebuild the policy table, not keep the tiers the daemon started with"
+        );
+        assert_eq!(provider_serving(&after.model).await?, "beta");
+        Ok(())
     }
 
     #[tokio::test]

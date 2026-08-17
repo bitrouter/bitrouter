@@ -67,6 +67,7 @@ use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
+use crate::workflow_state::response_observer::PredictiveResponseObserver;
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -90,6 +91,8 @@ pub struct Assembled {
     pub continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
+    #[cfg(test)]
+    pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
@@ -101,6 +104,11 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
+    /// The live `policy_table:` transform, when one was wired. The built `App`
+    /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
+    /// concrete handle to swap a freshly built spec into it, because the
+    /// transform itself cannot be re-registered on a built `App`.
+    pub policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
     /// Snapshot provider for `bitrouter observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
@@ -195,6 +203,11 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    // Validate and construct ingress aliases before opening the database or
+    // performing any other startup work. A custom transform must not run ahead
+    // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    let fusion_alias = build_fusion_alias(config)?;
+
     // ---- database + migrations ----
     // `database.url` may name any backend sea-orm supports (sqlite /
     // postgres / mysql); `crate::db::connect` handles the per-backend
@@ -277,6 +290,7 @@ pub async fn build_app_with_path(
     // into the App pipeline, but the daemon's reloader needs the
     // concrete type to call `replace_config` in zero-config mode.
     let routing_table_for_reload = routing_table.clone();
+    let continuation_for_pre_request = continuation_runtime.clone();
     let continuation_for_route = continuation_runtime.clone();
     let continuation_for_finalization = continuation_runtime;
     // Upstream timeouts: the `upstream.timeouts` block layered over the
@@ -487,15 +501,6 @@ pub async fn build_app_with_path(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
-    // The bitrouter/fusion model alias (an ingress prompt transform) and the
-    // server-tool declaration-parsing hook are wired below when enabled.
-    let fusion_alias: Option<Arc<dyn PromptTransform>> = config
-        .server_tools
-        .fusion
-        .as_ref()
-        .and_then(FusionAliasConfig::from_settings)
-        .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
-
     // Legacy inline policy tables remain declarative and lock-only. Process
     // mode controls publication, never request-time learned-state reads.
     let mut effective_policy_table_config = config.policy_table.clone();
@@ -591,6 +596,9 @@ pub async fn build_app_with_path(
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
+    let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
+    #[cfg(test)]
+    let response_observer_for_tests = response_observer.clone();
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
@@ -609,6 +617,7 @@ pub async fn build_app_with_path(
             );
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
+            lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -618,10 +627,12 @@ pub async fn build_app_with_path(
             if server_tools_enabled {
                 lm.pre_request_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → policy. The guardrail plugin appends its
-            // hooks after this closure (see `.plugin(...)` below), preserving the
-            // auth → policy → guardrail order.
+            // Stage 1, in order: auth → continuation → policy. The continuation
+            // hook resolves owner-scoped history before Stage 2 model selection.
+            // The guardrail plugin appends its hooks after this closure (see
+            // `.plugin(...)` below), preserving the policy → guardrail order.
             lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_request_hook(continuation_for_pre_request);
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
@@ -632,6 +643,7 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
+            lm.observe_hook(response_observer);
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -687,15 +699,19 @@ pub async fn build_app_with_path(
     // the transform skips any already-`provider:`-routed model (the `claude-code:`
     // subscription route) and any request carrying a bitrouter server-tool
     // declaration (the `bitrouter/fusion` alias's injected tool).
-    let app = match policy_table {
+    let (app, policy_table_router) = match policy_table {
         Some(table) => {
             let mut router = crate::policy_table_router::PolicyTableRouter::new(table);
             if let Some(recorder) = policy_decision_recorder {
                 router = router.with_shared_decision_recorder(recorder);
             }
-            app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
+            let router = Arc::new(router);
+            (
+                app.prompt_transform(Arc::clone(&router) as Arc<dyn PromptTransform>),
+                Some(router),
+            )
         }
-        None => app,
+        None => (app, None),
     };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
@@ -724,13 +740,25 @@ pub async fn build_app_with_path(
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
+        #[cfg(test)]
+        response_observer: response_observer_for_tests,
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
+        policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,
     })
+}
+
+fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>>> {
+    let Some(settings) = config.server_tools.fusion.as_ref() else {
+        return Ok(None);
+    };
+    FusionAliasConfig::validate_settings(settings)?;
+    Ok(FusionAliasConfig::from_settings(settings)
+        .map(|alias| Arc::new(alias) as Arc<dyn PromptTransform>))
 }
 
 /// Merge the provider registry into `config`, then re-apply built-in defaults
@@ -1848,7 +1876,7 @@ mod server_tools_tests {
     };
     use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
 
-    use super::{Config, build_server_tool_loop};
+    use super::{Config, build_fusion_alias, build_server_tool_loop};
 
     struct NoopRunner;
     #[async_trait::async_trait]
@@ -1893,6 +1921,26 @@ mod server_tools_tests {
         advisor_cfg.server_tools.advisor = true;
         let runner2: Arc<dyn NestedRunner> = Arc::new(NoopRunner);
         assert!(build_server_tool_loop(&advisor_cfg, &None, &None, Some(runner2)).is_some());
+    }
+
+    #[test]
+    fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
+        let mut config = Config::default();
+        config.server_tools.fusion = Some(
+            bitrouter_sdk::language_model::server_tools::fusion::config::FusionSettings {
+                alias: Some("bitrouter/auto".to_string()),
+                outer_model: Some("anthropic/claude-opus-4.8".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let result = build_fusion_alias(&config);
+        let error = match result {
+            Ok(_) => panic!("reserved Fusion alias must fail app assembly"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("server_tools.fusion.alias"));
+        assert!(error.to_string().contains("bitrouter/auto"));
     }
 
     #[test]
@@ -2163,6 +2211,7 @@ presets:
             Some("strong")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
+        assert_eq!(assembled.response_observer.buffered_request_count(), 0);
         Ok(())
     }
 
@@ -2198,7 +2247,20 @@ presets:
             subjects[0].decisions[0].baseline_tier.as_deref(),
             Some("economy")
         );
+        let observation = subjects[0]
+            .evidence
+            .iter()
+            .find(|evidence| evidence.kind == "routing.prediction_observation")
+            .ok_or_else(|| anyhow::anyhow!("guarded response observation evidence missing"))?;
+        assert_eq!(
+            observation
+                .attributes
+                .get("observed_action")
+                .map(String::as_str),
+            Some("answer_or_summarize")
+        );
         assert!(assembled.pending_eval_decisions.is_empty());
+        assert_eq!(assembled.response_observer.buffered_request_count(), 0);
         Ok(())
     }
 

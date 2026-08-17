@@ -1,8 +1,37 @@
 # Spec: the observability TUI — `bitrouter status --watch` and `launch --tui`
 
-Status: **implemented; matrix layers 1-2 automated, manual pass outstanding** · Author: Claude (with Spikel) · Date: 2026-08-10
+> **SUPERSEDED 2026-08-16 — the live view is gone.** The `launch --tui` half was
+> already superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The
+> `status --watch` half is now superseded too: the self-refreshing ratatui table
+> this spec designs was removed, and `bitrouter status --requests` prints the
+> same snapshot as text. §6's argument against a cargo feature is retained and
+> still correct, but it no longer applies to `ratatui` — `apps/bitrouter` does
+> not depend on it at all, which is a stronger version of the same goal.
+>
+> What survives and is still authoritative: the data layer (§7, `snapshot.rs`),
+> the stream row and footer formats (§8.1), and the honesty rules — including
+> the one this spec states and the removed view never kept, that a spend figure
+> must say whose spend it is. `status --requests` still does not label its
+> scope; see `crate::chat::cost` for the rule applied properly.
+
+Status: **`status --watch` implemented and authoritative; the `launch --tui`
+half is superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)** · Author: Claude
+(with Spikel) · Date: 2026-08-10
 Issues: #782 (hosted bar) · #797 (live view) · #795 (attribution) · #796 (startup line)
 Supersedes the CLI framing of #782 (`bitrouter top`, `bitrouter tui` deprecation).
+
+> **This spec is half live.** Everything about `bitrouter status --watch` — §1,
+> §§4–8, §10.1, §13.2–13.3 — describes what ships today and remains the
+> authority for that view.
+>
+> Everything about `bitrouter launch --tui` — the hosted mode, the emulator,
+> the PTY host, the pinned status bar, and the fidelity matrix that gated them
+> — is **superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)**. The flag,
+> `tui/{host,pty,term,conformance}.rs`, `tui/fixtures/`,
+> `scripts/record-vt-fixture.sh`, and `TUI_FIDELITY_MATRIX.md` are deleted; the
+> replacement is an inline-viewport ACP client, not a terminal emulator. The
+> hosted sections below are kept as the record of a decision that was reversed,
+> and are marked where they start.
 
 **Context.** #749 ratified that BitRouter is a self-improving LLM router, not an
 agent-orchestrator, and #786 executed that: `apps/bitrouter/src/tui/` (~11.5k
@@ -53,8 +82,10 @@ plain command, since it does not need to be live to be useful.
 
 - A live request stream: time, model, provider *actually* used, tokens, cache,
   cost, latency, status.
-- A status bar that renders identically for all eight catalog harnesses and
-  **degrades honestly** where the data cannot exist (§7.2).
+- A status bar that renders uniformly across hosted harnesses and **degrades
+  honestly** where the data cannot exist (§7.2). *(Superseded — the hosted bar
+  is deleted. The honest-degradation rule survives it and carries into
+  [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3.)*
 - One renderer and one data layer behind both surfaces.
 - `launch --tui` is a strict superset of `launch` in child behavior — true by
   construction, not by test discipline (§5).
@@ -429,15 +460,23 @@ makes it unusually cheap for this codebase specifically.
 
 ## 9. `bitrouter launch --tui`
 
+> **§§9–12 are superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md).** The flag
+> and every file described here are deleted. Kept as the record of a reversed
+> decision — read them as history, not as a description of the codebase.
+
 ### 9.1 Why an emulator, not a reserved line
 
 The cheap design — reserve a line with `DECSTBM` and let the harness write to
 the real tty — does not survive the requirement. `term.rs` tracks alt-screen
 state (`\x1b[?1049h`) because some harnesses render inline on the main screen and
 others take the alternate screen, and an alt-screen app owns the whole display
-and clobbers a reserved line. **Uniformity across all eight harnesses is the
-product requirement**, so BitRouter must own the screen and composite. The
-emulator's cost is the price of uniformity specifically.
+and clobbers a reserved line. Uniform chrome was taken as the product
+requirement, so BitRouter must own the screen and composite. The emulator's
+cost is the price of uniformity specifically.
+
+*(That premise is what [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) rejects: uniformity
+across the catalog was never delivered — `launch --tui` was only ever offered
+for four of the eight harnesses — and it was not worth an emulator.)*
 
 ### 9.2 Geometry and input
 
@@ -525,8 +564,8 @@ Two honesty constraints:
 
 ### 10.2 Uniform chrome, not uniform capability
 
-The bar renders identically for all eight harnesses. What it can *say* does not.
-Verified in `harness.rs`: the `grok` and `antigravity` arms return
+The bar renders identically for every hosted harness. What it can *say* does
+not. Verified in `harness.rs`: the `grok` and `antigravity` arms return
 `RoutingOverlay { env: Vec::new(), args: <model flag> }` and ignore the `mcp`
 parameter; the `pi-acp` arm carries the comment *"No MCP mechanism — `mcp` is
 ignored"*; `openclaw` likewise injects none.
@@ -616,8 +655,8 @@ is a new feature on a new data source.
 
 ## 12. Acceptance gate: the fidelity matrix
 
-Specified in full — including the redefined gate — in
-[`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md). In short:
+*(Superseded. `TUI_FIDELITY_MATRIX.md` was deleted with the mode it gated; what
+it specified is summarized below for the record.)*
 
 - **Layer 1, input conformance** (`tui/conformance.rs`): hosts `cat -v` under
   the real PTY so everything the wrapper *sends* is echoed back and asserted.
@@ -807,7 +846,7 @@ Per CLAUDE.md, the same change must update:
 | 5 | **Zero BitRouter keybindings in hosted mode (v1)** | Any prefix collides across eight harnesses; none is needed since the child owns `Ctrl-C` and its own exit. |
 | 6 | **Stream first; spend, providers, and route-detail in v2** | A view earns a TUI only if it changes while you watch it. The header's rolling total answers the daily spend question; a full breakdown does not need to be live, so it can ship later as a view or a command. |
 | 7 | **The TUI never handles a secret and never writes config** | `providers login` already is the credential editor (OAuth flows, credential store); a TUI form would be a second, worse credential path. serde_yaml round-tripping would destroy the user's config comments. |
-| 8 | **The emulator is required, not preferred** | `DECSTBM` line reservation cannot survive alt-screen harnesses, and uniformity across all eight is the requirement. |
+| 8 | ~~**The emulator is required, not preferred**~~ — **reversed** | Rested on uniformity across the catalog being the requirement. It was never delivered: `launch --tui` shipped for four of the eight harnesses. [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) deletes the emulator rather than paying for it. |
 | 9 | **`--tui` stays opt-in** | Scrollback moving to BitRouter is daily friction. Revisit only after the matrix runs clean across several harness releases. |
 | 10 | **Suspend primitive ships in v1** wired to `reload`/`$EDITOR` | It is the riskiest part of the management story; prove it on a trivial reversible action, not on an OAuth browser flow. v1 confines it to `--watch`, which hosts no child (§13.3). |
 | 11 | **Unix only in v1** | SIGWINCH, SIGTSTP, `$EDITOR`, `SHELL`, and the whole `TERM` contract are unix semantics; ConPTY is a separate design with its own matrix. The repo does support Windows, so this must be an explicit refusal with a clear message, not an untested claim. |

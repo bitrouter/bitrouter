@@ -17,24 +17,32 @@ rate_limits: []
 models:
   - id: anthropic/claude-opus-4.8
     provider_model_id: claude-opus-4-8
+    reasoning_effort: &claude_full_effort
+      levels: [low, medium, high, xhigh, max]
+      default: high
     capabilities:
       - reasoning
       - structured_outputs
       - tools
   - id: anthropic/claude-opus-4.7
     provider_model_id: claude-opus-4-7
+    reasoning_effort: *claude_full_effort
     capabilities:
       - reasoning
       - structured_outputs
       - tools
   - id: anthropic/claude-opus-4.6
     provider_model_id: claude-opus-4-6
+    reasoning_effort: &claude_max_effort
+      levels: [low, medium, high, max]
+      default: high
     capabilities:
       - reasoning
       - structured_outputs
       - tools
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
+    reasoning_effort: *claude_full_effort
     capabilities:
       - reasoning
       - structured_outputs
@@ -42,6 +50,7 @@ models:
       - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
+    reasoning_effort: *claude_max_effort
     capabilities:
       - reasoning
       - structured_outputs
@@ -55,9 +64,12 @@ models:
       - tools
   - id: anthropic/claude-fable-5
     provider_model_id: claude-fable-5
-    capabilities: []
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
   - id: anthropic/claude-opus-5
     provider_model_id: claude-opus-5
+    reasoning_effort: *claude_full_effort
+    capabilities: [reasoning]
 status: active
 weight: 1
 community: false

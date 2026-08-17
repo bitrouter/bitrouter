@@ -32,6 +32,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
         target: None,
         model_id: "gpt-5".into(),
+        reasoning_effort: None,
         provider_id: "openai".into(),
         account_label: None,
         prompt_tokens: prompt,

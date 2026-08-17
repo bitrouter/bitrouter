@@ -11,28 +11,38 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use anyhow::{Context, Result};
 use bitrouter_sdk::config::{
-    AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
-    TrajectoryConfig, validate_policy_table_config,
+    AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
+    PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
 };
-use bitrouter_sdk::language_model::{ModelSelector, PipelineContext};
+#[cfg(test)]
+use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
-use crate::eval::settlement::PendingEvalDecisionStore;
+use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
+use crate::eval::settlement::{EvalInvocation, PendingEvalDecisionStore};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
 use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::RouteProjection;
+use crate::workflow_state::predictive::{
+    CanonicalPolicyProjection, PredictorContract, compiled_predictor_contract,
+    compiled_scorecard_digest,
+};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
-pub const POLICY_LOCKFILE_VERSION: u32 = 2;
+pub const EVIDENCE_POLICY_LOCKFILE_VERSION: u32 = 2;
+pub const POLICY_LOCKFILE_VERSION: u32 = 3;
 pub const POLICY_COMPILER_ID: &str = "bitrouter-policy-compiler";
 pub const POLICY_COMPILER_VERSION: u32 = 1;
+pub(crate) const OPTIMIZATION_EXPERIMENT_COMPILER_ID: &str =
+    "bitrouter-optimization-private-experiment";
 const EMPTY_SHA256: &str =
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -43,14 +53,14 @@ pub struct PolicyLock {
     /// File-format version only.
     #[serde(rename = "lockfileVersion")]
     pub lockfile_version: u32,
-    /// Reproducible compiler inputs and artifact lineage. Required for v2.
+    /// Reproducible compiler inputs and artifact lineage. Required for v2+.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<PolicyArtifact>,
     /// Named policies referenced by `presets.<name>.policy`.
     #[serde(default)]
     pub policies: BTreeMap<String, PolicyDefinition>,
     /// Decision-relevant provenance for explicit routes, nested by policy and
-    /// canonical route key. Required for every v2 route.
+    /// canonical route key. Required for every v2+ route.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub certificates: BTreeMap<String, BTreeMap<String, PolicyCertificate>>,
 }
@@ -67,8 +77,11 @@ impl Default for PolicyLock {
 }
 
 impl PolicyLock {
-    pub fn is_v2(&self) -> bool {
-        self.lockfile_version == POLICY_LOCKFILE_VERSION
+    pub fn is_compiled(&self) -> bool {
+        matches!(
+            self.lockfile_version,
+            EVIDENCE_POLICY_LOCKFILE_VERSION | POLICY_LOCKFILE_VERSION
+        )
     }
 
     pub fn certificate(&self, policy: &str, request_key: &str) -> Option<&PolicyCertificate> {
@@ -237,7 +250,7 @@ pub struct PolicyCertificate {
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyDefinition {
     pub key_strategy: PolicyKeyStrategy,
-    pub tiers: BTreeMap<String, String>,
+    pub tiers: BTreeMap<String, PolicyModelTarget>,
     /// Workflow-state/fingerprint key to tier. `fingerprints` is accepted as a
     /// migration alias, while deterministic output always uses `routes`.
     #[serde(alias = "fingerprints")]
@@ -249,6 +262,10 @@ pub struct PolicyDefinition {
     /// `policy_table:` config has no corresponding field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_guard: Option<ProgressGuardPolicy>,
+    /// Exact deterministic predictor admitted by this signed policy. Required
+    /// whenever a route uses the predictive `agent_route/v1` namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predictor: Option<PredictorContract>,
     pub adequacy: AdequacyConfig,
 }
 
@@ -262,6 +279,7 @@ impl Default for PolicyDefinition {
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
             progress_guard: None,
+            predictor: None,
             adequacy: AdequacyConfig::default(),
         }
     }
@@ -369,10 +387,12 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
                 anyhow::bail!("policy lock v1 cannot contain v2 artifact or certificates");
             }
         }
-        POLICY_LOCKFILE_VERSION => validate_v2_metadata(document)?,
+        EVIDENCE_POLICY_LOCKFILE_VERSION | POLICY_LOCKFILE_VERSION => {
+            validate_compiled_metadata(document)?
+        }
         version => {
             anyhow::bail!(
-                "unsupported policy lockfileVersion {version}; expected {LEGACY_POLICY_LOCKFILE_VERSION} or {POLICY_LOCKFILE_VERSION}"
+                "unsupported policy lockfileVersion {version}; expected {LEGACY_POLICY_LOCKFILE_VERSION}, {EVIDENCE_POLICY_LOCKFILE_VERSION}, or {POLICY_LOCKFILE_VERSION}"
             );
         }
     }
@@ -387,31 +407,74 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
         }
         let mut model_tiers = BTreeMap::new();
         for (tier, model) in &config.tiers {
-            if model.trim().is_empty() {
+            if model.effort().is_some() && document.lockfile_version < POLICY_LOCKFILE_VERSION {
+                anyhow::bail!(
+                    "policy '{name}' tier '{tier}' uses a compound model/effort target that requires policy lock v{POLICY_LOCKFILE_VERSION}"
+                );
+            }
+            if model.model().trim().is_empty() {
                 anyhow::bail!("policy '{name}' tier '{tier}' must use a non-empty model id");
             }
-            if model.starts_with('@') {
+            if model.model().starts_with('@')
+                || bitrouter_sdk::config::presets::is_reserved(model.model())
+            {
                 anyhow::bail!(
-                    "policy '{name}' tier target '{model}' cannot reference another preset"
+                    "policy '{name}' tier target '{}' cannot reference another preset",
+                    model.model()
                 );
             }
             if let Some(previous) = model_tiers.insert(model, tier) {
                 anyhow::bail!(
-                    "policy '{name}' tiers '{previous}' and '{tier}' use the same model '{model}'"
+                    "policy '{name}' tiers '{previous}' and '{tier}' use the same model/effort target '{}'",
+                    model.model()
                 );
             }
         }
         if let Some(guard) = &policy.progress_guard {
-            if document.lockfile_version != POLICY_LOCKFILE_VERSION {
+            if document.lockfile_version < EVIDENCE_POLICY_LOCKFILE_VERSION {
                 anyhow::bail!(
-                    "policy '{name}' progress_guard requires policy lock v{POLICY_LOCKFILE_VERSION}"
+                    "policy '{name}' progress_guard requires policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+"
                 );
             }
             validate_progress_guard(name, policy, guard)?;
         }
+        validate_predictor_contract(name, policy, document.lockfile_version)?;
     }
-    if document.lockfile_version == POLICY_LOCKFILE_VERSION {
+    if document.is_compiled() {
         validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_predictor_contract(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    lockfile_version: u32,
+) -> Result<()> {
+    let uses_predictive_routes = policy
+        .routes
+        .keys()
+        .any(|key| key.starts_with("agent_route/v1|"));
+    if uses_predictive_routes && lockfile_version < EVIDENCE_POLICY_LOCKFILE_VERSION {
+        anyhow::bail!(
+            "policy '{policy_name}' agent_route/v1 routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
+        );
+    }
+    if !uses_predictive_routes && policy.predictor.is_none() {
+        return Ok(());
+    }
+    let expected = compiled_predictor_contract();
+    let Some(actual) = policy.predictor.as_ref() else {
+        anyhow::bail!(
+            "policy '{policy_name}' uses agent_route/v1 but is missing its signed predictor contract (expected {})",
+            compiled_scorecard_digest()
+        );
+    };
+    if actual != &expected {
+        anyhow::bail!(
+            "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
+            compiled_scorecard_digest()
+        );
     }
     Ok(())
 }
@@ -467,11 +530,11 @@ fn validate_progress_guard(
     Ok(())
 }
 
-fn validate_v2_metadata(document: &PolicyLock) -> Result<()> {
+fn validate_compiled_metadata(document: &PolicyLock) -> Result<()> {
     let artifact = document
         .artifact
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("policy lock v2 requires artifact metadata"))?;
+        .ok_or_else(|| anyhow::anyhow!("compiled policy lock requires artifact metadata"))?;
     if let Some(parent) = artifact.parent_digest.as_deref() {
         validate_sha256_digest(parent, "artifact.parent_digest")?;
     }
@@ -629,7 +692,7 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
     Ok(())
 }
 
-/// Ensure a non-empty legacy database has been sealed into the active v2 lock
+/// Ensure a non-empty legacy database has been sealed into the active compiled lock
 /// before an adaptive process accepts publication-capable traffic.
 pub fn verify_legacy_migration(
     mode: PolicyRuntimeMode,
@@ -817,6 +880,38 @@ pub fn diff_explanations(active: &PolicyLock, candidate: &PolicyLock) -> Vec<Str
             )
         })
         .collect::<Vec<_>>();
+    let mut policies = active.policies.keys().cloned().collect::<BTreeSet<_>>();
+    policies.extend(candidate.policies.keys().cloned());
+    for policy_name in policies {
+        let active_tiers = active
+            .policies
+            .get(&policy_name)
+            .map(|policy| &policy.tiers);
+        let candidate_tiers = candidate
+            .policies
+            .get(&policy_name)
+            .map(|policy| &policy.tiers);
+        let mut tiers = active_tiers
+            .into_iter()
+            .flat_map(|items| items.keys().cloned())
+            .collect::<BTreeSet<_>>();
+        tiers.extend(
+            candidate_tiers
+                .into_iter()
+                .flat_map(|items| items.keys().cloned()),
+        );
+        for tier in tiers {
+            let active_target = active_tiers.and_then(|items| items.get(&tier));
+            let candidate_target = candidate_tiers.and_then(|items| items.get(&tier));
+            if active_target != candidate_target {
+                explanations.push(format!(
+                    "{policy_name}: tier {tier} {} -> {}",
+                    active_target.map_or_else(|| "unset".into(), ToString::to_string),
+                    candidate_target.map_or_else(|| "unset".into(), ToString::to_string),
+                ));
+            }
+        }
+    }
     explanations.extend(
         diff_progress_guards(active, candidate)
             .into_iter()
@@ -986,6 +1081,13 @@ fn publish_bytes_unlocked(
     history_dir: &Path,
     action: &str,
 ) -> Result<PromotionRecord> {
+    if target
+        .artifact
+        .as_ref()
+        .is_some_and(|artifact| artifact.compiler.id == OPTIMIZATION_EXPERIMENT_COMPILER_ID)
+    {
+        anyhow::bail!("private optimization experiment policy locks cannot be published");
+    }
     let parent_bytes = std::fs::read(active_path)
         .with_context(|| format!("reading active policy lock {}", active_path.display()))?;
     let parent_raw =
@@ -1391,6 +1493,29 @@ pub async fn initialize_files(
     strong_model: Option<&str>,
     economy_model: &str,
 ) -> Result<PolicyFileUpdate> {
+    initialize_files_with_efforts(
+        config_path,
+        policy_name,
+        preset_name,
+        strong_model,
+        None,
+        economy_model,
+        None,
+    )
+    .await
+}
+
+/// Create one named policy whose tiers may identify the same model at distinct
+/// exact effort levels. Scalar/model-only callers retain the historical form.
+pub async fn initialize_files_with_efforts(
+    config_path: &Path,
+    policy_name: &str,
+    preset_name: &str,
+    strong_model: Option<&str>,
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_model: &str,
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> Result<PolicyFileUpdate> {
     let _config_lock = acquire_publication_lock(config_path)?;
     let raw = tokio::fs::read_to_string(config_path)
         .await
@@ -1404,7 +1529,9 @@ pub async fn initialize_files(
         policy_name,
         preset_name,
         strong_model,
+        strong_effort,
         economy_model,
+        economy_effort,
     )
     .await
 }
@@ -1415,7 +1542,9 @@ pub async fn initialize_files_unlocked(
     policy_name: &str,
     preset_name: &str,
     strong_model: Option<&str>,
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     economy_model: &str,
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
     validate_name(policy_name)?;
     validate_name(preset_name).context("validating preset name")?;
@@ -1438,8 +1567,8 @@ pub async fn initialize_files_unlocked(
             )
         })?;
     validate_tier_model(&strong_model, "strong")?;
-    if strong_model == economy_model {
-        anyhow::bail!("strong and economy tiers must use different models");
+    if strong_model == economy_model && strong_effort == economy_effort {
+        anyhow::bail!("strong and economy tiers must use different model/effort targets");
     }
 
     let mut capability_config = config.clone();
@@ -1483,8 +1612,26 @@ pub async fn initialize_files_unlocked(
         policy_name.to_string(),
         PolicyDefinition {
             tiers: BTreeMap::from([
-                ("economy".into(), economy_model.to_string()),
-                ("strong".into(), strong_model.clone()),
+                (
+                    "economy".into(),
+                    economy_effort.map_or_else(
+                        || PolicyModelTarget::from(economy_model),
+                        |effort| PolicyModelTarget::ModelEffort {
+                            model: economy_model.to_owned(),
+                            effort,
+                        },
+                    ),
+                ),
+                (
+                    "strong".into(),
+                    strong_effort.map_or_else(
+                        || PolicyModelTarget::from(strong_model.as_str()),
+                        |effort| PolicyModelTarget::ModelEffort {
+                            model: strong_model.clone(),
+                            effort,
+                        },
+                    ),
+                ),
             ]),
             default_tier: Some("strong".into()),
             tool_use_tier: Some("strong".into()),
@@ -1677,7 +1824,7 @@ pub async fn compile_files_with_eval(
     })
 }
 
-/// Validate and publish one exact precompiled v2 candidate. The candidate's
+/// Validate and publish one exact precompiled candidate. The candidate's
 /// parent digest is the compare-and-swap token, so a stale compiler can never
 /// overwrite a newer active lock.
 pub async fn publish_candidate_file(
@@ -1718,7 +1865,7 @@ async fn publish_candidate_file_inner(
         .document
         .artifact
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("policy publish requires a compiled v2 candidate"))?;
+        .ok_or_else(|| anyhow::anyhow!("policy publish requires a compiled candidate"))?;
     let parent_digest = artifact
         .parent_digest
         .as_deref()
@@ -1964,7 +2111,10 @@ fn readonly_database_url(url: &str, config_path: &Path) -> Result<String> {
 }
 
 fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
-    if model.trim().is_empty() || model.starts_with('@') {
+    if model.trim().is_empty()
+        || model.starts_with('@')
+        || bitrouter_sdk::config::presets::is_reserved(model)
+    {
         anyhow::bail!("{tier} model must be a non-empty model id, not a preset");
     }
     Ok(())
@@ -2241,6 +2391,30 @@ pub struct PolicyRuntime {
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
+#[derive(Debug)]
+struct PredictiveSingleTargetDispatch;
+
+/// Prevent a predictive named-policy decision from inheriting the SDK's
+/// generic cross-account fallback chain. Without an authoritative proof that a
+/// failed provider accepted no generation and incurred no charge, a semantic
+/// request may be dispatched to exactly one physical target.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PredictiveSingleTargetRouteHook;
+
+#[async_trait::async_trait]
+impl RouteHook for PredictiveSingleTargetRouteHook {
+    async fn resolve(
+        &self,
+        chain: &mut Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        if ctx.extension::<PredictiveSingleTargetDispatch>().is_some() {
+            chain.truncate(1);
+        }
+        Ok(())
+    }
+}
+
 impl PolicyRuntime {
     pub(crate) async fn new(
         config: &Config,
@@ -2327,22 +2501,13 @@ impl PolicyRuntime {
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
                     .with_progress_guard(definition.progress_guard.clone());
-                router = if definition.progress_guard.is_none() {
-                    router.with_eval_observer(
-                        self.eval_decisions.clone(),
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                } else {
-                    router.with_eval_metadata(
-                        name.clone(),
-                        loaded.digest.clone(),
-                        route_baselines,
-                        definition.default_tier.clone(),
-                    )
-                };
+                router = router.with_eval_observer(
+                    self.eval_decisions.clone(),
+                    name.clone(),
+                    loaded.digest.clone(),
+                    route_baselines,
+                    definition.default_tier.clone(),
+                );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
                 }
@@ -2401,6 +2566,13 @@ impl ModelSelector for PolicyRuntime {
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
+        let invocation = ctx
+            .extension::<EvalInvocation>()
+            .unwrap_or_else(|| Arc::new(EvalInvocation::new(ctx.caller().user_id())));
+        if !ctx.has_event::<EvalInvocation>() {
+            ctx.emit(invocation.as_ref().clone());
+        }
+        ctx.insert_extension(invocation.clone());
         let guard = router.progress_guard();
         if let (Some(trajectory), Some(guard)) = (&self.trajectory, guard) {
             if ctx.caller().is_anonymous() {
@@ -2419,11 +2591,12 @@ impl ModelSelector for PolicyRuntime {
                 ))
             })?;
             let input_model = ctx.model().to_string();
+            let input_effort = ctx.prompt().params.reasoning_effort;
             let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
-            let projection =
-                RouteProjection::parse_key(&decision.route_projection).ok_or_else(|| {
+            let projection = RouteProjection::parse_key(&decision.observed_route_projection)
+                .ok_or_else(|| {
                     bitrouter_sdk::BitrouterError::internal(
-                        "named policy produced an invalid canonical route projection",
+                        "named policy produced an invalid observed route projection",
                     )
                 })?;
             let policy_digest = snapshot.digest.as_deref().ok_or_else(|| {
@@ -2438,6 +2611,10 @@ impl ModelSelector for PolicyRuntime {
             })?;
             let request_key = decision.request_key.clone();
             let baseline_tier = router.eval_baseline_tier(&decision);
+            let baseline_effort = baseline_tier
+                .as_deref()
+                .and_then(|tier| router.effort_of_tier(tier))
+                .or(input_effort);
             let owner = ctx.caller().user_id();
             let trajectory_request_id = trajectory
                 .request_identity(owner, ctx.request_id())
@@ -2452,13 +2629,15 @@ impl ModelSelector for PolicyRuntime {
                 policy_name: policy_name.to_owned(),
                 request_key,
                 baseline_tier,
+                baseline_effort,
+                tier_efforts: router.effective_tier_efforts(input_effort),
                 preset: Some(policy_name.to_owned()),
                 projection,
                 candidate_tier: decision.static_tier.clone(),
                 policy_digest: policy_digest.to_owned(),
                 policy: guard.clone(),
                 carries_tools: !ctx.prompt().tools.is_empty(),
-                tool_use_tier: router.tool_use_tier().map(ToOwned::to_owned),
+                tool_use_tier: router.tool_use_tier(),
                 tool_safe_tiers: router.tool_safe_tiers(),
             };
             let (correlated, guarded) = trajectory
@@ -2506,30 +2685,80 @@ impl ModelSelector for PolicyRuntime {
                 .iter()
                 .map(|clause| clause.clause_id.clone())
                 .collect();
+            if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+                && let Some(adjustment) = plan.adjustment.as_ref()
+            {
+                router.apply_continuation_adjustment(&mut decision, adjustment)?;
+            }
+            let route_projection = decision.route_projection.clone();
             let selected = router.record_bound_policy_decision(
                 &correlated.request_id,
+                invocation.as_ref(),
                 input_model,
+                input_effort,
                 decision,
                 ctx.headers(),
             );
-            if let Some(model) = selected {
-                ctx.set_model(model);
+            if let Some(target) = selected {
+                ctx.set_model(target.model());
+                if let Some(effort) = target.effort() {
+                    ctx.set_policy_reasoning_effort(effort);
+                }
+                if let Some(effort) = pinned_continuation_effort(ctx) {
+                    ctx.set_policy_reasoning_effort_override(effort);
+                }
+                mark_predictive_single_target(&route_projection, ctx);
             }
             ctx.insert_extension(Arc::new(correlated));
             return Ok(());
         }
         let input_model = ctx.model().to_string();
-        let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let input_effort = ctx.prompt().params.reasoning_effort;
+        let mut decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
+            && let Some(adjustment) = plan.adjustment.as_ref()
+        {
+            router.apply_continuation_adjustment(&mut decision, adjustment)?;
+        }
+        let route_projection = decision.route_projection.clone();
         let selected = router.record_bound_policy_decision(
             ctx.request_id(),
+            invocation.as_ref(),
             input_model,
+            input_effort,
             decision,
             ctx.headers(),
         );
-        if let Some(model) = selected {
-            ctx.set_model(model);
+        if let Some(target) = selected {
+            ctx.set_model(target.model());
+            if let Some(effort) = target.effort() {
+                ctx.set_policy_reasoning_effort(effort);
+            }
+            if let Some(effort) = pinned_continuation_effort(ctx) {
+                ctx.set_policy_reasoning_effort_override(effort);
+            }
+            mark_predictive_single_target(&route_projection, ctx);
         }
         Ok(())
+    }
+}
+
+fn pinned_continuation_effort(
+    ctx: &PipelineContext,
+) -> Option<Option<bitrouter_sdk::language_model::types::ReasoningEffort>> {
+    ctx.extension::<ContinuationRequestPlan>().and_then(|plan| {
+        plan.adjustment
+            .as_ref()
+            .and_then(ContinuationAdjustment::pinned_effort_override)
+    })
+}
+
+fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
+    if matches!(
+        CanonicalPolicyProjection::parse_key(route_projection),
+        Some(CanonicalPolicyProjection::Predictive(_))
+    ) {
+        ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }
 
@@ -2575,8 +2804,8 @@ mod tests {
     fn definition() -> PolicyDefinition {
         PolicyDefinition {
             tiers: BTreeMap::from([
-                ("economy".into(), "vendor:economy".into()),
-                ("strong".into(), "vendor:strong".into()),
+                ("economy".into(), PolicyModelTarget::from("vendor:economy")),
+                ("strong".into(), PolicyModelTarget::from("vendor:strong")),
             ]),
             routes: BTreeMap::from([("opening".into(), "strong".into())]),
             default_tier: Some("strong".into()),
@@ -2669,6 +2898,30 @@ certificates:
                 .is_some_and(|message| message.contains("selected tier 'strong'"))
         );
         Ok(())
+    }
+
+    /// A tier may not target the reserved namespace. `bitrouter/auto` resolves
+    /// back through the very policy whose tier names it, so accepting it would
+    /// sign a self-referential lock. The `@`-only guard used to let it through
+    /// because the public spelling carries neither an `@` nor a colon.
+    #[test]
+    fn tier_target_cannot_reference_the_reserved_namespace() {
+        let mut policy = definition();
+        policy
+            .tiers
+            .insert("strong".into(), "bitrouter/auto".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("auto".into(), policy)]),
+            certificates: BTreeMap::new(),
+        };
+
+        let error = validate_document(&lock).unwrap_err().to_string();
+        assert!(
+            error.contains("cannot reference another preset"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -2878,6 +3131,38 @@ certificates:
         ] {
             assert!(fields.contains(field), "missing {field}");
         }
+    }
+
+    #[test]
+    fn effort_only_tier_diff_is_visible() {
+        let mut active = PolicyLock::default();
+        let mut active_policy = definition();
+        active_policy.routes.clear();
+        active_policy.tiers.insert(
+            "strong".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "vendor:same".into(),
+                effort: ReasoningEffort::High,
+            },
+        );
+        active
+            .policies
+            .insert("coding".into(), active_policy.clone());
+
+        active_policy.tiers.insert(
+            "strong".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "vendor:same".into(),
+                effort: ReasoningEffort::Low,
+            },
+        );
+        let mut candidate = PolicyLock::default();
+        candidate.policies.insert("coding".into(), active_policy);
+
+        assert_eq!(
+            diff_explanations(&active, &candidate),
+            ["coding: tier strong vendor:same@high -> vendor:same@low"]
+        );
     }
 
     #[tokio::test]
@@ -3611,49 +3896,130 @@ policies:
     }
 
     #[test]
-    fn auto_router_template_lock_is_bound_and_canonical() {
+    fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
-        let config_raw = std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap();
-        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap();
-        let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
-        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw).unwrap();
+        let config_raw = std::fs::read_to_string(template_dir.join("bitrouter.yaml"))?;
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let config = bitrouter_sdk::config::parse(&config_raw)?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
 
-        validate_for_config(&config, &lock).unwrap();
+        validate_for_config(&config, &lock)?;
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert!(!config_raw.contains("writeback:"));
         assert!(!lock_raw.contains("enabled:"));
         assert!(!lock_raw.contains("explore_enabled:"));
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
-        assert_eq!(policy.tiers["balanced"], "bitrouter:moonshotai/kimi-k3");
-        assert_eq!(policy.routes["agent_trace/v2|edit|normal"], "economy");
-        assert_eq!(policy.routes["agent_trace/v2|test|normal"], "economy");
         assert_eq!(
-            policy.routes["agent_trace/v2|tool_followup|normal"],
-            "economy"
+            policy.tiers["balanced"].model(),
+            "bitrouter:moonshotai/kimi-k3"
         );
-        for key in [
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|context",
-            "agent_trace/v2|edit|context",
-            "agent_trace/v2|test|context",
-            "agent_trace/v2|tool_followup|context",
-        ] {
-            assert_eq!(policy.routes[key], "balanced", "{key}");
-        }
-        assert_eq!(policy.default_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            policy.routes,
+            BTreeMap::from([
+                ("agent_route/v1|finalize|context".into(), "balanced".into()),
+                ("agent_route/v1|finalize|guarded".into(), "strong".into()),
+                ("agent_route/v1|finalize|normal".into(), "balanced".into()),
+                ("agent_route/v1|implement|context".into(), "balanced".into()),
+                ("agent_route/v1|implement|guarded".into(), "balanced".into()),
+                ("agent_route/v1|implement|normal".into(), "balanced".into()),
+                (
+                    "agent_route/v1|mechanical|context".into(),
+                    "balanced".into()
+                ),
+                (
+                    "agent_route/v1|mechanical|guarded".into(),
+                    "balanced".into()
+                ),
+                ("agent_route/v1|mechanical|normal".into(), "economy".into()),
+                ("agent_route/v1|orchestrate|context".into(), "strong".into()),
+                ("agent_route/v1|orchestrate|guarded".into(), "strong".into()),
+                ("agent_route/v1|orchestrate|normal".into(), "strong".into()),
+                ("agent_route/v1|verify|context".into(), "balanced".into()),
+                ("agent_route/v1|verify|guarded".into(), "strong".into()),
+                ("agent_route/v1|verify|normal".into(), "economy".into()),
+            ])
+        );
+        assert_eq!(policy.default_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
+        assert_eq!(
+            policy.predictor.as_ref(),
+            Some(&compiled_predictor_contract())
+        );
+        let guard = policy
+            .progress_guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing its progress guard"))?;
+        assert_eq!(guard.escalation_tier, "strong");
+        assert_eq!(guard.protected_tiers, BTreeSet::from(["strong".into()]));
 
-        let rendered = deterministic_yaml(&lock).unwrap();
+        let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
+        Ok(())
     }
 
     #[test]
-    fn auto_router_template_experiments_are_compiler_owned() -> anyhow::Result<()> {
+    fn predictive_routes_require_the_exact_compiled_predictor_contract() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+
+        let mut missing = lock.clone();
+        if let Some(policy) = missing.policies.get_mut("auto") {
+            policy.predictor = None;
+        }
+        let missing_error = validate_document(&missing)
+            .expect_err("predictive routes without a predictor contract must be rejected");
+        assert!(missing_error.to_string().contains("predictor"));
+
+        let mut mismatched = lock;
+        if let Some(policy) = mismatched.policies.get_mut("auto")
+            && let Some(predictor) = &mut policy.predictor
+        {
+            predictor.config_digest = EMPTY_SHA256.to_owned();
+        }
+        let mismatch_error = validate_document(&mismatched)
+            .expect_err("a stale predictor contract must be rejected");
+        assert!(
+            mismatch_error
+                .to_string()
+                .contains(compiled_scorecard_digest())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn predictive_routes_require_v2_artifact_and_certificates() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let mut lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+        lock.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
+        lock.artifact = None;
+        lock.certificates.clear();
+        if let Some(policy) = lock.policies.get_mut("auto") {
+            policy.progress_guard = None;
+        }
+
+        let error = validate_document(&lock)
+            .expect_err("predictive routes must not bypass v2 provenance metadata");
+        assert!(
+            error.to_string().contains("require policy lock v2"),
+            "unexpected validation error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_router_template_routes_have_deterministic_compiler_certificates() -> anyhow::Result<()>
+    {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -3665,13 +4031,67 @@ policies:
             .certificates
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
-        assert_eq!(certificates.len(), 8);
-        for certificate in certificates.values() {
+        let policy = &lock.policies["auto"];
+        assert_eq!(certificates.len(), 15);
+        assert_eq!(
+            certificates.keys().collect::<Vec<_>>(),
+            policy.routes.keys().collect::<Vec<_>>()
+        );
+        let compiler_digest = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .compiler
+            .config_digest;
+        let compiler = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .compiler;
+        let expected_compiler_digest = canonical_template_digest(&(
+            "auto-router-predictive-template-v1",
+            compiler.id.as_str(),
+            compiler.version,
+            "auto",
+            policy,
+        ))?;
+        assert_eq!(compiler_digest, &expected_compiler_digest);
+        let mut route_evidence = BTreeMap::new();
+        for (request_key, certificate) in certificates {
             assert_eq!(certificate.owner, RouteOwner::Compiler);
             assert_eq!(certificate.source, CertificateSource::Mixed);
             assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
+            assert_eq!(certificate.selected_tier, policy.routes[request_key]);
+            assert_eq!(&certificate.compiler_config_digest, compiler_digest);
+            let expected_evidence_digest = canonical_template_digest(&(
+                "auto-router-predictive-route-v1",
+                "auto",
+                request_key,
+                certificate.selected_tier.as_str(),
+            ))?;
+            assert_eq!(certificate.evidence_digest, expected_evidence_digest);
+            route_evidence.insert(request_key, expected_evidence_digest);
         }
+        let evidence_root = &lock
+            .artifact
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing artifact metadata"))?
+            .evidence_root;
+        let expected_evidence_root = canonical_template_digest(&(
+            "auto-router-predictive-evidence-v1",
+            "auto",
+            route_evidence,
+        ))?;
+        assert_eq!(evidence_root, &expected_evidence_root);
+        let rendered = deterministic_yaml(&lock)?;
+        let reparsed: PolicyLock = serde_saphyr::from_str(&rendered)?;
+        assert_eq!(deterministic_yaml(&reparsed)?, rendered);
         Ok(())
+    }
+
+    fn canonical_template_digest<T: Serialize>(value: &T) -> anyhow::Result<String> {
+        let canonical = serde_json::to_vec(value)?;
+        Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
     }
 
     #[test]
@@ -3785,6 +4205,56 @@ policies:
         })
         .unwrap_err();
         assert!(error.to_string().contains("same model"));
+    }
+
+    #[test]
+    fn validation_treats_model_and_effort_as_the_target_identity() -> anyhow::Result<()> {
+        let mut distinct = definition();
+        distinct.routes.clear();
+        distinct.tiers = BTreeMap::from([
+            (
+                "economy".into(),
+                PolicyModelTarget::ModelEffort {
+                    model: "vendor:same".into(),
+                    effort: ReasoningEffort::Low,
+                },
+            ),
+            (
+                "strong".into(),
+                PolicyModelTarget::ModelEffort {
+                    model: "vendor:same".into(),
+                    effort: ReasoningEffort::High,
+                },
+            ),
+        ]);
+        let mut lock = PolicyLock::default();
+        lock.policies.insert("coding".into(), distinct.clone());
+        validate_document(&lock)?;
+
+        let mut mislabeled_v2 = lock.clone();
+        mislabeled_v2.lockfile_version = EVIDENCE_POLICY_LOCKFILE_VERSION;
+        let version_error = validate_document(&mislabeled_v2)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("v2 compound target was accepted"))?;
+        assert!(
+            version_error
+                .to_string()
+                .contains("requires policy lock v3")
+        );
+
+        distinct.tiers.insert(
+            "strong".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "vendor:same".into(),
+                effort: ReasoningEffort::Low,
+            },
+        );
+        lock.policies.insert("coding".into(), distinct);
+        let error = validate_document(&lock)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("duplicate compound target was accepted"))?;
+        assert!(error.to_string().contains("same model/effort target"));
+        Ok(())
     }
 
     #[test]
@@ -3952,8 +4422,8 @@ presets:
         );
         let loaded = load(&update.path).await.unwrap();
         let policy = &loaded.document.policies["terminal-bench"];
-        assert_eq!(policy.tiers["strong"], "anthropic/claude-opus-4.8");
-        assert_eq!(policy.tiers["economy"], "moonshotai/kimi-k2.7-code");
+        assert_eq!(policy.tiers["strong"].model(), "anthropic/claude-opus-4.8");
+        assert_eq!(policy.tiers["economy"].model(), "moonshotai/kimi-k2.7-code");
         assert_eq!(policy.default_tier.as_deref(), Some("strong"));
         assert_eq!(policy.adequacy.explore_tier.as_deref(), Some("economy"));
     }
@@ -3999,6 +4469,49 @@ presets:
             loaded.document.policies["auto"].tool_safe_tiers,
             ["strong", "economy"]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn initialize_accepts_same_model_at_distinct_efforts() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"inherit_defaults: false
+providers:
+  model-provider:
+    api_base: https://model.example/v1
+    api_key: test
+    models:
+      - id: one-model
+        capabilities: [reasoning, tools]
+        reasoning_effort:
+          levels: [low, high]
+          default: high
+presets:
+  auto:
+    model: model-provider:one-model
+"#,
+        )
+        .await?;
+
+        let update = initialize_files_with_efforts(
+            &config_path,
+            "auto",
+            "auto",
+            Some("model-provider:one-model"),
+            Some(ReasoningEffort::High),
+            "model-provider:one-model",
+            Some(ReasoningEffort::Low),
+        )
+        .await?;
+        let loaded = load(&update.path).await?;
+        let policy = &loaded.document.policies["auto"];
+        assert_eq!(policy.tiers["strong"].model(), "model-provider:one-model");
+        assert_eq!(policy.tiers["strong"].effort(), Some(ReasoningEffort::High));
+        assert_eq!(policy.tiers["economy"].model(), "model-provider:one-model");
+        assert_eq!(policy.tiers["economy"].effort(), Some(ReasoningEffort::Low));
         Ok(())
     }
 

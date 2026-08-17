@@ -29,7 +29,8 @@ use crate::language_model::settlement::{
 };
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
-    ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, StreamPart,
+    ExecutionResult, PipelineRequest, PipelineResponse, Prompt, ReasoningEffortSource,
+    RoutingTarget, StreamPart,
 };
 
 /// The default SSE keepalive interval.
@@ -961,6 +962,7 @@ impl Pipeline {
         for hook in &self.route_hooks {
             hook.resolve(&mut chain, ctx).await?;
         }
+        filter_reasoning_effort_targets(&mut chain, ctx.prompt())?;
         if chain.is_empty() {
             return Err(BitrouterError::NotFound(format!(
                 "no route for model '{}'",
@@ -1190,6 +1192,23 @@ impl Pipeline {
     }
 }
 
+fn filter_reasoning_effort_targets(chain: &mut Vec<RoutingTarget>, prompt: &Prompt) -> Result<()> {
+    let Some(effort) = prompt.params.reasoning_effort else {
+        return Ok(());
+    };
+    let policy_owned = prompt.params.reasoning_effort_source == ReasoningEffortSource::Policy;
+    chain.retain(|target| match &target.reasoning_effort {
+        Some(support) => support.levels.contains(&effort),
+        None => !policy_owned,
+    });
+    if chain.is_empty() {
+        return Err(BitrouterError::bad_request(format!(
+            "reasoning effort '{effort}' has no supported provider/model route"
+        )));
+    }
+    Ok(())
+}
+
 async fn observe_hop_start_with(
     hooks: &[Arc<dyn ObserveHook>],
     ctx: &PipelineContext,
@@ -1321,6 +1340,109 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
         .into_iter()
         .last()
         .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string()))
+}
+
+#[cfg(test)]
+mod policy_effort_target_tests {
+    use super::filter_reasoning_effort_targets;
+    use crate::language_model::types::{
+        ApiProtocol, GenerationParams, Prompt, ReasoningEffort, ReasoningEffortConfig,
+        ReasoningEffortSource, RoutingTarget,
+    };
+
+    fn prompt() -> Prompt {
+        Prompt {
+            model: "model".to_string(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    fn target(name: &str, levels: Option<Vec<ReasoningEffort>>) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: name.to_string(),
+            service_id: "model".to_string(),
+            api_base: "https://example.test/v1".to_string(),
+            api_key: "test".to_string(),
+            api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            reasoning_effort: levels.map(|levels| ReasoningEffortConfig {
+                levels,
+                default: None,
+            }),
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    #[test]
+    fn policy_effort_keeps_only_exact_positive_support() -> crate::Result<()> {
+        let mut prompt = prompt();
+        prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        prompt.params.reasoning_effort_source = ReasoningEffortSource::Policy;
+        let mut chain = vec![
+            target("supported", Some(vec![ReasoningEffort::High])),
+            target("wrong-level", Some(vec![ReasoningEffort::Low])),
+            target("unknown", None),
+        ];
+
+        filter_reasoning_effort_targets(&mut chain, &prompt)?;
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "supported");
+        Ok(())
+    }
+
+    #[test]
+    fn caller_effort_preserves_unknown_target_passthrough() -> crate::Result<()> {
+        let mut prompt = prompt();
+        prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        let mut chain = vec![target("unknown", None)];
+
+        filter_reasoning_effort_targets(&mut chain, &prompt)?;
+        assert_eq!(chain.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn caller_effort_drops_routes_with_known_incompatible_ladders() -> crate::Result<()> {
+        let mut prompt = prompt();
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Minimal);
+        let mut chain = vec![
+            target("anthropic", Some(vec![ReasoningEffort::Low])),
+            target("gemini", Some(vec![ReasoningEffort::Minimal])),
+            target("custom-unknown", None),
+        ];
+
+        filter_reasoning_effort_targets(&mut chain, &prompt)?;
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].provider_name, "gemini");
+        assert_eq!(chain[1].provider_name, "custom-unknown");
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_policy_effort_fails_closed() -> crate::Result<()> {
+        let mut prompt = prompt();
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Max);
+        prompt.params.reasoning_effort_source = ReasoningEffortSource::Policy;
+        let mut chain = vec![target("unsupported", Some(vec![ReasoningEffort::High]))];
+
+        let error = filter_reasoning_effort_targets(&mut chain, &prompt)
+            .err()
+            .ok_or_else(|| crate::BitrouterError::internal("unsupported effort was accepted"))?;
+        assert!(error.to_string().contains("reasoning effort 'max'"));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

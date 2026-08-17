@@ -119,8 +119,15 @@ pub(crate) fn build_operational_evaluation(
             ),
         ]),
     };
-    let evidence = vec![event_evidence, snapshot_evidence];
+    let mut evidence = vec![event_evidence, snapshot_evidence];
+    if let Some(prediction_evidence) = prediction_observation_evidence(settlement)? {
+        evidence.push(prediction_evidence);
+    }
     let evidence_digest = evidence_digest(&evidence)?;
+    let evidence_refs = evidence
+        .iter()
+        .map(|item| item.evidence_id.clone())
+        .collect();
     let decisions = decoded
         .iter()
         .map(|(_, decision)| decision.clone())
@@ -164,10 +171,7 @@ pub(crate) fn build_operational_evaluation(
         metrics,
         hard_violations: Vec::new(),
         confidence_ppm: None,
-        evidence_refs: vec![
-            "episode-events".to_owned(),
-            "trajectory-snapshot".to_owned(),
-        ],
+        evidence_refs,
         idempotency_key: format!(
             "trajectory-operational:{}:{}",
             snapshot.episode_id, snapshot.through_sequence
@@ -177,6 +181,68 @@ pub(crate) fn build_operational_evaluation(
     let envelope = TrajectoryEvaluationEnvelope { subject, result };
     validate_evaluation_envelope(&envelope)?;
     Ok(envelope)
+}
+
+fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Option<EvidenceItem>> {
+    let mut attributes = BTreeMap::new();
+    for (event_key, attribute_key) in [
+        ("routing.predicted_role", "predicted_role"),
+        ("routing.predicted_action", "predicted_action"),
+        (
+            "routing.predictor_contract_digest",
+            "predictor_contract_digest",
+        ),
+        (
+            "routing.prediction_confidence_kind",
+            "prediction_confidence_kind",
+        ),
+        ("routing.observed_action", "observed_action"),
+        ("routing.observation_reason_code", "observation_reason_code"),
+        ("routing.action_match", "action_match"),
+        (
+            "routing.continuation_proposed_tier",
+            "continuation_proposed_tier",
+        ),
+        (
+            "routing.continuation_proposed_model",
+            "continuation_proposed_model",
+        ),
+        ("routing.continuation_adjustment", "continuation_adjustment"),
+    ] {
+        if let Some(value) = settlement.evidence.categorical.get(event_key) {
+            attributes.insert(attribute_key.to_owned(), value.clone());
+        }
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.prediction_confidence_ppm")
+    {
+        attributes.insert(
+            "prediction_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.observation_confidence_ppm")
+    {
+        attributes.insert(
+            "observation_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if attributes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(EvidenceItem {
+        evidence_id: "routing-prediction-observation".to_owned(),
+        kind: "routing.prediction_observation".to_owned(),
+        digest: canonical_digest(&attributes)?,
+        redacted: true,
+        attributes,
+    }))
 }
 
 fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRef>> {
@@ -200,16 +266,32 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
         .get("route.policy_lock")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing policy digest"))?;
+    let selected_effort = event
+        .evidence
+        .categorical
+        .get("route.selected_effort")
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let baseline_effort = event
+        .evidence
+        .categorical
+        .get("route.baseline_effort")
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
         request_key: required("route.request_key")?,
         selected_tier: required("route.selected_tier")?,
+        selected_effort,
         baseline_tier: event
             .evidence
             .categorical
             .get("route.baseline_tier")
             .cloned(),
+        baseline_effort,
         policy_digest,
     }))
 }
@@ -442,6 +524,50 @@ mod tests {
         assert_eq!(
             envelope.subject.requested_dimensions,
             envelope.result.metrics.keys().cloned().collect()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tracked_eval_evidence_keeps_continuation_proposal_and_adjustment() -> anyhow::Result<()> {
+        let mut events = complete_events(Some(15), Some(70))?;
+        let settlement = events
+            .last_mut()
+            .ok_or_else(|| anyhow::anyhow!("settlement missing"))?;
+        settlement.evidence.categorical.extend(BTreeMap::from([
+            (
+                "routing.continuation_proposed_tier".to_owned(),
+                "economy".to_owned(),
+            ),
+            (
+                "routing.continuation_proposed_model".to_owned(),
+                "provider:economy".to_owned(),
+            ),
+            (
+                "routing.continuation_adjustment".to_owned(),
+                "pin".to_owned(),
+            ),
+        ]));
+        resign(settlement)?;
+
+        let envelope = build_operational_evaluation(&events)?;
+        let evidence = envelope
+            .subject
+            .evidence
+            .iter()
+            .find(|item| item.evidence_id == "routing-prediction-observation")
+            .ok_or_else(|| anyhow::anyhow!("prediction evidence missing"))?;
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_tier"),
+            Some(&"economy".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_model"),
+            Some(&"provider:economy".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_adjustment"),
+            Some(&"pin".to_owned())
         );
         Ok(())
     }

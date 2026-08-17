@@ -1091,6 +1091,140 @@ pub enum Capability {
     AudioOutput,
 }
 
+/// Qualitative reasoning-effort levels understood by BitRouter's built-in
+/// OpenAI, Anthropic, and Gemini protocol adapters.
+///
+/// This is the cross-provider superset, not a claim that every model supports
+/// every value. Exact provider/model routes advertise their supported subset
+/// separately and policy-owned effort targets are validated against it before
+/// dispatch.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    /// Disable reasoning where the selected model supports doing so.
+    None,
+    /// Use the smallest non-zero reasoning setting exposed by the model.
+    Minimal,
+    /// Prefer low reasoning cost and latency.
+    Low,
+    /// Balance reasoning depth with cost and latency.
+    Medium,
+    /// Prefer deeper reasoning over cost and latency.
+    High,
+    /// Use the provider's extra-high reasoning setting.
+    Xhigh,
+    /// Use the provider's maximum reasoning setting.
+    Max,
+}
+
+/// Provenance for the canonical reasoning-effort parameter.
+///
+/// Caller-authored effort keeps the historical pass-through behavior. A
+/// policy-owned effort is a router treatment and must be positively supported
+/// by the exact provider/model route before dispatch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningEffortSource {
+    /// The inbound request supplied the effort value.
+    #[default]
+    Caller,
+    /// A versioned routing policy selected the effort value.
+    Policy,
+}
+
+impl ReasoningEffort {
+    /// Return the canonical lowercase wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+impl std::fmt::Display for ReasoningEffort {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "minimal" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::Xhigh),
+            "max" => Ok(Self::Max),
+            _ => Err(format!(
+                "unsupported reasoning effort '{value}'; expected none, minimal, low, medium, high, xhigh, or max"
+            )),
+        }
+    }
+}
+
+/// Exact qualitative reasoning-effort support for one provider/model route.
+///
+/// Absence means unknown rather than unsupported. Policy-owned effort targets
+/// require this positive declaration; ordinary caller-authored parameters keep
+/// their existing pass-through behavior when support is unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReasoningEffortConfig {
+    /// Effort values accepted by this exact provider/model route.
+    pub levels: Vec<ReasoningEffort>,
+    /// Provider default when the request omits an effort value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<ReasoningEffort>,
+}
+
+impl ReasoningEffortConfig {
+    /// Validate the internal capability declaration.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.levels.is_empty() {
+            return Err(crate::BitrouterError::bad_request(
+                "reasoning_effort.levels must not be empty",
+            ));
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for level in &self.levels {
+            if !unique.insert(*level) {
+                return Err(crate::BitrouterError::bad_request(format!(
+                    "reasoning_effort.levels contains duplicate '{level}'"
+                )));
+            }
+        }
+        if let Some(default) = self.default
+            && !self.levels.contains(&default)
+        {
+            return Err(crate::BitrouterError::bad_request(format!(
+                "reasoning_effort.default '{default}' must be listed in levels"
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl Capability {
     /// The stable token string (e.g. `"structured_outputs"`), equal to this
     /// enum's serde representation.
@@ -1226,7 +1360,10 @@ pub struct GenerationParams {
     pub chat_token_limit_field: Option<ChatTokenLimitField>,
     /// Reasoning effort hint (`low` / `medium` / `high`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Transient ownership metadata for pre-dispatch capability validation.
+    #[serde(skip)]
+    pub reasoning_effort_source: ReasoningEffortSource,
     /// Requested output modalities (OpenAI `modalities` / Gemini
     /// `responseModalities`). Empty means text-only (the default). Drives
     /// `image_output` / `audio_output` capability detection.
@@ -1744,6 +1881,27 @@ pub struct GenerateResult {
     pub provider_metadata: ProviderMetadata,
 }
 
+/// Redacted wrapper for an internal fixed-size semantic commitment carried on a
+/// terminal stream part. The value is lifecycle evidence, not client output.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResponseOutputCommitment(String);
+
+impl ResponseOutputCommitment {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ResponseOutputCommitment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ResponseOutputCommitment(<redacted>)")
+    }
+}
+
 /// One part of a streaming response, in canonical internal form. `StreamHook`
 /// operates on a `Stream<Item = StreamPart>` before outbound protocol
 /// conversion.
@@ -1963,6 +2121,10 @@ pub enum StreamPart {
         /// Final usage, if the provider reported it.
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        /// Bounded commitment derived from the terminal full Responses output.
+        /// It is internal lifecycle evidence and is never rendered to clients.
+        #[serde(skip)]
+        response_output_commitment: Option<ResponseOutputCommitment>,
     },
 }
 
@@ -2047,6 +2209,9 @@ pub struct RoutingTarget {
     pub chat_supports_store: Option<bool>,
     /// Whether this Chat Completions target accepts `stream_options`.
     pub chat_supports_stream_options: Option<bool>,
+    /// Exact qualitative reasoning-effort support for this provider/model.
+    /// `None` means unknown, not unsupported.
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a
@@ -2080,6 +2245,7 @@ impl std::fmt::Debug for RoutingTarget {
                 "chat_supports_stream_options",
                 &self.chat_supports_stream_options,
             )
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("account_label", &self.account_label)
             .field(
                 "api_key_override",
@@ -2160,6 +2326,18 @@ pub struct PipelineResponse {
 mod tests {
     use super::*;
 
+    #[test]
+    fn reasoning_effort_serde_covers_the_official_cross_provider_superset()
+    -> std::result::Result<(), serde_json::Error> {
+        for value in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            let effort: ReasoningEffort = serde_json::from_value(value.into())?;
+            assert_eq!(serde_json::to_value(effort)?, serde_json::json!(value));
+        }
+        assert!(serde_json::from_value::<ReasoningEffort>("adaptive".into()).is_err());
+        assert!(serde_json::from_value::<ReasoningEffort>("HIGH".into()).is_err());
+        Ok(())
+    }
+
     fn bare_prompt() -> Prompt {
         Prompt {
             model: "m".into(),
@@ -2210,7 +2388,7 @@ mod tests {
     #[test]
     fn reasoning_effort_requires_reasoning_capability() {
         let mut p = bare_prompt();
-        p.params.reasoning_effort = Some("high".to_string());
+        p.params.reasoning_effort = Some(ReasoningEffort::High);
         assert_eq!(p.required_capabilities(), vec![Capability::Reasoning]);
     }
 
@@ -2230,7 +2408,7 @@ mod tests {
             strict: None,
             provider_metadata: Default::default(),
         }];
-        p.params.reasoning_effort = Some("low".to_string());
+        p.params.reasoning_effort = Some(ReasoningEffort::Low);
         let caps = p.required_capabilities();
         assert!(caps.contains(&Capability::StructuredOutputs));
         assert!(caps.contains(&Capability::Tools));

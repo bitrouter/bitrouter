@@ -614,6 +614,7 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
             chat_token_limit_field: Some(override_field),
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            reasoning_effort: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -646,6 +647,7 @@ fn chat_target_omits_explicitly_unsupported_optional_fields() {
         chat_token_limit_field: None,
         chat_supports_store: Some(false),
         chat_supports_stream_options: Some(false),
+        reasoning_effort: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -676,6 +678,7 @@ fn chat_target_does_not_silently_drop_store_true() {
         chat_token_limit_field: None,
         chat_supports_store: Some(false),
         chat_supports_stream_options: None,
+        reasoning_effort: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -740,6 +743,7 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
                 chat_token_limit_field: Some(override_field),
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,
                 api_base_override: None,
@@ -1083,7 +1087,7 @@ fn messages_inbound_promotes_output_config_effort() {
         "output_config": {"effort": "high"}
     });
     let prompt = adapter.parse_request(body).unwrap();
-    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
     assert!(!prompt.params.extra.contains_key("output_config"));
 }
 
@@ -1102,7 +1106,7 @@ fn messages_inbound_promotes_output_config_format_and_effort() {
         }
     });
     let prompt = adapter.parse_request(body).unwrap();
-    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("max"));
+    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::Max));
     assert!(matches!(
         prompt.response_format,
         Some(ResponseFormat::JsonSchema { .. })
@@ -1121,7 +1125,7 @@ fn messages_inbound_effort_preserves_unknown_output_config_siblings() {
         "output_config": {"effort": "low", "unknown_key": "x"}
     });
     let prompt = adapter.parse_request(body).unwrap();
-    assert_eq!(prompt.params.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::Low));
     assert_eq!(prompt.params.extra["output_config"]["unknown_key"], "x");
     assert!(prompt.params.extra["output_config"].get("effort").is_none());
 }
@@ -1136,7 +1140,7 @@ fn messages_outbound_renders_output_config_effort() {
         messages: vec![Message::text(Role::User, "hi")],
         tools: vec![],
         params: GenerationParams {
-            reasoning_effort: Some("high".to_string()),
+            reasoning_effort: Some(ReasoningEffort::High),
             ..Default::default()
         },
         response_format: None,
@@ -1159,7 +1163,7 @@ fn messages_outbound_merges_format_and_effort_into_output_config() {
         messages: vec![Message::text(Role::User, "hi")],
         tools: vec![],
         params: GenerationParams {
-            reasoning_effort: Some("xhigh".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Xhigh),
             ..Default::default()
         },
         response_format: Some(ResponseFormat::JsonSchema {
@@ -1242,6 +1246,111 @@ fn effort_routes_messages_to_responses() {
     let prompt = messages.parse_request(body).unwrap();
     let rendered = responses.render_request(&prompt).unwrap();
     assert_eq!(rendered["reasoning"]["effort"], "max");
+}
+
+#[test]
+fn responses_reasoning_effort_preserves_reasoning_siblings() -> crate::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let body = serde_json::json!({
+        "model": "gpt-5.6-sol",
+        "input": "hi",
+        "reasoning": {
+            "effort": "high",
+            "summary": "auto",
+            "context": "preserve-me"
+        }
+    });
+
+    let prompt = adapter.parse_request(body)?;
+    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
+    let rendered = adapter.render_request(&prompt)?;
+    assert_eq!(rendered["reasoning"]["effort"], "high");
+    assert_eq!(rendered["reasoning"]["summary"], "auto");
+    assert_eq!(rendered["reasoning"]["context"], "preserve-me");
+    Ok(())
+}
+
+#[test]
+fn generate_content_promotes_thinking_level_and_preserves_siblings() -> crate::Result<()> {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let body = serde_json::json!({
+        "model": "gemini-3.1-pro-preview",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {
+            "thinkingConfig": {
+                "thinkingLevel": "high",
+                "includeThoughts": true
+            }
+        }
+    });
+
+    let prompt = adapter.parse_request(body)?;
+    assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
+    let rendered = adapter.render_request(&prompt)?;
+    assert_eq!(
+        rendered["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+        "high"
+    );
+    assert_eq!(
+        rendered["generationConfig"]["thinkingConfig"]["includeThoughts"],
+        true
+    );
+    Ok(())
+}
+
+#[test]
+fn generate_content_keeps_numeric_thinking_budget_opaque() -> crate::Result<()> {
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let body = serde_json::json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {
+            "thinkingConfig": {
+                "thinkingBudget": 2048,
+                "includeThoughts": true
+            }
+        }
+    });
+
+    let prompt = adapter.parse_request(body)?;
+    assert_eq!(prompt.params.reasoning_effort, None);
+    let rendered = adapter.render_request(&prompt)?;
+    assert_eq!(
+        rendered["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        2048
+    );
+    assert_eq!(
+        rendered["generationConfig"]["thinkingConfig"]["includeThoughts"],
+        true
+    );
+    Ok(())
+}
+
+#[test]
+fn generate_content_rejects_qualitative_and_numeric_thinking_controls_together() -> crate::Result<()>
+{
+    let adapter = adapter_for(ApiProtocol::GenerateContent);
+    let body = serde_json::json!({
+        "model": "gemini-3.1-pro-preview",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {
+            "thinkingConfig": {
+                "thinkingLevel": "high",
+                "thinkingBudget": 2048
+            }
+        }
+    });
+
+    assert!(adapter.parse_request(body).is_err());
+
+    let mut prompt = adapter.parse_request(serde_json::json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {"thinkingConfig": {"thinkingBudget": 2048}}
+    }))?;
+    prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+    assert!(adapter.render_request(&prompt).is_err());
+    Ok(())
 }
 
 #[test]
@@ -1630,6 +1739,7 @@ fn messages_no_beta_header_is_emitted() {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        reasoning_effort: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1660,6 +1770,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        reasoning_effort: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -4164,6 +4275,11 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
             "response": {
                 "id": "resp_xyz",
                 "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer", "annotations": []}]
+                }],
                 "usage": { "input_tokens": 12, "output_tokens": 8 }
             }
         })
@@ -4177,15 +4293,47 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     parts.extend(decoder.finish().unwrap());
     match parts.first() {
         Some(StreamPart::ResponseCompleted {
-            id, status, usage, ..
+            id,
+            status,
+            usage,
+            response_output_commitment,
+            ..
         }) => {
             assert_eq!(id, "resp_xyz");
             assert_eq!(status, "completed");
             assert_eq!(usage.as_ref().unwrap().prompt_tokens, 12);
             assert_eq!(usage.as_ref().unwrap().completion_tokens, 8);
+            assert!(response_output_commitment.is_some());
         }
         other => panic!("expected ResponseCompleted, got {other:?}"),
     }
+
+    let mut unsupported_decoder = adapter.stream_decoder();
+    let unsupported_terminal = SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_unsupported",
+                "status": "completed",
+                "output": [{"type": "mcp_call", "id": "mcp-1"}]
+            }
+        })
+        .to_string(),
+    };
+    assert!(
+        unsupported_decoder
+            .decode(&unsupported_terminal)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        unsupported_decoder.finish().unwrap().as_slice(),
+        [StreamPart::ResponseCompleted {
+            response_output_commitment: None,
+            ..
+        }]
+    ));
 
     // Re-encode a native lifecycle whose provider id differs from the gateway
     // id. Every public frame must retain the gateway identity.
@@ -4215,6 +4363,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
                     reasoning_tokens: 0,
                     ..Default::default()
                 }),
+                response_output_commitment: None,
             })
             .unwrap(),
     );
@@ -4258,6 +4407,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
                     source_protocol: ApiProtocol::Responses,
                     status: status.to_string(),
                     usage: None,
+                    response_output_commitment: None,
                 })
                 .unwrap(),
         );
@@ -4386,6 +4536,7 @@ fn responses_stream_uses_gateway_id_without_native_start() {
             source_protocol: ApiProtocol::Responses,
             status: "completed".to_string(),
             usage: None,
+            response_output_commitment: None,
         })
         .unwrap();
     let response_ids = frames

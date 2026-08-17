@@ -50,3 +50,16 @@
   knowledge_cutoff: 2025-05
   open_weights: true
   family: deepseek-thinking
+# Official model version and limits: https://api-docs.deepseek.com/quick_start/pricing
+- id: deepseek/deepseek-v4-pro-0813
+  name: 'DeepSeek: DeepSeek V4 Pro 0813'
+  description: Generally available DeepSeek V4 Pro release for advanced reasoning, coding, and agentic workloads.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 384000
+  release_date: 2026-08-13
+  open_weights: false
+  family: deepseek-thinking

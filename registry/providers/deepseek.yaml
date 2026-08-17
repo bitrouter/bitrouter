@@ -18,8 +18,11 @@ rate_limits:
 # Catalog source: https://models.dev/api.json (provider key `deepseek`, api=https://api.deepseek.com); v3.2 is no longer served first-party.
 # Pricing is per 1M tokens.
 models:
-  - id: deepseek/deepseek-v4-pro
+  # `deepseek-v4-pro` moved in place to the 0813 GA release:
+  # https://api-docs.deepseek.com/quick_start/pricing
+  - id: deepseek/deepseek-v4-pro-0813
     provider_model_id: deepseek-v4-pro
+    api_protocol: [openai, responses, anthropic]
     pricing:
       input_tokens:
         no_cache: 0.435
