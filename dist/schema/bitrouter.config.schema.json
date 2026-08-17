@@ -2064,7 +2064,7 @@
           "default": 0
         },
         "explore_opening": {
-          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and Terminal-Bench showed this state is high leverage.",
+          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and make this state high leverage.",
           "type": "boolean",
           "default": false
         },
