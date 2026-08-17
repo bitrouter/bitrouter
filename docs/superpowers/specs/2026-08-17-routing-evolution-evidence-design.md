@@ -252,3 +252,74 @@ workspace, a clean worktree, and a normal push of the existing branch.
 - Broadcasting one terminal reward over requests.
 - Guessing economy routes when the external analysis artifact is absent.
 - Rewriting branch history or force-pushing.
+
+## Review remediation: complete evidence boundary
+
+The first implementation review rejected five fail-open surfaces. This section
+supersedes any earlier wording that permits partial input coverage or
+benchmark-specific parsing in the BitRouter process.
+
+### Serving boundary
+
+BitRouter keeps only source-neutral `BenchmarkOutcomeRecord` JSONL handling and
+generic exact request-id joins. The `workflow-state harbor-outcomes` command,
+all Harbor result-directory parsing helpers, their Rust tests, and the CLI
+documentation are removed. Production Rust and SDK comments describe generic
+caller/benchmark behavior; they do not use Terminal-Bench observations as a
+runtime-design authority. The Terminus 2 harness extractor remains because it
+is a generic protocol adapter, not route-quality evidence generation.
+
+### Complete four-way request coverage
+
+The external adapter consumes four authoritative input sets: trial results and
+trajectories, raw request traces, policy decisions, and request outcomes. The
+CLI requires `--traces` and `--request-outcomes`; prejoined decisions do not
+bypass coverage validation.
+
+For every trace, the adapter requires exactly one trial identity, exactly one
+decision through the domain-separated ingress commitment, and exactly one
+request-outcome row through physical request id. Missing, duplicate,
+ambiguous, or unconsumed rows are recorded as coverage reasons. A defect that
+maps uniquely to a task makes that task inconclusive. A defect that cannot be
+assigned uniquely makes the entire batch quality- and recommendation-ineligible.
+No partial list of successfully joined decisions can produce positive quality.
+
+Request outcomes use the authoritative run schema with `request_id`, an
+explicit `error` field (including `null`), and optional cost/token/latency
+fields. Missing outcome coverage is a quality failure. Provider, network,
+authentication, rate-limit, and transport classification remains exclusively
+in the external skill.
+
+### Task-wide safety state
+
+Later-strong/recovery dependence is computed over the complete ordered task
+treatment and copied to every route cell associated with that task. It is never
+recomputed from a per-cell slice.
+
+Critical violations come only from an explicit trusted result/eval field. The
+matrix records whether this evidence is known. Missing evidence is `unknown`,
+not zero, and blocks both strict adoption and controlled-validation screening.
+
+### Identity and duplicate rejection
+
+Every joined decision must carry `exact_task_id` plus the complete generic
+decision identity. Duplicate task attempts, result rows, trace ids, decision
+ids, ingress commitments, request-outcome ids, or byte-equivalent JSONL rows
+are rejected before evidence generation.
+
+Eval and idempotency identities are content-derived from adapter/taxonomy
+versions, a full source digest, canonical task identity, trial/attempt identity,
+and the complete attribution digest. Equivalent retries are stable; distinct
+runs or attempts cannot collide. Matrix `independent_tasks` still deduplicates
+by canonical task identity rather than attempt.
+
+Every fixture packet must pass the real BitRouter subject seal and result
+submission validators. Existing Rust duplicate-decision rejection remains part
+of this validation boundary.
+
+### Input and output hardening
+
+JSONL is streamed with bounded line and row counts; individual JSON artifacts
+have a bounded byte size. CSV text cells beginning with spreadsheet formula
+sigils are prefixed defensively. Non-finite rewards and malformed numeric
+request accounting are rejected.

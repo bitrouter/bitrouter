@@ -529,3 +529,91 @@ git push origin codex/next-bitrouter-iteration
 Verify local HEAD equals `origin/codex/next-bitrouter-iteration` and the
 worktree is clean. Return only status, commits, key tests, and one risk/concern
 line; refer to the SDD report for full details.
+
+---
+
+## Fix round 1 — rejected review findings
+
+The five findings below are one atomic remediation wave. Do not push a subset.
+
+### Fix 1: Remove benchmark-specific serving code
+
+**Files:** `apps/bitrouter/src/main.rs`,
+`apps/bitrouter/src/workflow_state/reward.rs`,
+`apps/bitrouter/tests/workflow_state_replay.rs`, `docs/CLI.md`, and generic
+production comments in `apps/` / `crates/`.
+
+1. RED: execute a boundary scan that finds the Harbor CLI/parser symbols in
+   production Rust and the documented command.
+2. Delete `WorkflowStateAction::HarborOutcomes`, its handler, recursive result
+   parser/helpers, and parser-specific Rust tests.
+3. Preserve generic `BenchmarkOutcomeRecord` JSONL and strict request-id joins.
+4. Rewrite benchmark-derived production comments generically; retain the
+   Terminus 2 extractor.
+5. GREEN: boundary scan has no prohibited production/documentation symbols and
+   focused workflow-state/main tests pass.
+
+### Fix 2: Make request coverage fail closed
+
+**Files:** external adapter and its tests/fixtures.
+
+1. RED: production `run()` fixture with two same-task traces where only one
+   joins currently emits positive quality.
+2. Introduce a coverage ledger for trace→task, trace→decision, and
+   trace→request-outcome joins plus unconsumed inputs.
+3. Propagate task-local reasons to the task; propagate unattributable defects to
+   a batch quality block. Packets and all recommendations remain inconclusive
+   under either block.
+4. GREEN: partial, ambiguous, duplicate, missing-identity, and unconsumed cases
+   retain audit rows but have zero quality/recommendation.
+
+### Fix 3: Join authoritative request outcomes
+
+1. RED: an end-to-end fixture using the real request-outcome schema currently
+   misses its exclusions or succeeds without complete coverage.
+2. Require `--request-outcomes`; stream rows keyed uniquely by physical
+   `request_id`, require an explicit nullable `error`, and attach through the
+   trace/ingress chain.
+3. Aggregate request cost/latency when present and classify all request errors
+   only in the external taxonomy.
+4. GREEN: redacted fixture counts all exclusions; missing files/rows block
+   quality. The final 1,306-row artifact replay reports 303 exclusions.
+
+### Fix 4: Propagate task recovery and trusted critical state
+
+1. RED: a multi-cell task whose later cell selects strong currently leaves an
+   earlier cell recovery-clean; a result without critical evidence currently
+   defaults to zero and can screen.
+2. Compute recovery once across the task and propagate it to every associated
+   cell.
+3. Parse non-negative critical-violation evidence only from an explicit trusted
+   result/eval field. Record known/unknown; unknown blocks strict and
+   observational recommendations.
+4. GREEN: production run→matrix fixtures cover cross-cell recovery and
+   known-zero/unknown/nonzero critical gates.
+
+### Fix 5: Strengthen identity and real validation
+
+1. RED: cover duplicate decision/ingress/result/input rows, missing
+   `exact_task_id`, repeated attempt identity, non-finite reward, and different
+   attempt collision.
+2. Derive source, attribution, eval, subject, and idempotency identities from
+   versioned content plus canonical task and trial/attempt identity. Keep matrix
+   task counts canonical-task distinct.
+3. Automatically pass every fixture packet through the existing real BitRouter
+   `eval subject seal`, `eval subject put`, and `eval result submit` commands;
+   do not add benchmark logic or a new schema to Rust.
+4. Add/retain explicit Rust coverage for duplicate Eval decision rejection.
+5. Bound input bytes/lines/rows and escape spreadsheet formula-leading CSV text.
+
+### Fix-round verification and completion
+
+1. Run the full adapter tests and real packet validator loop.
+2. Replay the final artifact with run directory, traces, decisions, and request
+   outcomes; require exclusions=303, active=0, controlled candidate=0.
+3. Run focused Eval, template, workflow-state/replay, and CLI tests.
+4. Run `cargo test --all-features`, workspace/all-targets clippy with warnings
+   denied, fmt, committed diff check, config validation, skill validation, and
+   `dist-helper check`.
+5. Update the SDD ledger/review, commit all expected changes, fetch, and
+   ordinary-push the same branch only when every gate is green.
