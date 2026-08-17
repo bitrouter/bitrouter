@@ -617,3 +617,58 @@ production comments in `apps/` / `crates/`.
    `dist-helper check`.
 5. Update the SDD ledger/review, commit all expected changes, fetch, and
    ordinary-push the same branch only when every gate is green.
+
+---
+
+## Fix round 2 — unknown errors and canonical subjects
+
+This is one narrow atomic remediation wave. It modifies the external adapter
+and regression tests only; production Rust remains benchmark-neutral.
+
+### Fix 2.1: Fail closed on explicit unclassified errors
+
+**Files:** external adapter, matrix contract, skill references, Python tests,
+and one generic compiler integration regression.
+
+1. RED: generate five exact, passing, economy tasks whose authoritative
+   request outcomes contain `mystery_upstream_fault`. Run the production
+   adapter and then the real `eval subject seal`, `subject put`, `result
+   submit`, snapshot, and compiler path. Record that the old code produces five
+   quality tasks and an economy recommendation.
+2. Preserve every explicit non-null authoritative error as a `RequestError`.
+   Known taxonomy categories keep the existing exclusion accounting; unknowns
+   remain category-less with rule `unclassified.v1` and receive separate
+   counts/reasons.
+3. Make unknown-error contamination block packet quality, strict route
+   recommendations, and controlled-validation screening while retaining the
+   terminal verifier outcome at zero quality weight.
+4. GREEN: the five-task production pipeline reports quality 0, active 0, and
+   controlled 0; no unknown is counted as a known provider category.
+
+### Fix 2.2: Deduplicate attempts by canonical task subject
+
+**Files:** external adapter, Python identity tests, and the same generic
+compiler integration regression.
+
+1. RED: run two exact passing attempts for one canonical task. Confirm the old
+   packets have distinct `subject_id` values and the generic compiler reports
+   two independent tasks while the adapter matrix reports one.
+2. Keep eval/result/evidence/idempotency identity attempt-specific. Derive
+   `subject_id` separately from canonical task plus run, full source, and policy
+   namespace, excluding trial/result attempt identity.
+3. GREEN: the attempts retain distinct eval ids and results, share one subject
+   id, and both adapter matrix and compiler report one independent task. No
+   recommendation reaches the five-task gate.
+
+### Fix-round-2 verification and completion
+
+1. Run focused Python RED/GREEN tests and the real generic ingestion/compiler
+   integration test.
+2. Replay the final real artifact; require exact joins=1,306, known
+   exclusions=303, unknown exclusions=0, active=0, and controlled=0.
+3. Run the complete adapter suite, skill/schema/config/template checks,
+   focused Eval/workflow tests, `cargo test --all-features`, workspace
+   all-target Clippy with warnings denied, format, and diff checks.
+4. Append RED/GREEN and verification evidence to the ignored SDD ledger and
+   final review. Commit the complete wave separately, fetch, and ordinary-push
+   `codex/next-bitrouter-iteration` only after every gate is green.

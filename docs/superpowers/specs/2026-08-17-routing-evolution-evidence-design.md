@@ -323,3 +323,50 @@ JSONL is streamed with bounded line and row counts; individual JSON artifacts
 have a bounded byte size. CSV text cells beginning with spreadsheet formula
 sigils are prefixed defensively. Non-finite rewards and malformed numeric
 request accounting are rejected.
+
+## Final review remediation: unknown errors and task identity
+
+This section closes two remaining fail-open paths without changing the generic
+Rust Eval Exchange contract.
+
+### Explicit unclassified request errors
+
+An authoritative request-outcome row with a non-null `error` is contamination
+even when no taxonomy rule recognizes it. Known provider, network, auth,
+rate-limit, and transport errors continue to increment
+`excluded_non_task_errors`. An unknown error does not masquerade as one of
+those categories: it is retained as `unclassified.v1`, increments a separate
+`unclassified_request_errors` count, and records its rule id in the join
+summary, task evidence, matrix, and classification evidence.
+
+Any unclassified request error makes its task quality-ineligible. It also
+blocks strict adoption, strict experiment evidence, and non-causal controlled
+validation for every affected route cell. A recovered terminal verifier pass
+is still preserved as the terminal outcome, with zero quality weight. Missing
+request coverage remains a separate coverage failure.
+
+### Canonical task subjects and attempt results
+
+Eval attempts retain distinct `eval_id`, result idempotency keys, evidence, and
+attribution digests. The `subject_id` used by the generic compiler instead
+identifies the canonical task within a run/source/policy namespace. Its digest
+therefore binds `run_identity`, the complete source digest, policy digest, and
+canonical task id, but excludes trial/result/attempt identity. Two attempts of
+the same task in that namespace compile as two eligible episodes and one
+independent task. Unrelated runs or policy/source namespaces cannot collide.
+
+The external matrix continues to deduplicate `independent_tasks` by canonical
+task id and to count attempts separately as episodes. No Terminal-Bench field,
+taxonomy, or identity rule is added to Rust production code.
+
+### Regression boundary
+
+The adapter regression suite includes two real generic ingestion pipelines:
+
+- five passing economy tasks whose authoritative errors are all unknown must
+  produce zero quality evidence, zero active recommendations, and zero
+  controlled-validation candidates after subject seal, subject put, result
+  submit, snapshot freeze, and `EvalEvidenceSnapshot::route_evidence()`;
+- two passing attempts of one canonical task retain distinct eval/results but
+  share one subject id; both the matrix and generic compiler report one
+  independent task and the route cannot meet the five-task gate.
