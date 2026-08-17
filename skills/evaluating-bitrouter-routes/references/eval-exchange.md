@@ -121,6 +121,12 @@ hard violations. Other requested metrics remain immutable records but do not
 become route evidence. Submit only requested dimensions; absence means
 unsupported, while zero is an observed value.
 
+`inconclusive` is a quality firewall. Even if an old or malformed packet gives
+positive credit to `quality.pass` or a hard violation, the route compiler does
+not increase eligible episodes, independent tasks, pass/fail weight, total
+quality weight, or critical-violation evidence. Explicitly credited cost and
+latency remain independent observations and may aggregate.
+
 For one decision, omitted `decision_credit` means full credit. To deliberately
 withhold attribution from a one-decision inconclusive result, include that
 decision with `weight_ppm: 0`; an empty map would activate implicit full credit.
@@ -143,6 +149,13 @@ counterfactual policy may credit a route family when a matched baseline differs
 only on that family; shared candidate/baseline failure is inconclusive, not
 negative evidence. If several route families changed and the evaluator cannot
 separate their effects, submit no positive-weight decision credit.
+
+When a provider or transport request fails but the task later obtains an
+authoritative terminal reward, preserve that terminal outcome as the task
+record. Withhold quality credit from the failed request. If contamination makes
+the task-to-route attribution ambiguous, use explicit zero credit for a
+single-decision result or no positive mapping for a multi-decision result;
+reliability, cost, and latency stay separate.
 
 ## Authority, submission, and ownership
 

@@ -1,6 +1,6 @@
 ---
 name: evaluating-bitrouter-routes
-description: Use when evaluating BitRouter route decisions or Eval Exchange subjects with task-native verifiers, human reviewers, private enterprise evaluators, agentic judges, or genuinely uncategorized evaluator sources.
+description: Use when evaluating BitRouter route decisions or Eval Exchange subjects, including Harbor or Terminal-Bench runs, task-native verifiers, human reviewers, private enterprise evaluators, agentic judges, or genuinely uncategorized evaluator sources.
 ---
 
 # Evaluate BitRouter Routes
@@ -11,6 +11,11 @@ snapshots, candidate compilation, diffs, and publication.
 
 Read [the Eval Exchange reference](references/eval-exchange.md) before forming
 a subject or result. It is the exact current wire and authority contract.
+
+For Harbor or Terminal-Bench artifacts, also read
+[the Harbor adapter reference](references/terminal-bench-harbor.md). Use its
+script and fixed taxonomy; do not copy benchmark parsing or exception names into
+BitRouter code or SDK schemas.
 
 ## Classify the evaluation
 
@@ -61,6 +66,33 @@ Choose `evaluator.kind` from the actual source:
    decision with `weight_ppm: 0` instead.
    Keep hypothetical or illustrative weights outside submit-ready JSON.
 
+## Adapt a Harbor run
+
+Use the deterministic external adapter. Raw decision rows require the trace
+file so the adapter can establish exact content and ingress identity; prejoined
+rows may omit `--traces`.
+
+```bash
+python3 scripts/terminal_bench_route_evidence.py \
+  --run-dir /path/to/harbor-run \
+  --decisions /path/to/policy-decisions.jsonl \
+  --traces /path/to/traces.jsonl \
+  --output-dir /path/to/evolution-analysis
+```
+
+Inspect `join-summary.json` before any matrix row. Treat unmatched or ambiguous
+joins as inconclusive. `packets.jsonl` is the generic Eval Exchange handoff;
+`task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are external analysis.
+
+Keep the two recommendation layers separate:
+
+- Only strict unique task attribution can set `quality_credit_eligible` or an
+  `active_recommendation`.
+- `controlled_validation_candidate` and `screening_reason` are non-causal
+  observational screening. They carry zero Eval quality credit and cannot
+  publish or edit a policy. A balanced candidate remains balanced until a
+  controlled evaluation satisfies the strict gate.
+
 ## Submit and hand off
 
 1. Insert the sealed subject and submit a result that repeats its exact
@@ -84,5 +116,7 @@ Choose `evaluator.kind` from the actual source:
   causal policy (for example, a matched control plus one changed route family)
   or withhold credit.
 - Preserve the router-authored baseline and selected tiers.
+- Treat `inconclusive` as zero quality evidence even if an old or malformed
+  packet assigns positive quality credit. Attribute cost or latency separately.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.

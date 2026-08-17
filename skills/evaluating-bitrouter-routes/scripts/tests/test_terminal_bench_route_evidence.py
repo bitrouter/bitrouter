@@ -178,6 +178,90 @@ class PacketAttributionTests(unittest.TestCase):
         self.assertEqual(outcome.excluded_error.category, "provider")
 
 
+class ExactJoinTests(unittest.TestCase):
+    def test_full_prefix_and_unique_task_description_join_without_time(self) -> None:
+        task_a = [
+            {
+                "role": "user",
+                "content": "Task Description:\nBuild A\n\nCurrent terminal state:\n$",
+            },
+            {"role": "assistant", "content": "working"},
+            {"role": "user", "content": "next"},
+        ]
+        task_b = [
+            {
+                "role": "user",
+                "content": "Task Description:\nBuild B\n\nCurrent terminal state:\n$",
+            }
+        ]
+        traces = [
+            {"id": "request-a", "raw_body": {"messages": task_a}},
+            {
+                "id": "request-b",
+                "raw_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Task Description:\nBuild B\n\nCurrent terminal state:\nchanged",
+                        }
+                    ]
+                },
+            },
+        ]
+        decisions = [
+            {
+                **decision("decision-a"),
+                "ingress_request_id_sha256": adapter.ingress_commitment("request-a"),
+            },
+            {
+                **decision("decision-b"),
+                "ingress_request_id_sha256": adapter.ingress_commitment("request-b"),
+            },
+        ]
+
+        joined, summary = adapter.join_raw_decisions(
+            {"task-a": task_a, "task-b": task_b}, traces, decisions
+        )
+
+        self.assertEqual(
+            [(row["decision_id"], row["exact_task_id"], row["task_join_method"]) for row in joined],
+            [
+                ("decision-a", "task-a", "full_messages_prefix"),
+                ("decision-b", "task-b", "task_description_field"),
+            ],
+        )
+        self.assertEqual(summary["joined"], 2)
+        self.assertEqual(summary["ambiguous"], 0)
+
+    def test_duplicate_task_description_is_ambiguous_and_withheld(self) -> None:
+        common = [
+            {
+                "role": "user",
+                "content": "Task Description:\nSame task\n\nCurrent terminal state:\n$",
+            }
+        ]
+        changed = [
+            {
+                "role": "user",
+                "content": "Task Description:\nSame task\n\nCurrent terminal state:\nchanged",
+            }
+        ]
+        traces = [{"id": "request-a", "raw_body": {"messages": changed}}]
+        decisions = [
+            {
+                **decision("decision-a"),
+                "ingress_request_id_sha256": adapter.ingress_commitment("request-a"),
+            }
+        ]
+
+        joined, summary = adapter.join_raw_decisions(
+            {"task-a": common, "task-b": common}, traces, decisions
+        )
+
+        self.assertEqual(joined, [])
+        self.assertEqual(summary["ambiguous"], 1)
+
+
 class MatrixTests(unittest.TestCase):
     def test_strict_and_observational_gates_never_mix(self) -> None:
         economy_route = "agent_route/v1|unknown|mechanical|normal"
@@ -327,7 +411,13 @@ class CliTests(unittest.TestCase):
             adapter.run(fixture, fixture / "decisions.jsonl", Path(left))
             adapter.run(fixture, fixture / "decisions.jsonl", Path(right))
 
-            names = ["packets.jsonl", "task-evidence.jsonl", "matrix.json", "matrix.csv"]
+            names = [
+                "packets.jsonl",
+                "task-evidence.jsonl",
+                "matrix.json",
+                "matrix.csv",
+                "join-summary.json",
+            ]
             for name in names:
                 with self.subTest(name=name):
                     self.assertEqual(

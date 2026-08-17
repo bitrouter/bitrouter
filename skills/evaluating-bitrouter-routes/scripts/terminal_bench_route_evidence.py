@@ -11,6 +11,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, NamedTuple
@@ -129,6 +130,105 @@ def _json_bytes(value: object, *, sort_keys: bool = False) -> bytes:
 def _digest(value: bytes | object) -> str:
     raw = value if isinstance(value, bytes) else _json_bytes(value, sort_keys=True)
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def ingress_commitment(request_id: str) -> str:
+    domain = b"bitrouter.ingress-request-id.v1\0"
+    return "sha256:" + hashlib.sha256(domain + request_id.encode("utf-8")).hexdigest()
+
+
+def _message_semantics(messages: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": message.get("role"), "content": message.get("content")}
+        for message in messages
+    ]
+
+
+def _message_hash(messages: Iterable[dict[str, object]]) -> str:
+    return _digest(_message_semantics(messages))
+
+
+def _task_description_hash(content: object) -> str | None:
+    if not isinstance(content, str):
+        return None
+    match = re.search(
+        r"Task Description:\n(.*?)(?:\n\n(?:Current terminal state:|Current Terminal Screen:)|\Z)",
+        content,
+        re.S,
+    )
+    return _digest(match.group(1).strip()) if match else None
+
+
+def join_raw_decisions(
+    trial_histories: dict[str, list[dict[str, object]]],
+    traces: list[dict[str, object]],
+    decisions: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    prefix_to_tasks: dict[str, set[str]] = defaultdict(set)
+    description_to_tasks: dict[str, set[str]] = defaultdict(set)
+    for task_id, history in trial_histories.items():
+        prefix = []
+        for message in history:
+            prefix.append(message)
+            if message.get("role") == "user":
+                prefix_to_tasks[_message_hash(prefix)].add(task_id)
+                description = _task_description_hash(message.get("content"))
+                if description is not None:
+                    description_to_tasks[description].add(task_id)
+
+    decisions_by_ingress: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in decisions:
+        commitment = row.get("ingress_request_id_sha256")
+        if isinstance(commitment, str) and commitment:
+            decisions_by_ingress[commitment].append(row)
+
+    joined = []
+    summary = {"joined": 0, "ambiguous": 0, "unmatched": 0}
+    for trace in traces:
+        raw_body = trace.get("raw_body")
+        raw_messages = raw_body.get("messages") if isinstance(raw_body, dict) else None
+        if not isinstance(raw_messages, list) or not all(
+            isinstance(message, dict) for message in raw_messages
+        ):
+            summary["unmatched"] += 1
+            continue
+        messages = list(raw_messages)
+        task_candidates = prefix_to_tasks.get(_message_hash(messages), set())
+        method = "full_messages_prefix" if task_candidates else None
+        if not task_candidates:
+            descriptions = {
+                description
+                for description in (
+                    _task_description_hash(message.get("content"))
+                    for message in messages
+                    if message.get("role") == "user"
+                )
+                if description is not None
+            }
+            described_tasks = set()
+            for description in descriptions:
+                described_tasks.update(description_to_tasks.get(description, set()))
+            task_candidates = described_tasks
+            method = "task_description_field" if task_candidates else None
+
+        trace_id = trace.get("id")
+        decision_candidates = (
+            decisions_by_ingress.get(ingress_commitment(str(trace_id)), [])
+            if isinstance(trace_id, str) and trace_id
+            else []
+        )
+        if len(task_candidates) == 1 and len(decision_candidates) == 1 and method:
+            row = dict(decision_candidates[0])
+            row["exact_task_id"] = next(iter(task_candidates))
+            row["task_join_method"] = method
+            row["exact_ingress_join"] = True
+            joined.append(row)
+            summary["joined"] += 1
+        elif len(task_candidates) > 1 or len(decision_candidates) > 1:
+            summary["ambiguous"] += 1
+        else:
+            summary["unmatched"] += 1
+    return joined, summary
 
 
 def classify_request_error(raw: dict[str, object]) -> RequestError:
@@ -612,6 +712,36 @@ def _result_paths(run_dir: Path) -> list[Path]:
     return sorted(run_dir.glob("*/result.json"))
 
 
+def _load_trial_histories(run_dir: Path) -> dict[str, list[dict[str, object]]]:
+    histories = {}
+    for result_path in _result_paths(run_dir):
+        raw = json.loads(result_path.read_text())
+        if not isinstance(raw, dict):
+            continue
+        trajectory_path = result_path.parent / "agent" / "trajectory.json"
+        if not trajectory_path.exists():
+            continue
+        trajectory = json.loads(trajectory_path.read_text())
+        steps = trajectory.get("steps") if isinstance(trajectory, dict) else None
+        if not isinstance(steps, list):
+            continue
+        history = []
+        for step in steps:
+            if not isinstance(step, dict) or "message" not in step:
+                continue
+            source = step.get("source")
+            if source == "user":
+                role = "user"
+            elif source == "agent":
+                role = "assistant"
+            else:
+                continue
+            history.append({"role": role, "content": step["message"]})
+        if history:
+            histories[_task_identity(raw)] = history
+    return histories
+
+
 def _task_evidence_rows(
     raw: dict[str, object],
     decisions: list[dict[str, object]],
@@ -701,8 +831,24 @@ def _write_matrix_csv(path: Path, rows: list[dict[str, object]]) -> None:
             writer.writerow(rendered)
 
 
-def run(run_dir: Path, decisions_path: Path, output_dir: Path) -> None:
+def run(
+    run_dir: Path,
+    decisions_path: Path,
+    output_dir: Path,
+    traces_path: Path | None = None,
+) -> None:
     decisions = _load_jsonl(decisions_path)
+    if all(_valid_exact_decision(row) for row in decisions):
+        join_summary = {"prejoined": len(decisions), "joined": 0, "ambiguous": 0, "unmatched": 0}
+    else:
+        if traces_path is None:
+            raise ValueError(
+                "decision rows lack exact task/ingress identity; provide --traces for exact content joining"
+            )
+        decisions, join_summary = join_raw_decisions(
+            _load_trial_histories(run_dir), _load_jsonl(traces_path), decisions
+        )
+        join_summary["prejoined"] = 0
     by_task: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in decisions:
         task_id = row.get("exact_task_id")
@@ -743,6 +889,9 @@ def run(run_dir: Path, decisions_path: Path, output_dir: Path) -> None:
         json.dumps(matrix, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     _write_matrix_csv(output_dir / "matrix.csv", matrix)
+    (output_dir / "join-summary.json").write_text(
+        json.dumps(join_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> None:
@@ -751,9 +900,14 @@ def main() -> None:
     )
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--decisions", type=Path, required=True)
+    parser.add_argument(
+        "--traces",
+        type=Path,
+        help="Raw trace JSONL; required when decision rows are not already exact-joined",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    run(args.run_dir, args.decisions, args.output_dir)
+    run(args.run_dir, args.decisions, args.output_dir, args.traces)
 
 
 if __name__ == "__main__":
