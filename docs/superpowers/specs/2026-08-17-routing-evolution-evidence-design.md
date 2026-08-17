@@ -351,7 +351,8 @@ Eval attempts retain distinct `eval_id`, result idempotency keys, evidence, and
 attribution digests. The `subject_id` used by the generic compiler instead
 identifies the canonical task within a run/source/policy namespace. Its digest
 therefore binds `run_identity`, the complete source digest, policy digest, and
-canonical task id, but excludes trial/result/attempt identity. Two attempts of
+canonical task id, but excludes adapter/taxonomy version and
+trial/result/attempt identity. Two attempts of
 the same task in that namespace compile as two eligible episodes and one
 independent task. Unrelated runs or policy/source namespaces cannot collide.
 

@@ -10,7 +10,7 @@ An `EvalSubject` has these required fields:
 | Field | Meaning |
 |---|---|
 | `schema_version` | Integer `1`. |
-| `eval_id`, `subject_id` | Non-empty bounded identifiers. `eval_id` is immutable. |
+| `eval_id`, `subject_id` | Non-empty bounded identifiers. `eval_id` identifies the immutable evaluation attempt; `subject_id` identifies the logical request, episode, or task within its caller-defined namespace. |
 | `scope` | `request`, `episode`, or `task`. Select the smallest scope containing the outcome. |
 | `policy_digest` | The exact `sha256:<64 lowercase hex>` policy digest observed by the router. |
 | `preset`, `cohort` | Optional evaluator metadata. Do not use them to reconstruct policy identity. |
@@ -32,6 +32,13 @@ Choose `scope` from the evidence packet's observable boundary:
 Decision count and evaluator organization do not determine scope. For example,
 a bounded multi-request enterprise workflow is an `episode` unless its packet
 names an externally defined task and terminal task outcome.
+
+For repeated evaluations of one task, keep each attempt's `eval_id`, result,
+and evidence distinct while keeping `subject_id` stable inside the same
+run/source/policy namespace. The route compiler uses `subject_id` to deduplicate
+independent tasks; attempt-specific subject ids would incorrectly turn retries
+into independent evidence. Include enough namespace in the subject identity to
+avoid collision with an unrelated run or policy population.
 
 Each `decisions[]` entry is exactly:
 

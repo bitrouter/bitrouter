@@ -77,6 +77,15 @@ from task text or a verifier failure. In particular, Harbor
 `AgentTimeoutError` is not automatically non-task; it stays inconclusive unless
 a request field independently matches the taxonomy.
 
+Every explicit non-null authoritative request error is retained. When no rule
+matches, the adapter records category `null` and rule `unclassified.v1` instead
+of silently treating the request as clean or misreporting a known provider
+class. `unclassified_request_errors` and `unclassified_error_rule_ids` are
+separate from the known exclusion counts. Any such error blocks quality and
+both recommendation layers for every cell associated with its affected task;
+`unclassified_contaminated_tasks` exposes that propagated task count without
+duplicating the physical request-error count.
+
 A binary terminal verifier reward wins as the task outcome. If a request failed
 and the task later receives a reward, retain pass/fail at task level while the
 failed request contributes no quality credit. Reliability counts and separately
@@ -90,7 +99,8 @@ One task produces at most one positive quality mapping. Require all conditions:
 2. all task requests have unique exact task, decision, and ingress joins;
 3. all requests use one policy and one route projection;
 4. all requests use one actual selected tier;
-5. the task has zero non-task request contamination.
+5. the task has zero known non-task request contamination and zero unclassified
+   request errors.
 
 Choose the earliest `(captured_at, decision_id)` as the one representative and
 credit only it at 1,000,000 ppm. Never copy the reward onto all requests. Mixed
@@ -121,7 +131,8 @@ coverage, actual economy
 exposure or is balanced at normal risk, at least five distinct terminal-pass
 associations, zero terminal-fail associations, zero route-level non-task
 errors, zero recovery dependency, and explicitly known zero critical
-violations.
+violations. Unclassified request errors also block screening; they never become
+passing observational associations.
 
 The matrix emits:
 
@@ -145,14 +156,18 @@ diffs, and publication.
 Matrix rows include route projection, task family, role, risk, independent
 tasks/episodes, pass/fail/inconclusive, selected/static tier distributions,
 cost, latency, guard promotion, non-task exclusions/rule ids, ambiguity,
-coverage failures, recovery, known/unknown critical violations, evidence grade,
-and both recommendation layers. CSV text is spreadsheet-formula escaped.
+separate unclassified-error counts/rule ids, coverage failures, recovery,
+known/unknown critical violations, evidence grade, and both recommendation
+layers. CSV text is spreadsheet-formula escaped.
 
 Eval and idempotency identities bind the adapter and taxonomy versions, run
 identity, complete input/source digest, canonical task, trial/result attempt,
 and attribution digest. Equivalent reruns are stable; separate run/attempt
-evidence cannot collide. Matrix independent-task counts still deduplicate the
-canonical task, while independent episodes retain attempt identity.
+evidence cannot collide. Subject identity is deliberately separate: it binds
+canonical task plus run, complete source, and policy namespace, excluding the
+adapter/taxonomy versions and trial/result attempt. Repeated attempts therefore remain separate eligible
+episodes but the generic compiler and matrix both count one independent task.
+Unrelated run/source/policy namespaces do not collide.
 
 ## Current calibration evidence
 
@@ -172,9 +187,10 @@ a counterfactual quality result. The private artifact is intentionally not
 shipped; its `sha256-manifest.json` digest is
 `2adb125f71b8e362984894281710a30e75c27f3d7b45f8ca74a3106ad930403e`.
 
-The v2 adapter replay over the complete raw inputs reports 1,306 exact joins,
+The v3 adapter replay over the complete raw inputs reports 1,306 exact joins,
 303 exclusions (261 provider and 42 transport), and three unmatched traces plus
 two unconsumed decisions outside the formal request-outcome set. Those
 unattributable extras correctly trigger the global quality block. The replay
-therefore emits zero quality-eligible matrix rows, zero active economy routes,
-and zero controlled-validation candidates.
+has zero unclassified request errors and therefore emits zero quality-eligible
+matrix rows, zero active economy routes, and zero controlled-validation
+candidates.

@@ -84,9 +84,11 @@ python3 scripts/terminal_bench_route_evidence.py \
 Inspect `join-summary.json` before any matrix row. Any task-local coverage
 reason makes that task inconclusive; any unattributable/global reason blocks
 quality and recommendations for the batch. Missing or unknown critical-safety
-evidence blocks both recommendation layers. `packets.jsonl` is the generic Eval
-Exchange handoff; `task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are
-external analysis.
+evidence blocks both recommendation layers. Any explicit non-null request error
+that the fixed taxonomy cannot classify is separate auditable contamination;
+it is not a provider exclusion, and it blocks quality and both recommendation
+layers. `packets.jsonl` is the generic Eval Exchange handoff;
+`task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are external analysis.
 
 Keep the two recommendation layers separate:
 
@@ -124,3 +126,7 @@ Keep the two recommendation layers separate:
   packet assigns positive quality credit. Attribute cost or latency separately.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.
+- Keep `eval_id`, result, and evidence identities attempt-specific. For task
+  scope, keep `subject_id` stable for the canonical task inside its explicit
+  run/source/policy namespace so repeated attempts cannot inflate the generic
+  compiler's independent-task count.

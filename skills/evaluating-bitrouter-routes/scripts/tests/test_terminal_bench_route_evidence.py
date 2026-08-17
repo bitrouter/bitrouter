@@ -311,6 +311,31 @@ class PacketAttributionTests(unittest.TestCase):
         self.assertFalse(evidence["quality_credit_eligible"])
         self.assertEqual(evidence["excluded_non_task_errors"], 1)
 
+    def test_recovered_unclassified_failure_keeps_pass_but_blocks_quality(self) -> None:
+        request_error = adapter.classify_request_error(
+            {"error": "mystery_upstream_fault"}
+        )
+
+        packet, evidence = adapter.build_packet(
+            task_result(), [decision("decision-a")], [request_error]
+        )
+
+        self.assertEqual(packet["result"]["verdict"], "pass")
+        self.assertEqual(
+            packet["result"]["decision_credit"],
+            {
+                "decision-a": {
+                    "weight_ppm": 0,
+                    "metric_ids": ["quality.pass"],
+                }
+            },
+        )
+        self.assertFalse(evidence["quality_credit_eligible"])
+        self.assertEqual(evidence["attribution_reason"], "unclassified_request_error")
+        self.assertEqual(evidence["excluded_non_task_errors"], 0)
+        self.assertEqual(evidence["unclassified_request_errors"], 1)
+        self.assertEqual(evidence["unclassified_error_rule_ids"], ["unclassified.v1"])
+
     def test_provider_exception_without_verifier_is_inconclusive(self) -> None:
         raw = task_result(
             reward=None,
@@ -673,6 +698,87 @@ class ProductionCoverageTests(unittest.TestCase):
             )
             self.assertEqual(sum(row["excluded_non_task_errors"] for row in evidence), 3)
 
+    def test_five_unclassified_request_errors_block_every_recommendation_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run"
+            all_traces: list[dict[str, object]] = []
+            all_decisions: list[dict[str, object]] = []
+            all_outcomes: list[dict[str, object]] = []
+            for index in range(5):
+                task_id = f"mystery-{index}"
+                messages = task_messages(task_id, 1)
+                install_trial(run_dir, task_id, messages)
+                traces, decisions, outcomes = raw_inputs(
+                    task_id, messages, errors=["mystery_upstream_fault"]
+                )
+                all_traces.extend(traces)
+                all_decisions.extend(decisions)
+                all_outcomes.extend(outcomes)
+
+            output = run_fixture(
+                root, run_dir, all_traces, all_decisions, all_outcomes
+            )
+            summary = json.loads((output / "join-summary.json").read_text())
+            matrix = json.loads((output / "matrix.json").read_text())
+
+            self.assertEqual(summary["excluded_non_task_errors"], 0)
+            self.assertEqual(summary["unclassified_request_errors"], 5)
+            self.assertEqual(
+                summary["unclassified_error_rule_ids"], {"unclassified.v1": 5}
+            )
+            self.assertEqual(len(matrix), 1)
+            self.assertEqual(matrix[0]["independent_tasks"], 0)
+            self.assertEqual(matrix[0]["unclassified_request_errors"], 5)
+            self.assertFalse(matrix[0]["quality_credit_eligible"])
+            self.assertEqual(matrix[0]["active_recommendation"], "retain")
+            self.assertFalse(matrix[0]["controlled_validation_candidate"])
+            self.assertEqual(
+                matrix[0]["screening_reason"], "unclassified_request_errors"
+            )
+
+    def test_unclassified_error_blocks_every_cell_associated_with_the_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run"
+            all_traces: list[dict[str, object]] = []
+            all_decisions: list[dict[str, object]] = []
+            all_outcomes: list[dict[str, object]] = []
+            for index in range(5):
+                task_id = f"multi-mystery-{index}"
+                messages = task_messages(task_id, 2)
+                install_trial(run_dir, task_id, messages)
+                traces, decisions, outcomes = raw_inputs(
+                    task_id,
+                    messages,
+                    tiers=["balanced", "balanced"],
+                    routes=[
+                        "agent_route/v1|unknown|implement|normal",
+                        "agent_route/v1|unknown|verify|normal",
+                    ],
+                    errors=["mystery_upstream_fault", None],
+                )
+                all_traces.extend(traces)
+                all_decisions.extend(decisions)
+                all_outcomes.extend(outcomes)
+
+            output = run_fixture(
+                root, run_dir, all_traces, all_decisions, all_outcomes
+            )
+            matrix = json.loads((output / "matrix.json").read_text())
+
+            self.assertEqual(len(matrix), 2)
+            self.assertTrue(
+                all(
+                    row["controlled_validation_candidate"] is False
+                    and row["screening_reason"] == "unclassified_request_errors"
+                    for row in matrix
+                )
+            )
+            self.assertTrue(
+                all(row["unclassified_contaminated_tasks"] == 5 for row in matrix)
+            )
+
     def test_task_wide_recovery_and_critical_state_reach_every_cell(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -803,8 +909,10 @@ class ProductionCoverageTests(unittest.TestCase):
             first = (output / "packets.jsonl").read_bytes()
             packets = [json.loads(line) for line in first.splitlines()]
             self.assertEqual(len({packet["subject"]["eval_id"] for packet in packets}), 2)
-            self.assertEqual(len({packet["subject"]["subject_id"] for packet in packets}), 2)
-            self.assertEqual(json.loads((output / "matrix.json").read_text())[0]["independent_tasks"], 1)
+            self.assertEqual(len({packet["subject"]["subject_id"] for packet in packets}), 1)
+            matrix_row = json.loads((output / "matrix.json").read_text())[0]
+            self.assertEqual(matrix_row["independent_tasks"], 1)
+            self.assertEqual(matrix_row["independent_episodes"], 2)
 
             repeat = root / "repeat"
             adapter.run(
@@ -815,6 +923,76 @@ class ProductionCoverageTests(unittest.TestCase):
                 root / "request-outcomes.jsonl",
             )
             self.assertEqual(first, (repeat / "packets.jsonl").read_bytes())
+
+    def test_canonical_subject_identity_is_namespaced_by_run_source_and_policy(self) -> None:
+        raw = task_result("canonical")
+        first_decision = decision("decision-a")
+        first_decision["exact_task_id"] = "canonical"
+        first, _ = adapter.build_packet(
+            raw,
+            [first_decision],
+            [],
+            source_digest="sha256:" + "1" * 64,
+            run_identity="run-a",
+            trial_identity="attempt-a",
+        )
+        second, _ = adapter.build_packet(
+            raw,
+            [first_decision],
+            [],
+            source_digest="sha256:" + "1" * 64,
+            run_identity="run-b",
+            trial_identity="attempt-a",
+        )
+        policy_decision = dict(first_decision)
+        policy_decision["policy_digest"] = "sha256:" + "b" * 64
+        third, _ = adapter.build_packet(
+            raw,
+            [policy_decision],
+            [],
+            source_digest="sha256:" + "1" * 64,
+            run_identity="run-a",
+            trial_identity="attempt-a",
+        )
+
+        self.assertNotEqual(
+            first["subject"]["subject_id"], second["subject"]["subject_id"]
+        )
+        self.assertNotEqual(
+            first["subject"]["subject_id"], third["subject"]["subject_id"]
+        )
+
+    def test_adapter_version_changes_eval_but_not_canonical_task_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run"
+            messages = task_messages("versioned-subject", 1)
+            install_trial(run_dir, "versioned-subject", messages)
+            traces, decisions, outcomes = raw_inputs("versioned-subject", messages)
+            first_output = run_fixture(root, run_dir, traces, decisions, outcomes)
+            first = json.loads((first_output / "packets.jsonl").read_text())
+
+            original_version = adapter.ADAPTER_VERSION
+            adapter.ADAPTER_VERSION = original_version + "-next"
+            try:
+                second_output = root / "second"
+                adapter.run(
+                    run_dir,
+                    root / "decisions.jsonl",
+                    second_output,
+                    root / "traces.jsonl",
+                    root / "request-outcomes.jsonl",
+                )
+            finally:
+                adapter.ADAPTER_VERSION = original_version
+            second = json.loads((second_output / "packets.jsonl").read_text())
+
+            self.assertNotEqual(
+                first["subject"]["eval_id"], second["subject"]["eval_id"]
+            )
+            self.assertEqual(
+                first["subject"]["subject_id"], second["subject"]["subject_id"]
+            )
 
     def test_repeated_attempt_identity_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

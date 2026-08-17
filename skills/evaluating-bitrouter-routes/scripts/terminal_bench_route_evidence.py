@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable, NamedTuple
 
 
-ADAPTER_VERSION = "terminal-bench-route-evidence-v2"
+ADAPTER_VERSION = "terminal-bench-route-evidence-v3"
 TAXONOMY_VERSION = "request-error-taxonomy-v1"
 QUALITY_METRIC = "quality.pass"
 ROUTE_PREFIX = "agent_route/v1|"
@@ -119,6 +119,9 @@ MATRIX_COLUMNS = (
     "guard_promotions",
     "excluded_non_task_errors",
     "excluded_error_rule_ids",
+    "unclassified_request_errors",
+    "unclassified_error_rule_ids",
+    "unclassified_contaminated_tasks",
     "attribution_ambiguities",
     "coverage_failures",
     "recovery_dependencies",
@@ -342,6 +345,8 @@ def _attribution(
         decisions,
         key=lambda row: (str(row["captured_at"]), str(row["decision_id"])),
     )
+    if any(error.category is None for error in errors):
+        return False, "unclassified_request_error", str(representative["decision_id"])
     if errors:
         return False, "non_task_error_contamination", str(representative["decision_id"])
     return True, "unique_route_cell_and_tier", str(representative["decision_id"])
@@ -352,6 +357,7 @@ def _evidence_items(
     outcome: Outcome,
     attribution_reason: str,
     identity_material: dict[str, object],
+    request_errors: list[RequestError],
 ) -> list[dict[str, object]]:
     reward = "none" if outcome.reward is None else str(outcome.reward)
     items = [
@@ -370,7 +376,13 @@ def _evidence_items(
             "redacted": True,
             "attributes": {
                 "attribution_reason": attribution_reason,
+                "request_error_rule_ids": ",".join(
+                    sorted(error.rule_id for error in request_errors)
+                ),
                 "terminal_verdict": outcome.terminal_verdict,
+                "unclassified_request_errors": str(
+                    sum(error.category is None for error in request_errors)
+                ),
             },
         },
         {
@@ -395,9 +407,13 @@ def build_packet(
     trial_identity: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     outcome = classify_outcome(raw)
-    errors = [error for error in request_errors if error.category in NON_TASK_CATEGORIES]
+    errors = list(request_errors)
     if not errors and outcome.excluded_error is not None:
         errors = [outcome.excluded_error]
+    known_errors = [
+        error for error in errors if error.category in NON_TASK_CATEGORIES
+    ]
+    unknown_errors = [error for error in errors if error.category is None]
     coverage = sorted(set(coverage_reasons))
     eligible, reason, representative = _attribution(
         decisions, outcome, errors, coverage
@@ -430,8 +446,16 @@ def build_packet(
     }
     identity_digest = _digest(identity_material).split(":", 1)[1]
     eval_id = "tb-route-" + identity_digest[:40]
-    subject_id = "tb-subject-" + identity_digest[40:] + identity_digest[:8]
-    evidence = _evidence_items(raw, outcome, reason, identity_material)
+    subject_identity = {
+        "namespace": "terminal-bench-canonical-task-subject-v1",
+        "run_identity": run_identity or "direct-build",
+        "source_digest": source,
+        "policy_digest": policy_digest,
+        "canonical_task_id": task_id,
+    }
+    subject_digest = _digest(subject_identity).split(":", 1)[1]
+    subject_id = "tb-task-" + subject_digest[:40]
+    evidence = _evidence_items(raw, outcome, reason, identity_material, errors)
     evidence_digest = _digest(_json_bytes(evidence))
     if coverage:
         packet_verdict = "inconclusive"
@@ -526,8 +550,12 @@ def build_packet(
             or row.get("selected_tier") != row.get("static_tier")
             for row in decisions
         ),
-        "excluded_non_task_errors": len(errors),
-        "excluded_error_rule_ids": sorted(error.rule_id for error in errors),
+        "excluded_non_task_errors": len(known_errors),
+        "excluded_error_rule_ids": sorted(error.rule_id for error in known_errors),
+        "unclassified_request_errors": len(unknown_errors),
+        "unclassified_error_rule_ids": sorted(
+            error.rule_id for error in unknown_errors
+        ),
         "attribution_ambiguity": reason
         in {
             "multiple_policies",
@@ -577,6 +605,7 @@ def _screening_reason(
     associated_passes: int,
     associated_failures: int,
     excluded_errors: int,
+    unclassified_contaminated_tasks: int,
     recoveries: int,
     critical_violations: int,
     critical_known: bool,
@@ -586,6 +615,8 @@ def _screening_reason(
         return False, "strict_quality_adoptable"
     if coverage_failures:
         return False, "request_coverage_incomplete"
+    if unclassified_contaminated_tasks:
+        return False, "unclassified_request_errors"
     if screenable_tier is None:
         return False, "tier_not_screenable"
     if not critical_known:
@@ -653,6 +684,14 @@ def build_experience_matrix(
         excluded_errors = sum(
             int(row.get("excluded_non_task_errors", 0)) for row in rows
         )
+        unclassified_errors = sum(
+            int(row.get("unclassified_request_errors", 0)) for row in rows
+        )
+        unclassified_contaminated_tasks = {
+            str(row["task_id"])
+            for row in rows
+            if row.get("task_has_unclassified_request_error") is True
+        }
         ambiguities = sum(bool(row.get("attribution_ambiguity")) for row in rows)
         coverage_failures = sum(int(row.get("coverage_failures", 0)) for row in rows)
         recoveries = sum(bool(row.get("recovery_dependency")) for row in rows)
@@ -667,6 +706,8 @@ def build_experience_matrix(
             and ambiguities == 0
             and coverage_failures == 0
             and excluded_errors == 0
+            and unclassified_errors == 0
+            and not unclassified_contaminated_tasks
         )
         adoptable = (
             strictly_eligible
@@ -712,6 +753,7 @@ def build_experience_matrix(
             associated_passes=associated_passes,
             associated_failures=associated_failures,
             excluded_errors=excluded_errors,
+            unclassified_contaminated_tasks=len(unclassified_contaminated_tasks),
             recoveries=recoveries,
             critical_violations=critical_violations,
             critical_known=critical_known,
@@ -731,6 +773,13 @@ def build_experience_matrix(
                 str(rule_id)
                 for row in rows
                 for rule_id in list(row.get("excluded_error_rule_ids", []))
+            }
+        )
+        unclassified_rule_ids = sorted(
+            {
+                str(rule_id)
+                for row in rows
+                for rule_id in list(row.get("unclassified_error_rule_ids", []))
             }
         )
         matrix.append(
@@ -762,6 +811,11 @@ def build_experience_matrix(
                 ),
                 "excluded_non_task_errors": excluded_errors,
                 "excluded_error_rule_ids": rule_ids,
+                "unclassified_request_errors": unclassified_errors,
+                "unclassified_error_rule_ids": unclassified_rule_ids,
+                "unclassified_contaminated_tasks": len(
+                    unclassified_contaminated_tasks
+                ),
                 "attribution_ambiguities": ambiguities,
                 "coverage_failures": coverage_failures,
                 "recovery_dependencies": recoveries,
@@ -1218,10 +1272,16 @@ def _join_run_evidence(
         row["classified_error"]
         for row in outcomes_by_id.values()
         if isinstance(row.get("classified_error"), RequestError)
-        and row["classified_error"].category in NON_TASK_CATEGORIES
     ]
-    category_counts = Counter(error.category for error in classified_errors)
-    rule_counts = Counter(error.rule_id for error in classified_errors)
+    known_errors = [
+        error
+        for error in classified_errors
+        if error.category in NON_TASK_CATEGORIES
+    ]
+    unknown_errors = [error for error in classified_errors if error.category is None]
+    category_counts = Counter(error.category for error in known_errors)
+    rule_counts = Counter(error.rule_id for error in known_errors)
+    unknown_rule_counts = Counter(error.rule_id for error in unknown_errors)
     summary.update(
         {
             "consumed_decisions": len(consumed_decisions),
@@ -1232,9 +1292,11 @@ def _join_run_evidence(
                 key: sorted(value) for key, value in sorted(trial_reasons.items())
             },
             "task_coverage_reasons": _task_coverage_reasons(trials, trial_reasons),
-            "excluded_non_task_errors": len(classified_errors),
+            "excluded_non_task_errors": len(known_errors),
             "excluded_error_categories": dict(sorted(category_counts.items())),
             "excluded_error_rule_ids": dict(sorted(rule_counts.items())),
+            "unclassified_request_errors": len(unknown_errors),
+            "unclassified_error_rule_ids": dict(sorted(unknown_rule_counts.items())),
         }
     )
     return joined, summary, trial_reasons
@@ -1268,11 +1330,14 @@ def _task_evidence_rows(
             error
             for error in errors
             if isinstance(error, RequestError)
-            and error.category in NON_TASK_CATEGORIES
         ]
-        error_count = len(errors)
-        error_rule_ids = {error.rule_id for error in errors}
-        if error_count == 0 and outcome.excluded_error is not None:
+        known_errors = [
+            error for error in errors if error.category in NON_TASK_CATEGORIES
+        ]
+        unknown_errors = [error for error in errors if error.category is None]
+        error_count = len(known_errors)
+        error_rule_ids = {error.rule_id for error in known_errors}
+        if not errors and outcome.excluded_error is not None:
             error_count = 1
             error_rule_ids.add(outcome.excluded_error.rule_id)
         rows.append(
@@ -1305,6 +1370,14 @@ def _task_evidence_rows(
                 ),
                 "excluded_non_task_errors": error_count,
                 "excluded_error_rule_ids": sorted(error_rule_ids),
+                "unclassified_request_errors": len(unknown_errors),
+                "unclassified_error_rule_ids": sorted(
+                    error.rule_id for error in unknown_errors
+                ),
+                "task_has_unclassified_request_error": int(
+                    summary.get("unclassified_request_errors", 0)
+                )
+                > 0,
                 "attribution_ambiguity": summary.get("attribution_reason")
                 in {
                     "multiple_policies",
@@ -1346,8 +1419,6 @@ def _source_digest(
         )
     return _digest(
         {
-            "adapter_version": ADAPTER_VERSION,
-            "taxonomy_version": TAXONOMY_VERSION,
             "run_identity": run_dir.name,
             "traces": _file_digest(traces_path),
             "decisions": _file_digest(decisions_path),
@@ -1436,7 +1507,6 @@ def run(
             error
             for error in request_errors
             if isinstance(error, RequestError)
-            and error.category in NON_TASK_CATEGORIES
         ]
         packet, summary = build_packet(
             raw,
