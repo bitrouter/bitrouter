@@ -29,6 +29,10 @@ use crate::optimization::exploration::RouteRejection;
 use crate::optimization::exploration::{
     OptimizationGate, PolicyOptimizationState, RouteExploration,
 };
+use crate::optimization::identity::{
+    HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, experiment_id, explore_compiler_config_digest,
+    retreat_compiler_config_digest, treatment_context_digest,
+};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
@@ -469,6 +473,15 @@ fn validate_optimization_state(policy_name: &str, policy: &PolicyDefinition) -> 
         if let Some(digest) = rejection.treatment_context_digest.as_deref() {
             validate_sha256_digest(digest, "optimization rejection treatment_context_digest")?;
         }
+        if let Some(digest) = rejection.experiment_parent_digest.as_deref() {
+            validate_sha256_digest(digest, "optimization rejection experiment_parent_digest")?;
+        }
+        if let Some(digest) = rejection.source_policy_digest.as_deref() {
+            validate_sha256_digest(digest, "optimization rejection source_policy_digest")?;
+        }
+        if let Some(treatment) = rejection.treatment.as_ref() {
+            validate_route_exploration(policy_name, policy, treatment)?;
+        }
         validate_sha256_digest(
             &rejection.evidence_root,
             "optimization rejection evidence_root",
@@ -694,10 +707,11 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
                 if !policy.routes.contains_key(request_key)
                     && !is_default_derived_optimizer_certificate(
                         document,
+                        policy_name,
                         policy,
                         request_key,
                         certificate,
-                    )
+                    )?
                 {
                     anyhow::bail!(
                         "policy '{policy_name}' certificate '{request_key}' has no explicit route"
@@ -749,14 +763,22 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
 
 fn is_default_derived_optimizer_certificate(
     document: &PolicyLock,
+    policy_name: &str,
     policy: &PolicyDefinition,
     request_key: &str,
     certificate: &PolicyCertificate,
-) -> bool {
+) -> Result<bool> {
     let Some(artifact) = document.artifact.as_ref() else {
-        return false;
+        return Ok(false);
     };
-    if artifact.compiler.id != "bitrouter-history-optimizer"
+    let (Some(parent_digest), Some(eval_snapshot_root)) = (
+        artifact.parent_digest.as_deref(),
+        artifact.eval_snapshot_root.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+    if artifact.compiler.id != HISTORY_OPTIMIZER_ID
+        || artifact.compiler.version != HISTORY_OPTIMIZER_VERSION
         || artifact.migration.is_some()
         || certificate.compiler_config_digest != artifact.compiler.config_digest
         || certificate.evidence_digest != artifact.evidence_root
@@ -765,32 +787,89 @@ fn is_default_derived_optimizer_certificate(
         || certificate.owner != RouteOwner::Compiler
         || certificate.source != CertificateSource::Mixed
     {
-        return false;
+        return Ok(false);
     }
     let optimization = policy.optimization.as_ref();
     match certificate.verdict {
-        PromotionVerdict::Experiment => optimization
-            .and_then(|state| state.active.as_ref())
-            .is_some_and(|active| {
-                active.target_request_key == request_key
-                    && active.champion_tier == certificate.selected_tier
-                    && certificate.baseline_tier.is_none()
-            }),
-        PromotionVerdict::Blocked => optimization.is_some_and(|state| {
-            state.active.is_none()
-                && certificate.baseline_tier.as_ref() == Some(&certificate.selected_tier)
-                && artifact
-                    .eval_snapshot_root
-                    .as_ref()
-                    .is_some_and(|evidence_root| {
-                        state.rejections.iter().any(|rejection| {
-                            rejection.target_request_key.as_deref() == Some(request_key)
-                                && rejection.evidence_root == *evidence_root
-                                && rejection.treatment_context_digest.is_some()
-                        })
-                    })
-        }),
-        PromotionVerdict::Retain | PromotionVerdict::Promote | PromotionVerdict::Demote => false,
+        PromotionVerdict::Experiment => {
+            let Some(active) = optimization.and_then(|state| state.active.as_ref()) else {
+                return Ok(false);
+            };
+            let context_digest = treatment_context_digest(
+                policy_name,
+                &active.target_request_key,
+                &active.champion_tier,
+                &active.challenger_tier,
+                active.challenger_exposure_ppm,
+                &active.gate,
+            )?;
+            let expected_experiment_id = experiment_id(parent_digest, &context_digest)?;
+            let expected_compiler_config = explore_compiler_config_digest(
+                policy_name,
+                &active.challenger_tier,
+                active.challenger_exposure_ppm,
+                &active.gate,
+            )?;
+            Ok(active.target_request_key == request_key
+                && active.champion_tier == certificate.selected_tier
+                && certificate.baseline_tier.as_ref() == Some(&active.champion_tier)
+                && active.experiment_id == expected_experiment_id
+                && artifact.compiler.config_digest == expected_compiler_config)
+        }
+        PromotionVerdict::Blocked => {
+            let Some(state) = optimization else {
+                return Ok(false);
+            };
+            if state.active.is_some() {
+                return Ok(false);
+            }
+            for rejection in &state.rejections {
+                let (
+                    Some(target_request_key),
+                    Some(stored_context_digest),
+                    Some(treatment),
+                    Some(experiment_parent_digest),
+                    Some(source_policy_digest),
+                ) = (
+                    rejection.target_request_key.as_deref(),
+                    rejection.treatment_context_digest.as_deref(),
+                    rejection.treatment.as_ref(),
+                    rejection.experiment_parent_digest.as_deref(),
+                    rejection.source_policy_digest.as_deref(),
+                )
+                else {
+                    continue;
+                };
+                let expected_context_digest = treatment_context_digest(
+                    policy_name,
+                    &treatment.target_request_key,
+                    &treatment.champion_tier,
+                    &treatment.challenger_tier,
+                    treatment.challenger_exposure_ppm,
+                    &treatment.gate,
+                )?;
+                let expected_experiment_id =
+                    experiment_id(experiment_parent_digest, &expected_context_digest)?;
+                let expected_compiler_config = retreat_compiler_config_digest(treatment)?;
+                if target_request_key == request_key
+                    && treatment.target_request_key == request_key
+                    && treatment.champion_tier == certificate.selected_tier
+                    && certificate.baseline_tier.as_ref() == Some(&treatment.champion_tier)
+                    && rejection.experiment_id == treatment.experiment_id
+                    && treatment.experiment_id == expected_experiment_id
+                    && stored_context_digest == expected_context_digest
+                    && rejection.evidence_root == eval_snapshot_root
+                    && source_policy_digest == parent_digest
+                    && artifact.compiler.config_digest == expected_compiler_config
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        PromotionVerdict::Retain | PromotionVerdict::Promote | PromotionVerdict::Demote => {
+            Ok(false)
+        }
     }
 }
 
@@ -3114,6 +3193,38 @@ mod tests {
     }
 
     #[test]
+    fn optimization_rejects_malformed_rejected_treatment_semantics() {
+        let mut treatment = valid_exploration();
+        treatment.challenger_tier = treatment.champion_tier.clone();
+        let mut policy = valid_optimization_policy();
+        policy.optimization = Some(PolicyOptimizationState {
+            active: None,
+            rejections: vec![RouteRejection {
+                experiment_id: treatment.experiment_id.clone(),
+                target_request_key: Some(treatment.target_request_key.clone()),
+                treatment_context_digest: Some(
+                    "sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+                        .into(),
+                ),
+                treatment: Some(treatment),
+                experiment_parent_digest: Some(
+                    "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
+                        .into(),
+                ),
+                source_policy_digest: Some(
+                    "sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012"
+                        .into(),
+                ),
+                evidence_root:
+                    "sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123".into(),
+                reason: "invalid rejected treatment".into(),
+            }],
+        });
+
+        assert!(validate_optimization_state("auto", &policy).is_err());
+    }
+
+    #[test]
     fn optimization_rejects_zero_maximum_challenger_tasks() {
         let policy = valid_optimization_policy();
         let mut exploration = valid_exploration();
@@ -3146,6 +3257,9 @@ mod tests {
             treatment_context_digest: Some(
                 "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01".into(),
             ),
+            treatment: None,
+            experiment_parent_digest: None,
+            source_policy_digest: None,
             evidence_root:
                 "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
             reason: "insufficient quality".into(),

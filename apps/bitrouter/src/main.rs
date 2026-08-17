@@ -3888,6 +3888,113 @@ async fn reload_policy_if_reachable(
     reload(&socket).await.map(|_| ())
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum OptimizationRecoveryRevision {
+    Parent,
+    Child,
+    Other(String),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct OptimizationRecoveryPair {
+    config: OptimizationRecoveryRevision,
+    policy: OptimizationRecoveryRevision,
+}
+
+impl OptimizationRecoveryPair {
+    fn description(&self) -> String {
+        format!(
+            "config={}, policy={}",
+            self.config.description(),
+            self.policy.description()
+        )
+    }
+}
+
+impl OptimizationRecoveryRevision {
+    fn description(&self) -> &str {
+        match self {
+            Self::Parent => "parent",
+            Self::Child => "child",
+            Self::Other(detail) => detail,
+        }
+    }
+}
+
+async fn observe_optimization_recovery_pair(
+    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    update: &bitrouter::policy_lock::PolicyFileUpdate,
+) -> Result<OptimizationRecoveryPair> {
+    let config = std::fs::read_to_string(&publication.config_path)
+        .with_context(|| format!("reading {}", publication.config_path.display()))?;
+    let config = if config == publication.config_before {
+        OptimizationRecoveryRevision::Parent
+    } else if config == publication.config_after {
+        OptimizationRecoveryRevision::Child
+    } else {
+        OptimizationRecoveryRevision::Other("different bytes".into())
+    };
+    let active = bitrouter::policy_lock::load(&update.path).await?;
+    let policy = if active.digest == publication.parent_policy_digest {
+        OptimizationRecoveryRevision::Parent
+    } else if active.digest == publication.active_policy_digest {
+        OptimizationRecoveryRevision::Child
+    } else {
+        OptimizationRecoveryRevision::Other(active.digest)
+    };
+    Ok(OptimizationRecoveryPair { config, policy })
+}
+
+fn optimizer_recovery_failure(
+    initial_error: &anyhow::Error,
+    message: impl std::fmt::Display,
+    recovery_errors: &[String],
+) -> anyhow::Error {
+    let recovery_detail = if recovery_errors.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; recovery operation errors: {}",
+            recovery_errors.join("; ")
+        )
+    };
+    anyhow::anyhow!("{initial_error:#}").context(format!("{message}{recovery_detail}"))
+}
+
+async fn reload_reconciled_optimization_pair<Reload, ReloadFuture>(
+    reload: &Reload,
+    initial_error: &anyhow::Error,
+    pair: &str,
+    recovery_errors: &[String],
+) -> Result<()>
+where
+    Reload: Fn() -> ReloadFuture,
+    ReloadFuture: std::future::Future<Output = Result<()>>,
+{
+    match reload().await {
+        Ok(()) => Err(optimizer_recovery_failure(
+            initial_error,
+            format!(
+                "daemon rejected optimization publication; reconciled and reloaded the {pair} config and policy"
+            ),
+            recovery_errors,
+        )),
+        Err(reload_error) => {
+            let mut errors = recovery_errors.to_vec();
+            errors.push(format!(
+                "reloading reconciled {pair} pair: {reload_error:#}"
+            ));
+            Err(optimizer_recovery_failure(
+                initial_error,
+                format!(
+                    "daemon rejected optimization publication; reconciled the {pair} config and policy but recovery reload failed"
+                ),
+                &errors,
+            ))
+        }
+    }
+}
+
 async fn reload_published_policy_or_restore(
     source: &bitrouter::paths::ConfigSource,
     update: &bitrouter::policy_lock::PolicyFileUpdate,
@@ -3955,6 +4062,44 @@ where
     ReloadFuture: std::future::Future<Output = Result<()>>,
     BeforeRecovery: FnOnce() -> Result<()>,
 {
+    reload_optimization_publication_or_restore_with_mutations(
+        publication,
+        reload,
+        before_recovery,
+        |path, expected_digest, target_digest, history_dir| {
+            bitrouter::policy_lock::rollback_to_digest_unlocked(
+                path,
+                expected_digest,
+                target_digest,
+                history_dir,
+            )
+            .map(|_| ())
+        },
+        bitrouter::policy_lock::write_text_atomic_unlocked,
+    )
+    .await
+}
+
+async fn reload_optimization_publication_or_restore_with_mutations<
+    Reload,
+    ReloadFuture,
+    BeforeRecovery,
+    MutatePolicy,
+    MutateConfig,
+>(
+    publication: &bitrouter::optimization::controller::OptimizationPublication,
+    reload: Reload,
+    before_recovery: BeforeRecovery,
+    mutate_policy: MutatePolicy,
+    mutate_config: MutateConfig,
+) -> Result<()>
+where
+    Reload: Fn() -> ReloadFuture,
+    ReloadFuture: std::future::Future<Output = Result<()>>,
+    BeforeRecovery: FnOnce() -> Result<()>,
+    MutatePolicy: Fn(&Path, &str, &str, &Path) -> Result<()>,
+    MutateConfig: Fn(&Path, &str, &str) -> Result<()>,
+{
     let initial_error = match reload().await {
         Ok(()) => return Ok(()),
         Err(error) => error,
@@ -3985,72 +4130,155 @@ where
             )
         },
     )?;
-    let current_config = std::fs::read_to_string(&publication.config_path)
-        .with_context(|| format!("reading {}", publication.config_path.display()))
-        .map_err(|recovery| {
-            anyhow::anyhow!(
-                "daemon rejected optimization publication ({initial_detail}); config recovery failed: {recovery:#}"
-            )
-        })?;
-    if current_config != publication.config_after {
-        return Err(initial_error.context(
-            "daemon rejected optimization publication; recovery is stale because config changed",
-        ));
+    if update.digest != publication.active_policy_digest {
+        return Err(initial_error.context(format!(
+            "daemon rejected optimization publication; recovery is stale because update {} does not match published policy {}",
+            update.digest, publication.active_policy_digest
+        )));
     }
-    let active = bitrouter::policy_lock::load(&update.path)
+    let initial_pair = observe_optimization_recovery_pair(publication, update)
         .await
         .map_err(|recovery| {
             anyhow::anyhow!(
-                "daemon rejected optimization publication ({initial_detail}); loading policy recovery target failed: {recovery:#}"
+                "daemon rejected optimization publication ({initial_detail}); reading recovery state failed: {recovery:#}"
             )
         })?;
-    if active.digest != publication.active_policy_digest
-        || update.digest != publication.active_policy_digest
+    if initial_pair
+        != (OptimizationRecoveryPair {
+            config: OptimizationRecoveryRevision::Child,
+            policy: OptimizationRecoveryRevision::Child,
+        })
     {
         return Err(initial_error.context(format!(
-            "daemon rejected optimization publication; recovery is stale because policy advanced to {}",
-            active.digest
+            "daemon rejected optimization publication; recovery is stale because the active pair is {}",
+            initial_pair.description()
         )));
     }
     let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
-    bitrouter::policy_lock::rollback_to_digest_unlocked(
+    let mut recovery_errors = Vec::new();
+    if let Err(policy_error) = mutate_policy(
         &update.path,
         &publication.active_policy_digest,
         &publication.parent_policy_digest,
         &history_dir,
-    )
-    .context("restoring parent policy after optimizer reload rejection")
-    .map_err(|recovery| {
-        anyhow::anyhow!(
-            "daemon rejected optimization publication ({initial_detail}); policy recovery failed: {recovery:#}"
-        )
-    })?;
-    if let Err(config_error) = bitrouter::policy_lock::write_text_atomic_unlocked(
+    ) {
+        recovery_errors.push(format!("restoring parent policy: {policy_error:#}"));
+    }
+    let after_policy = observe_optimization_recovery_pair(publication, update)
+        .await
+        .map_err(|recovery| {
+            optimizer_recovery_failure(
+                &initial_error,
+                format!(
+                    "daemon rejected optimization publication; reconciling disk state after policy recovery failed: {recovery:#}"
+                ),
+                &recovery_errors,
+            )
+        })?;
+    match (&after_policy.config, &after_policy.policy) {
+        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Child) => {
+            return reload_reconciled_optimization_pair(
+                &reload,
+                &initial_error,
+                "child",
+                &recovery_errors,
+            )
+            .await;
+        }
+        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Parent) => {}
+        _ => {
+            return Err(optimizer_recovery_failure(
+                &initial_error,
+                format!(
+                    "daemon rejected optimization publication; recovery is stale after policy recovery because the pair is {}",
+                    after_policy.description()
+                ),
+                &recovery_errors,
+            ));
+        }
+    }
+    if let Err(config_error) = mutate_config(
         &publication.config_path,
         &publication.config_after,
         &publication.config_before,
     ) {
-        let policy_compensation = bitrouter::policy_lock::rollback_to_digest_unlocked(
-            &update.path,
-            &publication.parent_policy_digest,
-            &publication.active_policy_digest,
-            &history_dir,
-        );
-        return Err(initial_error.context(format!(
-            "daemon rejected optimization publication and config recovery failed ({config_error:#}); policy compensation: {}",
-            policy_compensation
-                .err()
-                .map(|error| format!("{error:#}"))
-                .unwrap_or_else(|| "ok".into())
-        )));
+        recovery_errors.push(format!("restoring parent config: {config_error:#}"));
     }
-    if let Err(reload_error) = reload().await {
-        return Err(initial_error.context(format!(
-            "daemon rejected optimization publication; restored the parent config and policy but recovery reload failed: {reload_error:#}"
-        )));
+    let after_config = observe_optimization_recovery_pair(publication, update)
+        .await
+        .map_err(|recovery| {
+            optimizer_recovery_failure(
+                &initial_error,
+                format!(
+                    "daemon rejected optimization publication; reconciling disk state after config recovery failed: {recovery:#}"
+                ),
+                &recovery_errors,
+            )
+        })?;
+    match (&after_config.config, &after_config.policy) {
+        (OptimizationRecoveryRevision::Parent, OptimizationRecoveryRevision::Parent) => {
+            return reload_reconciled_optimization_pair(
+                &reload,
+                &initial_error,
+                "parent",
+                &recovery_errors,
+            )
+            .await;
+        }
+        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Parent) => {}
+        _ => {
+            return Err(optimizer_recovery_failure(
+                &initial_error,
+                format!(
+                    "daemon rejected optimization publication; recovery is stale after config recovery because the pair is {}",
+                    after_config.description()
+                ),
+                &recovery_errors,
+            ));
+        }
     }
-    Err(initial_error.context(
-        "daemon rejected optimization publication; restored and reloaded the parent config and policy",
+    if let Err(compensation_error) = mutate_policy(
+        &update.path,
+        &publication.parent_policy_digest,
+        &publication.active_policy_digest,
+        &history_dir,
+    ) {
+        recovery_errors.push(format!(
+            "restoring child policy after config recovery failure: {compensation_error:#}"
+        ));
+    }
+    let after_compensation = observe_optimization_recovery_pair(publication, update)
+        .await
+        .map_err(|recovery| {
+            optimizer_recovery_failure(
+                &initial_error,
+                format!(
+                    "daemon rejected optimization publication; reconciling disk state after policy compensation failed: {recovery:#}"
+                ),
+                &recovery_errors,
+            )
+        })?;
+    if after_compensation
+        == (OptimizationRecoveryPair {
+            config: OptimizationRecoveryRevision::Child,
+            policy: OptimizationRecoveryRevision::Child,
+        })
+    {
+        return reload_reconciled_optimization_pair(
+            &reload,
+            &initial_error,
+            "child",
+            &recovery_errors,
+        )
+        .await;
+    }
+    Err(optimizer_recovery_failure(
+        &initial_error,
+        format!(
+            "daemon rejected optimization publication; recovery is stale after policy compensation because the pair is {}",
+            after_compensation.description()
+        ),
+        &recovery_errors,
     ))
 }
 
@@ -6081,6 +6309,224 @@ mod tests {
 
         assert!(format!("{error:#}").contains("injected daemon rejection"));
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            std::fs::read_to_string(&fixture.config_path)?,
+            fixture.config_before
+        );
+        assert_eq!(
+            bitrouter::policy_lock::load(&fixture.policy_path)
+                .await?
+                .digest,
+            fixture.parent_digest
+        );
+        assert_eq!(
+            *live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
+            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_reload_recovery_reconciles_a_post_commit_policy_error() -> anyhow::Result<()>
+    {
+        let fixture = recovery_fixture()?;
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let live = Arc::new(std::sync::Mutex::new((
+            config::PolicyRuntimeMode::Frozen,
+            fixture.parent_digest.clone(),
+        )));
+        let reload = {
+            let attempts = attempts.clone();
+            let events = events.clone();
+            let live = live.clone();
+            let config_path = fixture.config_path.clone();
+            let policy_path = fixture.policy_path.clone();
+            move || {
+                let attempts = attempts.clone();
+                let events = events.clone();
+                let live = live.clone();
+                let config_path = config_path.clone();
+                let policy_path = policy_path.clone();
+                async move {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        events
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                            .push("reload-child-rejected".into());
+                        anyhow::bail!("injected daemon rejection of child policy")
+                    }
+                    let raw = std::fs::read_to_string(config_path)?;
+                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
+                    events
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                        .push("reload-parent".into());
+                    *live
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
+                        (mode, digest);
+                    Ok(())
+                }
+            }
+        };
+        let policy_events = events.clone();
+        let config_events = events.clone();
+
+        let error = reload_optimization_publication_or_restore_with_mutations(
+            &fixture.publication,
+            reload,
+            || Ok(()),
+            move |path, expected, target, history| {
+                bitrouter::policy_lock::rollback_to_digest_unlocked(
+                    path, expected, target, history,
+                )?;
+                policy_events
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                    .push("policy-parent-post-commit-error".into());
+                anyhow::bail!("injected post-commit policy failure")
+            },
+            move |path, expected, updated| {
+                bitrouter::policy_lock::write_text_atomic_unlocked(path, expected, updated)?;
+                config_events
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                    .push("config-parent".into());
+                Ok(())
+            },
+        )
+        .await
+        .err()
+        .context("post-commit policy failure unexpectedly succeeded")?;
+        let detail = format!("{error:#}");
+
+        assert!(detail.contains("injected daemon rejection of child policy"));
+        assert!(detail.contains("injected post-commit policy failure"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            *events
+                .lock()
+                .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?,
+            [
+                "reload-child-rejected",
+                "policy-parent-post-commit-error",
+                "config-parent",
+                "reload-parent",
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&fixture.config_path)?,
+            fixture.config_before
+        );
+        assert_eq!(
+            bitrouter::policy_lock::load(&fixture.policy_path)
+                .await?
+                .digest,
+            fixture.parent_digest
+        );
+        assert_eq!(
+            *live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
+            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn optimizer_reload_recovery_reconciles_a_post_rename_config_error() -> anyhow::Result<()>
+    {
+        let fixture = recovery_fixture()?;
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let live = Arc::new(std::sync::Mutex::new((
+            config::PolicyRuntimeMode::Frozen,
+            fixture.parent_digest.clone(),
+        )));
+        let reload = {
+            let attempts = attempts.clone();
+            let events = events.clone();
+            let live = live.clone();
+            let config_path = fixture.config_path.clone();
+            let policy_path = fixture.policy_path.clone();
+            move || {
+                let attempts = attempts.clone();
+                let events = events.clone();
+                let live = live.clone();
+                let config_path = config_path.clone();
+                let policy_path = policy_path.clone();
+                async move {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        events
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                            .push("reload-child-rejected".into());
+                        anyhow::bail!("injected daemon rejection of child policy")
+                    }
+                    let raw = std::fs::read_to_string(config_path)?;
+                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
+                    events
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                        .push("reload-parent".into());
+                    *live
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
+                        (mode, digest);
+                    Ok(())
+                }
+            }
+        };
+        let policy_events = events.clone();
+        let config_events = events.clone();
+
+        let error = reload_optimization_publication_or_restore_with_mutations(
+            &fixture.publication,
+            reload,
+            || Ok(()),
+            move |path, expected, target, history| {
+                bitrouter::policy_lock::rollback_to_digest_unlocked(
+                    path, expected, target, history,
+                )?;
+                policy_events
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                    .push("policy-parent".into());
+                Ok(())
+            },
+            move |path, expected, updated| {
+                bitrouter::policy_lock::write_text_atomic_unlocked(path, expected, updated)?;
+                config_events
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
+                    .push("config-parent-post-rename-error".into());
+                anyhow::bail!("injected post-rename config failure")
+            },
+        )
+        .await
+        .err()
+        .context("post-rename config failure unexpectedly succeeded")?;
+        let detail = format!("{error:#}");
+
+        assert!(detail.contains("injected daemon rejection of child policy"));
+        assert!(detail.contains("injected post-rename config failure"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            *events
+                .lock()
+                .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?,
+            [
+                "reload-child-rejected",
+                "policy-parent",
+                "config-parent-post-rename-error",
+                "reload-parent",
+            ]
+        );
         assert_eq!(
             std::fs::read_to_string(&fixture.config_path)?,
             fixture.config_before

@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::eval::compiler::EvalEvidenceSnapshot;
 use crate::eval::store::EvalSnapshot;
@@ -12,13 +11,14 @@ use crate::optimization::cohort::{CohortAssessment, CohortGateVerdict, assess_co
 use crate::optimization::exploration::{
     OptimizationGate, PolicyOptimizationState, RouteExploration, RouteRejection,
 };
+use crate::optimization::identity::{
+    HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, canonical_digest, experiment_id,
+    explore_compiler_config_digest, retreat_compiler_config_digest, treatment_context_digest,
+};
 use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, PolicyArtifact, PolicyCertificate,
     PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
 };
-
-const HISTORY_OPTIMIZER_ID: &str = "bitrouter-history-optimizer";
-const HISTORY_OPTIMIZER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationOptions {
@@ -319,8 +319,14 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         &gate,
     )?;
     let experiment_id = experiment_id(input.active_policy_digest, &context_digest)?;
-    let compiler_config_digest = compiler_config_digest(input.options)?;
+    let compiler_config_digest = explore_compiler_config_digest(
+        input.policy_name,
+        input.options.candidate_tier()?,
+        input.options.challenger_exposure_ppm,
+        &gate,
+    )?;
     let mut successor = input.active_policy.clone();
+    prune_superseded_route_less_optimizer_certificates(&mut successor);
     successor.artifact = Some(PolicyArtifact {
         parent_digest: Some(input.active_policy_digest.into()),
         evidence_root: observed_subject_digest.clone(),
@@ -359,7 +365,7 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         PolicyCertificate {
             owner: RouteOwner::Compiler,
             selected_tier: target.champion_tier.clone(),
-            baseline_tier: None,
+            baseline_tier: Some(target.champion_tier.clone()),
             source: CertificateSource::Mixed,
             eligible_episodes: target.independent_units,
             independent_tasks: target.independent_units,
@@ -457,7 +463,8 @@ fn active_successor(
     action: ControllerAction,
 ) -> Result<PolicyLock> {
     let mut successor = input.active_policy.clone();
-    let compiler_config_digest = active_compiler_config_digest(exploration)?;
+    prune_superseded_route_less_optimizer_certificates(&mut successor);
+    let compiler_config_digest = retreat_compiler_config_digest(exploration)?;
     successor.artifact = Some(successor_artifact(
         input,
         observed_subject_digest,
@@ -483,6 +490,12 @@ fn active_successor(
             )
         }
         ControllerAction::Retreat => {
+            let experiment_parent_digest = input
+                .active_policy
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.parent_digest.clone())
+                .context("active exploration artifact has no parent digest")?;
             let treatment_context_digest = treatment_context_digest(
                 input.policy_name,
                 &exploration.target_request_key,
@@ -502,6 +515,9 @@ fn active_successor(
                 experiment_id: exploration.experiment_id.clone(),
                 target_request_key: Some(exploration.target_request_key.clone()),
                 treatment_context_digest: Some(treatment_context_digest),
+                treatment: Some(exploration.clone()),
+                experiment_parent_digest: Some(experiment_parent_digest),
+                source_policy_digest: Some(input.active_policy_digest.into()),
                 evidence_root: input.eval.evidence_root.clone(),
                 reason: rejection_reason(assessment).into(),
             });
@@ -528,6 +544,33 @@ fn active_successor(
         );
     validate_document(&successor)?;
     Ok(successor)
+}
+
+fn prune_superseded_route_less_optimizer_certificates(document: &mut PolicyLock) {
+    let Some(artifact) = document.artifact.as_ref() else {
+        return;
+    };
+    if artifact.compiler.id != HISTORY_OPTIMIZER_ID
+        || artifact.compiler.version != HISTORY_OPTIMIZER_VERSION
+    {
+        return;
+    }
+    for (policy_name, certificates) in &mut document.certificates {
+        let Some(policy) = document.policies.get(policy_name) else {
+            continue;
+        };
+        certificates.retain(|request_key, certificate| {
+            policy.routes.contains_key(request_key)
+                || certificate.owner != RouteOwner::Compiler
+                || certificate.source != CertificateSource::Mixed
+                || certificate.compiler_config_digest != artifact.compiler.config_digest
+                || certificate.evidence_digest != artifact.evidence_root
+                || !matches!(
+                    certificate.verdict,
+                    PromotionVerdict::Experiment | PromotionVerdict::Blocked
+                )
+        });
+    }
 }
 
 fn successor_artifact(
@@ -624,76 +667,6 @@ fn rejection_reason(assessment: &CohortAssessment) -> &'static str {
     }
 }
 
-fn active_compiler_config_digest(exploration: &RouteExploration) -> Result<String> {
-    #[derive(Serialize)]
-    struct ActiveCompilerConfig<'a> {
-        id: &'a str,
-        version: u32,
-        exploration: &'a RouteExploration,
-    }
-    canonical_digest(&ActiveCompilerConfig {
-        id: HISTORY_OPTIMIZER_ID,
-        version: HISTORY_OPTIMIZER_VERSION,
-        exploration,
-    })
-}
-
-#[derive(Serialize)]
-struct TreatmentContext<'a> {
-    policy_name: &'a str,
-    request_key: &'a str,
-    champion_tier: &'a str,
-    challenger_tier: &'a str,
-    challenger_exposure_ppm: u32,
-    gate: &'a OptimizationGate,
-}
-
-pub fn treatment_context_digest(
-    policy_name: &str,
-    request_key: &str,
-    champion_tier: &str,
-    challenger_tier: &str,
-    challenger_exposure_ppm: u32,
-    gate: &OptimizationGate,
-) -> Result<String> {
-    canonical_digest(&TreatmentContext {
-        policy_name,
-        request_key,
-        champion_tier,
-        challenger_tier,
-        challenger_exposure_ppm,
-        gate,
-    })
-}
-
-fn experiment_id(parent_policy_digest: &str, treatment_context_digest: &str) -> Result<String> {
-    #[derive(Serialize)]
-    struct ExperimentIdentity<'a> {
-        domain: &'a str,
-        parent_policy_digest: &'a str,
-        treatment_context_digest: &'a str,
-    }
-    canonical_digest(&ExperimentIdentity {
-        domain: "bitrouter.history-optimizer.experiment.v1",
-        parent_policy_digest,
-        treatment_context_digest,
-    })
-}
-
-fn compiler_config_digest(options: &OptimizationOptions) -> Result<String> {
-    #[derive(Serialize)]
-    struct CompilerConfig<'a> {
-        id: &'a str,
-        version: u32,
-        options: &'a OptimizationOptions,
-    }
-    canonical_digest(&CompilerConfig {
-        id: HISTORY_OPTIMIZER_ID,
-        version: HISTORY_OPTIMIZER_VERSION,
-        options,
-    })
-}
-
 fn observed_subject_digest(eval: &EvalEvidenceSnapshot) -> Result<String> {
     let mut records = eval
         .records
@@ -708,11 +681,6 @@ fn observed_subject_digest(eval: &EvalEvidenceSnapshot) -> Result<String> {
         .collect::<Vec<_>>();
     records.sort_by(|left, right| left.0.cmp(right.0));
     canonical_digest(&records)
-}
-
-fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
-    let canonical = serde_json::to_vec(value).context("serializing optimizer digest input")?;
-    Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
 pub async fn prepare_files(
@@ -1316,11 +1284,14 @@ mod tests {
 
     fn active_lock() -> PolicyLock {
         let mut lock = lock();
+        if let Some(artifact) = lock.artifact.as_mut() {
+            artifact.parent_digest = Some(CONFIG_DIGEST.into());
+        }
         lock.policies.get_mut("auto").and_then(|policy| {
             policy.optimization = Some(PolicyOptimizationState {
                 active: Some(crate::optimization::exploration::RouteExploration {
                     experiment_id: EXPERIMENT_ID.into(),
-                    target_request_key: "agent_trace/v2|verify|normal".into(),
+                    target_request_key: "agent_trace/v2|edit|normal".into(),
                     champion_tier: "strong".into(),
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
@@ -1345,7 +1316,7 @@ mod tests {
         cost: i64,
         hard_violation: bool,
     ) -> EvalEvidenceRecord {
-        let mut record = unit_record("agent_trace/v2|verify|normal", subject_id);
+        let mut record = unit_record("agent_trace/v2|edit|normal", subject_id);
         record.subject.decisions[0].selected_tier = match arm {
             ExperimentArm::Control => "strong",
             ExperimentArm::Challenger => "economy",
@@ -1435,6 +1406,9 @@ mod tests {
                 experiment_id: SNAPSHOT_ROOT.into(),
                 target_request_key: Some("agent_trace/v2|finalization|normal".into()),
                 treatment_context_digest: Some(rejected_context),
+                treatment: None,
+                experiment_parent_digest: None,
+                source_policy_digest: None,
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "higher cost".into(),
             }],
@@ -1623,7 +1597,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(changed_routes.len(), 1);
         assert_eq!(
-            successor_policy.routes.get("agent_trace/v2|verify|normal"),
+            successor_policy.routes.get("agent_trace/v2|edit|normal"),
             Some(&"economy".to_string())
         );
         assert!(
@@ -1641,7 +1615,7 @@ mod tests {
         assert_eq!(artifact.compiler.id, "bitrouter-history-optimizer");
         assert_eq!(
             successor
-                .certificate("auto", "agent_trace/v2|verify|normal")
+                .certificate("auto", "agent_trace/v2|edit|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Promote)
         );
@@ -1698,12 +1672,12 @@ mod tests {
             successor
                 .policies
                 .get("auto")
-                .and_then(|policy| policy.routes.get("agent_trace/v2|verify|normal")),
+                .and_then(|policy| policy.routes.get("agent_trace/v2|edit|normal")),
             Some(&"strong".to_string())
         );
         assert_eq!(
             successor
-                .certificate("auto", "agent_trace/v2|verify|normal")
+                .certificate("auto", "agent_trace/v2|edit|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Blocked)
         );
@@ -1754,6 +1728,9 @@ mod tests {
                 experiment_id: SNAPSHOT_ROOT.into(),
                 target_request_key: None,
                 treatment_context_digest: Some(format!("sha256:{index:064x}")),
+                treatment: None,
+                experiment_parent_digest: None,
+                source_policy_digest: None,
                 evidence_root: SNAPSHOT_ROOT.into(),
                 reason: "prior rejection".into(),
             })
@@ -1818,6 +1795,9 @@ mod tests {
                 experiment_id: EXPERIMENT_ID.into(),
                 target_request_key: None,
                 treatment_context_digest: Some(context.clone()),
+                treatment: None,
+                experiment_parent_digest: None,
+                source_policy_digest: None,
                 evidence_root: CONFIG_DIGEST.into(),
                 reason: "prior attempt".into(),
             });
@@ -1981,6 +1961,7 @@ mod file_tests {
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
         publish_prepared_with_config_writer, read_status,
     };
+    use crate::optimization::exploration::{RouteExploration, RouteRejection};
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,
@@ -1988,6 +1969,7 @@ mod file_tests {
     };
 
     const REQUEST_KEY: &str = "agent_trace/v2|edit|normal";
+    const SECOND_REQUEST_KEY: &str = "agent_trace/v2|test|normal";
     const SHA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct Harness {
@@ -2102,6 +2084,14 @@ mod file_tests {
         }
 
         async fn admit_champion_history(&self) -> Result<()> {
+            self.admit_champion_history_for(REQUEST_KEY, "1").await
+        }
+
+        async fn admit_champion_history_for(
+            &self,
+            request_key: &str,
+            id_suffix: &str,
+        ) -> Result<()> {
             let policy_digest = load(&self.policy_path).await?.digest;
             let db = crate::db::connect(&self.database_url).await?;
             crate::db::run_migrations(&db).await?;
@@ -2109,8 +2099,12 @@ mod file_tests {
             let service =
                 EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
             for (scope, id, cost) in [
-                (EvalScope::Request, "request-1", Some("900")),
-                (EvalScope::Task, "task-1", None),
+                (
+                    EvalScope::Request,
+                    format!("request-{id_suffix}"),
+                    Some("900"),
+                ),
+                (EvalScope::Task, format!("task-{id_suffix}"), None),
             ] {
                 let evidence = cost.map_or_else(Vec::new, |cost| {
                     vec![EvidenceItem {
@@ -2127,7 +2121,7 @@ mod file_tests {
                     schema_version: EVAL_SCHEMA_VERSION,
                     eval_id: eval_id.clone(),
                     scope,
-                    subject_id: id.into(),
+                    subject_id: id.clone(),
                     policy_digest: policy_digest.clone(),
                     preset: Some("auto".into()),
                     cohort: None,
@@ -2135,7 +2129,7 @@ mod file_tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: format!("decision-{id}"),
                         policy: "auto".into(),
-                        request_key: REQUEST_KEY.into(),
+                        request_key: request_key.into(),
                         selected_tier: "strong".into(),
                         selected_effort: None,
                         baseline_tier: None,
@@ -2286,6 +2280,24 @@ mod file_tests {
         Ok(files)
     }
 
+    fn active_exploration_mut(document: &mut PolicyLock) -> Result<&mut RouteExploration> {
+        document
+            .policies
+            .get_mut("auto")
+            .and_then(|policy| policy.optimization.as_mut())
+            .and_then(|state| state.active.as_mut())
+            .context("test exploration is missing")
+    }
+
+    fn last_rejection_mut(document: &mut PolicyLock) -> Result<&mut RouteRejection> {
+        document
+            .policies
+            .get_mut("auto")
+            .and_then(|policy| policy.optimization.as_mut())
+            .and_then(|state| state.rejections.last_mut())
+            .context("test rejection is missing")
+    }
+
     #[tokio::test]
     async fn champion_history_publishes_one_exploration_descendant() -> Result<()> {
         let harness = Harness::new(PolicyRuntimeMode::Adaptive).await?;
@@ -2399,6 +2411,337 @@ mod file_tests {
         assert!(
             forged_error.to_string().contains("no explicit route"),
             "unexpected forged certificate error: {forged_error:#}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn later_default_route_exploration_prunes_a_superseded_blocked_certificate() -> Result<()>
+    {
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        harness.admit_challenger_hard_failure().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        let retreated = load(&harness.policy_path).await?;
+        assert!(retreated.document.policies["auto"].routes.is_empty());
+        assert_eq!(
+            retreated
+                .document
+                .certificate("auto", REQUEST_KEY)
+                .map(|certificate| certificate.verdict),
+            Some(PromotionVerdict::Blocked)
+        );
+        harness
+            .admit_champion_history_for(SECOND_REQUEST_KEY, "2")
+            .await?;
+
+        let next = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        let successor = next
+            .step
+            .successor
+            .as_ref()
+            .context("second exploration has no successor")?;
+
+        assert_eq!(next.step.action, ControllerAction::Explore);
+        assert!(successor.policies["auto"].routes.is_empty());
+        assert!(successor.certificate("auto", REQUEST_KEY).is_none());
+        assert_eq!(
+            successor
+                .certificate("auto", SECOND_REQUEST_KEY)
+                .map(|certificate| certificate.verdict),
+            Some(PromotionVerdict::Experiment)
+        );
+        validate_document(successor)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retreat_persists_exact_treatment_and_policy_provenance() -> Result<()> {
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        let exploring = load(&harness.policy_path).await?;
+        let treatment = exploring.document.policies["auto"]
+            .optimization
+            .as_ref()
+            .and_then(|state| state.active.as_ref())
+            .context("exploration treatment is missing")?
+            .clone();
+        let experiment_parent_digest = exploring
+            .document
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.parent_digest.clone())
+            .context("exploration artifact parent is missing")?;
+        harness.admit_challenger_hard_failure().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        let retreated = load(&harness.policy_path).await?;
+        let rejection = retreated.document.policies["auto"]
+            .optimization
+            .as_ref()
+            .and_then(|state| state.rejections.last())
+            .context("retreat rejection is missing")?;
+
+        assert_eq!(rejection.treatment.as_ref(), Some(&treatment));
+        assert_eq!(
+            rejection.experiment_parent_digest.as_deref(),
+            Some(experiment_parent_digest.as_str())
+        );
+        assert_eq!(
+            rejection.source_policy_digest.as_deref(),
+            retreated
+                .document
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.parent_digest.as_deref())
+        );
+        assert_eq!(
+            rejection.source_policy_digest.as_deref(),
+            Some(exploring.digest.as_str())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_derived_explore_rejects_independent_identity_mutations() -> Result<()> {
+        #[derive(Clone, Copy)]
+        enum Mutation {
+            CompilerVersion,
+            MissingParent,
+            MissingEvalRoot,
+            ExperimentId,
+            Exposure,
+            Gate,
+            OperatorCertificate,
+            ArbitraryRouteLessCertificate,
+        }
+
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        let valid = prepare_files(&harness.config_path, OptimizationOptions::default())
+            .await?
+            .step
+            .successor
+            .context("exploration successor is missing")?;
+        validate_document(&valid)?;
+        let mut accepted = Vec::new();
+        for mutation in [
+            Mutation::CompilerVersion,
+            Mutation::MissingParent,
+            Mutation::MissingEvalRoot,
+            Mutation::ExperimentId,
+            Mutation::Exposure,
+            Mutation::Gate,
+            Mutation::OperatorCertificate,
+            Mutation::ArbitraryRouteLessCertificate,
+        ] {
+            let mut forged = valid.clone();
+            let label = match mutation {
+                Mutation::CompilerVersion => {
+                    forged
+                        .artifact
+                        .as_mut()
+                        .context("test artifact is missing")?
+                        .compiler
+                        .version += 1;
+                    "compiler version"
+                }
+                Mutation::MissingParent => {
+                    forged
+                        .artifact
+                        .as_mut()
+                        .context("test artifact is missing")?
+                        .parent_digest = None;
+                    "missing artifact parent"
+                }
+                Mutation::MissingEvalRoot => {
+                    forged
+                        .artifact
+                        .as_mut()
+                        .context("test artifact is missing")?
+                        .eval_snapshot_root = None;
+                    "missing eval root"
+                }
+                Mutation::ExperimentId => {
+                    active_exploration_mut(&mut forged)?.experiment_id = SHA.into();
+                    "experiment id"
+                }
+                Mutation::Exposure => {
+                    active_exploration_mut(&mut forged)?.challenger_exposure_ppm += 1;
+                    "exposure"
+                }
+                Mutation::Gate => {
+                    active_exploration_mut(&mut forged)?
+                        .gate
+                        .minimum_tasks_per_arm += 1;
+                    "gate"
+                }
+                Mutation::OperatorCertificate => {
+                    let certificate = forged
+                        .certificates
+                        .get_mut("auto")
+                        .and_then(|certificates| certificates.get_mut(REQUEST_KEY))
+                        .context("test certificate is missing")?;
+                    certificate.owner = RouteOwner::Operator;
+                    certificate.source = CertificateSource::Operator;
+                    "operator route-less certificate"
+                }
+                Mutation::ArbitraryRouteLessCertificate => {
+                    let copied = forged.certificates["auto"][REQUEST_KEY].clone();
+                    forged
+                        .certificates
+                        .get_mut("auto")
+                        .context("test certificates are missing")?
+                        .insert(SECOND_REQUEST_KEY.into(), copied);
+                    "arbitrary route-less certificate"
+                }
+            };
+            if validate_document(&forged).is_ok() {
+                accepted.push(label);
+            }
+        }
+
+        assert!(
+            accepted.is_empty(),
+            "forged Explore mutations remained valid: {accepted:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_derived_blocked_rejects_independent_identity_mutations() -> Result<()> {
+        #[derive(Clone, Copy)]
+        enum Mutation {
+            CompilerVersion,
+            MissingParent,
+            RejectionId,
+            Context,
+            TreatmentExperimentId,
+            TreatmentExposure,
+            ExperimentParent,
+            SourcePolicy,
+            OperatorCertificate,
+            ArbitraryRouteLessCertificate,
+        }
+
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        harness.admit_challenger_hard_failure().await?;
+        let valid = prepare_files(&harness.config_path, OptimizationOptions::default())
+            .await?
+            .step
+            .successor
+            .context("retreat successor is missing")?;
+        validate_document(&valid)?;
+        let mut accepted = Vec::new();
+        for mutation in [
+            Mutation::CompilerVersion,
+            Mutation::MissingParent,
+            Mutation::RejectionId,
+            Mutation::Context,
+            Mutation::TreatmentExperimentId,
+            Mutation::TreatmentExposure,
+            Mutation::ExperimentParent,
+            Mutation::SourcePolicy,
+            Mutation::OperatorCertificate,
+            Mutation::ArbitraryRouteLessCertificate,
+        ] {
+            let mut forged = valid.clone();
+            let label = match mutation {
+                Mutation::CompilerVersion => {
+                    forged
+                        .artifact
+                        .as_mut()
+                        .context("test artifact is missing")?
+                        .compiler
+                        .version += 1;
+                    "compiler version"
+                }
+                Mutation::MissingParent => {
+                    forged
+                        .artifact
+                        .as_mut()
+                        .context("test artifact is missing")?
+                        .parent_digest = None;
+                    "missing artifact parent"
+                }
+                Mutation::RejectionId => {
+                    last_rejection_mut(&mut forged)?.experiment_id = SHA.into();
+                    "rejection experiment id"
+                }
+                Mutation::Context => {
+                    last_rejection_mut(&mut forged)?.treatment_context_digest = Some(SHA.into());
+                    "treatment context"
+                }
+                Mutation::TreatmentExperimentId => {
+                    last_rejection_mut(&mut forged)?
+                        .treatment
+                        .as_mut()
+                        .context("test rejected treatment is missing")?
+                        .experiment_id = SHA.into();
+                    "treatment experiment id"
+                }
+                Mutation::TreatmentExposure => {
+                    last_rejection_mut(&mut forged)?
+                        .treatment
+                        .as_mut()
+                        .context("test rejected treatment is missing")?
+                        .challenger_exposure_ppm += 1;
+                    "treatment exposure"
+                }
+                Mutation::ExperimentParent => {
+                    last_rejection_mut(&mut forged)?.experiment_parent_digest = Some(SHA.into());
+                    "experiment parent"
+                }
+                Mutation::SourcePolicy => {
+                    last_rejection_mut(&mut forged)?.source_policy_digest = Some(SHA.into());
+                    "source policy"
+                }
+                Mutation::OperatorCertificate => {
+                    let certificate = forged
+                        .certificates
+                        .get_mut("auto")
+                        .and_then(|certificates| certificates.get_mut(REQUEST_KEY))
+                        .context("test certificate is missing")?;
+                    certificate.owner = RouteOwner::Operator;
+                    certificate.source = CertificateSource::Operator;
+                    "operator route-less certificate"
+                }
+                Mutation::ArbitraryRouteLessCertificate => {
+                    let copied = forged.certificates["auto"][REQUEST_KEY].clone();
+                    forged
+                        .certificates
+                        .get_mut("auto")
+                        .context("test certificates are missing")?
+                        .insert(SECOND_REQUEST_KEY.into(), copied);
+                    "arbitrary route-less certificate"
+                }
+            };
+            if validate_document(&forged).is_ok() {
+                accepted.push(label);
+            }
+        }
+
+        assert!(
+            accepted.is_empty(),
+            "forged Blocked mutations remained valid: {accepted:?}"
         );
         Ok(())
     }

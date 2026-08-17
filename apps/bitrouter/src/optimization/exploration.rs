@@ -94,6 +94,16 @@ pub struct RouteRejection {
     /// new opportunity until an operator changes or replaces the policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub treatment_context_digest: Option<String>,
+    /// Complete rejected treatment for exact validation of current optimizer
+    /// locks. Legacy rejections omit it and remain readable but fail closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treatment: Option<RouteExploration>,
+    /// Policy digest from which the rejected experiment identity was derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment_parent_digest: Option<String>,
+    /// Active exploration policy that the Retreat successor replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy_digest: Option<String>,
     pub evidence_root: String,
     pub reason: String,
 }
@@ -222,6 +232,46 @@ mod tests {
             ..WorkflowIdentity::default()
         };
         assert!(experiment().assignment(&unusable)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_round_trips_full_treatment_and_policy_provenance() -> Result<()> {
+        let raw = r#"{
+            "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "target_request_key":"agent_trace/v2|edit|normal",
+            "treatment_context_digest":"sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+            "treatment":{
+                "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "target_request_key":"agent_trace/v2|edit|normal",
+                "champion_tier":"strong",
+                "challenger_tier":"economy",
+                "challenger_exposure_ppm":100000,
+                "gate":{
+                    "minimum_tasks_per_arm":3,
+                    "maximum_challenger_tasks":20,
+                    "minimum_pass_rate_ppm":900000
+                }
+            },
+            "experiment_parent_digest":"sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+            "source_policy_digest":"sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+            "evidence_root":"sha256:456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+            "reason":"challenger hard violation"
+        }"#;
+
+        let parsed = serde_json::from_str::<RouteRejection>(raw);
+        assert!(
+            parsed.is_ok(),
+            "full rejection provenance must deserialize: {:?}",
+            parsed.err()
+        );
+        let rejection = serde_json::from_str::<RouteRejection>(raw)?;
+        let rendered = serde_json::to_string(&rejection)?;
+
+        assert_eq!(
+            serde_json::from_str::<RouteRejection>(&rendered)?,
+            rejection
+        );
         Ok(())
     }
 }
