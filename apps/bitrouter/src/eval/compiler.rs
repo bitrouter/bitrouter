@@ -361,10 +361,9 @@ mod tests {
         let store = EvalStore::new(db);
         let service = EvalService::new(store.clone(), EvalConfig::default());
         let mut subject = subject()?;
-        subject.requested_dimensions.extend([
-            "cost.usd_micros".into(),
-            "latency.ms".into(),
-        ]);
+        subject
+            .requested_dimensions
+            .extend(["cost.usd_micros".into(), "latency.ms".into()]);
         store.insert_subject(&subject).await?;
         let mut result = result(&subject);
         result.verdict = EvalVerdict::Inconclusive;
