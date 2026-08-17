@@ -620,7 +620,7 @@ pub struct AdequacyConfig {
     pub min_semantic_successes_for_lock: u32,
     /// Whether the opening turn is eligible for aggressive exploration. Default
     /// `false`, because opening/planning errors tend to propagate through the
-    /// whole task and Terminal-Bench showed this state is high leverage.
+    /// whole task and make this state high leverage.
     pub explore_opening: bool,
     /// Minimum distinct benchmark-task successes required before an opening
     /// request-level lock becomes active. This is combined with
