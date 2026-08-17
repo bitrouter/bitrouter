@@ -824,10 +824,10 @@ async fn native_literal_histories_receive_exact_template_decisions() {
                 ClaudeFixture::ToolFollowup,
                 Some("error: cargo test failed"),
             ),
-            "strong",
-            MOCK_STRONG_MODEL,
-            "strong",
-            MOCK_STRONG_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
         ),
     ];
 
@@ -1651,7 +1651,7 @@ fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
             risk: "normal",
             primary_route: "agent_route/v1|code:debugging|implement|normal",
             matched_route: "agent_route/v1|unknown|implement|normal",
-            tier: "strong",
+            tier: "balanced",
         },
     ]
 }
