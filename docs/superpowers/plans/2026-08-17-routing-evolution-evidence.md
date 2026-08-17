@@ -14,7 +14,8 @@
 - Keep the main program's evaluator semantics limited to generic pass, fail, inconclusive, quality, cost, latency, and hard-violation credit.
 - An inconclusive result never increments eligible episodes, independent tasks, pass/fail weight, total quality weight, or quality-scoped critical violations; explicit cost and latency credit may aggregate.
 - Never duplicate a task- or episode-level reward across requests; positive quality credit requires one fixed, auditable route cell and one deterministic representative decision.
-- Direct economy adoption requires actual economy use, at least five independent conclusive tasks, pass rate at least 80%, zero critical violations, unique attribution, and no later strong recovery dependency.
+- Direct economy adoption requires actual economy use, at least five independent conclusive tasks, pass rate at least 80%, zero critical violations, unique attribution, no later strong recovery dependency, and zero excluded non-task-error contamination.
+- Keep non-causal observational screening separate from Eval Exchange quality: it may name controlled-validation candidates, but `quality_credit_eligible` remains false and it cannot drive publication or automatic template edits.
 - Balanced low-risk cells may be economy experiment candidates but remain balanced; undersampled and ambiguous cells retain their current route.
 - Change the template progress guard to `protected_tiers: [strong, balanced]` while retaining `escalation_tier: strong`.
 - Do not publish an active policy or run/resume a paid benchmark.
@@ -120,7 +121,7 @@ git commit -m "fix: withhold inconclusive quality evidence"
 - Create: `skills/evaluating-bitrouter-routes/scripts/tests/fixtures/run/decisions.jsonl`
 
 **Interfaces:**
-- Consumes: `--run-dir PATH`, `--decisions PATH`, `--output-dir PATH`, with Harbor `result.json` files and router decision JSONL.
+- Consumes: `--run-dir PATH`, `--decisions PATH`, `--output-dir PATH`, with Harbor `result.json` files and router decision JSONL carrying exact full-prefix/task-description and ingress digest joins.
 - Produces: `packets.jsonl`, `task-evidence.jsonl`, and deterministic evidence digests compatible with Eval Exchange schema version 1.
 
 - [ ] **Step 1: Write failing classification and packet tests**
@@ -135,6 +136,11 @@ self.assertEqual(classify_outcome(provider_result).excluded_error_kind, "provide
 self.assertEqual(packet["result"]["evaluator"]["kind"], "task_native")
 self.assertEqual(packet["subject"]["scope"], "task")
 ```
+
+Add one literal fixture for each non-task class: provider, network, auth,
+rate-limit, and transport. Add an overlapping-marker fixture and assert the
+documented ordered rule id wins, so broad provider text cannot mask a more
+specific auth, rate-limit, network, or transport classification.
 
 The pass fixture contains two decisions with one route projection and one
 selected tier; assert `decision_credit` contains exactly the earliest decision
@@ -162,8 +168,14 @@ def build_packet(trial: Trial, decisions: list[Decision], outcome: Outcome) -> d
 ```
 
 Use an ordered `ERROR_RULES` tuple with versioned rule ids. Match only in this
-external module. A valid binary verifier reward wins over a recoverable request
-failure; otherwise non-task exceptions are inconclusive and counted separately.
+external module, test every class and precedence, and keep classification
+details out of Rust. A valid binary verifier reward wins over a recoverable
+request failure; otherwise non-task exceptions are inconclusive and counted
+separately.
+
+Join only by exact content identities and the exact ingress digest. Never use
+capture/agent-execution time proximity. Rows without a unique exact mapping are
+preserved as unassigned observations and cannot receive quality credit.
 
 Derive one positive quality mapping only when all joined decisions have ids,
 one policy, one route projection, and one selected tier. Choose the earliest
@@ -206,7 +218,7 @@ git commit -m "feat: adapt terminal benchmark evidence"
 
 **Interfaces:**
 - Consumes: normalized task evidence from Task 2.
-- Produces: `matrix.json` and `matrix.csv` sorted by policy/route with recommendation fields.
+- Produces: `matrix.json` and `matrix.csv` sorted by policy/route with strict recommendation and isolated observational-screening fields.
 
 - [ ] **Step 1: Write failing literal matrix tests**
 
@@ -222,10 +234,17 @@ self.assertEqual(economy["active_recommendation"], "economy")
 self.assertFalse(economy["economy_experiment_candidate"])
 self.assertEqual(balanced["active_recommendation"], "retain")
 self.assertTrue(balanced["economy_experiment_candidate"])
+self.assertTrue(balanced["controlled_validation_candidate"])
+self.assertFalse(balanced["quality_credit_eligible"])
+self.assertEqual(balanced["screening_reason"], "balanced_normal_observational")
 self.assertGreater(ambiguous["attribution_ambiguities"], 0)
 ```
 
-Assert every required CSV column and the exact deterministic JSON fixture.
+Assert every required CSV column and the exact deterministic JSON fixture. Add
+a task whose strict whole-task attribution is ambiguous but whose associated
+balanced cell passes the observational screen; assert it remains inconclusive,
+receives no packet quality credit, and appears only as a controlled-validation
+candidate.
 
 - [ ] **Step 2: Verify RED**
 
@@ -249,20 +268,32 @@ adoptable = (
     and critical_violations == 0
     and recovery_dependencies == 0
     and attribution_ambiguities == 0
+    and excluded_non_task_errors == 0
 )
 experiment = (
-    actual_tiers == {"balanced"}
+    quality_credit_eligible
+    and actual_tiers == {"balanced"}
     and risk == "normal"
     and conclusive_tasks >= 5
     and pass_rate_ppm >= 800_000
     and critical_violations == 0
     and recovery_dependencies == 0
     and attribution_ambiguities == 0
+    and excluded_non_task_errors == 0
 )
 ```
 
 Map grades to `adoptable`, `experiment`, `insufficient`, or `inconclusive`.
 Never edit a policy file from this script.
+
+Separately compute `controlled_validation_candidate` from exact route/task
+associations. Require actual economy exposure or a normal-risk balanced cell,
+at least five distinct passing-task associations, zero route-level non-task
+errors, zero recovery dependency, and zero critical violations. Set
+`quality_credit_eligible: false` for an observational-only row and emit
+`screening_reason` as `economy_exposure_observational` or
+`balanced_normal_observational`. Never copy associated task rewards into packet
+credit or use screening to set `active_recommendation`.
 
 - [ ] **Step 4: Verify GREEN and stable artifacts**
 
@@ -308,9 +339,10 @@ python3 scripts/terminal_bench_route_evidence.py \
   --output-dir /path/to/evolution-analysis
 ```
 
-The reference defines input fields, taxonomy rule ids, verifier precedence,
-unique attribution, matrix columns, recommendation gates, packet submission
-handoff, and the prohibition on active publication.
+The reference defines exact non-temporal joins, input fields, taxonomy rule ids,
+verifier precedence, unique attribution, strict matrix gates, the isolated
+non-causal controlled-validation screen, packet submission handoff, and the
+prohibition on active publication.
 
 Update the Eval Exchange reference so inconclusive results always withhold
 quality credit even if an old packet supplies a positive mapping, while cost
@@ -421,10 +453,14 @@ every proposed active/economy-experiment cell to the adapter matrix.
 For each proposed active economy cell, require literal evidence for actual
 economy use, five independent conclusive tasks, pass rate >= 800,000 ppm, zero
 critical violations, zero recovery dependencies, and zero attribution
-ambiguities. Reject any incomplete cell and retain its existing route.
+ambiguities, plus zero excluded non-task errors. Reject any incomplete cell and
+retain its existing route.
 
-Experiment candidates are reported only; do not change their route. If no cell
-passes, make no route edit and do not refresh per-route certificates.
+Experiment and controlled-validation candidates are reported only; do not
+change their route. Confirm observational candidates have
+`quality_credit_eligible: false` and never treat their task associations as Eval
+quality. If no strict cell passes, make no route edit and do not refresh
+per-route certificates.
 
 - [ ] **Step 3: Validate any justified route edit canonically**
 

@@ -62,11 +62,13 @@ It reads only bounded, documented fields:
   reason, progress-clause ids, latency, and cost from decision rows when
   present.
 
-The adapter joins a decision to a trial only when its timestamp falls inside
-exactly one agent-execution interval. Missing or ambiguous joins remain
-records, but cannot receive quality credit. It never fabricates router decision
-ids. A run lacking submit-ready decision ids can still produce the experience
-matrix and diagnostics, but its packet list contains no invented attribution.
+The adapter joins a decision to a trial only through an exact content identity:
+an identical full message-prefix digest or a unique hashed task-description
+field, followed by the exact router ingress digest. Execution-time proximity is
+never a join key. Missing or ambiguous joins remain records, but cannot receive
+quality credit. It never fabricates router decision ids. A run lacking
+submit-ready decision ids can still produce the experience matrix and
+diagnostics, but its packet list contains no invented attribution.
 
 ## Terminal outcome classification
 
@@ -151,7 +153,9 @@ The adapter emits deterministic JSON and CSV matrices, sorted by
 - attribution-ambiguity count;
 - critical-violation count;
 - evidence grade;
-- `active_recommendation` and `economy_experiment_candidate`.
+- `quality_credit_eligible`, `active_recommendation`,
+  `economy_experiment_candidate`, `controlled_validation_candidate`, and
+  `screening_reason`.
 
 Evidence grades are deterministic:
 
@@ -160,6 +164,20 @@ Evidence grades are deterministic:
   trial, but not direct adoption;
 - `insufficient`: conclusive evidence exists but does not meet either gate;
 - `inconclusive`: no uniquely attributable conclusive quality evidence.
+
+Strict quality evidence and observational screening are separate layers. The
+strict layer alone controls Eval Exchange quality credit, evidence grades, and
+`active_recommendation`. The screening layer may associate a terminal passing
+task with each exact-matched route cell it exercised, but it never emits quality
+credit and is explicitly non-causal. A row may be a
+`controlled_validation_candidate` when it has actual economy exposure or is a
+normal-risk balanced cell, has at least five distinct passing-task
+associations, has zero route-level non-task errors, zero recovery dependency,
+and zero critical violations. `screening_reason` names the observational gate;
+such a row requires a controlled future validation and is not publishable.
+
+`economy_experiment_candidate` is true only for a normal-risk balanced row that
+passes this screening gate. It does not change the row's active tier.
 
 ## Recommendation gates
 
@@ -171,7 +189,8 @@ cell:
 3. pass rate at least 80% after excluding non-task errors;
 4. zero critical violations;
 5. no attributed task depends on a later strong recovery;
-6. every credited outcome satisfies unique attribution.
+6. every credited outcome satisfies unique attribution;
+7. zero excluded non-task-error contamination in the route cell.
 
 No other route changes automatically. A balanced route may become an economy
 experiment candidate only when it is normal risk, has at least five uniquely
