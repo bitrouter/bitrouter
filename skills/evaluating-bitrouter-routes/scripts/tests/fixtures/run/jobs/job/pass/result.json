@@ -1,0 +1,8 @@
+{
+  "task_name": "terminal-bench/task-pass",
+  "task_checksum": "task-pass",
+  "trial_name": "task-pass__trial",
+  "verifier_result": {"rewards": {"reward": 1}},
+  "exception_info": null,
+  "finished_at": "2026-08-17T00:01:00Z"
+}
