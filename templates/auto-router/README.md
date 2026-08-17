@@ -88,9 +88,14 @@ template policy, not hidden runtime defaults: trajectory remains disabled by
 default for existing configurations, and existing locks are unchanged. All
 three `trajectory` settings are restart-only.
 
-The example immediately selects `strong` for incomplete history, a recovery
-edge, or a configured structural bound, then holds that protected tier for the
-next two requests. `max_recovery_count` is edge-triggered: its prospective
+The example treats both `strong` and `balanced` as progress-capable protected
+tiers while retaining `strong` as the structural escalation tier. Ordinary
+balanced work therefore remains balanced through progress accounting instead
+of being promoted solely because it is not strong. Incomplete history, a
+recovery edge, or a configured structural bound activates the guard: an already
+protected candidate stays at its tier, while an unprotected candidate escalates
+to `strong`. The guard then holds a protected tier for the next two requests.
+`max_recovery_count` is edge-triggered: its prospective
 cumulative count is compared only when the current projection enters
 `recovery`; consecutive recovery projections remain protected without counting
 or activating again. The edge always activates hold. If the recovery's static

@@ -543,7 +543,7 @@ async fn explicit_non_policy_routes_retain_generic_multi_account_fallback() {
 }
 
 #[tokio::test]
-async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
+async fn auto_template_preserves_balanced_across_progress_guards() {
     let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
     let template = template_config();
     for model in ["@auto", "@auto:cost"] {
@@ -751,21 +751,24 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         decisions[13].request_key,
         "agent_route/v1|unknown|implement|guarded"
     );
-    assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[13].static_tier.as_deref(), Some("balanced"));
+    assert_eq!(decisions[13].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[13].selected_model.as_deref(),
-        Some(MOCK_STRONG_MODEL)
+        Some(MOCK_BALANCED_MODEL)
     );
+    assert!(!decisions[13].progress_clause_ids.is_empty());
     assert_eq!(
         decisions[14].request_key,
         "agent_route/v1|unknown|unknown|normal"
     );
     assert_eq!(decisions[14].static_tier.as_deref(), Some("balanced"));
-    assert_eq!(decisions[14].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[14].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[14].trajectory_completeness.as_deref(),
         Some("incomplete")
     );
+    assert!(!decisions[14].progress_clause_ids.is_empty());
 }
 
 #[tokio::test]

@@ -4222,7 +4222,10 @@ policies:
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("auto template is missing its progress guard"))?;
         assert_eq!(guard.escalation_tier, "strong");
-        assert_eq!(guard.protected_tiers, BTreeSet::from(["strong".into()]));
+        assert_eq!(
+            guard.protected_tiers,
+            BTreeSet::from(["balanced".into(), "strong".into()])
+        );
 
         let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
