@@ -22,13 +22,16 @@ python3 scripts/terminal_bench_route_evidence.py \
   --run-dir /path/to/harbor-run \
   --decisions /path/to/policy-decisions.jsonl \
   --traces /path/to/traces.jsonl \
+  --request-outcomes /path/to/current-request-cost-join.jsonl \
   --output-dir /path/to/evolution-analysis
 ```
 
 The run directory contains Harbor `result.json` files and each trial's
 `agent/trajectory.json`. Raw trace rows contain the physical request id and
 request messages. Decision rows contain BitRouter's
-`ingress_request_id_sha256` and router fields.
+`ingress_request_id_sha256` and router fields. Request-outcome rows use the
+authoritative run schema: unique physical `request_id`, an explicit nullable
+`error`, and optional cost, token, and latency/timestamp fields.
 
 The adapter accepts exactly two trace-to-task identities:
 
@@ -43,21 +46,16 @@ It then joins trace to decision through:
 sha256("bitrouter.ingress-request-id.v1\0" + physical_trace_request_id)
 ```
 
-Both joins must be unique. Capture timestamps and agent-execution windows are
-never join keys. Duplicate task descriptions, duplicate ingress matches,
-missing trajectories, and unmatched traces are inconclusive. Inspect
-`join-summary.json`; never repair ambiguity by proximity.
-
-Prejoined decision rows may omit `--traces` only when every row contains:
-
-- `exact_task_id`;
-- `task_join_method` equal to `full_messages_prefix` or
-  `task_description_field`;
-- `exact_ingress_join: true`;
-- the copied router decision id, policy/digest, route/request keys,
-  selected/baseline tier, and capture time.
-
-The adapter never invents a router decision id.
+The task and ingress joins plus the trace-to-request-outcome join must all be
+unique and complete. Capture timestamps and agent-execution windows are never
+join keys. Duplicate task descriptions, duplicate ids/rows, missing
+trajectories, unconsumed inputs, and unmatched traces fail closed. A defect
+uniquely attributable to a trial blocks that canonical task; a defect that
+cannot be assigned uniquely blocks the entire batch. Inspect the task-local and
+global coverage reasons in `join-summary.json`; never repair ambiguity by
+proximity. The adapter accepts the router log's durable `request_id` as the
+decision identity when a separate `decision_id` field is absent, but never
+fabricates one from position or time.
 
 ## Request error taxonomy
 
@@ -102,9 +100,14 @@ preserve the terminal verdict with explicit zero quality credit.
 
 The direct economy gate is stricter still. A route needs actual economy use,
 five independent conclusive uniquely attributed tasks, pass rate at least 80%,
-zero critical violations, zero later-strong recovery dependency, zero
+explicitly known zero critical violations, zero later-strong recovery dependency, zero
 attribution ambiguity, and zero non-task contamination. Only this layer may set
 `active_recommendation: economy`.
+
+Later-strong recovery is calculated once across the complete ordered trial and
+propagated to every cell that trial touched. Critical violations are read only
+from an explicit result/eval artifact field. A missing field is unknown, never
+zero, and blocks both active and controlled-validation recommendations.
 
 ## Observational screening is not Eval evidence
 
@@ -113,10 +116,12 @@ be useful. This second layer associates terminal task outcomes with every
 exact-matched route cell exercised, but it is non-causal and always separate
 from Eval quality credit.
 
-A cell is a controlled-validation candidate only when it has actual economy
+A cell is a controlled-validation candidate only when it has complete request
+coverage, actual economy
 exposure or is balanced at normal risk, at least five distinct terminal-pass
 associations, zero terminal-fail associations, zero route-level non-task
-errors, zero recovery dependency, and zero critical violations.
+errors, zero recovery dependency, and explicitly known zero critical
+violations.
 
 The matrix emits:
 
@@ -140,7 +145,14 @@ diffs, and publication.
 Matrix rows include route projection, task family, role, risk, independent
 tasks/episodes, pass/fail/inconclusive, selected/static tier distributions,
 cost, latency, guard promotion, non-task exclusions/rule ids, ambiguity,
-recovery, critical violations, evidence grade, and both recommendation layers.
+coverage failures, recovery, known/unknown critical violations, evidence grade,
+and both recommendation layers. CSV text is spreadsheet-formula escaped.
+
+Eval and idempotency identities bind the adapter and taxonomy versions, run
+identity, complete input/source digest, canonical task, trial/result attempt,
+and attribution digest. Equivalent reruns are stable; separate run/attempt
+evidence cannot collide. Matrix independent-task counts still deduplicate the
+canonical task, while independent episodes retain attempt identity.
 
 ## Current calibration evidence
 
@@ -159,3 +171,10 @@ economy; the all-run accounting was 351/917/40. This is static accounting, not
 a counterfactual quality result. The private artifact is intentionally not
 shipped; its `sha256-manifest.json` digest is
 `2adb125f71b8e362984894281710a30e75c27f3d7b45f8ca74a3106ad930403e`.
+
+The v2 adapter replay over the complete raw inputs reports 1,306 exact joins,
+303 exclusions (261 provider and 42 transport), and three unmatched traces plus
+two unconsumed decisions outside the formal request-outcome set. Those
+unattributable extras correctly trigger the global quality block. The replay
+therefore emits zero quality-eligible matrix rows, zero active economy routes,
+and zero controlled-validation candidates.

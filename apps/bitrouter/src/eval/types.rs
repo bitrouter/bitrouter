@@ -554,6 +554,27 @@ mod tests {
     }
 
     #[test]
+    fn subject_rejects_duplicate_decision_ids() {
+        let mut subject = subject_fixture();
+        let decision = EvalDecisionRef {
+            decision_id: "decision-duplicate".into(),
+            policy: "auto".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            selected_tier: "balanced".into(),
+            selected_effort: None,
+            baseline_tier: Some("strong".into()),
+            baseline_effort: None,
+            policy_digest: subject.policy_digest.clone(),
+        };
+        subject.decisions = vec![decision.clone(), decision];
+
+        let error = validate_subject(&subject).expect_err("duplicate decisions must fail closed");
+
+        assert!(error.to_string().contains("duplicate eval decision id"));
+    }
+
+    #[test]
     fn result_cannot_reference_missing_subject_evidence() -> anyhow::Result<()> {
         let subject = subject_fixture();
         let result = EvaluationResult {

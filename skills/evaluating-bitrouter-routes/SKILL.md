@@ -68,21 +68,25 @@ Choose `evaluator.kind` from the actual source:
 
 ## Adapt a Harbor run
 
-Use the deterministic external adapter. Raw decision rows require the trace
-file so the adapter can establish exact content and ingress identity; prejoined
-rows may omit `--traces`.
+Use the deterministic external adapter. The trace and authoritative
+request-outcome files are always required; a prejoined decision file never
+bypasses complete request coverage.
 
 ```bash
 python3 scripts/terminal_bench_route_evidence.py \
   --run-dir /path/to/harbor-run \
   --decisions /path/to/policy-decisions.jsonl \
   --traces /path/to/traces.jsonl \
+  --request-outcomes /path/to/current-request-cost-join.jsonl \
   --output-dir /path/to/evolution-analysis
 ```
 
-Inspect `join-summary.json` before any matrix row. Treat unmatched or ambiguous
-joins as inconclusive. `packets.jsonl` is the generic Eval Exchange handoff;
-`task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are external analysis.
+Inspect `join-summary.json` before any matrix row. Any task-local coverage
+reason makes that task inconclusive; any unattributable/global reason blocks
+quality and recommendations for the batch. Missing or unknown critical-safety
+evidence blocks both recommendation layers. `packets.jsonl` is the generic Eval
+Exchange handoff; `task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are
+external analysis.
 
 Keep the two recommendation layers separate:
 
