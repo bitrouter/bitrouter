@@ -480,7 +480,7 @@ fn validate_optimization_state(policy_name: &str, policy: &PolicyDefinition) -> 
             validate_sha256_digest(digest, "optimization rejection source_policy_digest")?;
         }
         if let Some(treatment) = rejection.treatment.as_ref() {
-            validate_route_exploration(policy_name, policy, treatment)?;
+            validate_route_exploration_intrinsic(policy_name, policy, treatment)?;
         }
         validate_sha256_digest(
             &rejection.evidence_root,
@@ -505,6 +505,24 @@ fn validate_route_exploration(
     policy: &PolicyDefinition,
     exploration: &RouteExploration,
 ) -> Result<()> {
+    validate_route_exploration_intrinsic(policy_name, policy, exploration)?;
+    let champion_route = policy
+        .routes
+        .get(&exploration.target_request_key)
+        .or(policy.default_tier.as_ref());
+    if champion_route != Some(&exploration.champion_tier) {
+        anyhow::bail!(
+            "policy '{policy_name}' optimization target_request_key must resolve to champion_tier"
+        )
+    }
+    Ok(())
+}
+
+fn validate_route_exploration_intrinsic(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    exploration: &RouteExploration,
+) -> Result<()> {
     validate_sha256_digest(&exploration.experiment_id, "optimization experiment_id")?;
     if !RouteProjection::is_canonical_learning_key(&exploration.target_request_key) {
         anyhow::bail!(
@@ -520,15 +538,6 @@ fn validate_route_exploration(
                 "policy '{policy_name}' optimization {label} must reference a defined tier"
             )
         }
-    }
-    let champion_route = policy
-        .routes
-        .get(&exploration.target_request_key)
-        .or(policy.default_tier.as_ref());
-    if champion_route != Some(&exploration.champion_tier) {
-        anyhow::bail!(
-            "policy '{policy_name}' optimization target_request_key must resolve to champion_tier"
-        )
     }
     if exploration.champion_tier == exploration.challenger_tier {
         anyhow::bail!("policy '{policy_name}' optimization treatments must differ")
@@ -854,6 +863,11 @@ fn is_default_derived_optimizer_certificate(
                 if target_request_key == request_key
                     && treatment.target_request_key == request_key
                     && treatment.champion_tier == certificate.selected_tier
+                    && policy
+                        .routes
+                        .get(request_key)
+                        .or(policy.default_tier.as_ref())
+                        == Some(&treatment.champion_tier)
                     && certificate.baseline_tier.as_ref() == Some(&treatment.champion_tier)
                     && rejection.experiment_id == treatment.experiment_id
                     && treatment.experiment_id == expected_experiment_id

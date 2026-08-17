@@ -1059,7 +1059,8 @@ mod tests {
     };
 
     use super::{
-        ControllerAction, OptimizationOptions, OptimizationStepInput, prepare_step,
+        ControllerAction, HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, OptimizationOptions,
+        OptimizationStepInput, prepare_step, prune_superseded_route_less_optimizer_certificates,
         select_opportunity, treatment_context_digest,
     };
 
@@ -1530,6 +1531,73 @@ mod tests {
     }
 
     #[test]
+    fn pruning_preserves_explicit_operator_and_other_compiler_certificates() -> Result<()> {
+        let request_key = "agent_trace/v2|edit|normal";
+        let mut explicit = lock();
+        let artifact = explicit
+            .artifact
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("test artifact is missing"))?;
+        artifact.compiler.id = HISTORY_OPTIMIZER_ID.into();
+        artifact.compiler.version = HISTORY_OPTIMIZER_VERSION;
+        artifact.compiler.config_digest = CONFIG_DIGEST.into();
+        artifact.evidence_root = SNAPSHOT_ROOT.into();
+        let certificate = explicit
+            .certificates
+            .get_mut("auto")
+            .and_then(|certificates| certificates.get_mut(request_key))
+            .ok_or_else(|| anyhow::anyhow!("test certificate is missing"))?;
+        certificate.owner = RouteOwner::Compiler;
+        certificate.source = CertificateSource::Mixed;
+        certificate.verdict = PromotionVerdict::Blocked;
+        certificate.compiler_config_digest = CONFIG_DIGEST.into();
+        certificate.evidence_digest = SNAPSHOT_ROOT.into();
+
+        prune_superseded_route_less_optimizer_certificates(&mut explicit);
+
+        assert!(explicit.certificate("auto", request_key).is_some());
+
+        let mut operator = explicit.clone();
+        operator
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test policy is missing"))?
+            .routes
+            .remove(request_key);
+        let certificate = operator
+            .certificates
+            .get_mut("auto")
+            .and_then(|certificates| certificates.get_mut(request_key))
+            .ok_or_else(|| anyhow::anyhow!("test certificate is missing"))?;
+        certificate.owner = RouteOwner::Operator;
+        certificate.source = CertificateSource::Operator;
+
+        prune_superseded_route_less_optimizer_certificates(&mut operator);
+
+        assert!(operator.certificate("auto", request_key).is_some());
+
+        let mut other_compiler = operator;
+        let certificate = other_compiler
+            .certificates
+            .get_mut("auto")
+            .and_then(|certificates| certificates.get_mut(request_key))
+            .ok_or_else(|| anyhow::anyhow!("test certificate is missing"))?;
+        certificate.owner = RouteOwner::Compiler;
+        certificate.source = CertificateSource::Mixed;
+        other_compiler
+            .artifact
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("test artifact is missing"))?
+            .compiler
+            .id = "other-optimizer".into();
+
+        prune_superseded_route_less_optimizer_certificates(&mut other_compiler);
+
+        assert!(other_compiler.certificate("auto", request_key).is_some());
+        Ok(())
+    }
+
+    #[test]
     fn champion_only_history_starts_exploration_without_promoting() -> Result<()> {
         let lock = lock();
         let snapshot = snapshot();
@@ -1955,7 +2023,7 @@ mod file_tests {
     use crate::eval::types::{
         EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject,
         EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem,
-        ExperimentArm, ExperimentAssignmentUnit, evidence_digest,
+        ExperimentArm, ExperimentAssignmentUnit, MetricUnit, MetricValue, evidence_digest,
     };
     use crate::optimization::controller::{
         ControllerAction, OptimizationOptions, prepare_files, publish_prepared,
@@ -2245,6 +2313,103 @@ mod file_tests {
             Ok(())
         }
 
+        async fn admit_passing_experiment(&self, id_suffix: &str) -> Result<()> {
+            let active = load(&self.policy_path).await?;
+            let exploration = active.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .and_then(|state| state.active.as_ref())
+                .context("passing experiment is not active")?;
+            let store = EvalStore::new(crate::db::connect(&self.database_url).await?);
+            let service =
+                EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+            for (arm, tier, cost) in [
+                (ExperimentArm::Control, "strong", 1_000),
+                (ExperimentArm::Challenger, "economy", 700),
+            ] {
+                for index in 0..3 {
+                    let subject_id = format!(
+                        "task-{id_suffix}-{}-{index}",
+                        match arm {
+                            ExperimentArm::Control => "control",
+                            ExperimentArm::Challenger => "challenger",
+                        }
+                    );
+                    let evidence = Vec::new();
+                    let digest = evidence_digest(&evidence)?;
+                    let eval_id = format!("eval-{subject_id}");
+                    let metrics = BTreeMap::from([
+                        (
+                            "trajectory.cost.usd_micros".into(),
+                            MetricValue::new(cost, MetricUnit::MicroUsd),
+                        ),
+                        (
+                            "trajectory.history_complete".into(),
+                            MetricValue::new(1, MetricUnit::Boolean),
+                        ),
+                    ]);
+                    let subject = EvalSubject {
+                        schema_version: EVAL_SCHEMA_VERSION,
+                        eval_id: eval_id.clone(),
+                        scope: EvalScope::Task,
+                        subject_id: subject_id.clone(),
+                        policy_digest: active.digest.clone(),
+                        preset: Some("auto".into()),
+                        cohort: None,
+                        holdout: false,
+                        decisions: vec![EvalDecisionRef {
+                            decision_id: format!("decision-{subject_id}"),
+                            policy: "auto".into(),
+                            request_key: exploration.target_request_key.clone(),
+                            selected_tier: tier.into(),
+                            selected_effort: None,
+                            baseline_tier: None,
+                            baseline_effort: None,
+                            policy_digest: active.digest.clone(),
+                            experiment: Some(EvalExperimentRef {
+                                experiment_id: exploration.experiment_id.clone(),
+                                arm,
+                                assignment_unit: ExperimentAssignmentUnit::Task,
+                                assignment_id_digest: SHA.into(),
+                                challenger_propensity_ppm: exploration.challenger_exposure_ppm,
+                            }),
+                        }],
+                        requested_dimensions: metrics.keys().cloned().collect(),
+                        evidence,
+                        evidence_digest: digest.clone(),
+                        observed_at: "2026-08-17T00:00:04Z".into(),
+                    };
+                    store.insert_subject(&subject).await?;
+                    service
+                        .submit(
+                            EvaluationResult {
+                                schema_version: EVAL_SCHEMA_VERSION,
+                                eval_id,
+                                evidence_digest: digest,
+                                evaluator: EvaluatorIdentity {
+                                    authority_id: "local".into(),
+                                    evaluator_id: "history".into(),
+                                    kind: EvaluatorKind::TaskNative,
+                                    version: "1".into(),
+                                    config_digest: SHA.into(),
+                                },
+                                verdict: EvalVerdict::Pass,
+                                metrics,
+                                hard_violations: Vec::new(),
+                                confidence_ppm: None,
+                                evidence_refs: Vec::new(),
+                                decision_credit: BTreeMap::new(),
+                                idempotency_key: format!("result-{subject_id}"),
+                                submitted_at: "2026-08-17T00:00:05Z".into(),
+                            },
+                            SubmissionPrincipal::LocalOperator,
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+
         async fn snapshot_count(&self) -> Result<i64> {
             let database = crate::db::connect(&self.database_url).await?;
             let row = database
@@ -2453,10 +2618,98 @@ mod file_tests {
         assert!(successor.policies["auto"].routes.is_empty());
         assert!(successor.certificate("auto", REQUEST_KEY).is_none());
         assert_eq!(
+            successor.policies["auto"]
+                .optimization
+                .as_ref()
+                .map(|state| state.rejections.as_slice()),
+            retreated.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .map(|state| state.rejections.as_slice())
+        );
+        assert_eq!(
+            successor.policies["auto"]
+                .optimization
+                .as_ref()
+                .map(|state| state.rejections.len()),
+            Some(1)
+        );
+        assert_eq!(
             successor
                 .certificate("auto", SECOND_REQUEST_KEY)
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Experiment)
+        );
+        validate_document(successor)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn historical_rejection_survives_changed_context_explore_and_promotion() -> Result<()> {
+        let harness = Harness::new_initialized().await?;
+        harness.admit_champion_history().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        harness.admit_challenger_hard_failure().await?;
+        publish_prepared(
+            prepare_files(&harness.config_path, OptimizationOptions::default()).await?,
+        )
+        .await?;
+        let retreated = load(&harness.policy_path).await?;
+        let historical_rejection = retreated.document.policies["auto"]
+            .optimization
+            .as_ref()
+            .and_then(|state| state.rejections.first())
+            .context("first retreat did not retain its rejection")?
+            .clone();
+        harness
+            .admit_champion_history_for(REQUEST_KEY, "changed-context")
+            .await?;
+        let changed_options = OptimizationOptions {
+            challenger_exposure_ppm: 200_000,
+            ..Default::default()
+        };
+        let explore = prepare_files(&harness.config_path, changed_options).await?;
+        assert_eq!(explore.step.action, ControllerAction::Explore);
+        publish_prepared(explore).await?;
+        let exploring = load(&harness.policy_path).await?;
+        assert_eq!(
+            exploring.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .and_then(|state| state.active.as_ref())
+                .map(|active| active.challenger_exposure_ppm),
+            Some(200_000)
+        );
+        assert_eq!(
+            exploring.document.policies["auto"]
+                .optimization
+                .as_ref()
+                .map(|state| state.rejections.as_slice()),
+            Some(std::slice::from_ref(&historical_rejection))
+        );
+        harness.admit_passing_experiment("changed-context").await?;
+
+        let promote = prepare_files(&harness.config_path, OptimizationOptions::default()).await?;
+        assert_eq!(promote.step.action, ControllerAction::Promote);
+        let successor = promote
+            .step
+            .successor
+            .as_ref()
+            .context("promotion has no successor")?;
+
+        assert_eq!(
+            successor.policies["auto"].routes.get(REQUEST_KEY),
+            Some(&"economy".to_string())
+        );
+        assert_eq!(
+            successor.policies["auto"]
+                .optimization
+                .as_ref()
+                .map(|state| state.rejections.as_slice()),
+            Some(std::slice::from_ref(&historical_rejection))
         );
         validate_document(successor)?;
         Ok(())

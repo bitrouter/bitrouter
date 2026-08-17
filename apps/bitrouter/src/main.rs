@@ -3892,6 +3892,7 @@ async fn reload_policy_if_reachable(
 enum OptimizationRecoveryRevision {
     Parent,
     Child,
+    Both,
     Other(String),
 }
 
@@ -3916,8 +3917,13 @@ impl OptimizationRecoveryRevision {
         match self {
             Self::Parent => "parent",
             Self::Child => "child",
+            Self::Both => "parent and child (identical bytes)",
             Self::Other(detail) => detail,
         }
+    }
+
+    fn is_child(&self) -> bool {
+        matches!(self, Self::Child | Self::Both)
     }
 }
 
@@ -3927,7 +3933,11 @@ async fn observe_optimization_recovery_pair(
 ) -> Result<OptimizationRecoveryPair> {
     let config = std::fs::read_to_string(&publication.config_path)
         .with_context(|| format!("reading {}", publication.config_path.display()))?;
-    let config = if config == publication.config_before {
+    let config = if publication.config_before == publication.config_after
+        && config == publication.config_before
+    {
+        OptimizationRecoveryRevision::Both
+    } else if config == publication.config_before {
         OptimizationRecoveryRevision::Parent
     } else if config == publication.config_after {
         OptimizationRecoveryRevision::Child
@@ -4143,11 +4153,7 @@ where
                 "daemon rejected optimization publication ({initial_detail}); reading recovery state failed: {recovery:#}"
             )
         })?;
-    if initial_pair
-        != (OptimizationRecoveryPair {
-            config: OptimizationRecoveryRevision::Child,
-            policy: OptimizationRecoveryRevision::Child,
-        })
+    if !initial_pair.config.is_child() || initial_pair.policy != OptimizationRecoveryRevision::Child
     {
         return Err(initial_error.context(format!(
             "daemon rejected optimization publication; recovery is stale because the active pair is {}",
@@ -4176,11 +4182,23 @@ where
             )
         })?;
     match (&after_policy.config, &after_policy.policy) {
-        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Child) => {
+        (
+            OptimizationRecoveryRevision::Child | OptimizationRecoveryRevision::Both,
+            OptimizationRecoveryRevision::Child,
+        ) => {
             return reload_reconciled_optimization_pair(
                 &reload,
                 &initial_error,
                 "child",
+                &recovery_errors,
+            )
+            .await;
+        }
+        (OptimizationRecoveryRevision::Both, OptimizationRecoveryRevision::Parent) => {
+            return reload_reconciled_optimization_pair(
+                &reload,
+                &initial_error,
+                "parent",
                 &recovery_errors,
             )
             .await;
@@ -4258,11 +4276,8 @@ where
                 &recovery_errors,
             )
         })?;
-    if after_compensation
-        == (OptimizationRecoveryPair {
-            config: OptimizationRecoveryRevision::Child,
-            policy: OptimizationRecoveryRevision::Child,
-        })
+    if after_compensation.config.is_child()
+        && after_compensation.policy == OptimizationRecoveryRevision::Child
     {
         return reload_reconciled_optimization_pair(
             &reload,
@@ -6261,6 +6276,194 @@ mod tests {
             child_document,
             publication,
         })
+    }
+
+    #[tokio::test]
+    async fn optimizer_reload_recovery_restores_an_adaptive_publication_with_identical_config()
+    -> anyhow::Result<()> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use bitrouter::eval::EvalService;
+        use bitrouter::eval::admission::SubmissionPrincipal;
+        use bitrouter::eval::store::EvalStore;
+        use bitrouter::eval::types::{
+            EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict,
+            EvaluationResult, EvaluatorIdentity, EvaluatorKind, EvidenceItem, evidence_digest,
+        };
+
+        const EVIDENCE_DIGEST: &str =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        let database_path = directory.path().join("eval.db");
+        let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+        std::fs::write(
+            &config_path,
+            "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n",
+        )?;
+        let database = bitrouter::db::connect(&database_url).await?;
+        bitrouter::db::run_migrations(&database).await?;
+        drop(database);
+        let initialized = bitrouter::policy_lock::initialize_files(
+            &config_path,
+            "auto",
+            "auto",
+            Some("strong-model"),
+            "economy-model",
+        )
+        .await?;
+        let frozen_config = std::fs::read_to_string(&config_path)?;
+        let adaptive_config = bitrouter::policy_lock::edit_config_mode(
+            &frozen_config,
+            config::PolicyRuntimeMode::Adaptive,
+        )?;
+        std::fs::write(&config_path, &adaptive_config)?;
+        let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
+        let service = EvalService::new(store.clone(), bitrouter_sdk::config::EvalConfig::default());
+        for (scope, subject_id, cost) in [
+            (EvalScope::Request, "request-adaptive-recovery", Some("900")),
+            (EvalScope::Task, "task-adaptive-recovery", None),
+        ] {
+            let evidence = cost.map_or_else(Vec::new, |cost| {
+                vec![EvidenceItem {
+                    evidence_id: format!("evidence-{subject_id}"),
+                    kind: "request.outcome".into(),
+                    digest: EVIDENCE_DIGEST.into(),
+                    redacted: true,
+                    attributes: BTreeMap::from([("cost_micro_usd".into(), cost.into())]),
+                }]
+            });
+            let digest = evidence_digest(&evidence)?;
+            let eval_id = format!("eval-{subject_id}");
+            let subject = EvalSubject {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: eval_id.clone(),
+                scope,
+                subject_id: subject_id.into(),
+                policy_digest: initialized.digest.clone(),
+                preset: Some("auto".into()),
+                cohort: None,
+                holdout: false,
+                decisions: vec![EvalDecisionRef {
+                    decision_id: format!("decision-{subject_id}"),
+                    policy: "auto".into(),
+                    request_key: "agent_trace/v2|edit|normal".into(),
+                    selected_tier: "strong".into(),
+                    selected_effort: None,
+                    baseline_tier: None,
+                    baseline_effort: None,
+                    policy_digest: initialized.digest.clone(),
+                    experiment: None,
+                }],
+                requested_dimensions: BTreeSet::new(),
+                evidence,
+                evidence_digest: digest.clone(),
+                observed_at: "2026-08-17T00:00:00Z".into(),
+            };
+            store.insert_subject(&subject).await?;
+            service
+                .submit(
+                    EvaluationResult {
+                        schema_version: EVAL_SCHEMA_VERSION,
+                        eval_id,
+                        evidence_digest: digest,
+                        evaluator: EvaluatorIdentity {
+                            authority_id: "local".into(),
+                            evaluator_id: "history".into(),
+                            kind: EvaluatorKind::TaskNative,
+                            version: "1".into(),
+                            config_digest: EVIDENCE_DIGEST.into(),
+                        },
+                        verdict: if scope == EvalScope::Request {
+                            EvalVerdict::Inconclusive
+                        } else {
+                            EvalVerdict::Pass
+                        },
+                        metrics: BTreeMap::new(),
+                        hard_violations: Vec::new(),
+                        confidence_ppm: None,
+                        evidence_refs: Vec::new(),
+                        decision_credit: BTreeMap::new(),
+                        idempotency_key: format!("result-{subject_id}"),
+                        submitted_at: "2026-08-17T00:00:01Z".into(),
+                    },
+                    SubmissionPrincipal::LocalOperator,
+                )
+                .await?;
+        }
+        let prepared = bitrouter::optimization::controller::prepare_files(
+            &config_path,
+            bitrouter::optimization::controller::OptimizationOptions::default(),
+        )
+        .await?;
+        let publication = bitrouter::optimization::controller::publish_prepared(prepared).await?;
+        let policy_path = publication
+            .update
+            .as_ref()
+            .map(|update| update.path.clone())
+            .context("adaptive optimizer publication has no policy update")?;
+        assert_eq!(publication.config_before, adaptive_config);
+        assert_eq!(publication.config_after, adaptive_config);
+        assert!(!publication.config_activated);
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let live = Arc::new(std::sync::Mutex::new((
+            config::PolicyRuntimeMode::Adaptive,
+            initialized.digest.clone(),
+        )));
+        let reload = {
+            let attempts = attempts.clone();
+            let live = live.clone();
+            let config_path = config_path.clone();
+            let policy_path = policy_path.clone();
+            move || {
+                let attempts = attempts.clone();
+                let live = live.clone();
+                let config_path = config_path.clone();
+                let policy_path = policy_path.clone();
+                async move {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        anyhow::bail!("injected adaptive daemon rejection of child policy")
+                    }
+                    let raw = std::fs::read_to_string(config_path)?;
+                    let mode = bitrouter_sdk::config::parse(&raw)?.policy.mode;
+                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
+                    *live
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
+                        (mode, digest);
+                    Ok(())
+                }
+            }
+        };
+
+        let error =
+            reload_optimization_publication_or_restore_with(&publication, reload, || Ok(()))
+                .await
+                .err()
+                .context("injected adaptive daemon rejection unexpectedly succeeded")?;
+        let detail = format!("{error:#}");
+
+        assert!(detail.contains("injected adaptive daemon rejection of child policy"));
+        assert!(detail.contains("reconciled and reloaded the parent"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read_to_string(&config_path)?, adaptive_config);
+        assert_eq!(
+            bitrouter_sdk::config::parse(&std::fs::read_to_string(&config_path)?)?
+                .policy
+                .mode,
+            config::PolicyRuntimeMode::Adaptive
+        );
+        assert_eq!(
+            bitrouter::policy_lock::load(&policy_path).await?.digest,
+            initialized.digest
+        );
+        assert_eq!(
+            *live
+                .lock()
+                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
+            (config::PolicyRuntimeMode::Adaptive, initialized.digest)
+        );
+        Ok(())
     }
 
     #[tokio::test]
