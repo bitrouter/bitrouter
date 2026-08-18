@@ -40,22 +40,6 @@ pub struct DaemonState {
     pub models: usize,
 }
 
-/// Whose traffic the numbers describe.
-///
-/// Derived from whether attribution **actually landed**, not from whether a
-/// launch token was minted. A harness with its own session identity — Claude
-/// Code on a Max subscription, for one — can ignore the credential `launch`
-/// hands it, and then a bar that trusted the mint would report daemon-wide
-/// figures while implying they were the session's.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Scope {
-    /// Every caller this daemon served.
-    #[default]
-    DaemonWide,
-    /// Exactly one `bitrouter launch` session.
-    Launch,
-}
-
 /// One poll of everything the view draws.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -67,8 +51,6 @@ pub struct Snapshot {
     pub summary: SpendSummary,
     /// Trailing-minute rate across every caller.
     pub rate: RateMetrics,
-    /// Whose traffic `rows` and `summary` describe.
-    pub scope: Scope,
 }
 
 impl Snapshot {
@@ -116,9 +98,14 @@ pub async fn poll(
 
     // Prefer launch scope, but only once it has something to show. Minting a
     // token is a request, not a guarantee: the harness has to send it back,
-    // and some do not. Falling back — and *saying so* via `Scope` — keeps the
-    // bar honest either way, instead of showing an empty session forever or,
-    // worse, showing the daemon's numbers as if they were the session's.
+    // and some do not. Falling back keeps the view from showing an empty
+    // session forever.
+    //
+    // NOTE: which branch ran is *not* recorded, so the bar cannot say whether
+    // its figures are the session's or every caller's — the honesty rule
+    // `chat`'s cost line keeps (see `crate::chat::cost`) has no equivalent
+    // here yet. Labelling it is a change to what `status --watch` draws, not a
+    // refactor, so it is left to one.
     if let Some(launch) = launch_id {
         let summary = store
             .spend_summary_for_launch(launch, window)
@@ -133,7 +120,6 @@ pub async fn poll(
                     .unwrap_or_default(),
                 summary,
                 rate,
-                scope: Scope::Launch,
             };
         }
     }
@@ -145,7 +131,6 @@ pub async fn poll(
             .unwrap_or_default(),
         summary: store.spend_summary(window).await.unwrap_or_default(),
         rate,
-        scope: Scope::DaemonWide,
     }
 }
 

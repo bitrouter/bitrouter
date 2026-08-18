@@ -5,6 +5,7 @@ use std::path::Path;
 
 use bitrouter_cloud_sdk::settlement::{SettlementReceipt, SettlementState};
 use bitrouter_sdk::language_model::UsageOrigin;
+use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -144,6 +145,14 @@ pub struct SemanticPolicyTransitionCandidate {
     pub static_model: Option<String>,
     pub selected_model: Option<String>,
     pub model_transition: Option<String>,
+    #[serde(default)]
+    pub static_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub selected_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub effort_transition: Option<String>,
+    #[serde(default)]
+    pub target_transition: Option<String>,
     pub reason: String,
 }
 
@@ -1017,7 +1026,8 @@ fn semantic_policy_transition_candidates(
             let usage = usage_by_request_id.get(request_id).copied();
             let tier_changed = changed(&decision.static_tier, &decision.selected_tier);
             let model_changed = changed(&decision.static_model, &decision.selected_model);
-            if !tier_changed && !model_changed {
+            let effort_changed = decision.static_effort != decision.selected_effort;
+            if !tier_changed && !model_changed && !effort_changed {
                 return None;
             }
             Some(SemanticPolicyTransitionCandidate {
@@ -1042,6 +1052,18 @@ fn semantic_policy_transition_candidates(
                 model_transition: transition_option(
                     &decision.static_model,
                     &decision.selected_model,
+                ),
+                static_effort: decision.static_effort,
+                selected_effort: decision.selected_effort,
+                effort_transition: effort_transition_option(
+                    decision.static_effort,
+                    decision.selected_effort,
+                ),
+                target_transition: target_transition_option(
+                    decision.static_model.as_deref(),
+                    decision.static_effort,
+                    decision.selected_model.as_deref(),
+                    decision.selected_effort,
                 ),
                 reason: decision.reason.clone(),
             })
@@ -1092,9 +1114,43 @@ fn changed(left: &Option<String>, right: &Option<String>) -> bool {
 
 fn transition_option(left: &Option<String>, right: &Option<String>) -> Option<String> {
     match (left.as_deref(), right.as_deref()) {
-        (Some(left), Some(right)) => Some(format!("{left} -> {right}")),
+        (Some(left), Some(right)) if left != right => Some(format!("{left} -> {right}")),
         _ => None,
     }
+}
+
+fn effort_transition_option(
+    left: Option<ReasoningEffort>,
+    right: Option<ReasoningEffort>,
+) -> Option<String> {
+    (left != right).then(|| {
+        format!(
+            "{} -> {}",
+            left.map_or("default", ReasoningEffort::as_str),
+            right.map_or("default", ReasoningEffort::as_str)
+        )
+    })
+}
+
+fn target_transition_option(
+    left_model: Option<&str>,
+    left_effort: Option<ReasoningEffort>,
+    right_model: Option<&str>,
+    right_effort: Option<ReasoningEffort>,
+) -> Option<String> {
+    let (Some(left_model), Some(right_model)) = (left_model, right_model) else {
+        return None;
+    };
+    if left_model == right_model && left_effort == right_effort {
+        return None;
+    }
+    Some(format!(
+        "{}@{} -> {}@{}",
+        left_model,
+        left_effort.map_or("default", ReasoningEffort::as_str),
+        right_model,
+        right_effort.map_or("default", ReasoningEffort::as_str)
+    ))
 }
 
 fn micro_usd_to_usd(value: u64) -> f64 {

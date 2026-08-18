@@ -17,7 +17,9 @@ use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::CausalPrefixCommitment;
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
+use crate::language_model::types::{
+    ApiProtocol, FinishReason, ReasoningEffort, RoutingTarget, UsageOrigin,
+};
 
 /// Success-only lifecycle data supplied to required finalizers before a
 /// response is allowed to advertise successful completion.
@@ -33,6 +35,8 @@ pub struct RequiredFinalizationContext {
     pub target: Option<RoutingTarget>,
     /// Public logical model selector resolved for the successful request.
     pub effective_model: String,
+    /// Canonical effort that produced the continuation, when present.
+    pub effective_effort: Option<ReasoningEffort>,
     /// Fixed-size rolling commitment to the delivered causal message prefix.
     pub causal_prefix_commitment: Option<CausalPrefixCommitment>,
     /// Inbound client protocol.
@@ -294,6 +298,8 @@ pub struct SettlementContext {
     pub target: Option<RoutingTarget>,
     /// Resolved model id, including the attempted model on execution failure.
     pub model_id: String,
+    /// Canonical effort applied to the settled request, when present.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Resolved provider id, including the attempted provider on execution
     /// failure.
     pub provider_id: String,
@@ -417,6 +423,7 @@ mod tests {
             caller: CallerContext::local(),
             target: None,
             model_id: "test-model".into(),
+            reasoning_effort: None,
             provider_id: "test-provider".into(),
             account_label: None,
             prompt_tokens: 0,

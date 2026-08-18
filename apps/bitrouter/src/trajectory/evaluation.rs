@@ -266,16 +266,32 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
         .get("route.policy_lock")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing policy digest"))?;
+    let selected_effort = event
+        .evidence
+        .categorical
+        .get("route.selected_effort")
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let baseline_effort = event
+        .evidence
+        .categorical
+        .get("route.baseline_effort")
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
         request_key: required("route.request_key")?,
         selected_tier: required("route.selected_tier")?,
+        selected_effort,
         baseline_tier: event
             .evidence
             .categorical
             .get("route.baseline_tier")
             .cloned(),
+        baseline_effort,
         policy_digest,
     }))
 }

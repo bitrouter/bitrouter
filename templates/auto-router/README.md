@@ -1,9 +1,24 @@
-# Predictive `@auto:cost` routing
+# Predictive `bitrouter/auto:cost` routing
 
 This starter policy predicts the role of the next response from the native
 prompt and causal history, then selects a tier from the resulting
 `agent_route/v1|<role>|<risk>` key. It uses GPT-5.6 as the strong route, Kimi K3
 as the balanced route, and DeepSeek V4 Pro as the economy route.
+
+Tier values are model targets. The scalar form above remains compatible and
+preserves a caller-supplied reasoning effort. For a model that positively
+declares exact effort support in the registry, a tier may instead own effort:
+
+```yaml
+tiers:
+  strong: { model: "openai-codex:gpt-5.6-sol", effort: high }
+  economy: { model: "openai-codex:gpt-5.6-sol", effort: low }
+```
+
+Those are distinct routing targets even though they share a model. Predictor,
+tool guard, progress guard, continuation, evidence, and fallback behavior stay
+the same; the selected effort is applied by the BitRouter daemon and rendered
+in the upstream protocol's native field.
 
 The frozen mapping is intentionally aggressive: normal mechanical and verify
 work uses economy; implementation, finalization, and context-heavy work mostly
@@ -23,11 +38,12 @@ lock. Traces, metering, eval subjects/results, snapshots, and separate candidate
 exports remain available. Set `policy.mode: adaptive` only when the process may
 publish a reviewed candidate; it does not enable request-time learning.
 
-Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
-cost routing variant. Physical model ids remain passthrough, so an explicit
-`openai-codex:gpt-5.6-sol` request is not converted to a preset.
+Use `bitrouter/auto` for the strong base policy, or `bitrouter/auto:cost` to add
+the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
+form addresses the same policy. Physical model ids remain passthrough, so an
+explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v2 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
+The v3 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
 are `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
 bands are `normal`, `context`, and `guarded`. Runtime adapters may enrich
 diagnostics from native request shapes, but headers and harness identity do not

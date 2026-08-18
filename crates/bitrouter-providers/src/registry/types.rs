@@ -345,6 +345,9 @@ pub struct RegistryModel {
     /// Positively verified model features from the public registry.
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// Positively verified qualitative effort levels for this exact route.
+    #[serde(default)]
+    pub reasoning_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffortConfig>,
     /// Provider/model request-shape compatibility settings.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -448,6 +451,10 @@ mod tests {
                         "provider_model_id": "claude-sonnet-4-6",
                         "api_protocol": "anthropic",
                         "capabilities": ["reasoning", "tools"],
+                        "reasoning_effort": {
+                            "levels": ["low", "medium", "high", "xhigh"],
+                            "default": "high"
+                        },
                         "rate_limits": { "requests_per_minute": 60 },
                         "pricing": {
                             "input_tokens": { "no_cache": 3, "cache_read": 0.3 },
@@ -513,6 +520,11 @@ mod tests {
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");
         assert_eq!(m.provider_model_id, "claude-sonnet-4-6");
         assert_eq!(m.capabilities, [Capability::Reasoning, Capability::Tools]);
+        assert!(m.reasoning_effort.is_some());
+        assert_eq!(
+            m.reasoning_effort.as_ref().and_then(|value| value.default),
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
+        );
         // Resolved per-model protocol + rate limits (no glob to resolve here).
         assert_eq!(
             m.api_protocol,

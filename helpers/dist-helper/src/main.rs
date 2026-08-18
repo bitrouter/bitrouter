@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod changelog;
+mod chart;
 mod registry;
 mod schema;
 
@@ -35,6 +36,12 @@ enum Command {
     Changelog {
         #[command(subcommand)]
         command: ChangelogCommand,
+    },
+    /// Render the README registry chart SVGs (light + dark).
+    Chart {
+        /// Directory to write `registry-by-lab{,-dark}.svg` into.
+        #[arg(long, default_value = "dist/charts")]
+        out: PathBuf,
     },
     /// Check every committed dist artifact managed by this helper.
     Check,
@@ -101,6 +108,7 @@ async fn run(cli: Cli) -> Result<()> {
             ChangelogCommand::Check => changelog::check(&root),
             ChangelogCommand::Fold => changelog::fold(&root),
         },
+        Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {
             schema::generate(&root, true)?;
             registry::build(&root, true)?;

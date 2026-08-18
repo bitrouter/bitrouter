@@ -106,6 +106,8 @@ Public providers are defined as YAML files under [`registry/providers`](registry
 3. Regenerate and verify the generated registry artifacts: `cargo run -p dist-helper -- registry build && cargo run -p dist-helper -- check`.
 4. Update docs (in `bitrouter-docs`) if the public provider list or onboarding guidance changes — the `supported-*` tables regenerate on the docs site from the committed `dist/registry`.
 
+The README's model-catalog chart also regenerates from the committed `dist/registry` — the `Registry Chart` workflow renders it on every push to `main` that touches the catalog and pushes the SVGs to the orphan `charts` branch, so there is nothing to update by hand. To preview it locally, run `cargo run -p dist-helper -- chart` and open `dist/charts/registry-by-lab.svg` (that directory is build output, not committed).
+
 ### Adding a new provider
 
 If the provider uses an already-supported wire protocol (Chat Completions, Responses, Messages, Generate Content):

@@ -15,6 +15,18 @@ rate_limits:
 # Catalog source: https://models.dev/api.json (provider key `xai`); >200k tier on Grok 4 family doubles the base price listed here.
 # Pricing is per 1M tokens.
 models:
+  # Official model and pricing: https://docs.x.ai/developers/models/grok-4.6
+  - id: x-ai/grok-4.6
+    provider_model_id: grok-4.6
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
+    capabilities:
+      - reasoning
+      - tools
   - id: x-ai/grok-4.5
     provider_model_id: grok-4.5
     # Pricing from the xAI API catalog ($2.00 in / $6.00 out per 1M, $0.50

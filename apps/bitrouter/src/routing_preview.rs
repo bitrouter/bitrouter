@@ -102,7 +102,14 @@ impl RoutingPreview {
                 Ok(DaemonResponse::Route { chain }) => {
                     // The daemon applied its own policy to produce the chain, so
                     // there's no separate static decision to surface here.
-                    return Ok(self.report(&args.model, &args.model, "live daemon", None, &chain));
+                    return Ok(self.report(
+                        &args.model,
+                        &args.model,
+                        None,
+                        "live daemon",
+                        None,
+                        &chain,
+                    ));
                 }
                 Ok(DaemonResponse::Error { message }) => {
                     anyhow::bail!("resolving model '{}': {message}", args.model);
@@ -128,6 +135,9 @@ impl RoutingPreview {
             .as_ref()
             .and_then(|d| d.selected_model.clone())
             .unwrap_or_else(|| args.model.clone());
+        let effective_effort = decision
+            .as_ref()
+            .and_then(|decision| decision.selected_effort);
         let chain: Vec<RouteHop> = self
             .table
             .route_chain(
@@ -147,6 +157,7 @@ impl RoutingPreview {
         Ok(self.report(
             &args.model,
             &effective_model,
+            effective_effort,
             "config",
             decision.as_ref(),
             &chain,
@@ -161,6 +172,7 @@ impl RoutingPreview {
         &self,
         requested_model: &str,
         effective_model: &str,
+        effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
         resolved_via: &str,
         decision: Option<&PolicyDecision>,
         chain: &[RouteHop],
@@ -177,6 +189,7 @@ impl RoutingPreview {
         serde_json::json!({
             "requested_model": requested_model,
             "effective_model": effective_model,
+            "effective_effort": effective_effort,
             "resolved_via": resolved_via,
             "policy_decision": decision.map(decision_json),
             "provider_chain": chain
@@ -231,8 +244,10 @@ fn decision_json(d: &PolicyDecision) -> serde_json::Value {
         "reason": d.reason.to_string(),
         "static_tier": d.static_tier,
         "static_model": d.static_model,
+        "static_effort": d.static_effort,
         "selected_tier": d.selected_tier,
         "selected_model": d.selected_model,
+        "selected_effort": d.selected_effort,
         "pinned": d.pinned,
         "locked": d.locked,
         "trialed": d.trialed,

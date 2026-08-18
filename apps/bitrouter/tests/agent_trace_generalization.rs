@@ -1276,9 +1276,9 @@ fn predictive_matrix_router() -> PolicyTableRouter {
     PolicyTableRouter::from_config(&PolicyTableConfig {
         key_strategy: PolicyKeyStrategy::AgentTrace,
         tiers: HashMap::from([
-            ("strong".to_string(), "vendor/strong".to_string()),
-            ("economy".to_string(), "vendor/economy".to_string()),
-            ("balanced".to_string(), "vendor/balanced".to_string()),
+            ("strong".to_string(), "vendor/strong".into()),
+            ("economy".to_string(), "vendor/economy".into()),
+            ("balanced".to_string(), "vendor/balanced".into()),
         ]),
         fingerprints: HashMap::from([
             (
@@ -1601,11 +1601,11 @@ fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf, TempDi
         .get_mut("auto")
         .expect("template auto policy exists");
     auto.tiers
-        .insert("strong".to_string(), MOCK_STRONG_MODEL.to_string());
+        .insert("strong".to_string(), MOCK_STRONG_MODEL.into());
     auto.tiers
-        .insert("balanced".to_string(), MOCK_BALANCED_MODEL.to_string());
+        .insert("balanced".to_string(), MOCK_BALANCED_MODEL.into());
     auto.tiers
-        .insert("economy".to_string(), MOCK_ECONOMY_MODEL.to_string());
+        .insert("economy".to_string(), MOCK_ECONOMY_MODEL.into());
     let mock_lock_path = config_dir.path().join("policy-lock.yaml");
     let mock_lock_yaml = serde_saphyr::to_string(&lock).expect("serialize mock policy lock");
     std::fs::write(&mock_lock_path, mock_lock_yaml).expect("write mock policy lock");

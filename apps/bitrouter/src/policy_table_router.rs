@@ -27,8 +27,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
-use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
-use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
+use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
+use bitrouter_sdk::language_model::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::continuation::ContinuationAdjustment;
@@ -84,12 +84,16 @@ pub struct PolicyDecision {
     pub workflow_state_kind: String,
     pub harness_id: HarnessId,
     pub workflow_identity: WorkflowIdentity,
+    pub input_effort: Option<ReasoningEffort>,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
+    pub static_effort: Option<ReasoningEffort>,
     pub selected_tier: Option<String>,
     pub selected_model: Option<String>,
+    pub selected_effort: Option<ReasoningEffort>,
     pub continuation_proposed_tier: Option<String>,
     pub continuation_proposed_model: Option<String>,
+    pub continuation_proposed_effort: Option<ReasoningEffort>,
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
@@ -130,7 +134,7 @@ impl PolicyDecision {
 /// guardrails. Learned-state databases never participate in this hot path.
 pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
-    tiers: HashMap<String, String>,
+    tiers: HashMap<String, PolicyModelTarget>,
     /// Request fingerprint → tier name.
     fingerprints: HashMap<String, String>,
     /// Tier for a fingerprint absent from `fingerprints`.
@@ -156,6 +160,22 @@ impl PolicyTable {
             tool_use_tier: config.tool_use_tier.clone(),
             tool_safe_tiers: config.tool_safe_tiers.clone(),
         }))
+    }
+
+    /// A spec that routes nothing.
+    ///
+    /// What a reload installs when the fresh config defines no tiers. The
+    /// transform is baked into the built `App` and cannot be unregistered, so
+    /// "no policy table" has to be expressible as a table: every lookup misses,
+    /// so `route_prompt` leaves the caller's model alone.
+    pub fn inert() -> Arc<Self> {
+        Arc::new(Self {
+            tiers: HashMap::new(),
+            fingerprints: HashMap::new(),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+        })
     }
 
     /// Resolve the predictive key, then observed v2 and v1 compatibility
@@ -191,14 +211,38 @@ impl PolicyTable {
 
     /// The model id a tier routes to.
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
-        self.tiers.get(tier).map(String::as_str)
+        self.target_of_tier(tier).map(PolicyModelTarget::model)
     }
 
-    fn stable_tier_of_model(&self, model: &str) -> Option<&str> {
+    /// The policy-owned effort override for a tier, when the target is
+    /// structured. Scalar targets intentionally preserve caller effort.
+    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
+        self.target_of_tier(tier)
+            .and_then(PolicyModelTarget::effort)
+    }
+
+    /// The complete model/effort target selected by a tier.
+    pub(crate) fn target_of_tier(&self, tier: &str) -> Option<&PolicyModelTarget> {
+        self.tiers.get(tier)
+    }
+
+    fn stable_tier_of_target(&self, model: &str, effort: Option<ReasoningEffort>) -> Option<&str> {
         self.tiers
             .iter()
-            .filter_map(|(tier, candidate)| (candidate == model).then_some(tier.as_str()))
+            .filter_map(|(tier, candidate)| {
+                (candidate.model() == model && candidate.effort() == effort)
+                    .then_some(tier.as_str())
+            })
             .min()
+            .or_else(|| {
+                self.tiers
+                    .iter()
+                    .filter_map(|(tier, candidate)| {
+                        (candidate.model() == model && candidate.effort().is_none())
+                            .then_some(tier.as_str())
+                    })
+                    .min()
+            })
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -248,7 +292,23 @@ impl PolicyTable {
 /// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
 /// (`None` when no tiers are defined) or [`PolicyTableRouter::new`].
 pub struct PolicyTableRouter {
-    table: Arc<PolicyTable>,
+    /// Swappable so `bitrouter reload` can install a fresh spec into the
+    /// *live* transform. The router itself is baked into the built `App` and
+    /// cannot be re-registered, so the reloadable unit has to be the table
+    /// inside it rather than the router around it.
+    ///
+    /// A plain `RwLock` rather than a channel or an async lock: reads happen
+    /// on the per-request hot path from [`PromptTransform::apply`], which is
+    /// synchronous, and writes happen once per reload.
+    table: std::sync::RwLock<Arc<PolicyTable>>,
+    /// Launch id → provider id, for sessions that asked to be rerouted
+    /// (`providers/set`, ACP_TUI_SPEC §6).
+    ///
+    /// Keyed by launch id so an override can only ever move the traffic of
+    /// the session that asked for it. A caller with no launch tag — anyone
+    /// authenticating with a real credential — is never matched, so no
+    /// override can reach them.
+    route_overrides: std::sync::RwLock<HashMap<String, String>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
@@ -272,7 +332,8 @@ impl PolicyTableRouter {
     /// transform. No adequacy ledger is attached.
     pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
         PolicyTable::from_config(config).map(|table| Self {
-            table,
+            table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -281,10 +342,80 @@ impl PolicyTableRouter {
         })
     }
 
+    /// The spec in force right now. Clones the `Arc` rather than handing out a
+    /// borrow so a concurrent [`Self::replace_table`] cannot invalidate a
+    /// decision already in progress: a request that started under the old
+    /// table finishes under it.
+    ///
+    /// A poisoned lock yields the value anyway. The alternative is a panic on
+    /// the request path over a writer that panicked while swapping a
+    /// declarative table — the stale spec is strictly the better failure.
+    fn table(&self) -> Arc<PolicyTable> {
+        match self.table.read() {
+            Ok(table) => Arc::clone(&table),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Install a freshly built spec into this live router (`bitrouter reload`).
+    ///
+    /// Returns whether the swap happened; a poisoned lock is reported rather
+    /// than silently dropping the operator's new table.
+    pub(crate) fn replace_table(&self, table: Arc<PolicyTable>) -> bool {
+        match self.table.write() {
+            Ok(mut current) => {
+                *current = table;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Point one session's traffic at `provider_id` until it is cleared.
+    ///
+    /// Returns whether the override was installed; a poisoned lock is reported
+    /// rather than silently dropping the request, because a caller that thinks
+    /// it switched provider and did not is exactly the failure this whole
+    /// surface exists to avoid.
+    pub fn set_route_override(&self, launch_id: &str, provider_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.insert(launch_id.to_string(), provider_id.to_string());
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Drop a session's override. Called when the session ends, so an override
+    /// cannot outlive the thing that asked for it and catch a later launch
+    /// that happens to reuse the id.
+    pub fn clear_route_override(&self, launch_id: &str) -> bool {
+        match self.route_overrides.write() {
+            Ok(mut overrides) => {
+                overrides.remove(launch_id);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The provider this request's session has been redirected to, if any.
+    fn route_override_for(&self, headers: &HeaderMap) -> Option<String> {
+        let launch_id = bitrouter_sdk::caller::launch_tag(
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        )?;
+        match self.route_overrides.read() {
+            Ok(overrides) => overrides.get(&launch_id).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(&launch_id).cloned(),
+        }
+    }
+
     /// Build a router over an immutable policy table.
     pub fn new(table: Arc<PolicyTable>) -> Self {
         Self {
-            table,
+            table: std::sync::RwLock::new(table),
+            route_overrides: std::sync::RwLock::new(HashMap::new()),
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
@@ -358,12 +489,34 @@ impl PolicyTableRouter {
             .or_else(|| decision.static_tier.clone())
     }
 
-    pub(crate) fn tool_use_tier(&self) -> Option<&str> {
-        self.table.tool_use_tier.as_deref()
+    /// Returns an owned value rather than a borrow: the table it reads is
+    /// swappable, so nothing inside it can outlive the call.
+    pub(crate) fn tool_use_tier(&self) -> Option<String> {
+        self.table().tool_use_tier.clone()
     }
 
     pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.table.tool_safe_tiers.iter().cloned().collect()
+        self.table().tool_safe_tiers.iter().cloned().collect()
+    }
+
+    pub(crate) fn effective_tier_efforts(
+        &self,
+        inherited: Option<ReasoningEffort>,
+    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
+        self.table()
+            .tiers
+            .iter()
+            .filter_map(|(tier, target)| {
+                target
+                    .effort()
+                    .or(inherited)
+                    .map(|effort| (tier.clone(), effort))
+            })
+            .collect()
+    }
+
+    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
+        self.table().effort_of_tier(tier)
     }
 
     fn ledger_key(&self, request_key: &str) -> String {
@@ -411,12 +564,16 @@ impl PolicyTableRouter {
             workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
             workflow_identity: online.ir.identity.clone(),
+            input_effort: prompt.params.reasoning_effort,
             static_tier: None,
             static_model: None,
+            static_effort: None,
             selected_tier: None,
             selected_model: None,
+            selected_effort: None,
             continuation_proposed_tier: None,
             continuation_proposed_model: None,
+            continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some(
                 prediction_role_name(online.predictive.next_step_role).to_string(),
@@ -451,7 +608,11 @@ impl PolicyTableRouter {
             return decision;
         }
 
-        let Some((raw_static_tier, matched_request_key)) = self.table.tier_for_workflow(
+        // One snapshot for the whole decision: a reload landing mid-decision
+        // must not let the tier and the model it maps to come from different
+        // tables.
+        let table = self.table();
+        let Some((raw_static_tier, matched_request_key)) = table.tier_for_workflow(
             &primary_request_key,
             &observed_route_projection,
             online.compatibility_routing_key_v1(),
@@ -460,12 +621,14 @@ impl PolicyTableRouter {
         };
         decision.request_key = matched_request_key.to_string();
         decision.static_tier = Some(raw_static_tier.to_string());
-        decision.static_model = self
-            .table
+        decision.static_model = table
             .model_of_tier(raw_static_tier)
             .map(ToString::to_string);
+        decision.static_effort = table
+            .effort_of_tier(raw_static_tier)
+            .or(decision.input_effort);
         let (selected_tier, static_clamped) = if apply_tool_floor {
-            self.table.guardrail_with_status(raw_static_tier, prompt)
+            table.guardrail_with_status(raw_static_tier, prompt)
         } else {
             (raw_static_tier, false)
         };
@@ -476,10 +639,10 @@ impl PolicyTableRouter {
         };
 
         decision.selected_tier = Some(selected_tier.to_string());
-        decision.selected_model = self
-            .table
-            .model_of_tier(selected_tier)
-            .map(ToString::to_string);
+        decision.selected_model = table.model_of_tier(selected_tier).map(ToString::to_string);
+        decision.selected_effort = table
+            .effort_of_tier(selected_tier)
+            .or(decision.input_effort);
         if decision.selected_model.is_none() {
             decision.reason = PolicyDecisionReason::NoMatch;
         }
@@ -487,17 +650,39 @@ impl PolicyTableRouter {
     }
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
-        let input_model = prompt.model.clone();
-        let decision = self.decision_for(prompt, headers);
-        let selected = self.record_decision(input_model, decision, headers, None, None);
-        let Some(model) = selected else {
-            return false;
-        };
-        if prompt.model == model {
+        // A live `providers/set` outranks the configured table: it is this
+        // session's operator saying where its traffic goes, now. It does not
+        // outrank a model the caller pinned itself — the same exemption the
+        // table honours, and the only case where the caller wins.
+        if !is_explicitly_routed(&prompt.model)
+            && let Some(provider) = self.route_override_for(headers)
+        {
+            // Keep the model, change the provider: ACP's `providers/set`
+            // names a provider, not a model.
+            let rerouted = format!("{provider}:{}", prompt.model);
+            if prompt.model != rerouted {
+                prompt.model = rerouted;
+                return true;
+            }
             return false;
         }
-        prompt.model = model;
-        true
+        let input_model = prompt.model.clone();
+        let input_effort = prompt.params.reasoning_effort;
+        let decision = self.decision_for(prompt, headers);
+        let selected =
+            self.record_decision(input_model, input_effort, decision, headers, None, None);
+        let Some(target) = selected else {
+            return false;
+        };
+        let mut changed = prompt.model != target.model();
+        prompt.model = target.model().to_string();
+        if let Some(effort) = target.effort() {
+            changed |= prompt.params.reasoning_effort != Some(effort);
+            prompt.params.reasoning_effort = Some(effort);
+            prompt.params.reasoning_effort_source =
+                bitrouter_sdk::language_model::types::ReasoningEffortSource::Policy;
+        }
+        changed
     }
 
     /// Select a model for a preset that explicitly owns this policy. Unlike the
@@ -527,9 +712,13 @@ impl PolicyTableRouter {
         tool_floor_applied: bool,
     ) {
         decision.selected_tier = selected_tier.map(ToOwned::to_owned);
+        let table = self.table();
         decision.selected_model = selected_tier
-            .and_then(|tier| self.table.model_of_tier(tier))
+            .and_then(|tier| table.model_of_tier(tier))
             .map(ToOwned::to_owned);
+        decision.selected_effort = selected_tier
+            .and_then(|tier| table.effort_of_tier(tier))
+            .or(decision.input_effort);
         decision.reason = match (guard_applied, tool_floor_applied) {
             (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
             (true, false) => PolicyDecisionReason::ProgressGuard,
@@ -548,11 +737,22 @@ impl PolicyTableRouter {
     ) -> bitrouter_sdk::Result<()> {
         decision.continuation_proposed_tier = decision.selected_tier.clone();
         decision.continuation_proposed_model = decision.selected_model.clone();
+        decision.continuation_proposed_effort = decision.selected_effort;
         match adjustment {
-            ContinuationAdjustment::Pin { effective_model } => {
-                let selected_tier = self
-                    .table
-                    .stable_tier_of_model(effective_model)
+            ContinuationAdjustment::Pin {
+                effective_model,
+                effective_effort,
+                effort_authoritative,
+            } => {
+                let pinned_effort = effort_authoritative
+                    .then_some(*effective_effort)
+                    .unwrap_or(decision.input_effort);
+                // Through the snapshot, like every other lookup: a reload
+                // landing here must not answer from a table the rest of this
+                // decision never saw.
+                let table = self.table();
+                let selected_tier = table
+                    .stable_tier_of_target(effective_model, pinned_effort)
                     .ok_or_else(|| {
                         bitrouter_sdk::BitrouterError::bad_request(
                             "provider continuation model is unavailable in the active policy",
@@ -560,6 +760,7 @@ impl PolicyTableRouter {
                     })?;
                 decision.selected_tier = Some(selected_tier.to_owned());
                 decision.selected_model = Some(effective_model.clone());
+                decision.selected_effort = pinned_effort;
                 decision.continuation_adjustment = Some("pin".to_owned());
                 decision.reason = PolicyDecisionReason::ContinuationPin;
                 decision.pinned = true;
@@ -579,11 +780,13 @@ impl PolicyTableRouter {
         request_id: &str,
         invocation: &EvalInvocation,
         input_model: String,
+        input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
-    ) -> Option<String> {
+    ) -> Option<PolicyModelTarget> {
         self.record_decision(
             input_model,
+            input_effort,
             decision,
             headers,
             Some(request_id),
@@ -594,12 +797,17 @@ impl PolicyTableRouter {
     fn record_decision(
         &self,
         input_model: String,
+        input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
         request_id_override: Option<&str>,
         invocation: Option<&EvalInvocation>,
-    ) -> Option<String> {
+    ) -> Option<PolicyModelTarget> {
         let baseline_tier = self.eval_baseline_tier(&decision);
+        let baseline_effort = baseline_tier
+            .as_deref()
+            .and_then(|tier| self.table().effort_of_tier(tier))
+            .or(input_effort);
         let ingress_request_id = headers
             .get("x-bitrouter-request-id")
             .and_then(|value| value.to_str().ok())
@@ -617,12 +825,16 @@ impl PolicyTableRouter {
             trace_agent_role = decision.workflow_identity.role.as_str(),
             trace_context_epoch = decision.workflow_identity.context_epoch,
             trace_session_fingerprint = %decision.workflow_identity.fingerprint,
+            input_effort = ?decision.input_effort,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
+            static_effort = ?decision.static_effort,
             selected_tier = ?decision.selected_tier,
             selected_model = ?decision.selected_model,
+            selected_effort = ?decision.selected_effort,
             continuation_proposed_tier = ?decision.continuation_proposed_tier,
             continuation_proposed_model = ?decision.continuation_proposed_model,
+            continuation_proposed_effort = ?decision.continuation_proposed_effort,
             continuation_adjustment = ?decision.continuation_adjustment,
             trajectory_episode_id = ?decision.trajectory_episode_id,
             trajectory_sequence = ?decision.trajectory_sequence,
@@ -655,7 +867,9 @@ impl PolicyTableRouter {
                     policy_digest: observer.policy_digest.clone(),
                     request_key: decision.request_key.clone(),
                     selected_tier: selected_tier.to_string(),
+                    selected_effort: decision.selected_effort,
                     baseline_tier: baseline_tier.clone(),
+                    baseline_effort,
                     preset: Some(observer.policy.clone()),
                     holdout: false,
                     continuation_proposed_tier: bounded_continuation_label(
@@ -666,6 +880,7 @@ impl PolicyTableRouter {
                         decision.continuation_proposed_model.as_deref(),
                         512,
                     ),
+                    continuation_proposed_effort: decision.continuation_proposed_effort,
                     continuation_adjustment: bounded_continuation_label(
                         decision.continuation_adjustment.as_deref(),
                         32,
@@ -687,6 +902,7 @@ impl PolicyTableRouter {
                 ingress_request_id_sha256: ingress_request_id
                     .map(crate::workflow_state::decision::ingress_request_id_sha256),
                 input_model,
+                input_effort,
                 key_strategy: key_strategy_name().to_string(),
                 request_key: decision.request_key.clone(),
                 ledger_key: self
@@ -700,15 +916,19 @@ impl PolicyTableRouter {
                     .map(|item| item.policy_digest.clone()),
                 preset_variant: self.eval_observer.as_ref().map(|item| item.policy.clone()),
                 baseline_tier,
+                baseline_effort,
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
                 workflow_identity: decision.workflow_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
+                static_effort: decision.static_effort,
                 selected_tier: decision.selected_tier.clone(),
                 selected_model: decision.selected_model.clone(),
+                selected_effort: decision.selected_effort,
                 continuation_proposed_tier: decision.continuation_proposed_tier.clone(),
                 continuation_proposed_model: decision.continuation_proposed_model.clone(),
+                continuation_proposed_effort: decision.continuation_proposed_effort,
                 continuation_adjustment: decision.continuation_adjustment.clone(),
                 predicted_role: decision.predicted_role.clone(),
                 predicted_action: decision.predicted_action.clone(),
@@ -743,7 +963,23 @@ impl PolicyTableRouter {
                 tracing::warn!(%error, "policy decision recorder failed");
             }
         }
-        decision.selected_model
+        let selected_model = decision.selected_model.as_deref()?;
+        let selected_tier = decision.selected_tier.as_deref()?;
+        let configured = self
+            .table()
+            .target_of_tier(selected_tier)
+            .filter(|target| target.model() == selected_model)
+            .cloned()?;
+        if decision.continuation_adjustment.as_deref() == Some("pin")
+            && configured.effort().is_none()
+            && let Some(effort) = decision.selected_effort
+        {
+            return Some(PolicyModelTarget::ModelEffort {
+                model: selected_model.to_owned(),
+                effort,
+            });
+        }
+        Some(configured)
     }
 }
 
@@ -812,10 +1048,17 @@ impl PromptTransform for PolicyTableRouter {
 }
 
 /// Whether `model` already names an explicit upstream route or preset. A
-/// `provider:model` id triggers Strategy 1; `@preset` must survive until Stage
-/// 0 can resolve its prompt defaults, provider preferences, and named policy.
+/// `provider:model` id triggers Strategy 1; `@preset` and its public
+/// `bitrouter/<slug>` spelling must both survive until Stage 0 can resolve
+/// their prompt defaults, provider preferences, and named policy. The reserved
+/// namespace carries neither an `@` nor a colon, so it needs naming here — a
+/// `bitrouter/auto` request left to this table would be fingerprinted and
+/// rewritten by the legacy inline policy table instead of reaching the signed
+/// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@') || model.contains(':')
+    model.starts_with('@')
+        || model.contains(':')
+        || bitrouter_sdk::config::presets::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -842,6 +1085,64 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A `providers/set` override must move **only** the traffic of the launch
+    /// that asked for it. Keyed by launch tag, so a caller with a real
+    /// credential — which carries no tag — can never be caught by one.
+    #[test]
+    fn a_route_override_moves_only_its_own_launch() {
+        let router = PolicyTableRouter::new(PolicyTable::inert());
+        assert!(router.set_route_override("brl_mine", "beta"));
+
+        let headers_for = |auth: &str| {
+            let mut h = HeaderMap::new();
+            if let Ok(value) = auth.parse() {
+                h.insert("authorization", value);
+            }
+            h
+        };
+        let routed_model = |auth: &str| {
+            let mut prompt = prompt_with_model("m1");
+            router.route_prompt(&mut prompt, &headers_for(auth));
+            prompt.model
+        };
+
+        // The session that asked is rerouted, keeping its model.
+        assert_eq!(routed_model("Bearer brl_mine"), "beta:m1");
+        // Another launch is untouched.
+        assert_eq!(routed_model("Bearer brl_theirs"), "m1");
+        // A real credential carries no launch tag and cannot be matched.
+        assert_eq!(routed_model("Bearer sk-a-real-key"), "m1");
+        // Neither can an unauthenticated caller.
+        assert_eq!(routed_model(""), "m1");
+
+        // A model the caller pinned itself still wins — the same exemption the
+        // policy table honours.
+        let mut pinned = prompt_with_model("openai:gpt-5");
+        router.route_prompt(&mut pinned, &headers_for("Bearer brl_mine"));
+        assert_eq!(pinned.model, "openai:gpt-5");
+
+        // Clearing restores the configured route.
+        assert!(router.clear_route_override("brl_mine"));
+        assert_eq!(routed_model("Bearer brl_mine"), "m1");
+    }
+
+    fn prompt_with_model(model: &str) -> Prompt {
+        Prompt {
+            model: model.to_string(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![bitrouter_sdk::language_model::types::Message::text(
+                Role::User,
+                "hi",
+            )],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
     use super::*;
     use crate::trajectory::canonical::CorrelationKey;
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
@@ -879,8 +1180,11 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                ("cheap".to_string(), "vendor/cheap".to_string()),
-                ("flagship".to_string(), "vendor/flagship".to_string()),
+                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
+                (
+                    "flagship".to_string(),
+                    PolicyModelTarget::from("vendor/flagship"),
+                ),
             ]),
             fingerprints: HashMap::from([
                 (
@@ -903,8 +1207,14 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                ("economy".to_string(), "vendor/economy".to_string()),
-                ("strong".to_string(), "vendor/strong".to_string()),
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
             ]),
             fingerprints: HashMap::from([
                 (
@@ -952,6 +1262,21 @@ mod tests {
 
     fn user(text: &str) -> Message {
         Message::text(Role::User, text)
+    }
+
+    /// The reserved namespace is an addressing form the signed policy owns, so
+    /// the legacy inline table must leave it alone exactly as it leaves `@auto`
+    /// alone. `bitrouter/auto` carries neither an `@` nor a colon, so this is
+    /// the one classification that does not fall out of the old shape checks.
+    #[test]
+    fn reserved_namespace_counts_as_an_explicit_route() {
+        assert!(is_explicitly_routed("bitrouter/auto"));
+        assert!(is_explicitly_routed("bitrouter/auto:cost"));
+        assert!(is_explicitly_routed("@auto"));
+        assert!(is_explicitly_routed("openai:gpt-5.5"));
+        // A vendor-qualified catalog model is still an ordinary bare model the
+        // table may route.
+        assert!(!is_explicitly_routed("anthropic/claude-opus-5"));
     }
 
     /// An assistant message whose only content is a call to `tool`.
@@ -1071,6 +1396,7 @@ mod tests {
                 &opaque_request_id,
                 &invocation,
                 "inbound".into(),
+                None,
                 decision,
                 &headers,
             );
@@ -1170,7 +1496,7 @@ mod tests {
         // left as-is.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
+            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "cheap".to_string(),
@@ -1355,10 +1681,14 @@ mod tests {
             "request-1",
             &invocation,
             routed.model.clone(),
+            routed.params.reasoning_effort,
             decision,
             &headers,
         );
-        assert_eq!(selected.as_deref(), Some("vendor/economy"));
+        assert_eq!(
+            selected.as_ref().map(PolicyModelTarget::model),
+            Some("vendor/economy")
+        );
 
         let decision = pending
             .get(&invocation, "local")
@@ -1372,9 +1702,10 @@ mod tests {
     #[test]
     fn certificate_baseline_overrides_policy_default_in_eval_outputs() {
         let mut table_config = comparator_config();
-        table_config
-            .tiers
-            .insert("reference".to_string(), "vendor/reference".to_string());
+        table_config.tiers.insert(
+            "reference".to_string(),
+            PolicyModelTarget::from("vendor/reference"),
+        );
         let table = PolicyTable::from_config(&table_config).expect("configured");
         let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
         let path = temp_path("certificate-baseline-decisions.jsonl");
@@ -1405,10 +1736,14 @@ mod tests {
             "trajectory-request-opaque",
             &invocation,
             routed.model.clone(),
+            routed.params.reasoning_effort,
             decision,
             &headers,
         );
-        assert_eq!(selected.as_deref(), Some("vendor/economy"));
+        assert_eq!(
+            selected.as_ref().map(PolicyModelTarget::model),
+            Some("vendor/economy")
+        );
 
         let pending_decision = pending
             .get(&invocation, "local")
@@ -1483,7 +1818,10 @@ mod tests {
         // routes to it, and the second pass skips it as an explicit route.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("flagship".to_string(), "vendor:exact".to_string())]),
+            tiers: HashMap::from([(
+                "flagship".to_string(),
+                PolicyModelTarget::from("vendor:exact"),
+            )]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "flagship".to_string(),
@@ -1503,14 +1841,177 @@ mod tests {
     }
 
     #[test]
+    fn same_model_compound_target_overrides_caller_effort() -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([(
+                "strong".to_string(),
+                PolicyModelTarget::ModelEffort {
+                    model: "vendor/same".to_string(),
+                    effort: ReasoningEffort::High,
+                },
+            )]),
+            default_tier: Some("strong".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("vendor/same");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+
+        assert!(router.apply(&mut prompt), "effort-only route is a mutation");
+        assert_eq!(prompt.model, "vendor/same");
+        assert_eq!(prompt.params.reasoning_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_target_records_caller_effort_as_the_effective_static_treatment() -> anyhow::Result<()>
+    {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("strong".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("strong".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+
+        let decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.input_effort, Some(ReasoningEffort::Low));
+        assert_eq!(decision.static_effort, Some(ReasoningEffort::Low));
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::Low));
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_continuation_pins_same_model_compound_target() -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([
+                (
+                    "low".to_string(),
+                    PolicyModelTarget::ModelEffort {
+                        model: "vendor/same".to_string(),
+                        effort: ReasoningEffort::Low,
+                    },
+                ),
+                (
+                    "high".to_string(),
+                    PolicyModelTarget::ModelEffort {
+                        model: "vendor/same".to_string(),
+                        effort: ReasoningEffort::High,
+                    },
+                ),
+            ]),
+            default_tier: Some("low".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let prompt = prompt("@auto");
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: Some(ReasoningEffort::High),
+                effort_authoritative: true,
+            },
+        )?;
+
+        assert_eq!(decision.continuation_proposed_tier.as_deref(), Some("low"));
+        assert_eq!(
+            decision.continuation_proposed_effort,
+            Some(ReasoningEffort::Low)
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("high"));
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_continuation_effort_is_applied_through_a_scalar_compatibility_tier()
+    -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("compat".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::Low);
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: Some(ReasoningEffort::High),
+                effort_authoritative: true,
+            },
+        )?;
+
+        let target = router
+            .record_decision(
+                "@auto".to_owned(),
+                Some(ReasoningEffort::Low),
+                decision,
+                &HeaderMap::new(),
+                None,
+                None,
+            )
+            .ok_or_else(|| anyhow::anyhow!("continuation target missing"))?;
+        assert_eq!(target.model(), "vendor/same");
+        assert_eq!(target.effort(), Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_continuation_does_not_reinterpret_missing_effort_as_provider_default()
+    -> anyhow::Result<()> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            default_tier: Some("compat".to_string()),
+            ..Default::default()
+        };
+        let router = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
+        let mut prompt = prompt("@auto");
+        prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: "vendor/same".to_owned(),
+                effective_effort: None,
+                effort_authoritative: false,
+            },
+        )?;
+
+        assert_eq!(decision.selected_effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
     fn disabled_guardrail_lets_a_tool_request_route_cheap() {
         // With no `tool_use_tier`, the guardrail is off: a tool-carrying request
         // routes by fingerprint like any other (here `after_read_file` → cheap).
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([
-                ("cheap".to_string(), "vendor/cheap".to_string()),
-                ("flagship".to_string(), "vendor/flagship".to_string()),
+                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
+                (
+                    "flagship".to_string(),
+                    PolicyModelTarget::from("vendor/flagship"),
+                ),
             ]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|tool_followup|normal".to_string(),
@@ -1723,6 +2224,8 @@ mod tests {
             &mut decision,
             &ContinuationAdjustment::Pin {
                 effective_model: "vendor/flagship".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
             },
         );
 
@@ -1785,6 +2288,7 @@ mod tests {
             "request-legacy",
             &invocation,
             p.model,
+            p.params.reasoning_effort,
             decision,
             &HeaderMap::new(),
         );
@@ -1818,6 +2322,8 @@ mod tests {
             &mut decision,
             &ContinuationAdjustment::Pin {
                 effective_model: "vendor/flagship".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
             },
         )?;
 
@@ -1825,6 +2331,7 @@ mod tests {
             "request-continuation",
             &EvalInvocation::new("owner"),
             "@auto".to_owned(),
+            None,
             decision,
             &HeaderMap::new(),
         );
@@ -1857,6 +2364,8 @@ mod tests {
             &mut decision,
             &ContinuationAdjustment::Pin {
                 effective_model: "retired-provider:retired-model".to_owned(),
+                effective_effort: None,
+                effort_authoritative: true,
             },
         );
 
@@ -1902,7 +2411,7 @@ mod tests {
     fn decision_reason_no_match() {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
+            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "cheap".to_string(),

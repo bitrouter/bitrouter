@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use bitrouter_sdk::Result as BitrouterResult;
 use bitrouter_sdk::event::PipelineEvent;
+use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
@@ -79,11 +80,14 @@ pub struct PendingEvalDecision {
     pub policy_digest: String,
     pub request_key: String,
     pub selected_tier: String,
+    pub selected_effort: Option<ReasoningEffort>,
     pub baseline_tier: Option<String>,
+    pub baseline_effort: Option<ReasoningEffort>,
     pub preset: Option<String>,
     pub holdout: bool,
     pub continuation_proposed_tier: Option<String>,
     pub continuation_proposed_model: Option<String>,
+    pub continuation_proposed_effort: Option<ReasoningEffort>,
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
     pub predicted_action: Option<String>,
@@ -98,6 +102,7 @@ pub struct PendingEvalDecision {
 pub(crate) struct PredictionObservationSnapshot {
     continuation_proposed_tier: Option<String>,
     continuation_proposed_model: Option<String>,
+    continuation_proposed_effort: Option<ReasoningEffort>,
     continuation_adjustment: Option<String>,
     predicted_role: Option<String>,
     predicted_action: Option<String>,
@@ -120,6 +125,7 @@ impl PendingEvalDecision {
                 self.continuation_proposed_model.as_deref(),
                 512,
             ),
+            continuation_proposed_effort: self.continuation_proposed_effort,
             continuation_adjustment: bounded_continuation_label(
                 self.continuation_adjustment.as_deref(),
                 32,
@@ -161,6 +167,9 @@ impl PredictionObservationSnapshot {
         }
         if let Some(value) = &self.continuation_proposed_model {
             attributes.insert("continuation_proposed_model".into(), value.clone());
+        }
+        if let Some(value) = self.continuation_proposed_effort {
+            attributes.insert("continuation_proposed_effort".into(), value.to_string());
         }
         if let Some(value) = &self.continuation_adjustment {
             attributes.insert("continuation_adjustment".into(), value.clone());
@@ -211,6 +220,12 @@ impl PredictionObservationSnapshot {
         }
         if let Some(value) = &self.continuation_proposed_model {
             categorical.insert("routing.continuation_proposed_model".into(), value.clone());
+        }
+        if let Some(value) = self.continuation_proposed_effort {
+            categorical.insert(
+                "routing.continuation_proposed_effort".into(),
+                value.to_string(),
+            );
         }
         if let Some(value) = &self.continuation_adjustment {
             categorical.insert("routing.continuation_adjustment".into(), value.clone());
@@ -461,6 +476,9 @@ impl EvalSettlementRecorder {
         decision: &PendingEvalDecision,
         context: &SettlementContext,
     ) -> anyhow::Result<EvalSubject> {
+        if decision.selected_effort != context.reasoning_effort {
+            anyhow::bail!("settled reasoning effort does not match the recorded policy treatment");
+        }
         let mut attributes = BTreeMap::from([
             ("provider".to_string(), context.provider_id.clone()),
             ("model".to_string(), context.model_id.clone()),
@@ -484,6 +502,9 @@ impl EvalSettlementRecorder {
         ]);
         if let Some(error) = &context.error {
             attributes.insert("error_code".into(), error.error_code().into());
+        }
+        if let Some(effort) = context.reasoning_effort {
+            attributes.insert("reasoning_effort".into(), effort.to_string());
         }
         attributes.extend(decision.observation_snapshot().attributes());
         let usage = Usage {
@@ -525,7 +546,9 @@ impl EvalSettlementRecorder {
                 policy: decision.policy.clone(),
                 request_key: decision.request_key.clone(),
                 selected_tier: decision.selected_tier.clone(),
+                selected_effort: decision.selected_effort,
                 baseline_tier: decision.baseline_tier.clone(),
+                baseline_effort: decision.baseline_effort,
                 policy_digest: decision.policy_digest.clone(),
             }],
             requested_dimensions: BTreeSet::from([
@@ -604,6 +627,7 @@ mod tests {
 
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::event::EventBus;
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
     use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
@@ -631,11 +655,14 @@ mod tests {
                 policy_digest: DIGEST.into(),
                 request_key: "opening".into(),
                 selected_tier: "economy".into(),
+                selected_effort: Some(ReasoningEffort::Low),
                 baseline_tier: Some("strong".into()),
+                baseline_effort: Some(ReasoningEffort::High),
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: Some("balanced".into()),
                 continuation_proposed_model: Some("balanced:balanced-model".into()),
+                continuation_proposed_effort: Some(ReasoningEffort::Medium),
                 continuation_adjustment: Some("pin".into()),
                 predicted_role: None,
                 predicted_action: None,
@@ -652,6 +679,7 @@ mod tests {
             Arc::new(PricingTable::new()),
         );
         let mut context = settlement_context_with(&invocation);
+        context.reasoning_effort = Some(ReasoningEffort::Low);
 
         recorder.record(&mut context).await?;
 
@@ -661,6 +689,14 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("request subject missing"))?;
         assert_eq!(subject.policy_digest, DIGEST);
         assert_eq!(subject.decisions.len(), 1);
+        assert_eq!(
+            subject.decisions[0].selected_effort,
+            Some(ReasoningEffort::Low)
+        );
+        assert_eq!(
+            subject.decisions[0].baseline_effort,
+            Some(ReasoningEffort::High)
+        );
         assert!(subject.evidence.iter().all(|item| item.redacted));
         let evidence = subject
             .evidence
@@ -673,6 +709,10 @@ mod tests {
         assert_eq!(
             evidence.attributes.get("continuation_proposed_model"),
             Some(&"balanced:balanced-model".to_owned())
+        );
+        assert_eq!(
+            evidence.attributes.get("continuation_proposed_effort"),
+            Some(&"medium".to_owned())
         );
         assert_eq!(
             evidence.attributes.get("continuation_adjustment"),
@@ -707,11 +747,14 @@ mod tests {
                 policy_digest: DIGEST.into(),
                 request_key: "opening".into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: None,
                 continuation_proposed_model: None,
+                continuation_proposed_effort: None,
                 continuation_adjustment: None,
                 predicted_role: Some("implement".into()),
                 predicted_action: Some("mutate".into()),
@@ -774,11 +817,14 @@ mod tests {
             policy_digest: DIGEST.into(),
             request_key: "opening".into(),
             selected_tier: "economy".into(),
+            selected_effort: None,
             baseline_tier: Some("strong".into()),
+            baseline_effort: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
             continuation_proposed_model: None,
+            continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
@@ -832,11 +878,14 @@ mod tests {
             policy_digest: DIGEST.into(),
             request_key: "opening".into(),
             selected_tier: "economy".into(),
+            selected_effort: None,
             baseline_tier: Some("strong".into()),
+            baseline_effort: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
             continuation_proposed_model: None,
+            continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_action: Some("mutate".into()),
@@ -856,6 +905,7 @@ mod tests {
             caller: CallerContext::local(),
             target: None,
             model_id: "model".into(),
+            reasoning_effort: None,
             provider_id: "provider".into(),
             account_label: None,
             prompt_tokens: 10,

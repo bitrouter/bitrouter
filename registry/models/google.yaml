@@ -38,16 +38,20 @@
   knowledge_cutoff: 2025-01
   open_weights: false
   family: gemini-flash
-- id: google/gemma-4-31b
-  name: 'Google: Gemma 4 31B'
-  description: Google Gemma 4 31B — open-weight instruction-tuned vision-language model.
+# Official model: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
+- id: google/gemini-3.6-flash
+  name: 'Google: Gemini 3.6 Flash'
+  description: Efficient multimodal Gemini model for coding, agentic planning, and high-throughput workloads.
   input_modalities:
   - text
   - image
+  - audio
+  - video
   output_modalities:
   - text
-  max_input_tokens: 131072
-  max_output_tokens: 40960
-  release_date: 2026-04-02
-  open_weights: true
-  family: gemma
+  max_input_tokens: 1048576
+  max_output_tokens: 65536
+  release_date: 2026-07-21
+  knowledge_cutoff: 2026-03
+  open_weights: false
+  family: gemini-flash

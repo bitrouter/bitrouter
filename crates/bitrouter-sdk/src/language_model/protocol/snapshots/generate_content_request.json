@@ -4,31 +4,16 @@
   "description": "Generate Content `generateContent` request body\n(<https://ai.google.dev/api/generate-content>).\n\n`pub` so downstream crates (notably `bitrouter-cloud`) can derive an\nOpenAPI schema from the canonical wire shape without redeclaring it.",
   "type": "object",
   "properties": {
-    "contents": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/GenerateContentContent"
-      }
-    },
-    "generationConfig": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/GenerateContentGenerationConfig"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "model": {
       "description": "Carried as a field so the inbound HTTP route's `{model}` path param can\noverride it; defaults empty.",
       "type": "string",
       "default": ""
     },
-    "stream": {
-      "description": "Injected by `server::generate_content` from the path verb\n(`:streamGenerateContent` → true, `:generateContent` → false).",
-      "type": "boolean",
-      "default": false
+    "contents": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GenerateContentContent"
+      }
     },
     "systemInstruction": {
       "anyOf": [
@@ -45,6 +30,21 @@
       "items": {
         "$ref": "#/$defs/GenerateContentTool"
       }
+    },
+    "generationConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GenerateContentGenerationConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stream": {
+      "description": "Injected by `server::generate_content` from the path verb\n(`:streamGenerateContent` → true, `:generateContent` → false).",
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [
@@ -55,17 +55,29 @@
       "description": "One element of [`GenerateContentRequest`]'s `contents` array — a turn\ncarrying optional role + `parts[]`.",
       "type": "object",
       "properties": {
-        "parts": {
-          "type": "array",
-          "default": [],
-          "items": true
-        },
         "role": {
           "type": [
             "string",
             "null"
           ],
           "default": null
+        },
+        "parts": {
+          "type": "array",
+          "items": true,
+          "default": []
+        }
+      }
+    },
+    "GenerateContentTool": {
+      "description": "One element of [`GenerateContentRequest`]'s `tools` array.\n\nA single Google tool object may carry client function declarations\n(`functionDeclarations`) **and/or** one or more provider-defined (\"built-in\")\ntool keys on the same object — `googleSearch`, `codeExecution`,\n`googleSearchRetrieval`, `urlContext`. Function declarations parse to\n[`Tool::Function`]; every other key is a provider-defined tool namespaced\n`google.<key>`, its value preserved verbatim as `args`. The non-function keys\nride in `extra`.\n<https://ai.google.dev/gemini-api/docs/function-calling>\n<https://ai.google.dev/gemini-api/docs/google-search>\n<https://ai.google.dev/gemini-api/docs/code-execution>",
+      "type": "object",
+      "properties": {
+        "functionDeclarations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GenerateContentFunctionDecl"
+          }
         }
       }
     },
@@ -73,15 +85,15 @@
       "description": "One function declaration inside a [`GenerateContentTool`]: name + description +\nJSON-Schema parameters.",
       "type": "object",
       "properties": {
+        "name": {
+          "type": "string"
+        },
         "description": {
           "type": [
             "string",
             "null"
           ],
           "default": null
-        },
-        "name": {
-          "type": "string"
         },
         "parameters": {
           "default": null
@@ -95,8 +107,15 @@
       "description": "`generationConfig` knobs on a [`GenerateContentRequest`].",
       "type": "object",
       "properties": {
-        "frequencyPenalty": {
-          "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+        "temperature": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "topP": {
           "type": [
             "number",
             "null"
@@ -110,16 +129,7 @@
             "null"
           ],
           "format": "uint32",
-          "default": null,
-          "minimum": 0
-        },
-        "presencePenalty": {
-          "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double",
+          "minimum": 0,
           "default": null
         },
         "responseMimeType": {
@@ -132,6 +142,16 @@
         },
         "responseSchema": {
           "description": "JSON Schema constraining the response (with\n`response_mime_type: \"application/json\"`).",
+          "default": null
+        },
+        "topK": {
+          "description": "Top-k sampling. Promoted to the canonical `top_k` slot so it translates\nacross protocols (e.g. to an Anthropic upstream's `top_k`).\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
           "default": null
         },
         "seed": {
@@ -149,12 +169,13 @@
             "array",
             "null"
           ],
-          "default": null,
           "items": {
             "type": "string"
-          }
+          },
+          "default": null
         },
-        "temperature": {
+        "presencePenalty": {
+          "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
           "type": [
             "number",
             "null"
@@ -162,37 +183,84 @@
           "format": "double",
           "default": null
         },
-        "topK": {
-          "description": "Top-k sampling. Promoted to the canonical `top_k` slot so it translates\nacross protocols (e.g. to an Anthropic upstream's `top_k`).\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
-        },
-        "topP": {
+        "frequencyPenalty": {
+          "description": "Frequency penalty. Promoted to the canonical `frequency_penalty` slot.\n<https://ai.google.dev/api/generate-content#GenerationConfig>",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
+          "default": null
+        },
+        "thinkingConfig": {
+          "description": "Qualitative reasoning effort for Gemini 3+ models. Numeric\n`thinkingBudget` remains an opaque sibling because it is a distinct\nGemini 2.5 control with no lossless qualitative mapping.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenerateContentThinkingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "GenerateContentThinkingConfig": {
+      "description": "Gemini `generationConfig.thinkingConfig`.",
+      "type": "object",
+      "properties": {
+        "thinkingLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         }
       }
     },
-    "GenerateContentTool": {
-      "description": "One element of [`GenerateContentRequest`]'s `tools` array.\n\nA single Google tool object may carry client function declarations\n(`functionDeclarations`) **and/or** one or more provider-defined (\"built-in\")\ntool keys on the same object — `googleSearch`, `codeExecution`,\n`googleSearchRetrieval`, `urlContext`. Function declarations parse to\n[`Tool::Function`]; every other key is a provider-defined tool namespaced\n`google.<key>`, its value preserved verbatim as `args`. The non-function keys\nride in `extra`.\n<https://ai.google.dev/gemini-api/docs/function-calling>\n<https://ai.google.dev/gemini-api/docs/google-search>\n<https://ai.google.dev/gemini-api/docs/code-execution>",
-      "type": "object",
-      "properties": {
-        "functionDeclarations": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GenerateContentFunctionDecl"
-          }
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
         }
-      }
+      ]
     }
   }
 }

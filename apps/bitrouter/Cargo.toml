@@ -54,22 +54,13 @@ agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-# The live view (`bitrouter status --watch`). Not behind a cargo feature: a
-# flag on a documented command that sometimes isn't compiled in costs more
-# confusion than the build time it saves (OBSERVABILITY_TUI_SPEC §6).
-ratatui = { version = "0.29", features = [
-    # Paragraph::line_count — wrap-aware tail-follow needs the rendered
-    # height, not the logical line count.
-    "unstable-rendered-line-info",
-] }
-crossterm = { version = "0.28", features = ["event-stream"] }
-# The hosted mode (`bitrouter launch --tui`): a VT emulator and PTY host, so
-# one status row can survive harnesses that take the alternate screen. Only
-# `--tui` needs these; `status --watch` hosts no child.
-alacritty_terminal = { version = "0.25" }
-portable-pty = { version = "0.9" }
-termwiz = { version = "0.23", default-features = false }
-wezterm-input-types = { version = "0.1" }
+# Everything drawn by this binary. There is deliberately no `ratatui` here:
+# the app may touch the terminal but may not draw on it, and the absence of the
+# dependency is what makes that a compile error rather than a convention.
+bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.27" }
+# Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
+# reading key events for `bitrouter chat`. Not drawing — see above.
+crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 schemars.workspace = true

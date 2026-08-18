@@ -203,7 +203,7 @@ struct RouteEvidence<'a> {
     semantic_tasks: BTreeSet<&'a str>,
 }
 
-/// Compile a deterministic v2 candidate without mutating the active lock.
+/// Compile a deterministic v3 candidate without mutating the active lock.
 pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
     compile_candidate_with_quality(input, &PromotionQualityCriteria::quality_first())
 }
@@ -216,6 +216,9 @@ pub fn compile_candidate_with_quality(
 ) -> Result<CompileResult> {
     validate_document(input.current)?;
     quality.validate()?;
+    if let Some(eval) = input.eval {
+        validate_eval_effort_treatments(input.current, eval)?;
+    }
     let legacy_evidence_root = input.legacy.semantic_digest()?;
     let evidence_root = match input.eval {
         Some(eval) => canonical_digest(&(
@@ -555,6 +558,54 @@ pub fn compile_candidate_with_quality(
     })
 }
 
+/// Refuse to compile structured policy targets from evidence that does not
+/// identify the exact effort treatment. Scalar targets intentionally remain
+/// compatible with caller-owned effort, including legacy Eval v1 records.
+fn validate_eval_effort_treatments(
+    current: &PolicyLock,
+    eval: &EvalEvidenceSnapshot,
+) -> Result<()> {
+    for record in &eval.records {
+        for decision in &record.subject.decisions {
+            let Some(policy) = current.policies.get(&decision.policy) else {
+                continue;
+            };
+            if let Some(expected) = policy
+                .tiers
+                .get(&decision.selected_tier)
+                .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                && decision.selected_effort != Some(expected)
+            {
+                anyhow::bail!(
+                    "eval result '{}' attributes tier '{}:{}' to effort {:?}, expected '{}'",
+                    record.result_id,
+                    decision.policy,
+                    decision.selected_tier,
+                    decision.selected_effort,
+                    expected
+                );
+            }
+            if let Some(baseline_tier) = decision.baseline_tier.as_deref()
+                && let Some(expected) = policy
+                    .tiers
+                    .get(baseline_tier)
+                    .and_then(bitrouter_sdk::config::PolicyModelTarget::effort)
+                && decision.baseline_effort != Some(expected)
+            {
+                anyhow::bail!(
+                    "eval result '{}' attributes baseline tier '{}:{}' to effort {:?}, expected '{}'",
+                    record.result_id,
+                    decision.policy,
+                    baseline_tier,
+                    decision.baseline_effort,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn source_snapshot_time(input: &CompileInput<'_>) -> Result<i64> {
     let eval_time = match input.eval {
         Some(eval) => chrono::DateTime::parse_from_rfc3339(&eval.frozen_at)
@@ -718,7 +769,7 @@ fn route_owner(
     prior_certificate: Option<&PolicyCertificate>,
     evidence: Option<&RouteEvidence<'_>>,
 ) -> RouteOwner {
-    if current.is_v2() {
+    if current.is_compiled() {
         return prior_certificate
             .map(|certificate| certificate.owner)
             .unwrap_or(RouteOwner::Compiler);
@@ -807,7 +858,8 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bitrouter_sdk::config::AdequacyConfig;
+    use bitrouter_sdk::config::{AdequacyConfig, PolicyModelTarget};
+    use bitrouter_sdk::language_model::types::ReasoningEffort;
 
     use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
     use crate::adequacy::store::AdequacyStore;
@@ -940,6 +992,90 @@ mod tests {
     fn promotion_quality_criteria_reject_invalid_ppm_values() {
         assert!(super::PromotionQualityCriteria::custom(-1, 0).is_err());
         assert!(super::PromotionQualityCriteria::custom(0, 1_000_001).is_err());
+    }
+
+    #[test]
+    fn structured_targets_require_exact_effort_attribution() -> anyhow::Result<()> {
+        let mut current = v1(None);
+        let policy = current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?;
+        policy.tiers.insert(
+            "strong".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "openai:gpt-5.6".into(),
+                effort: ReasoningEffort::High,
+            },
+        );
+        policy.tiers.insert(
+            "economy".into(),
+            PolicyModelTarget::ModelEffort {
+                model: "openai:gpt-5.6".into(),
+                effort: ReasoningEffort::Low,
+            },
+        );
+        let mut eval = EvalEvidenceSnapshot {
+            evidence_root: "evidence-root".into(),
+            frozen_at: "2026-08-10T00:00:00Z".into(),
+            records: vec![EvalEvidenceRecord {
+                result_id: "result-effort".into(),
+                content_digest: "content-effort".into(),
+                subject: EvalSubject {
+                    schema_version: 1,
+                    eval_id: "eval-effort".into(),
+                    scope: EvalScope::Task,
+                    subject_id: "task-effort".into(),
+                    policy_digest: "policy-digest".into(),
+                    preset: Some("auto".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: vec![EvalDecisionRef {
+                        decision_id: "decision-effort".into(),
+                        policy: "auto".into(),
+                        request_key: EDIT_KEY.into(),
+                        selected_tier: "economy".into(),
+                        selected_effort: None,
+                        baseline_tier: Some("strong".into()),
+                        baseline_effort: Some(ReasoningEffort::High),
+                        policy_digest: "policy-digest".into(),
+                    }],
+                    requested_dimensions: BTreeSet::new(),
+                    evidence: Vec::new(),
+                    evidence_digest: "evidence-digest".into(),
+                    observed_at: "2026-08-10T00:00:00Z".into(),
+                },
+                result: EvaluationResult {
+                    schema_version: 1,
+                    eval_id: "eval-effort".into(),
+                    evidence_digest: "evidence-digest".into(),
+                    evaluator: EvaluatorIdentity {
+                        authority_id: "authority".into(),
+                        evaluator_id: "evaluator".into(),
+                        kind: EvaluatorKind::TaskNative,
+                        version: "1".into(),
+                        config_digest: "config-digest".into(),
+                    },
+                    verdict: EvalVerdict::Pass,
+                    metrics: BTreeMap::new(),
+                    hard_violations: Vec::new(),
+                    confidence_ppm: Some(1_000_000),
+                    evidence_refs: Vec::new(),
+                    decision_credit: BTreeMap::new(),
+                    idempotency_key: "idempotency-effort".into(),
+                    submitted_at: "2026-08-10T00:00:01Z".into(),
+                },
+            }],
+        };
+
+        let error = super::validate_eval_effort_treatments(&current, &eval)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("missing effort attribution must fail"))?;
+        assert!(error.to_string().contains("expected 'low'"));
+
+        eval.records[0].subject.decisions[0].selected_effort = Some(ReasoningEffort::Low);
+        super::validate_eval_effort_treatments(&current, &eval)?;
+        Ok(())
     }
 
     fn snapshot(positive: bool, pinned_at_unix: Option<i64>) -> super::LegacyAdequacySnapshot {
@@ -1097,7 +1233,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: TEMPLATE_ECONOMY_KEY.into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1316,7 +1454,9 @@ mod tests {
                 policy: "auto".into(),
                 request_key: EDIT_KEY.into(),
                 selected_tier: "economy".into(),
+                selected_effort: None,
                 baseline_tier: Some("strong".into()),
+                baseline_effort: None,
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             }],
@@ -1425,7 +1565,9 @@ mod tests {
                         policy: "auto".into(),
                         request_key: EDIT_KEY.into(),
                         selected_tier: tier.into(),
+                        selected_effort: None,
                         baseline_tier: Some("strong".into()),
+                        baseline_effort: None,
                         policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
                     }],
                     requested_dimensions: BTreeSet::from([

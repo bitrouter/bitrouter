@@ -201,6 +201,9 @@ pub(crate) struct GuardedRouteInput {
     pub policy_name: String,
     pub request_key: String,
     pub baseline_tier: Option<String>,
+    pub baseline_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    pub tier_efforts:
+        std::collections::BTreeMap<String, bitrouter_sdk::language_model::types::ReasoningEffort>,
     pub preset: Option<String>,
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
@@ -426,6 +429,7 @@ impl TrajectoryStore {
             }
             None => Vec::new(),
         };
+        let captured_at = episode_monotonic_captured_at(&prior_events, &input.captured_at)?;
         let extends_existing_episode = resolved_episode.is_some();
         let (episode_id, episode_start, sequence) = match resolved_episode {
             Some(episode) => {
@@ -511,7 +515,7 @@ impl TrajectoryStore {
                     })
                     .unwrap_or_default(),
             },
-            captured_at: input.captured_at.clone(),
+            captured_at: captured_at.clone(),
             content_digest: String::new(),
         };
         event.content_digest = event.semantic_digest()?;
@@ -532,7 +536,7 @@ impl TrajectoryStore {
                 &episode_id,
                 sequence,
                 &input.request_id,
-                &input.captured_at,
+                &captured_at,
                 completeness,
             )
             .await?;
@@ -2208,6 +2212,12 @@ fn build_guarded_route_batch(
     if let Some(baseline_tier) = &input.baseline_tier {
         categorical.insert("route.baseline_tier".to_owned(), baseline_tier.clone());
     }
+    if let Some(baseline_effort) = input.baseline_effort {
+        categorical.insert(
+            "route.baseline_effort".to_owned(),
+            baseline_effort.to_string(),
+        );
+    }
     if let Some(preset) = &input.preset {
         categorical.insert("route.preset".to_owned(), preset.clone());
     }
@@ -2216,6 +2226,9 @@ fn build_guarded_route_batch(
     }
     if let Some(selected) = &evaluation.intent.selected_tier {
         categorical.insert("route.selected_tier".to_owned(), selected.clone());
+        if let Some(effort) = input.tier_efforts.get(selected) {
+            categorical.insert("route.selected_effort".to_owned(), effort.to_string());
+        }
     }
     for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
         let prefix = format!("route.clause_{index:02}");
@@ -2592,6 +2605,34 @@ async fn event_matches_existing(
         anyhow::bail!("trajectory event id is already owned by another user")
     }
     Ok(false)
+}
+
+/// Holds a new request start at the episode head when the wall clock disagrees
+/// with the episode's own ordering.
+///
+/// A start timestamp is `Utc::now()` backdated by the pipeline's monotonic
+/// elapsed time, while the preceding settlement is its start plus a monotonic
+/// duration. The two readings round independently, so a request arriving within
+/// a couple of milliseconds of its predecessor's settlement can carry a start
+/// that precedes the event it follows — which the reducer rejects as a
+/// regression. Settlement already pins itself to the last event for the same
+/// reason; do the same here rather than let a sub-millisecond turnaround fail
+/// the request.
+fn episode_monotonic_captured_at(
+    prior_events: &[TrajectoryEvent],
+    captured_at: &str,
+) -> Result<String> {
+    let Some(head) = prior_events.last() else {
+        return Ok(captured_at.to_owned());
+    };
+    let observed = chrono::DateTime::parse_from_rfc3339(captured_at)
+        .context("parsing trajectory request start timestamp")?;
+    let head_captured_at = chrono::DateTime::parse_from_rfc3339(&head.captured_at)
+        .context("parsing trajectory episode head timestamp")?;
+    if observed < head_captured_at {
+        return Ok(head.captured_at.clone());
+    }
+    Ok(captured_at.to_owned())
 }
 
 fn validate_candidate_history(
@@ -3430,6 +3471,73 @@ mod tests {
             before
         );
         assert!(store.request("owner-a", "request-1").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_start_behind_the_episode_head_is_held_at_the_head() -> anyhow::Result<()>
+    {
+        let store = store().await?;
+        seed_started_episode(
+            &store,
+            "owner-a",
+            "episode-1",
+            "request-0",
+            "2026-08-01T00:00:00.010Z",
+        )
+        .await?;
+
+        let route = guarded_route_input("route-1", "guard-1");
+        let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
+        input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
+        input.starts_with_prior_turns = true;
+        input.captured_at = "2026-08-01T00:00:00.008Z".into();
+        store.correlate_and_begin("owner-a", input).await?;
+
+        let events = store.events_for_episode("owner-a", "episode-1").await?;
+        let start = events
+            .iter()
+            .find(|event| event.request_id.as_deref() == Some("request-1"))
+            .ok_or_else(|| anyhow::anyhow!("continuation start was not persisted"))?;
+        assert_eq!(start.captured_at, "2026-08-01T00:00:00.010Z");
+        assert_eq!(
+            store
+                .episode("owner-a", "episode-1")
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("episode is missing"))?
+                .last_captured_at,
+            "2026-08-01T00:00:00.010Z"
+        );
+        reduce(&events, &BTreeSet::new())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_start_ahead_of_the_episode_head_keeps_its_own_timestamp()
+    -> anyhow::Result<()> {
+        let store = store().await?;
+        seed_started_episode(
+            &store,
+            "owner-a",
+            "episode-1",
+            "request-0",
+            "2026-08-01T00:00:00.010Z",
+        )
+        .await?;
+
+        let route = guarded_route_input("route-1", "guard-1");
+        let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
+        input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
+        input.starts_with_prior_turns = true;
+        input.captured_at = "2026-08-01T00:00:00.025Z".into();
+        store.correlate_and_begin("owner-a", input).await?;
+
+        let events = store.events_for_episode("owner-a", "episode-1").await?;
+        let start = events
+            .iter()
+            .find(|event| event.request_id.as_deref() == Some("request-1"))
+            .ok_or_else(|| anyhow::anyhow!("continuation start was not persisted"))?;
+        assert_eq!(start.captured_at, "2026-08-01T00:00:00.025Z");
         Ok(())
     }
 
@@ -5486,6 +5594,8 @@ mod tests {
             policy_name: "auto:cost".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
+            baseline_effort: None,
+            tier_efforts: Default::default(),
             preset: Some("auto:cost".into()),
             projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
                 .unwrap_or_else(|| unreachable!()),

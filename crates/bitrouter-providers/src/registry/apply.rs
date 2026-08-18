@@ -285,6 +285,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
             capabilities: m.capabilities.clone(),
+            reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
         })
         .collect()
@@ -363,6 +364,7 @@ mod tests {
                 }),
                 rate_limits: None,
                 capabilities: Vec::new(),
+                reasoning_effort: None,
                 compatibility: Default::default(),
             }],
             status: "active".to_string(),
@@ -384,6 +386,15 @@ mod tests {
             bitrouter_sdk::language_model::types::Capability::Reasoning,
             bitrouter_sdk::language_model::types::Capability::Tools,
         ];
+        registry_provider.models[0].reasoning_effort = Some(
+            bitrouter_sdk::language_model::types::ReasoningEffortConfig {
+                levels: vec![
+                    bitrouter_sdk::language_model::types::ReasoningEffort::Low,
+                    bitrouter_sdk::language_model::types::ReasoningEffort::High,
+                ],
+                default: Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
+            },
+        );
         registry_provider.models[0]
             .compatibility
             .chat_completions
@@ -400,6 +411,13 @@ mod tests {
                 bitrouter_sdk::language_model::types::Capability::Reasoning,
                 bitrouter_sdk::language_model::types::Capability::Tools,
             ]
+        );
+        assert_eq!(
+            models[0]
+                .reasoning_effort
+                .as_ref()
+                .and_then(|config| config.default),
+            Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
         );
     }
 
@@ -781,6 +799,7 @@ mod tests {
             rate_limits: None,
             pricing: None,
             capabilities: Vec::new(),
+            reasoning_effort: None,
             compatibility: Default::default(),
         }];
         config.providers.insert("regtestprov".to_string(), user);

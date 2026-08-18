@@ -26,9 +26,9 @@ use crate::language_model::protocol::{
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, AuthScheme, Content, DataContent, FinishReason, GenerateResult, GenerationParams,
-    Message, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StopDetails,
-    StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin,
-    provider_namespace, set_provider_metadata,
+    Message, Prompt, ProviderMetadata, ReasoningEffort, ResponseFormat, Role, RoutingTarget,
+    Source, StopDetails, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput,
+    Usage, UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 /// The metadata key, within the `anthropic` namespace, under which a block /
@@ -384,7 +384,7 @@ pub struct MessagesOutputConfig {
     format: Option<MessagesOutputFormat>,
     /// Reasoning effort (`low` | `medium` | `high` | `xhigh` | `max`).
     #[serde(default)]
-    effort: Option<String>,
+    effort: Option<ReasoningEffort>,
     #[serde(flatten)]
     #[schemars(skip)]
     extra: std::collections::HashMap<String, serde_json::Value>,
@@ -1105,6 +1105,7 @@ impl InboundAdapter for MessagesAdapter {
                 max_tokens: req.max_tokens,
                 chat_token_limit_field: None,
                 reasoning_effort,
+                reasoning_effort_source: Default::default(),
                 response_modalities: Vec::new(),
                 top_k: req.top_k,
                 // Anthropic carries no seed or penalties on its wire.
@@ -1265,7 +1266,7 @@ impl OutboundAdapter for MessagesAdapter {
             output_config.insert("format".into(), render_messages_response_format(rf));
         }
         if let Some(effort) = &prompt.params.reasoning_effort {
-            output_config.insert("effort".into(), effort.clone().into());
+            output_config.insert("effort".into(), effort.as_str().into());
         }
         if !output_config.is_empty() {
             req.insert(
