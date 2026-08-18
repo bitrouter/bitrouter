@@ -187,7 +187,9 @@ git commit -m "feat: raise guarded mechanical quality"
 ```bash
 python3 -m unittest skills/evaluating-bitrouter-routes/scripts/tests/test_terminal_bench_strong_tier_plan.py -v
 python3 -m unittest skills/evaluating-bitrouter-routes/scripts/tests/test_terminal_bench_route_evidence.py -v
-python3 skills/quick_validate.py skills/evaluating-bitrouter-routes
+uv run --with pyyaml python \
+  /Users/archer/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  skills/evaluating-bitrouter-routes
 cargo test -p bitrouter --all-features auto_router_template -- --nocapture
 ```
 

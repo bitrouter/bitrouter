@@ -10,6 +10,7 @@ exception rule, and screening rule stays in this external skill.
 - [Request error taxonomy](#request-error-taxonomy)
 - [Strict quality attribution](#strict-quality-attribution)
 - [Observational screening is not Eval evidence](#observational-screening-is-not-eval-evidence)
+- [Strong-tier cost-budget planning](#strong-tier-cost-budget-planning)
 - [Output contract](#output-contract)
 - [Current calibration evidence](#current-calibration-evidence)
 
@@ -144,6 +145,66 @@ The matrix emits:
 
 Controlled-validation candidates carry zero training credit, are not safety
 claims, and cannot publish or automatically edit the template.
+
+## Strong-tier cost-budget planning
+
+This planner is separate from strict quality attribution and observational
+screening. Use it only after an operator has frozen a task cohort whose
+validity definition excludes terminal exceptions and matched physical request
+errors.
+
+```bash
+python3 scripts/terminal_bench_strong_tier_plan.py \
+  --validity-audit /path/to/validity-audit.json \
+  --request-join /path/to/current-request-model-join.jsonl \
+  --daemon-log /path/to/bitrouter-daemon.log \
+  --control-attempt-cost 12.34 \
+  --control-attempt-cost 13.45 \
+  --control-anchor cheapest \
+  --target-policy-key 'agent_route/v1|unknown|mechanical|guarded' \
+  --strong-rates '5,0.5,6.25,30' \
+  --target-savings-min-percent 40 \
+  --target-savings-max-percent 50 \
+  --output-dir /path/to/strong-tier-plan
+```
+
+The validity audit supplies `fully_clean_tasks`. For those tasks, the request
+join must contain only unique, provider-reported, priced requests with
+`error: null`. The daemon log must contain exactly one policy decision for
+each `trajectory_request_id`. Missing and duplicate joins fail closed.
+
+For the requested matched policy key, the planner holds these observed token
+categories fixed:
+
+1. uncached input;
+2. cache read;
+3. cache write;
+4. completion, including reasoning.
+
+It replaces only their per-million-token rates with the supplied strong rates.
+Reasoning is already inside completion and is never priced again. Requests on
+other cells retain their recorded nominal cost. This is an observed-token
+repricing counterfactual, not a prediction of strong-model token behavior,
+reward, or settled cash cost.
+
+Every exact-case control attempt stays on its own row. The planner identifies
+the cheapest attempt, but it becomes the target-band anchor only when the
+operator has explicitly approved that conservative rule. Other attempts remain
+sensitivity evidence. This avoids inventing an aggregate and makes an empty
+intersection across control attempts visible.
+
+The deterministic outputs are:
+
+- `summary.json`: strict counts, route shares, candidate cost, each control,
+  and the conservative anchor;
+- `route-cells.csv`: matched-key request/task counts and current/candidate
+  costs;
+- `report.md`: human-readable method and separate control rows;
+- `sha256-manifest.json`: hashes of the preceding outputs.
+
+The artifact supports an operator-reviewed generic policy change. It carries
+zero Eval quality credit, cannot set `active_recommendation`, and cannot
+publish or edit a policy by itself.
 
 ## Output contract
 

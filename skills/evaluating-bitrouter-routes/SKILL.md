@@ -99,6 +99,37 @@ Keep the two recommendation layers separate:
   publish or edit a policy. A balanced candidate remains balanced until a
   controlled evaluation satisfies the strict gate.
 
+## Plan a strong-tier cost budget
+
+When an operator has already chosen a strict, error-free task cohort and wants
+to spend more on a generic route cell, run the separate counterfactual planner:
+
+```bash
+python3 scripts/terminal_bench_strong_tier_plan.py \
+  --validity-audit /path/to/validity-audit.json \
+  --request-join /path/to/current-request-model-join.jsonl \
+  --daemon-log /path/to/bitrouter-daemon.log \
+  --control-attempt-cost 12.34 \
+  --control-attempt-cost 13.45 \
+  --control-anchor cheapest \
+  --target-policy-key 'agent_route/v1|unknown|mechanical|guarded' \
+  --strong-rates '5,0.5,6.25,30' \
+  --output-dir /path/to/strong-tier-plan
+```
+
+The planner requires one decision per strict-cohort request and rejects any
+strict request with a non-null error or non-provider-reported usage. It keeps
+observed token categories fixed, reprices only the requested matched policy
+key, and reports every control attempt separately. The output is a non-causal
+operator budget artifact; it never supplies Eval quality credit or edits a
+policy.
+
+Choose the control anchor explicitly. If the operator approved the cheapest
+exact-case control as a conservative anchor, use its separately reported
+savings to evaluate the requested band while retaining every other attempt as
+sensitivity evidence. Without an approved anchor, report incompatible control
+ranges instead of inventing an aggregate.
+
 ## Submit and hand off
 
 1. Insert the sealed subject and submit a result that repeats its exact

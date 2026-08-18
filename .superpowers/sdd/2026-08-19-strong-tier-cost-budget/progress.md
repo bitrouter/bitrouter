@@ -12,9 +12,20 @@
 
 - [x] Design approved by the user.
 - [x] Design and implementation plan written.
-- [ ] Skill baseline RED recorded.
-- [ ] External planner RED/GREEN complete.
-- [ ] Private optimization artifact generated and reproduced.
+- [x] Skill baseline RED recorded: without the new guidance, the operator
+  invented an all-three-controls-in-band requirement and would return no-go
+  despite the user-approved cheapest-control anchor; it also had no
+  deterministic fail-closed planner contract.
+- [x] External planner RED/GREEN complete: 5 focused CLI tests pass after
+  missing-script RED and targeted duplicate/missing/error RED.
+- [x] Validator-path diagnostic: the planned repository-local
+  `skills/quick_validate.py` does not exist; the installed canonical validator
+  is `/Users/archer/.codex/skills/.system/skill-creator/scripts/quick_validate.py`.
+  The system Python lacks PyYAML, so the verified invocation is
+  `uv run --with pyyaml python <validator> <skill>`.
+- [x] Private optimization artifact generated and reproduced byte-for-byte:
+  22 tasks, 309 joins, 22 promotions, candidate cost $7.105622196,
+  strong share 104/309, conservative savings 45.8309%.
 - [ ] Generic template RED/GREEN complete.
 - [ ] Full verification complete.
 - [ ] Pushed.
