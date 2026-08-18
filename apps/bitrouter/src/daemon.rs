@@ -136,11 +136,12 @@ pub enum DaemonResponse {
 }
 
 /// Serializable snapshot of the OTel exporter's state, transported over
-/// the daemon control socket. Fields mirror `bitrouter_observe::otel::OtelStatus`
-/// — this module re-states the wire format so the daemon crate doesn't
-/// need to depend on the observe crate's type when the `otel` feature is
-/// off (and so the JSON shape stays stable if the observe-side type
-/// ever moves).
+/// the daemon control socket. Fields mirror `bitrouter_sdk::otel::OtelStatus`
+/// — but this module deliberately re-states the wire format rather than
+/// serializing the SDK type directly, so the JSON shape on the control
+/// socket stays stable even if `OtelStatus` gains, drops, or renames a
+/// field. The duplication is the point: it makes any wire-format change a
+/// visible edit here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObserveStatusPayload {
     /// Whether the `otel` feature was compiled in.

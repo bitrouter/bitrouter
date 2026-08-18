@@ -1,0 +1,31 @@
+# Foreign crates reachable from `bitrouter-sdk`'s public API under
+# `--all-features`, one per line, sorted. Generated — see `public-api.pins`
+# for the exact command and the pinned toolchain.
+#
+# A diff here is a semver-relevant event: the SDK gained or lost a *public*
+# dependency, so an upstream breaking release in that crate becomes a
+# BitRouter breaking release. That is the whole reason the `otel` feature
+# keeps `opentelemetry*` out of public signatures — `tracing_subscriber` and
+# `tracing_core` are on this list precisely because the tracing bridge's
+# return type and bound put them there, deliberately.
+#
+# This tracks the public *dependency surface*, not every public item. Adding a
+# method to an existing type does not belong in review as a 6-line diff of
+# auto-derived marker impls; adding a new public dependency does.
+#
+# Lines beginning with `#` are stripped before comparison.
+agent_client_protocol_schema
+anyhow
+axum
+axum_core
+futures_core
+http
+pin_project_lite
+reqwest
+rmcp
+schemars
+serde_core
+serde_json
+tokio
+tracing_core
+tracing_subscriber

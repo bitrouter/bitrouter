@@ -1,13 +1,14 @@
 //! Performance benchmarks for the cardinality limiter — the only piece of
 //! the OTel exporter that can be exercised without spinning up the SDK
-//! against a live collector. End-to-end overhead is better measured against
-//! a real Jaeger / OTel-collector via `scripts/test_observability.sh`.
+//! against a live collector. End-to-end overhead is better measured by
+//! pointing a build at a real Jaeger / OTel-collector endpoint and driving
+//! traffic through it.
 
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use bitrouter_observe::otel::CardinalityLimiter;
+use bitrouter_sdk::otel::CardinalityLimiter;
 
 fn bench_cardinality_capping(c: &mut Criterion) {
     let mut group = c.benchmark_group("cardinality");

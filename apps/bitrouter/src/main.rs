@@ -2651,10 +2651,10 @@ fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_observe::otel::OtelExporter::new`]
+/// so this MUST be called after [`bitrouter_sdk::otel::OtelExporter::new`]
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
-fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::OtelExporter>) {
+fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_sdk::otel::OtelExporter>) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -2664,7 +2664,9 @@ fn init_serve_tracing_subscriber(exporter: Option<&bitrouter_observe::otel::Otel
         .with(tracing_subscriber::fmt::layer());
     match exporter {
         Some(exp) => registry
-            .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exp))
+            .with(bitrouter_sdk::otel::subscriber::tracing_subscriber_layer(
+                exp,
+            ))
             .init(),
         None => registry.init(),
     }
@@ -2804,12 +2806,23 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
 
     let http_app = app.clone();
     let http_listen = listen.clone();
+    // The ingress SERVER span is created from the exporter's own tracer — the
+    // SDK installs no global `TracerProvider`, so there is nothing to reach
+    // for implicitly. With OTel disabled there is no ingress span at all,
+    // which is the honest behaviour: the previous `TraceLayer` ran regardless
+    // and built `tracing` spans that went nowhere.
+    let otel_router_wrapper = assembled
+        .otel_exporter
+        .as_deref()
+        .map(bitrouter_sdk::otel::http_layer::router_wrapper);
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
     let http = async move {
-        // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
-        // trace-context propagation) so the inbound HTTP request becomes
-        // the SERVER span parent of the bitrouter `chat` INTERNAL span.
-        let otel_wrapper = bitrouter_observe::otel::http_layer::router_wrapper();
+        // Open an OTel SERVER span per inbound request and publish it on the
+        // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
+        let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
+            Some(wrapper) => wrapper(router),
+            None => router,
+        };
         let shutdown = async move {
             let _ = http_shutdown_rx.await;
         };
@@ -5257,7 +5270,7 @@ async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
 /// "feature off" from "daemon down."
 async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
-    use bitrouter_observe::OTEL_ENABLED;
+    use bitrouter_sdk::OTEL_ENABLED;
 
     let (snapshot, daemon_reachable) =
         match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {

@@ -15,7 +15,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
 
-use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome, StreamPart};
+use crate::language_model::{PipelineContext, RequestOutcome, StreamPart};
 
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::OtelConfig;
@@ -59,6 +59,10 @@ impl OtelMetrics {
             .with_resource(resource)
             .build();
 
+        // wire-visible: do not rename — the meter name is exported as the
+        // instrumentation scope on every metric point, so alerting rules and
+        // dashboards filter on it. It is independent of the crate that hosts
+        // this module.
         let meter: Meter = provider.meter("bitrouter");
 
         let request_counter = meter
@@ -206,8 +210,8 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::{
+    use crate::caller::CallerContext;
+    use crate::language_model::{
         ExecutionResult, GenerateResult, GenerationParams, PipelineRequest, Prompt,
     };
 

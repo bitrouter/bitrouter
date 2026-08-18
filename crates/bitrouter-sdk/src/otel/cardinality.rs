@@ -35,7 +35,12 @@ impl CardinalityLimiter {
             Ok(guard) => guard,
             Err(poisoned) => {
                 // If mutex is poisoned, log warning and recover
-                tracing::warn!("Cardinality limiter mutex poisoned, recovering");
+                // Target pinned so it stays a stable `RUST_LOG` selector
+                // regardless of which crate this module lives in.
+                tracing::warn!(
+                    target: "bitrouter::observe::cardinality",
+                    "Cardinality limiter mutex poisoned, recovering"
+                );
                 poisoned.into_inner()
             }
         };

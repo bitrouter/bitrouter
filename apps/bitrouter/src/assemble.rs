@@ -49,11 +49,11 @@ use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggrega
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
-use bitrouter_observe::OTEL_ENABLED;
-use bitrouter_observe::otel::{
+use bitrouter_sdk::MetricsRenderer;
+use bitrouter_sdk::OTEL_ENABLED;
+use bitrouter_sdk::otel::{
     ContentCaptureMode, MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook,
 };
-use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
@@ -354,7 +354,7 @@ pub async fn build_app_with_path(
                 // exporter path) is `StaticOnly` and never reads the credential
                 // store. Best-effort: a `None` source means the export proceeds
                 // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> =
+                let bearer: Option<Arc<dyn bitrouter_sdk::otel::TelemetryBearer>> =
                     match plan.bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
                             let source = crate::cloud::cloud_bearer_source().await;
@@ -1248,7 +1248,7 @@ pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelE
             return None;
         }
     };
-    let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
+    let bearer: Option<Arc<dyn bitrouter_sdk::otel::TelemetryBearer>> = match plan.bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
             let source = crate::cloud::cloud_bearer_source().await;
             if source.is_none() && warn_if_unmet {
@@ -1290,6 +1290,11 @@ struct OtelConfigPlan {
 /// longer snapshotted here — it is resolved live per export by a bearer source
 /// the async call site builds according to the returned [`BearerPlan`].
 fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
+    // `bitrouter-observe` is a stable historical *config* name, no longer tied
+    // to any crate — the OTel modules live in `bitrouter-sdk::otel` now. Do
+    // not tidy it to match. `config.plugins` is an unvalidated
+    // `HashMap<String, Value>`, so a renamed key still parses: every existing
+    // deployment's telemetry would silently stop, with no error anywhere.
     let observe = config.plugins.get("bitrouter-observe");
 
     // Env-var overrides are *not* applied here — `OtelExporter::new` runs
@@ -1476,7 +1481,7 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
 /// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a [`bitrouter_observe::otel::TelemetryBearer`]
+/// resolved live per export by a [`bitrouter_sdk::otel::TelemetryBearer`]
 /// source the async call site builds (refresh-aware), so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
