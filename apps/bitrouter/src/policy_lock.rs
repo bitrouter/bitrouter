@@ -4119,7 +4119,7 @@ policies:
                 ),
                 (
                     "agent_route/v1|unknown|mechanical|guarded".into(),
-                    "balanced".into()
+                    "strong".into()
                 ),
                 (
                     "agent_route/v1|unknown|mechanical|normal".into(),

@@ -138,7 +138,7 @@ protection remains exactly `{strong, balanced}`.
 Run:
 
 ```bash
-cargo test -p bitrouter --all-features auto_router_template_routes_have_deterministic_compiler_certificates -- --exact --nocapture
+cargo test -p bitrouter --all-features auto_router_template_lock_is_bound_and_canonical -- --nocapture
 ```
 
 Expected: FAIL because the current route is balanced.

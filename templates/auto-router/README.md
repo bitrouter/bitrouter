@@ -24,9 +24,10 @@ in the upstream protocol's native field.
 
 The frozen mapping is intentionally aggressive: normal mechanical and verify
 work uses economy; implementation, finalization, and context-heavy work mostly
-use balanced; orchestration and selected guarded work use strong. Unknown or
-unmatched predictions use the balanced default. Prediction is deterministic and
-does not add a controller call or modify the request.
+use balanced; orchestration, guarded mechanical work, and selected guarded
+verification or finalization work use strong. Unknown or unmatched predictions
+use the balanced default. Prediction is deterministic and does not add a
+controller call or modify the request.
 
 Start BitRouter from this directory:
 

@@ -26,6 +26,8 @@
 - [x] Private optimization artifact generated and reproduced byte-for-byte:
   22 tasks, 309 joins, 22 promotions, candidate cost $7.105622196,
   strong share 104/309, conservative savings 45.8309%.
-- [ ] Generic template RED/GREEN complete.
+- [x] Generic template RED/GREEN complete: route-map RED observed balanced
+  versus expected strong; canonical compiler digest, target certificate digest,
+  and evidence root were derived by the repository test and refreshed.
 - [ ] Full verification complete.
 - [ ] Pushed.
