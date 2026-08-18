@@ -1,0 +1,63 @@
+name: Registry Chart
+
+# Regenerates the README's model-catalog SVGs from the committed
+# `dist/registry/*.json` whenever the catalog changes. The SVGs are pushed to the
+# orphan `charts` branch — never to `main` — and the README's <picture> points at
+# the raw URLs, so catalog churn never shows up as a diff on the default branch.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dist/registry/**"
+      - "registry/**"
+      - "helpers/dist-helper/src/chart.rs"
+      - ".github/workflows/registry-chart.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialize runs so two pushes can't race the push to `charts`.
+concurrency:
+  group: registry-chart
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  chart:
+    name: render registry chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Set up charts worktree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin charts >/dev/null 2>&1; then
+            git fetch origin charts:charts
+            git worktree add charts charts
+          else
+            git worktree add --orphan -b charts charts
+          fi
+
+      - name: Render chart
+        run: |
+          cargo run -p dist-helper -- chart --out charts/dist/charts
+
+      - name: Commit and push charts branch
+        working-directory: charts
+        run: |
+          git add dist/charts/
+          if git diff --cached --quiet; then
+            echo "chart is unchanged"
+            exit 0
+          fi
+          git commit -m "Update registry chart (main @ ${GITHUB_SHA:0:7})"
+          git push origin charts

@@ -34,3 +34,6 @@ skills/bitrouter-e2e-test/
 # Per-repo BitRouter state (session records, worktrees, runtime files)
 .bitrouter/
 .worktrees/
+
+# Generated README charts (published to the orphan `charts` branch by CI)
+/dist/charts/
