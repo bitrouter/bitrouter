@@ -634,7 +634,6 @@ dependencies = [
  "opentelemetry-proto",
  "prost",
  "rand 0.10.2",
- "ratatui",
  "reqwest",
  "ring",
  "rmcp",

@@ -186,12 +186,12 @@ enum Command {
     /// Report a running daemon's status (pid, listen address, model count).
     /// Prints `running: no` when no daemon is reachable.
     ///
-    /// With `--watch`, becomes a live view of what the router is doing: a
-    /// stream of settled requests (model, the provider that actually served,
-    /// tokens, cost, latency) with a spend rollup. Read-only apart from `r`
-    /// (reload) and `e` (open `bitrouter.yaml` in `$EDITOR`); press `?` for
-    /// keys. Redirected or piped, `--watch` prints one snapshot and exits, so
-    /// it stays scriptable.
+    /// With `--requests`, prints what the router has actually done instead:
+    /// a table of settled requests (time, model, the provider that actually
+    /// served, tokens, cost, latency, status) under a daemon-state line and
+    /// over a spend rollup. Read straight from the metering store, so it works
+    /// with no daemon running. Identical piped or not — repeat it with
+    /// `watch -n1` for a live view.
     Status {
         /// Path to `bitrouter.yaml` (used to locate the control socket).
         #[arg(short, long)]
@@ -199,9 +199,9 @@ enum Command {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Watch live instead of printing one status line.
+        /// Print the settled-request table instead of one status line.
         #[arg(short, long)]
-        watch: bool,
+        requests: bool,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
@@ -1556,7 +1556,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             // Remembered so a session that dies badly can show the end of it
             // and say where the rest is. Set once, at init, because that is
             // the only place the path exists.
-            bitrouter::acp_cli::remember_session_log(path);
+            bitrouter::chat::session::remember_session_log(path);
         }
     } else {
         init_basic_tracing_subscriber();
@@ -1604,11 +1604,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Status {
             config,
             socket,
-            watch,
+            requests,
         } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            if watch {
-                return watch_status(config.as_deref(), &socket).await;
+            if requests {
+                return request_table(config.as_deref(), &socket).await;
             }
             output.emit(&status(&socket).await?)?;
             Ok(())
@@ -3339,23 +3339,19 @@ async fn status(socket: &Path) -> Result<StatusReport> {
     Ok(report)
 }
 
-/// `bitrouter status --watch` — the live view.
+/// `bitrouter status --requests` — the settled-request table.
 ///
-/// A non-terminal stdout gets one plain-text snapshot instead of a refusal:
-/// piping this is how people will script against it, and the whole point of
-/// the flag is that it reports rather than gatekeeps.
-async fn watch_status(config: Option<&Path>, socket: &Path) -> Result<()> {
-    use std::io::IsTerminal;
+/// One snapshot, printed the same way whether stdout is a terminal or a pipe.
+/// Nothing here takes the screen, so `| less`, `> file`, and an agent reading
+/// the bytes all see exactly what a person does.
+async fn request_table(config: Option<&Path>, socket: &Path) -> Result<()> {
     let source = bitrouter::paths::resolve_config(config)?;
     let window = bitrouter::metering::store::TimeWindow::Today;
-    if !std::io::stdout().is_terminal() {
-        print!(
-            "{}",
-            bitrouter::tui::oneshot_text(&source, socket, window).await
-        );
-        return Ok(());
-    }
-    bitrouter::tui::run_watch(&source, socket, window).await
+    print!(
+        "{}",
+        bitrouter::tui::oneshot_text(&source, socket, window).await
+    );
+    Ok(())
 }
 
 async fn route(
