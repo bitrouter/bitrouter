@@ -192,6 +192,15 @@ models:
         cache_read: 0.19
       output_tokens:
         text: 4
+  - id: anthropic/claude-opus-4.7
+    provider_model_id: claude-opus-4-7
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
 auto_sync:
   feed: models_dev
   key: azure
