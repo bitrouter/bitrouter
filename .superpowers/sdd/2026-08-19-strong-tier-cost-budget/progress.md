@@ -29,5 +29,11 @@
 - [x] Generic template RED/GREEN complete: route-map RED observed balanced
   versus expected strong; canonical compiler digest, target certificate digest,
   and evidence root were derived by the repository test and refreshed.
-- [ ] Full verification complete.
+- [x] Independent review completed. Initial REJECT findings were reproduced by
+  8 RED assertions, fixed in `793e963a`, and re-reviewed with verdict ACCEPT
+  and no Critical/Important findings.
+- [x] Full verification complete: full tests, Clippy, fmt, diff check, 10
+  planner tests, 33 evidence-adapter tests, skill validation, canonical
+  template tests, config validation, boundary audit, and byte-identical
+  private artifact replay all pass.
 - [ ] Pushed.
