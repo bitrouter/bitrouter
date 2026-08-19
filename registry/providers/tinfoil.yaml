@@ -50,6 +50,14 @@ models:
         no_cache: 2
       output_tokens:
         text: 6
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.7
+        cache_read: 0.125
+      output_tokens:
+        text: 1.9
 status: active
 weight: 1
 submitted_at: 2026-05-12
