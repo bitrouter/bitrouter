@@ -1,6 +1,6 @@
 ---
 name: evaluating-bitrouter-routes
-description: Use when evaluating BitRouter route decisions or Eval Exchange subjects, including Harbor or Terminal-Bench runs, task-native verifiers, human reviewers, private enterprise evaluators, agentic judges, or genuinely uncategorized evaluator sources.
+description: Use when evaluating BitRouter route decisions or Eval Exchange subjects with task-native verifiers, human reviewers, private enterprise evaluators, agentic judges, or genuinely uncategorized evaluator sources.
 ---
 
 # Evaluate BitRouter Routes
@@ -11,11 +11,6 @@ snapshots, candidate compilation, diffs, and publication.
 
 Read [the Eval Exchange reference](references/eval-exchange.md) before forming
 a subject or result. It is the exact current wire and authority contract.
-
-For Harbor or Terminal-Bench artifacts, also read
-[the Harbor adapter reference](references/terminal-bench-harbor.md). Use its
-script and fixed taxonomy; do not copy benchmark parsing or exception names into
-BitRouter code or SDK schemas.
 
 ## Classify the evaluation
 
@@ -65,70 +60,6 @@ Choose `evaluator.kind` from the actual source:
    inconclusive evaluator intentionally withholds attribution, emit that
    decision with `weight_ppm: 0` instead.
    Keep hypothetical or illustrative weights outside submit-ready JSON.
-
-## Adapt a Harbor run
-
-Use the deterministic external adapter. The trace and authoritative
-request-outcome files are always required; a prejoined decision file never
-bypasses complete request coverage.
-
-```bash
-python3 scripts/terminal_bench_route_evidence.py \
-  --run-dir /path/to/harbor-run \
-  --decisions /path/to/policy-decisions.jsonl \
-  --traces /path/to/traces.jsonl \
-  --request-outcomes /path/to/current-request-cost-join.jsonl \
-  --output-dir /path/to/evolution-analysis
-```
-
-Inspect `join-summary.json` before any matrix row. Any task-local coverage
-reason makes that task inconclusive; any unattributable/global reason blocks
-quality and recommendations for the batch. Missing or unknown critical-safety
-evidence blocks both recommendation layers. Any explicit non-null request error
-that the fixed taxonomy cannot classify is separate auditable contamination;
-it is not a provider exclusion, and it blocks quality and both recommendation
-layers. `packets.jsonl` is the generic Eval Exchange handoff;
-`task-evidence.jsonl`, `matrix.json`, and `matrix.csv` are external analysis.
-
-Keep the two recommendation layers separate:
-
-- Only strict unique task attribution can set `quality_credit_eligible` or an
-  `active_recommendation`.
-- `controlled_validation_candidate` and `screening_reason` are non-causal
-  observational screening. They carry zero Eval quality credit and cannot
-  publish or edit a policy. A balanced candidate remains balanced until a
-  controlled evaluation satisfies the strict gate.
-
-## Plan a strong-tier cost budget
-
-When an operator has already chosen a strict, error-free task cohort and wants
-to spend more on a generic route cell, run the separate counterfactual planner:
-
-```bash
-python3 scripts/terminal_bench_strong_tier_plan.py \
-  --validity-audit /path/to/validity-audit.json \
-  --request-join /path/to/current-request-model-join.jsonl \
-  --daemon-log /path/to/bitrouter-daemon.log \
-  --control-attempt-cost 12.34 \
-  --control-attempt-cost 13.45 \
-  --control-anchor cheapest \
-  --target-policy-key 'agent_route/v1|unknown|mechanical|guarded' \
-  --strong-rates '5,0.5,6.25,30' \
-  --output-dir /path/to/strong-tier-plan
-```
-
-The planner requires one decision per strict-cohort request and rejects any
-strict request with a non-null error or non-provider-reported usage. It keeps
-observed token categories fixed, reprices only the requested matched policy
-key, and reports every control attempt separately. The output is a non-causal
-operator budget artifact; it never supplies Eval quality credit or edits a
-policy.
-
-Choose the control anchor explicitly. If the operator approved the cheapest
-exact-case control as a conservative anchor, use its separately reported
-savings to evaluate the requested band while retaining every other attempt as
-sensitivity evidence. Without an approved anchor, report incompatible control
-ranges instead of inventing an aggregate.
 
 ## Submit and hand off
 
