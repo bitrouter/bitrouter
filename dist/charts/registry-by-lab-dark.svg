@@ -66,21 +66,21 @@
 <text class="model" x="338.0" y="221.0">qwen3.5-27b</text>
 <text class="routes" x="578.0" y="221.0" text-anchor="end">6</text>
 <rect x="330.0" y="232.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="232.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
+<rect x="330.0" y="232.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="338.0" y="247.0">qwen3.6-35b-a3b</text>
-<text class="routes" x="578.0" y="247.0" text-anchor="end">5</text>
+<text class="routes" x="578.0" y="247.0" text-anchor="end">6</text>
 <rect x="330.0" y="258.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="258.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="273.0">qwen3.6-flash</text>
+<text class="model" x="338.0" y="273.0">qwen3.6-27b</text>
 <text class="routes" x="578.0" y="273.0" text-anchor="end">5</text>
 <rect x="330.0" y="284.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="284.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="299.0">qwen3.8-max</text>
+<text class="model" x="338.0" y="299.0">qwen3.6-flash</text>
 <text class="routes" x="578.0" y="299.0" text-anchor="end">5</text>
 <rect x="330.0" y="310.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="310.0" width="42.8" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="325.0">qwen3.6-27b</text>
-<text class="routes" x="578.0" y="325.0" text-anchor="end">4</text>
+<rect x="330.0" y="310.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="325.0">qwen3.8-max</text>
+<text class="routes" x="578.0" y="325.0" text-anchor="end">5</text>
 <rect x="612.0" y="90.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="622.0" y="109.0">OPENAI</text>
 <text class="lab-count" x="870.0" y="109.0" text-anchor="end">6</text>
@@ -241,5 +241,5 @@
 <rect x="330.0" y="612.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="338.0" y="627.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="627.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="694.0">50 models · 46 providers · 439 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="694.0">50 models · 47 providers · 441 model→provider routes · 12 providers billed by subscription</text>
 </svg>
