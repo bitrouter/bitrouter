@@ -130,13 +130,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|normal",
-            "agent_route/v1|implement|normal",
-            "agent_route/v1|implement|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
         ]
     );
     Ok(())
@@ -401,6 +401,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         input_model: "inbound".to_string(),
         input_effort: None,
         key_strategy: "workflow_state".to_string(),
+        route_projection: None,
         request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
         policy: None,
@@ -422,11 +423,14 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
+        predicted_task_family: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        task_family_confidence_ppm: None,
         predictor_contract_digest: None,
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
+        task_family_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -478,7 +482,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 
 #[tokio::test]
 async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
-    let canonical_key = "agent_trace/v1|tool_followup|normal";
+    let canonical_key = "agent_route/v1|unknown|implement|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
     generic.headers.insert(
@@ -502,6 +506,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
 
     let mut generic_decision = benchmark_decision("req-reward-generic-merge");
     generic_decision.key_strategy = "agent_trace".to_string();
+    generic_decision.route_projection = Some(canonical_key.to_string());
     generic_decision.request_key = canonical_key.to_string();
     generic_decision.ledger_key = Some(ledger_key.clone());
     generic_decision.selected_tier = Some("cheap".to_string());
@@ -1053,35 +1058,35 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-near-done-finalize-001",
                 "agent_trace/v2|test|normal".to_string(),
-                "agent_route/v1|finalize|normal".to_string(),
+                "agent_route/v1|unknown|finalize|normal".to_string(),
                 NextActionClass::AnswerOrSummarize,
                 Some(true),
             ),
             (
                 "predictive-opening-plan-001",
                 "agent_trace/v2|opening|normal".to_string(),
-                "agent_route/v1|orchestrate|normal".to_string(),
+                "agent_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "agent_route/v1|verify|normal".to_string(),
+                "agent_route/v1|code:debugging|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
             (
                 "predictive-post-read-implement-001",
                 "agent_trace/v2|tool_followup|normal".to_string(),
-                "agent_route/v1|implement|normal".to_string(),
+                "agent_route/v1|unknown|implement|normal".to_string(),
                 NextActionClass::Mutate,
                 Some(true),
             ),
             (
                 "predictive-repeated-failure-replan-001",
                 "agent_trace/v2|test|guarded".to_string(),
-                "agent_route/v1|orchestrate|guarded".to_string(),
+                "agent_route/v1|unknown|orchestrate|guarded".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
@@ -1123,7 +1128,7 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "agent_route/v1|orchestrate|normal"
+        "agent_route/v1|unknown|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -1162,7 +1167,7 @@ fn new_fixture_prediction_is_compared_exactly() {
     assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
     assert_eq!(
         summary.records[0].predictive_route_key,
-        "agent_route/v1|orchestrate|normal"
+        "agent_route/v1|unknown|orchestrate|normal"
     );
 }
 
@@ -1867,111 +1872,6 @@ fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
 }
 
 #[test]
-fn harbor_result_dir_exports_benchmark_outcomes_with_trial_windows() {
-    let run_dir = temp_path("harbor-result-dir");
-    let trial_dir = run_dir.join("regex-log__abc123");
-    std::fs::create_dir_all(&trial_dir).unwrap();
-    std::fs::write(
-        run_dir.join("result.json"),
-        json!({
-            "id": "job-1",
-            "n_total_trials": 1,
-            "stats": {
-                "evals": {
-                    "codex__gpt-5.5__terminal-bench/terminal-bench-2-1": {
-                        "reward_stats": { "reward": { "1.0": ["regex-log__abc123"] } }
-                    }
-                }
-            }
-        })
-        .to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        trial_dir.join("result.json"),
-        json!({
-            "task_name": "terminal-bench/regex-log",
-            "trial_name": "regex-log__abc123",
-            "finished_at": "2026-07-09T08:05:00Z",
-            "agent_execution": {
-                "started_at": "2026-07-09T08:00:00Z",
-                "finished_at": "2026-07-09T08:04:00Z"
-            },
-            "verifier_result": { "rewards": { "reward": 1.0 } },
-            "exception_info": null
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let outcomes = BenchmarkOutcomeRecord::load_harbor_run_dir(&run_dir).unwrap();
-
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].session_key, "regex-log__abc123");
-    assert_eq!(outcomes[0].task_id, "terminal-bench/regex-log");
-    assert_eq!(outcomes[0].reward, 1.0);
-    assert_eq!(
-        outcomes[0].agent_started_at.as_deref(),
-        Some("2026-07-09T08:00:00Z")
-    );
-    assert_eq!(
-        outcomes[0].agent_finished_at.as_deref(),
-        Some("2026-07-09T08:04:00Z")
-    );
-
-    let _ = std::fs::remove_dir_all(&run_dir);
-}
-
-#[test]
-fn harbor_result_dir_exports_outcomes_from_nested_case_jobs() {
-    let run_dir = temp_path("harbor-nested-case-jobs");
-    let job_dir = run_dir.join("case-01-job");
-    let trial_dir = job_dir.join("regex-log__abc123");
-    std::fs::create_dir_all(&trial_dir).unwrap();
-    std::fs::write(
-        job_dir.join("result.json"),
-        json!({
-            "id": "job-1",
-            "n_total_trials": 1,
-            "stats": {
-                "evals": {
-                    "codex__gpt-5.6-terra__terminal-bench/terminal-bench-2-1": {
-                        "reward_stats": { "reward": { "1.0": ["regex-log__abc123"] } }
-                    }
-                }
-            }
-        })
-        .to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        trial_dir.join("result.json"),
-        json!({
-            "task_name": "terminal-bench/regex-log",
-            "trial_name": "regex-log__abc123",
-            "finished_at": "2026-07-17T21:05:00Z",
-            "agent_execution": {
-                "started_at": "2026-07-17T21:00:00Z",
-                "finished_at": "2026-07-17T21:04:00Z"
-            },
-            "verifier_result": { "rewards": { "reward": 1.0 } },
-            "exception_info": null
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let outcomes = BenchmarkOutcomeRecord::load_harbor_run_dir(&run_dir).unwrap();
-
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].session_key, "regex-log__abc123");
-    assert_eq!(outcomes[0].task_id, "terminal-bench/regex-log");
-    assert_eq!(outcomes[0].reward, 1.0);
-
-    let _ = std::fs::remove_dir_all(&run_dir);
-}
-
-#[test]
 fn benchmark_outcome_jsonl_reader_parses_records() {
     let path = temp_path("benchmark-outcomes.jsonl");
     std::fs::write(
@@ -2158,8 +2058,9 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2180,11 +2081,14 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
+        predicted_task_family: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        task_family_confidence_ppm: None,
         predictor_contract_digest: None,
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
+        task_family_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -2300,7 +2204,7 @@ fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decision
 }
 
 #[tokio::test]
-async fn legacy_workflow_state_lock_and_artifact_replay_without_projection_migration() {
+async fn legacy_workflow_state_lock_is_rejected_before_replay() {
     let root = temp_path("legacy-workflow-state-replay");
     std::fs::create_dir_all(&root).unwrap();
     let config_path = root.join("bitrouter.yaml");
@@ -2339,71 +2243,10 @@ policies:
     .unwrap();
     let config =
         config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
-    let loaded = policy_lock::load_for_config(&config, Some(&config_path))
+    let error = policy_lock::load_for_config(&config, Some(&config_path))
         .await
-        .unwrap()
-        .expect("legacy bound lock loads");
-    let definition = loaded.document.policies.get("legacy").unwrap();
-    assert_eq!(
-        definition
-            .as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen)
-            .key_strategy,
-        bitrouter_sdk::config::PolicyKeyStrategy::AgentTrace
-    );
-    assert!(
-        definition
-            .routes
-            .contains_key("codex|responses|tool_followup"),
-        "legacy source-specific route remains legacy evidence"
-    );
-
-    let trace_path = root.join("traces.jsonl");
-    let legacy_trace = CapturedIngressTrace {
-        id: "legacy-request".to_string(),
-        captured_at: None,
-        harness: HarnessId::Codex,
-        protocol: ProtocolKind::Responses,
-        method: "POST".to_string(),
-        path: "/v1/responses".to_string(),
-        headers: Default::default(),
-        raw_body: json!({
-            "model": "vendor/strong",
-            "previous_response_id": "resp_legacy",
-            "input": "continue"
-        }),
-        outcome: RealTraceOutcome {
-            http_status: 200,
-            status: "completed".to_string(),
-        },
-    };
-    TraceArchive::write_jsonl(&trace_path, &[legacy_trace], &TraceSanitizer::default()).unwrap();
-    let fixtures = TraceArchive::read_replay_fixtures(&trace_path).unwrap();
-    let replay = ReplayEvaluator.run(&fixtures);
-    assert_eq!(replay.total, 1);
-    assert_eq!(replay.covered, 1);
-
-    let decision_path = root.join("legacy-decisions.jsonl");
-    let mut legacy_decision = benchmark_decision("legacy-request");
-    legacy_decision.key_strategy = "workflow_state".to_string();
-    legacy_decision.request_key = "codex|responses|tool_followup".to_string();
-    PolicyDecisionRecord::write_jsonl(&decision_path, &[legacy_decision]).unwrap();
-    let legacy_records = PolicyDecisionRecord::load_jsonl(&decision_path).unwrap();
-    assert_eq!(
-        legacy_records[0].request_key,
-        "codex|responses|tool_followup"
-    );
-    assert!(!legacy_records[0].request_key.starts_with("agent_trace/"));
-
-    let canonical_path = root.join("agent-trace-decisions.jsonl");
-    let mut canonical = benchmark_decision("agent-trace-request");
-    canonical.key_strategy = "agent_trace".to_string();
-    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
-    PolicyDecisionRecord::write_jsonl(&canonical_path, &[canonical]).unwrap();
-    let canonical_records = PolicyDecisionRecord::load_jsonl(&canonical_path).unwrap();
-    assert_eq!(
-        canonical_records[0].request_key,
-        "agent_trace/v1|tool_followup|normal"
-    );
+        .expect_err("retired workflow_state strategy must be rejected");
+    assert!(format!("{error:#}").contains("no longer supported"));
 
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -2454,8 +2297,9 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2476,11 +2320,14 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
+        predicted_task_family: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        task_family_confidence_ppm: None,
         predictor_contract_digest: None,
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
+        task_family_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -2585,9 +2432,10 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         ingress_request_id_sha256: None,
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
-        ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
+        key_strategy: "agent_trace".to_string(),
+        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
+        ledger_key: Some("coding\0agent_route/v1|unknown|implement|normal".to_string()),
         policy: Some("coding".to_string()),
         policy_digest: Some(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
@@ -2609,11 +2457,14 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
+        predicted_task_family: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        task_family_confidence_ppm: None,
         predictor_contract_digest: None,
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
+        task_family_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -2660,10 +2511,17 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         candidate.settlement_outcome,
         SemanticSettlementOutcome::ProviderReportedComputed
     );
-    assert_eq!(candidate.request_key, "agent_trace/v1|tool_followup|normal");
+    assert_eq!(
+        candidate.route_projection,
+        "agent_route/v1|code:generation|implement|normal"
+    );
+    assert_eq!(
+        candidate.request_key,
+        "agent_route/v1|unknown|implement|normal"
+    );
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0agent_trace/v1|tool_followup|normal")
+        Some("coding\0agent_route/v1|unknown|implement|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),

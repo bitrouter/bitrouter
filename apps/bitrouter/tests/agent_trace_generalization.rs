@@ -6,12 +6,16 @@ use bitrouter::policy_lock::PolicyLock;
 use bitrouter::policy_table_router::{PolicyDecision, PolicyTableRouter};
 use bitrouter::workflow_state::decision::{POLICY_DECISION_JSONL_ENV, PolicyDecisionRecord};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{AgentRole, HarnessId};
+use bitrouter::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
+use bitrouter::workflow_state::online::OnlineWorkflowState;
 use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
 use bitrouter::workflow_state::real_trace::{RealTraceCapture, TraceCaptureOptions};
 use bitrouter::workflow_state::replay::ReplayEvaluator;
+use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::config::{self, PolicyKeyStrategy, PolicyTableConfig, resolve_presets};
+use bitrouter_sdk::language_model::{ApiProtocol, inbound_adapter_for};
 use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
+use http::HeaderValue;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -39,6 +43,20 @@ struct NativeCase {
     body: Value,
 }
 
+#[derive(Clone, Copy)]
+struct TaskAwareRouteCase {
+    name: &'static str,
+    instruction: &'static str,
+    pivot: Option<&'static str>,
+    history: SemanticHistory,
+    task_family: &'static str,
+    role: &'static str,
+    risk: &'static str,
+    primary_route: &'static str,
+    matched_route: &'static str,
+    tier: &'static str,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct RoutingDecisionView<'a> {
     request_key: &'a str,
@@ -59,6 +77,107 @@ fn routing_decision_view(decision: &PolicyDecision) -> RoutingDecisionView<'_> {
         predicted_action: decision.predicted_action.as_deref(),
         prediction_reason_codes: &decision.prediction_reason_codes,
         selected_tier: decision.selected_tier.as_deref(),
+    }
+}
+
+#[tokio::test]
+async fn task_aware_cross_harness_routes_equivalent_requests_identically() {
+    let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
+    let upstream = mock_chat_upstream().await;
+    let temp = TempDir::new().expect("temporary decision directory");
+    let decisions_path = temp.path().join("decisions.jsonl");
+    let _decision_env = DecisionRecorderEnv::set(&decisions_path);
+    let (server, capture, _config_dir) = generalization_server(&upstream.uri()).await;
+    let scenarios = task_aware_route_cases();
+    let mut expected = Vec::new();
+
+    for scenario in scenarios {
+        for case in task_aware_harness_cases(scenario) {
+            let (api_protocol, protocol_kind) = native_protocol(case.path);
+            let prompt = inbound_adapter_for(&api_protocol)
+                .expect("native adapter exists")
+                .parse_request(case.body.clone())
+                .expect("native task-aware request parses");
+            let online = OnlineWorkflowState::from_prompt(
+                &native_headers(&case),
+                &prompt,
+                Some(case.source.clone()),
+                protocol_kind,
+            );
+            assert_eq!(
+                online.routing_key(),
+                scenario.primary_route,
+                "{} {} primary route: {:?}",
+                scenario.name,
+                case.name,
+                online.predictive
+            );
+            assert_eq!(
+                online.predictive.route_risk.to_string(),
+                scenario.risk,
+                "{} {} route risk",
+                scenario.name,
+                case.name
+            );
+
+            let mut request = server.post(case.path);
+            for (name, value) in case.headers {
+                request = request.add_header(*name, *value);
+            }
+            request.json(&case.body).await.assert_status_ok();
+            expected.push((scenario, case.source, case.name));
+        }
+    }
+
+    let traces = capture.records();
+    assert_eq!(traces.len(), expected.len());
+    for (trace, (scenario, harness, case_name)) in traces.iter().zip(&expected) {
+        assert_eq!(
+            trace.harness, *harness,
+            "{} {case_name} harness extraction",
+            scenario.name,
+        );
+    }
+
+    let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
+        .expect("native task-aware HTTP traffic emits readable policy decisions");
+    assert_eq!(decisions.len(), expected.len());
+    for (decision, (scenario, _, case_name)) in decisions.iter().zip(&expected) {
+        assert_eq!(
+            decision.predicted_task_family.as_deref(),
+            Some(scenario.task_family),
+            "{} {case_name} family",
+            scenario.name,
+        );
+        assert_eq!(
+            decision.predicted_role.as_deref(),
+            Some(scenario.role),
+            "{} {case_name} role",
+            scenario.name,
+        );
+        assert_eq!(
+            decision.route_projection.as_deref(),
+            Some(scenario.primary_route),
+            "{} {case_name} primary route",
+            scenario.name,
+        );
+        assert_eq!(
+            decision.request_key, scenario.matched_route,
+            "{} {case_name} matched route",
+            scenario.name,
+        );
+        assert_eq!(
+            decision.selected_tier.as_deref(),
+            Some(scenario.tier),
+            "{} {case_name} tier",
+            scenario.name,
+        );
+        if scenario.name == "later causal pivot" {
+            assert_ne!(
+                scenario.primary_route, scenario.matched_route,
+                "{case_name} regression fixture must exercise unknown-family fallback"
+            );
+        }
     }
 }
 
@@ -100,7 +219,10 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     assert_eq!(decisions.len(), 7, "each HTTP request emits one decision");
     for decision in &decisions {
         assert_eq!(decision.key_strategy, "agent_trace");
-        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|orchestrate|normal"
+        );
         assert_eq!(
             decision.selected_tier.as_deref(),
             Some("strong"),
@@ -215,11 +337,14 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         .expect("release requests emit policy decisions");
     assert_eq!(decisions.len(), 3);
     for decision in decisions {
-        assert_eq!(decision.request_key, "agent_route/v1|mechanical|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|mechanical|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
-            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
         );
         assert_eq!(
             decision.prediction_confidence_kind.as_deref(),
@@ -418,7 +543,7 @@ async fn explicit_non_policy_routes_retain_generic_multi_account_fallback() {
 }
 
 #[tokio::test]
-async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
+async fn auto_template_preserves_balanced_across_progress_guards() {
     let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
     let template = template_config();
     for model in ["@auto", "@auto:cost"] {
@@ -583,20 +708,28 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), 15);
-    for decision in decisions.iter().step_by(2).take(7) {
-        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
-        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
+    for (decision, (key, tier)) in decisions.iter().step_by(2).take(7).zip([
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|verify|normal", "economy"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+    ]) {
+        assert_eq!(decision.request_key, key);
+        assert_eq!(decision.selected_tier.as_deref(), Some(tier));
         assert_eq!(
             decision.trajectory_completeness.as_deref(),
             Some("complete")
         );
     }
     for (decision, key) in decisions[1..10].iter().step_by(2).zip([
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
-        "agent_route/v1|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
+        "agent_route/v1|unknown|unknown|normal",
     ]) {
         assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
@@ -605,7 +738,10 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
             Some("complete")
         );
     }
-    assert_eq!(decisions[11].request_key, "agent_route/v1|unknown|normal");
+    assert_eq!(
+        decisions[11].request_key,
+        "agent_route/v1|unknown|unknown|normal"
+    );
     assert_eq!(decisions[11].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[11].selected_model.as_deref(),
@@ -613,20 +749,26 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     );
     assert_eq!(
         decisions[13].request_key,
-        "agent_route/v1|implement|guarded"
+        "agent_route/v1|unknown|implement|guarded"
     );
-    assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[13].static_tier.as_deref(), Some("balanced"));
+    assert_eq!(decisions[13].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[13].selected_model.as_deref(),
-        Some(MOCK_STRONG_MODEL)
+        Some(MOCK_BALANCED_MODEL)
     );
-    assert_eq!(decisions[14].request_key, "agent_route/v1|unknown|normal");
+    assert!(!decisions[13].progress_clause_ids.is_empty());
+    assert_eq!(
+        decisions[14].request_key,
+        "agent_route/v1|unknown|unknown|normal"
+    );
     assert_eq!(decisions[14].static_tier.as_deref(), Some("balanced"));
-    assert_eq!(decisions[14].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[14].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[14].trajectory_completeness.as_deref(),
         Some("incomplete")
     );
+    assert!(!decisions[14].progress_clause_ids.is_empty());
 }
 
 #[tokio::test]
@@ -641,8 +783,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
     let mut scenarios = [
         (
             "edit",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|verify|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|verify|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
             "balanced",
@@ -652,8 +794,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "test",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|finalize|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|finalize|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
             "balanced",
@@ -663,8 +805,8 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "tool followup",
-            "agent_route/v1|unknown|normal",
-            "agent_route/v1|unknown|normal",
+            "agent_route/v1|unknown|unknown|normal",
+            "agent_route/v1|unknown|unknown|normal",
             terminus_tool_case("@auto", None),
             claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
             "balanced",
@@ -674,18 +816,18 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         ),
         (
             "recovery",
-            "agent_route/v1|implement|guarded",
-            "agent_route/v1|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
+            "agent_route/v1|unknown|implement|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
             claude_fixture_case(
                 "@auto:cost",
                 ClaudeFixture::ToolFollowup,
                 Some("error: cargo test failed"),
             ),
-            "strong",
-            MOCK_STRONG_MODEL,
-            "strong",
-            MOCK_STRONG_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
+            "balanced",
+            MOCK_BALANCED_MODEL,
         ),
     ];
 
@@ -716,14 +858,30 @@ async fn native_literal_histories_receive_exact_template_decisions() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("native HTTP traffic emits policy decisions");
     assert_eq!(decisions.len(), 16);
+    let root_expectations = [
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|verify|normal", "economy"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+        ("agent_route/v1|unknown|unknown|normal", "balanced"),
+    ];
     for (
-        (name, first_key, second_key, _, _, first_tier, first_model, second_tier, second_model),
-        pair,
-    ) in scenarios.iter().zip(decisions.chunks_exact(4))
+        (
+            (name, first_key, second_key, _, _, first_tier, first_model, second_tier, second_model),
+            pair,
+        ),
+        (root_key, root_tier),
+    ) in scenarios
+        .iter()
+        .zip(decisions.chunks_exact(4))
+        .zip(root_expectations)
     {
         for root in [&pair[0], &pair[2]] {
-            assert_eq!(root.request_key, "agent_route/v1|unknown|normal");
-            assert_eq!(root.selected_tier.as_deref(), Some("balanced"));
+            assert_eq!(root.request_key, root_key, "{name} root route");
+            assert_eq!(
+                root.selected_tier.as_deref(),
+                Some(root_tier),
+                "{name} root tier"
+            );
             assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
         }
         assert_eq!(pair[1].request_key, *first_key, "{name} first source");
@@ -762,7 +920,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Orchestrate,
             NextActionClass::ReasonOrPlan,
             "normal",
-            "agent_route/v1|orchestrate|normal",
+            "agent_route/v1|unknown|orchestrate|normal",
             &["opening_broad_goal"] as &[&str],
             "strong",
         ),
@@ -771,7 +929,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Mechanical,
             NextActionClass::InspectOrRead,
             "normal",
-            "agent_route/v1|mechanical|normal",
+            "agent_route/v1|unknown|mechanical|normal",
             &["narrow_read_requested"],
             "economy",
         ),
@@ -780,7 +938,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Implement,
             NextActionClass::Mutate,
             "normal",
-            "agent_route/v1|implement|normal",
+            "agent_route/v1|unknown|implement|normal",
             &["concrete_mutation_requested", "read_result_available"],
             "economy",
         ),
@@ -789,7 +947,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Verify,
             NextActionClass::ExecuteOrTest,
             "normal",
-            "agent_route/v1|verify|normal",
+            "agent_route/v1|code:debugging|verify|normal",
             &["concrete_mutation_requested", "mutation_result_available"],
             "economy",
         ),
@@ -798,7 +956,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Implement,
             NextActionClass::Mutate,
             "guarded",
-            "agent_route/v1|implement|guarded",
+            "agent_route/v1|code:debugging|implement|guarded",
             &["concrete_mutation_requested", "test_failed_once"],
             "strong",
         ),
@@ -807,7 +965,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             NextStepRole::Finalize,
             NextActionClass::AnswerOrSummarize,
             "normal",
-            "agent_route/v1|finalize|normal",
+            "agent_route/v1|code:debugging|finalize|normal",
             &["concrete_mutation_requested", "progress_near_done"],
             "balanced",
         ),
@@ -830,7 +988,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             );
             assert_eq!(
                 record.predictor_contract_digest,
-                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec",
+                "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37",
                 "{history:?} {}",
                 fixture.id
             );
@@ -957,7 +1115,7 @@ fn private_headers_do_not_change_predictive_replay_or_selected_tier() {
                 plain_fixture.id
             );
             assert_eq!(
-                plain_decision.request_key, plain.predictive_route_key,
+                plain_decision.route_projection, plain.predictive_route_key,
                 "{history:?} {}",
                 plain_fixture.id
             );
@@ -1282,23 +1440,23 @@ fn predictive_matrix_router() -> PolicyTableRouter {
         ]),
         fingerprints: HashMap::from([
             (
-                "agent_route/v1|orchestrate|normal".to_string(),
+                "agent_route/v1|unknown|orchestrate|normal".to_string(),
                 "strong".to_string(),
             ),
             (
-                "agent_route/v1|implement|normal".to_string(),
+                "agent_route/v1|unknown|implement|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|mechanical|normal".to_string(),
+                "agent_route/v1|unknown|mechanical|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|verify|normal".to_string(),
+                "agent_route/v1|unknown|verify|normal".to_string(),
                 "economy".to_string(),
             ),
             (
-                "agent_route/v1|finalize|normal".to_string(),
+                "agent_route/v1|unknown|finalize|normal".to_string(),
                 "balanced".to_string(),
             ),
         ]),
@@ -1431,6 +1589,171 @@ fn claude_fixture_case(
 
 fn terminus_contract() -> &'static str {
     "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."
+}
+
+fn task_aware_route_cases() -> [TaskAwareRouteCase; 5] {
+    [
+        TaskAwareRouteCase {
+            name: "debugging recovery",
+            instruction: "Fix the parser panic after the regression test failed.",
+            pivot: None,
+            history: SemanticHistory::FailedTest,
+            task_family: "code:debugging",
+            role: "implement",
+            risk: "guarded",
+            primary_route: "agent_route/v1|code:debugging|implement|guarded",
+            matched_route: "agent_route/v1|code:debugging|implement|guarded",
+            tier: "strong",
+        },
+        TaskAwareRouteCase {
+            name: "review verification",
+            instruction: "Review this pull request diff for security vulnerabilities and audit it.",
+            pivot: None,
+            history: SemanticHistory::PostEdit,
+            task_family: "code:review",
+            role: "verify",
+            risk: "normal",
+            primary_route: "agent_route/v1|code:review|verify|normal",
+            matched_route: "agent_route/v1|code:review|verify|normal",
+            tier: "strong",
+        },
+        TaskAwareRouteCase {
+            name: "web research inspection",
+            instruction: "Read current web sources from sources.json and research the release.",
+            pivot: None,
+            history: SemanticHistory::NarrowRead,
+            task_family: "agent:web_research",
+            role: "mechanical",
+            risk: "normal",
+            primary_route: "agent_route/v1|agent:web_research|mechanical|normal",
+            matched_route: "agent_route/v1|agent:web_research|mechanical|normal",
+            tier: "balanced",
+        },
+        TaskAwareRouteCase {
+            name: "unknown fallback",
+            instruction: "Run the shell command and report its output.",
+            pivot: None,
+            history: SemanticHistory::Opening,
+            task_family: "unknown",
+            role: "finalize",
+            risk: "normal",
+            primary_route: "agent_route/v1|unknown|finalize|normal",
+            matched_route: "agent_route/v1|unknown|finalize|normal",
+            tier: "balanced",
+        },
+        TaskAwareRouteCase {
+            name: "later causal pivot",
+            instruction: "Review the parser API and report any compatibility risks.",
+            pivot: Some("Fix the regression in src/parser.rs and implement the correction."),
+            history: SemanticHistory::PostRead,
+            task_family: "code:debugging",
+            role: "implement",
+            risk: "normal",
+            primary_route: "agent_route/v1|code:debugging|implement|normal",
+            matched_route: "agent_route/v1|unknown|implement|normal",
+            tier: "balanced",
+        },
+    ]
+}
+
+fn task_aware_harness_cases(scenario: TaskAwareRouteCase) -> Vec<NativeCase> {
+    vec![
+        task_aware_harness_case(
+            "Codex",
+            HarnessId::Codex,
+            MatrixProtocol::Responses,
+            "codex",
+            "/v1/responses",
+            &[("user-agent", "codex-cli/1.0")],
+            scenario,
+        ),
+        task_aware_harness_case(
+            "Claude Code",
+            HarnessId::ClaudeCode,
+            MatrixProtocol::Messages,
+            "claude",
+            "/v1/messages",
+            &[("anthropic-beta", "claude-code-20250219")],
+            scenario,
+        ),
+        task_aware_harness_case(
+            "Terminus 2",
+            HarnessId::Terminus2,
+            MatrixProtocol::Chat,
+            "terminus",
+            "/v1/chat/completions",
+            &[],
+            scenario,
+        ),
+        task_aware_harness_case(
+            "Generic",
+            HarnessId::Generic,
+            MatrixProtocol::Chat,
+            "generic",
+            "/v1/chat/completions",
+            &[],
+            scenario,
+        ),
+    ]
+}
+
+fn task_aware_harness_case(
+    name: &'static str,
+    source: HarnessId,
+    protocol: MatrixProtocol,
+    source_name: &str,
+    path: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    scenario: TaskAwareRouteCase,
+) -> NativeCase {
+    let mut body = semantic_history_body(scenario.history, protocol, source_name);
+    body["model"] = Value::String("@auto".to_string());
+    match protocol {
+        MatrixProtocol::Responses => {
+            body["input"][0]["content"] = Value::String(scenario.instruction.to_string());
+        }
+        MatrixProtocol::Chat | MatrixProtocol::Messages => {
+            let user_index = usize::from(source_name == "terminus");
+            body["messages"][user_index]["content"] =
+                Value::String(scenario.instruction.to_string());
+        }
+    }
+    if let Some(pivot) = scenario.pivot {
+        match protocol {
+            MatrixProtocol::Responses => body["input"]
+                .as_array_mut()
+                .expect("responses input is an array")
+                .push(json!({"type": "message", "role": "user", "content": pivot})),
+            MatrixProtocol::Chat | MatrixProtocol::Messages => body["messages"]
+                .as_array_mut()
+                .expect("native messages are an array")
+                .push(json!({"role": "user", "content": pivot})),
+        }
+    }
+    NativeCase {
+        name,
+        source,
+        path,
+        headers,
+        body,
+    }
+}
+
+fn native_protocol(path: &str) -> (ApiProtocol, ProtocolKind) {
+    match path {
+        "/v1/chat/completions" => (ApiProtocol::ChatCompletions, ProtocolKind::ChatCompletions),
+        "/v1/responses" => (ApiProtocol::Responses, ProtocolKind::Responses),
+        "/v1/messages" => (ApiProtocol::Messages, ProtocolKind::Messages),
+        _ => unreachable!("native task-aware test only uses supported protocol paths"),
+    }
+}
+
+fn native_headers(case: &NativeCase) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in case.headers {
+        headers.insert(*name, HeaderValue::from_static(value));
+    }
+    headers
 }
 
 fn native_cases() -> Vec<NativeCase> {

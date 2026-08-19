@@ -113,8 +113,11 @@ impl ReplayEvaluator {
             summary.model_ladder.observe(&ir.capability_constraints);
 
             let prediction = predict_next_step(&ir, &fixture.prompt);
-            let predictive_projection =
-                PredictiveRouteProjection::new(prediction.next_step_role, prediction.route_risk);
+            let predictive_projection = PredictiveRouteProjection::new(
+                prediction.task_family,
+                prediction.next_step_role,
+                prediction.route_risk,
+            );
             let predictive_route_key = predictive_projection.key();
             let prediction_reason_codes = prediction
                 .evidence
@@ -130,6 +133,9 @@ impl ReplayEvaluator {
                     expected.next_step_role == prediction.next_step_role
                         && expected.next_action_class == prediction.next_action_class
                         && expected.route_risk == prediction.route_risk
+                        && expected
+                            .task_family
+                            .is_none_or(|family| family == prediction.task_family)
                 });
             if let Some(matches) = prediction_matches_expected {
                 summary.predictive_expectation_count += 1;
@@ -233,4 +239,49 @@ fn session_key(confidence: &SessionConfidence) -> String {
         SessionConfidence::High => "high",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::workflow_state::fixture::WorkflowTraceFixture;
+    use crate::workflow_state::replay::ReplayEvaluator;
+
+    #[test]
+    fn task_aware_replay_uses_unified_v1_and_compares_expected_family() {
+        let fixture = WorkflowTraceFixture::from_value(json!({
+            "id": "task-aware-debugging",
+            "harness": "generic",
+            "protocol": "chat_completions",
+            "headers": {},
+            "raw_body": {
+                "model": "test",
+                "messages": [{
+                    "role": "user",
+                    "content": "Fix the parser panic in src/parser.rs after this regression failed."
+                }]
+            },
+            "expected": {
+                "state_kind": "opening",
+                "baseline_fingerprint": "opening",
+                "confidence_min": 0.0,
+                "prediction": {
+                    "next_step_role": "implement",
+                    "next_action_class": "mutate",
+                    "route_risk": "normal",
+                    "task_family": "code_debugging"
+                }
+            }
+        }))
+        .unwrap();
+
+        let summary = ReplayEvaluator.run(&[fixture]);
+
+        assert_eq!(
+            summary.records[0].predictive_route_key,
+            "agent_route/v1|code:debugging|implement|normal"
+        );
+        assert_eq!(summary.records[0].prediction_matches_expected, Some(true));
+    }
 }

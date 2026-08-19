@@ -176,7 +176,7 @@ BitRouter already terminates **both** ACP roles: `up.rs` speaks the Client role
 to the spawned agent, `down.rs` re-exposes the session as a vanilla Agent over
 stdio for *"a manager (GUI / CLI / orchestrating agent)"*
 ([`down.rs:4`](../crates/bitrouter-sdk/src/acp/down.rs:4)). A working
-end-to-end ACP client already exists in the test suite — 
+end-to-end ACP client already exists in the test suite —
 [`tests/acp.rs`](../apps/bitrouter/tests/acp.rs) drives `initialize` →
 `session/new` → `session/prompt` → `session/update` over raw JSON-RPC.
 

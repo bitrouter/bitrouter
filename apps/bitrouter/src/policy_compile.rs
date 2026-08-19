@@ -20,8 +20,7 @@ use crate::policy_lock::{
     QualitySummary, RouteOwner, semantic_digest, validate_document,
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::workflow_state::ir::WorkflowStateKind;
-use crate::workflow_state::predictive::{CanonicalPolicyProjection, NextStepRole};
+use crate::workflow_state::predictive::{NextStepRole, PredictiveRouteProjection};
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
 
@@ -281,7 +280,7 @@ pub fn compile_candidate_with_quality(
             .iter()
             .filter_map(|((eval_policy, request_key), route)| {
                 (eval_policy == policy_name
-                    && CanonicalPolicyProjection::parse_key(request_key).is_some())
+                    && PredictiveRouteProjection::parse_key(request_key).is_some())
                 .then_some((request_key.clone(), route))
             })
             .collect::<BTreeMap<_, _>>();
@@ -542,6 +541,14 @@ pub fn compile_candidate_with_quality(
 
         if let Some(compiled_policy) = document.policies.get_mut(policy_name) {
             compiled_policy.routes = compiled_routes;
+            if compiled_policy
+                .routes
+                .keys()
+                .any(|request_key| request_key.starts_with("agent_route/"))
+            {
+                compiled_policy.predictor =
+                    Some(crate::workflow_state::predictive::compiled_predictor_contract());
+            }
         }
         if !certificates.is_empty() {
             document
@@ -725,6 +732,7 @@ fn eval_route_evidence_digest(
     canonical_digest(&(
         policy_name,
         request_key,
+        evidence.map(|route| &route.matched_request_keys),
         evidence.map(|route| &route.evidence_records),
     ))
 }
@@ -735,17 +743,17 @@ fn route_evidence<'a>(
 ) -> BTreeMap<String, RouteEvidence<'a>> {
     let mut evidence = BTreeMap::<String, RouteEvidence<'a>>::new();
     for pin in &legacy.pins {
-        if let Some(request_key) = legacy_request_key(policy_name, &pin.fingerprint) {
+        if let Some(request_key) = adequacy_request_key(policy_name, &pin.fingerprint) {
             evidence.entry(request_key).or_default().pin = Some(pin);
         }
     }
     for row in &legacy.exploration {
-        if let Some(request_key) = legacy_request_key(policy_name, &row.fingerprint) {
+        if let Some(request_key) = adequacy_request_key(policy_name, &row.fingerprint) {
             evidence.entry(request_key).or_default().exploration = Some(row);
         }
     }
     for row in &legacy.semantic_successes {
-        if let Some(request_key) = legacy_request_key(policy_name, &row.fingerprint) {
+        if let Some(request_key) = adequacy_request_key(policy_name, &row.fingerprint) {
             evidence
                 .entry(request_key)
                 .or_default()
@@ -756,9 +764,9 @@ fn route_evidence<'a>(
     evidence
 }
 
-fn legacy_request_key(policy_name: &str, fingerprint: &str) -> Option<String> {
+fn adequacy_request_key(policy_name: &str, fingerprint: &str) -> Option<String> {
     let (namespace, request_key) = fingerprint.split_once('\0')?;
-    (namespace == policy_name && CanonicalPolicyProjection::parse_key(request_key).is_some())
+    (namespace == policy_name && PredictiveRouteProjection::parse_key(request_key).is_some())
         .then(|| request_key.to_string())
 }
 
@@ -809,20 +817,13 @@ fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
 }
 
 fn positive_route_is_allowed(policy: &PolicyDefinition, request_key: &str) -> bool {
-    CanonicalPolicyProjection::parse_key(request_key)
+    PredictiveRouteProjection::parse_key(request_key)
         .is_some_and(|_| !is_opening_like(request_key) || policy.adequacy.explore_opening)
 }
 
 fn is_opening_like(request_key: &str) -> bool {
-    match CanonicalPolicyProjection::parse_key(request_key) {
-        Some(CanonicalPolicyProjection::Observed(projection)) => {
-            projection.state_kind == WorkflowStateKind::Opening
-        }
-        Some(CanonicalPolicyProjection::Predictive(projection)) => {
-            projection.next_step_role == NextStepRole::Orchestrate
-        }
-        None => false,
-    }
+    PredictiveRouteProjection::parse_key(request_key)
+        .is_some_and(|projection| projection.next_step_role == NextStepRole::Orchestrate)
 }
 
 fn route_evidence_digest(
@@ -875,7 +876,7 @@ mod tests {
         deterministic_yaml,
     };
 
-    const EDIT_KEY: &str = "agent_trace/v2|edit|normal";
+    const EDIT_KEY: &str = "agent_route/v1|unknown|implement|normal";
 
     fn policy(route: Option<&str>) -> PolicyDefinition {
         PolicyDefinition {
@@ -1033,6 +1034,7 @@ mod tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: "decision-effort".into(),
                         policy: "auto".into(),
+                        route_projection: EDIT_KEY.into(),
                         request_key: EDIT_KEY.into(),
                         selected_tier: "economy".into(),
                         selected_effort: None,
@@ -1191,8 +1193,27 @@ mod tests {
     #[test]
     fn negative_evidence_conflicting_with_operator_route_blocks_publication() -> anyhow::Result<()>
     {
+        let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let mut current: PolicyLock =
+            serde_saphyr::from_str(&std::fs::read_to_string(template_path)?)?;
+        current
+            .policies
+            .get_mut("auto")
+            .expect("template auto policy")
+            .routes
+            .insert(EDIT_KEY.to_string(), "economy".to_string());
+        let certificate = current
+            .certificates
+            .get_mut("auto")
+            .and_then(|certificates| certificates.get_mut(EDIT_KEY))
+            .expect("template edit certificate");
+        certificate.owner = RouteOwner::Operator;
+        certificate.selected_tier = "economy".into();
+        certificate.source = CertificateSource::Operator;
         let result = super::compile_candidate(super::CompileInput {
-            current: &v1(Some("economy")),
+            current: &current,
             parent_digest: None,
             legacy: &snapshot(false, Some(1_700_000_000)),
             eval: None,
@@ -1210,7 +1231,7 @@ mod tests {
 
     #[test]
     fn admitted_negative_evidence_demotes_pretrained_economy_route() -> anyhow::Result<()> {
-        const TEMPLATE_ECONOMY_KEY: &str = "agent_route/v1|verify|normal";
+        const TEMPLATE_ECONOMY_KEY: &str = "agent_route/v1|unknown|verify|normal";
         let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router/policy-lock.yaml");
@@ -1231,6 +1252,7 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-pretrained-demotion".into(),
                 policy: "auto".into(),
+                route_projection: TEMPLATE_ECONOMY_KEY.into(),
                 request_key: TEMPLATE_ECONOMY_KEY.into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
@@ -1373,7 +1395,7 @@ mod tests {
 
     #[test]
     fn predictive_orchestrate_guardrail_blocks_positive_legacy_promotion() -> anyhow::Result<()> {
-        let opening_key = "agent_route/v1|orchestrate|normal";
+        let opening_key = "agent_route/v1|unknown|orchestrate|normal";
         let fingerprint = format!("auto\0{opening_key}");
         let mut current = v1(None);
         current
@@ -1416,21 +1438,35 @@ mod tests {
     }
 
     #[test]
-    fn legacy_evidence_accepts_only_canonical_observed_and_predictive_keys() {
+    fn adequacy_evidence_accepts_only_canonical_predictive_keys() {
         assert_eq!(
-            super::legacy_request_key("auto", "auto\0agent_route/v1|implement|normal").as_deref(),
-            Some("agent_route/v1|implement|normal")
+            super::adequacy_request_key("auto", "auto\0agent_route/v1|unknown|implement|normal")
+                .as_deref(),
+            Some("agent_route/v1|unknown|implement|normal")
         );
         assert_eq!(
-            super::legacy_request_key("auto", "auto\0agent_trace/v2|edit|normal").as_deref(),
-            Some("agent_trace/v2|edit|normal")
-        );
-        assert_eq!(
-            super::legacy_request_key("auto", "auto\0agent_route/v2|implement|normal"),
+            super::adequacy_request_key("auto", "auto\0agent_trace/v2|edit|normal"),
             None
         );
         assert_eq!(
-            super::legacy_request_key("auto", "auto\0agent_route/v1|developer|normal"),
+            super::adequacy_request_key(
+                "auto",
+                &format!(
+                    "auto\0agent_route/{}|code:review|verify|normal",
+                    ["v", "2"].concat()
+                )
+            ),
+            None
+        );
+        assert_eq!(
+            super::adequacy_request_key(
+                "auto",
+                &format!("auto\0agent_route/v1|{}|normal", "implement")
+            ),
+            None
+        );
+        assert_eq!(
+            super::adequacy_request_key("auto", "auto\0agent_route/v1|unknown|developer|normal"),
             None
         );
     }
@@ -1452,6 +1488,7 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
+                route_projection: EDIT_KEY.into(),
                 request_key: EDIT_KEY.into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
@@ -1563,6 +1600,7 @@ mod tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: format!("decision-{tier}"),
                         policy: "auto".into(),
+                        route_projection: EDIT_KEY.into(),
                         request_key: EDIT_KEY.into(),
                         selected_tier: tier.into(),
                         selected_effort: None,

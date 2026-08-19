@@ -84,5 +84,11 @@ Choose `evaluator.kind` from the actual source:
   causal policy (for example, a matched control plus one changed route family)
   or withhold credit.
 - Preserve the router-authored baseline and selected tiers.
+- Treat `inconclusive` as zero quality evidence even if an old or malformed
+  packet assigns positive quality credit. Attribute cost or latency separately.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.
+- Keep `eval_id`, result, and evidence identities attempt-specific. For task
+  scope, keep `subject_id` stable for the canonical task inside its explicit
+  run/source/policy namespace so repeated attempts cannot inflate the generic
+  compiler's independent-task count.

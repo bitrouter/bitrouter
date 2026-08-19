@@ -358,8 +358,9 @@ impl std::fmt::Display for PolicyModelTarget {
 /// Config-driven per-request model routing — the top-level `policy_table:` block
 /// in `bitrouter.yaml`.
 ///
-/// An ingress transform projects each request into a source-independent agent
-/// trace key and looks that key up in [`fingerprints`](Self::fingerprints) to
+/// An ingress transform predicts a source-independent task, workflow role, and
+/// risk tuple, then looks its canonical `agent_route/v1` key up in
+/// [`fingerprints`](Self::fingerprints) to
 /// choose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id
 /// the request is rewritten to. A hard tool-use guardrail keeps tool-carrying
 /// requests on a tier known to handle tools.
@@ -370,8 +371,8 @@ impl std::fmt::Display for PolicyModelTarget {
 /// at runtime.
 #[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct PolicyTableConfig {
-    /// The request-key family used for `fingerprints`. Active policy routing
-    /// uses only the canonical source-independent `agent_trace` projection.
+    /// The predictor strategy used for `fingerprints`. Active policy routing
+    /// uses only canonical source-independent `agent_route/v1` keys.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
@@ -379,8 +380,9 @@ pub struct PolicyTableConfig {
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
     pub tiers: HashMap<String, PolicyModelTarget>,
-    /// Canonical agent trace projection key → tier name. A key absent from this
-    /// map falls back to [`default_tier`](Self::default_tier).
+    /// Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.
+    /// Lookup first tries the exact key, then the same role/risk under the
+    /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
     /// Tier applied to any fingerprint not listed in
     /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
@@ -447,15 +449,9 @@ where
 /// Request-key family used by `policy_table.fingerprints`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PolicyKeyStrategy {
-    /// The canonical source-independent agent trace projection key.
+    /// The canonical source-independent predictive route strategy.
     #[default]
     AgentTrace,
-    /// Deprecated compatibility variant. Config parsing rejects this strategy;
-    /// use [`AgentTrace`](Self::AgentTrace) and canonical projection routes.
-    LegacyFingerprint,
-    /// Deprecated Rust API spelling retained for downstream source compatibility.
-    /// It serializes as the canonical `agent_trace` strategy.
-    WorkflowState,
 }
 
 impl Serialize for PolicyKeyStrategy {
@@ -474,12 +470,11 @@ impl<'de> Deserialize<'de> for PolicyKeyStrategy {
     {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
-            "agent_trace" | "workflow_state" => Ok(Self::AgentTrace),
-            "legacy_fingerprint" => Ok(Self::LegacyFingerprint),
-            _ => Err(serde::de::Error::unknown_variant(
-                &value,
-                &["agent_trace", "workflow_state", "legacy_fingerprint"],
-            )),
+            "agent_trace" => Ok(Self::AgentTrace),
+            "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
+                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical agent_route/v1 routes"
+            ))),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
         }
     }
 }
@@ -492,10 +487,54 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Active policy routing uses the canonical source-independent agent trace projection key.",
+            "description": "Active policy routing uses canonical source-independent agent_route/v1 predictive keys.",
             "enum": ["agent_trace"],
         })
     }
+}
+
+/// Parse the one canonical predictive policy-key shape.
+///
+/// The returned tuple is `(task_family, next_step_role, risk)`. Keeping this
+/// boundary in the SDK lets configuration validation and the runtime predictor
+/// share one public wire contract without making observed telemetry routable.
+pub fn parse_agent_route_key(value: &str) -> Option<(&str, &str, &str)> {
+    let mut segments = value.split('|');
+    let (Some(namespace), Some(task_family), Some(role), Some(risk), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return None;
+    };
+    if namespace != "agent_route/v1"
+        || !matches!(
+            task_family,
+            "code:generation"
+                | "code:debugging"
+                | "code:review"
+                | "code:sql_database"
+                | "code:frontend_ui"
+                | "code:devops_config"
+                | "code:repository_analysis"
+                | "agent:multi_step_planning"
+                | "agent:workflow_execution"
+                | "agent:web_research"
+                | "agent:memory_operations"
+                | "agent:general"
+                | "unknown"
+        )
+        || !matches!(
+            role,
+            "orchestrate" | "implement" | "mechanical" | "verify" | "finalize" | "unknown"
+        )
+        || !matches!(risk, "normal" | "context" | "guarded")
+    {
+        return None;
+    }
+    Some((task_family, role, risk))
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
@@ -581,7 +620,7 @@ pub struct AdequacyConfig {
     pub min_semantic_successes_for_lock: u32,
     /// Whether the opening turn is eligible for aggressive exploration. Default
     /// `false`, because opening/planning errors tend to propagate through the
-    /// whole task and Terminal-Bench showed this state is high leverage.
+    /// whole task and make this state high leverage.
     pub explore_opening: bool,
     /// Minimum distinct benchmark-task successes required before an opening
     /// request-level lock becomes active. This is combined with
@@ -1627,11 +1666,12 @@ fn validate_policy_table(config: &Config) -> Result<()> {
 /// Policy lock loading reuses this so inline legacy tables and named lock
 /// policies enforce identical tier/guardrail/adequacy invariants.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
-    if policy.key_strategy == PolicyKeyStrategy::LegacyFingerprint {
-        return Err(BitrouterError::bad_request(
-            "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace' projection routes"
-                .to_string(),
-        ));
+    for fingerprint in policy.fingerprints.keys() {
+        if parse_agent_route_key(fingerprint).is_none() {
+            return Err(BitrouterError::bad_request(format!(
+                "policy_table fingerprint '{fingerprint}' is not a canonical agent_route/v1|<task-family>|<role>|<risk> key"
+            )));
+        }
     }
     if policy.tiers.is_empty() {
         return Ok(());

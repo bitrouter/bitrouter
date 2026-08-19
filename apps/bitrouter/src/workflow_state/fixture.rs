@@ -13,7 +13,7 @@ use http::{HeaderName, HeaderValue};
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
-use crate::workflow_state::predictive::{NextActionClass, NextStepRole};
+use crate::workflow_state::predictive::{NextActionClass, NextStepRole, TaskFamily};
 
 #[derive(Debug)]
 pub struct WorkflowTraceFixture {
@@ -40,6 +40,8 @@ pub struct ExpectedPredictiveRoute {
     pub next_step_role: NextStepRole,
     pub next_action_class: NextActionClass,
     pub route_risk: RouteRisk,
+    #[serde(default)]
+    pub task_family: Option<TaskFamily>,
 }
 
 #[derive(Debug, Deserialize)]

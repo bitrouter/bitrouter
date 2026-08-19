@@ -734,7 +734,6 @@ These commands export and validate the request-scoped evidence used by policy
 benchmarks:
 
 ```text
-bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
