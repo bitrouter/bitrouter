@@ -42,13 +42,25 @@ Each `decisions[]` entry is exactly:
   "request_key": "agent_trace/v1|edit|normal",
   "selected_tier": "economy",
   "baseline_tier": "strong",
-  "policy_digest": "sha256:..."
+  "policy_digest": "sha256:...",
+  "experiment": {
+    "experiment_id": "sha256:...",
+    "arm": "challenger",
+    "assignment_unit": "task",
+    "assignment_id_digest": "sha256:...",
+    "challenger_propensity_ppm": 100000
+  }
 }
 ```
 
 Copy every decision field from router evidence. `selected_tier` is the actual
 route; `baseline_tier` is the router's comparator. Never infer either from a
-preset or rewrite a known baseline.
+preset or rewrite a known baseline. `experiment` is optional for backward
+compatibility. When present, it is router-authored signed assignment evidence:
+copy the whole object verbatim. Evaluators must never invent or edit an
+experiment id, arm, assignment unit, assignment-id digest, or challenger
+propensity. The evaluator-owned top-level `cohort` string is metadata and never
+determines optimizer cohort membership.
 
 Each `evidence[]` entry contains `evidence_id`, namespaced lowercase `kind`,
 `digest` (`sha256:<64 lowercase hex>`), `redacted: true`, and optional safe
@@ -120,6 +132,13 @@ The current route compiler consumes credited `quality.pass` (`boolean`),
 hard violations. Other requested metrics remain immutable records but do not
 become route evidence. Submit only requested dimensions; absence means
 unsupported, while zero is an observed value.
+
+For optimizer quality and cost gates, only complete `task` or `episode`
+subjects qualify. Submit `cost.usd_micros` as the cost of the complete task or
+episode, not one request. BitRouter prefers complete trajectory cost when it is
+available and otherwise accepts evaluator-authored complete cost with the
+`micro_usd` unit. Request subjects can rank optimization opportunities but do
+not enter the quality or cost gate.
 
 For one decision, omitted `decision_credit` means full credit. To deliberately
 withhold attribution from a one-decision inconclusive result, include that
@@ -208,7 +227,9 @@ unrequested metric, unknown decision/evidence reference, unauthorized
 authority, kind mismatch, metric scope, or disallowed hard violation. A
 conflict with an equal or higher authority becomes `disputed`; do not average
 verdicts. The evaluator stops at admission in every state: never freeze,
-compile, diff, or publish a policy.
+compile, diff, publish, or invoke `optimize run`. A later explicit
+`bitrouter optimize run` is separate authorization for one autonomous
+controller step and needs no evaluator review or publication approval.
 
 ## Complete multi-decision example
 

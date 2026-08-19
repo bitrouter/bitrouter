@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use super::store::EvalStore;
 use super::types::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvidenceItem, canonical_digest,
-    evidence_digest,
+    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject, EvidenceItem,
+    canonical_digest, evidence_digest,
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
@@ -83,6 +83,7 @@ pub struct PendingEvalDecision {
     pub selected_effort: Option<ReasoningEffort>,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<ReasoningEffort>,
+    pub experiment: Option<EvalExperimentRef>,
     pub preset: Option<String>,
     pub holdout: bool,
     pub continuation_proposed_tier: Option<String>,
@@ -550,6 +551,7 @@ impl EvalSettlementRecorder {
                 baseline_tier: decision.baseline_tier.clone(),
                 baseline_effort: decision.baseline_effort,
                 policy_digest: decision.policy_digest.clone(),
+                experiment: decision.experiment.clone(),
             }],
             requested_dimensions: BTreeSet::from([
                 "cost.usd_micros".into(),
@@ -635,6 +637,7 @@ mod tests {
         EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
     };
     use crate::eval::store::EvalStore;
+    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
     use crate::metering::PricingTable;
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -658,6 +661,15 @@ mod tests {
                 selected_effort: Some(ReasoningEffort::Low),
                 baseline_tier: Some("strong".into()),
                 baseline_effort: Some(ReasoningEffort::High),
+                experiment: Some(EvalExperimentRef {
+                    experiment_id: DIGEST.into(),
+                    arm: ExperimentArm::Challenger,
+                    assignment_unit: ExperimentAssignmentUnit::Task,
+                    assignment_id_digest:
+                        "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+                            .into(),
+                    challenger_propensity_ppm: 100_000,
+                }),
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: Some("balanced".into()),
@@ -697,6 +709,24 @@ mod tests {
             subject.decisions[0].baseline_effort,
             Some(ReasoningEffort::High)
         );
+        assert_eq!(
+            subject.decisions[0]
+                .experiment
+                .as_ref()
+                .map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        let experiment = subject.decisions[0]
+            .experiment
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("settlement must preserve experiment metadata"))?;
+        assert_eq!(experiment.experiment_id, DIGEST);
+        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(
+            experiment.assignment_id_digest,
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         assert!(subject.evidence.iter().all(|item| item.redacted));
         let evidence = subject
             .evidence
@@ -750,6 +780,7 @@ mod tests {
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
+                experiment: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: None,
@@ -820,6 +851,7 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -881,6 +913,7 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,

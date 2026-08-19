@@ -1483,6 +1483,7 @@ mod tests {
                     .unwrap_or_else(|| unreachable!()),
                 candidate_tier: Some("economy".into()),
                 policy_digest: POLICY_DIGEST.into(),
+                experiment: None,
                 policy: ProgressGuardPolicy {
                     escalation_tier: "strong".into(),
                     protected_tiers: BTreeSet::from(["strong".into()]),
@@ -1559,6 +1560,7 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,

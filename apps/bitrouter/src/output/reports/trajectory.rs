@@ -512,6 +512,7 @@ mod tests {
                             .ok_or_else(|| anyhow::anyhow!("invalid fixture projection"))?,
                         candidate_tier: Some("economy".into()),
                         policy_digest: POLICY_DIGEST.into(),
+                        experiment: None,
                         policy: ProgressGuardPolicy {
                             escalation_tier: "strong".into(),
                             protected_tiers: BTreeSet::from(["strong".into()]),
