@@ -758,7 +758,14 @@ pub struct ServerConfig {
     pub listen: String,
     /// Unix control socket path.
     pub control_socket: String,
-    /// Log level.
+    /// Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —
+    /// a bare level (`debug`) or a per-target list (`info,bitrouter=debug`).
+    ///
+    /// `RUST_LOG` overrides this when set, following the Rust convention. The
+    /// filter is resolved once at startup, so changing it needs a restart —
+    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
+    /// (and therefore `start`); other subcommands install their subscriber
+    /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
     /// SDK-level flag: when `true`, credential-less requests are admitted with
     /// a synthesised local caller. Code default is **`false`** — only the
