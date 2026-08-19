@@ -36,4 +36,6 @@
   planner tests, 33 evidence-adapter tests, skill validation, canonical
   template tests, config validation, boundary audit, and byte-identical
   private artifact replay all pass.
-- [ ] Pushed.
+- [x] Ordinary push completed; local and remote branch heads matched at
+  `8e5b65f01d2dfdd90375e3746881515562bdac5e` before this ledger-only closure
+  commit.
