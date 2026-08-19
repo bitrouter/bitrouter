@@ -59,6 +59,17 @@ def decimal_value(raw: object, context: str) -> Decimal:
     return value
 
 
+def required_nonnegative_decimal(
+    row: dict[str, object], field: str
+) -> Decimal:
+    if field not in row or row[field] is None:
+        raise ValueError(f"missing {field}")
+    value = decimal_value(row[field], field)
+    if value < 0:
+        raise ValueError(f"{field} must be non-negative")
+    return value
+
+
 def money(value: Decimal) -> str:
     return str(value.quantize(NINE_PLACES, rounding=ROUND_HALF_UP))
 
@@ -120,7 +131,7 @@ def strong_cost(row: dict[str, object], rates: tuple[Decimal, ...]) -> Decimal:
         "cache_write_tokens",
         "completion_tokens",
     )
-    tokens = [decimal_value(row.get(field, 0) or 0, field) for field in token_fields]
+    tokens = [required_nonnegative_decimal(row, field) for field in token_fields]
     return sum(token * rate for token, rate in zip(tokens, rates)) / MILLION
 
 
@@ -212,12 +223,24 @@ def run(args: argparse.Namespace) -> None:
         if request_id_raw in request_ids:
             raise ValueError(f"duplicate strict request row for {request_id_raw}")
         request_ids.add(request_id_raw)
+        if "error" not in row:
+            raise ValueError(
+                f"strict cohort request missing explicit error field {request_id_raw}"
+            )
         if row.get("error") is not None:
             raise ValueError(f"strict cohort contains errored request {request_id_raw}")
         if row.get("included_in_nominal_cost") is not True:
             raise ValueError(f"strict cohort contains unpriced request {request_id_raw}")
         if row.get("usage_origin") != "provider_reported":
             raise ValueError(f"strict cohort contains non-provider usage {request_id_raw}")
+        required_nonnegative_decimal(row, "nominal_cost_usd")
+        for token_field in (
+            "uncached_input_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "completion_tokens",
+        ):
+            required_nonnegative_decimal(row, token_field)
     decisions = load_decisions(args.daemon_log, request_ids)
     missing_decisions = request_ids - set(decisions)
     if missing_decisions:
@@ -241,6 +264,21 @@ def run(args: argparse.Namespace) -> None:
     if target_min < 0 or target_max > 100 or target_min > target_max:
         raise ValueError("target savings range must satisfy 0 <= min <= max <= 100")
 
+    target_decisions = [
+        decisions[str(row["trajectory_request_id"])]
+        for row in rows
+        if decisions[str(row["trajectory_request_id"])]["request_key"]
+        == args.target_policy_key
+    ]
+    if not target_decisions:
+        raise ValueError("target route has no observed requests")
+    if any(
+        decision["static_tier"] != "balanced"
+        or decision["selected_tier"] != "balanced"
+        for decision in target_decisions
+    ):
+        raise ValueError("target route must be balanced before promotion")
+
     route_cells: dict[str, list[tuple[dict[str, object], dict[str, str]]]] = defaultdict(list)
     current_cost = Decimal(0)
     candidate_cost = Decimal(0)
@@ -250,12 +288,13 @@ def run(args: argparse.Namespace) -> None:
         request_id = str(row.get("trajectory_request_id"))
         decision = decisions[request_id]
         route_cells[decision["request_key"]].append((row, decision))
-        observed = decimal_value(row.get("nominal_cost_usd", 0), "nominal request cost")
+        observed = required_nonnegative_decimal(row, "nominal_cost_usd")
         current_cost += observed
         current_strong += int(decision["selected_tier"] == "strong")
         if (
             decision["request_key"] == args.target_policy_key
-            and decision["selected_tier"] != "strong"
+            and decision["static_tier"] == "balanced"
+            and decision["selected_tier"] == "balanced"
         ):
             candidate_cost += strong_cost(row, rates)
             promoted += 1
@@ -278,7 +317,9 @@ def run(args: argparse.Namespace) -> None:
                 <= int(target_max * 10_000),
             }
         )
-    anchor = min(controls, key=lambda control: Decimal(str(control["nominal_cost_usd"])))
+    anchor = controls[
+        min(range(len(control_costs)), key=lambda index: control_costs[index])
+    ]
     summary: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "strict_task_count": task_count,
@@ -343,17 +384,19 @@ def run(args: argparse.Namespace) -> None:
         for key in sorted(route_cells):
             entries = route_cells[key]
             old = sum(
-                decimal_value(row.get("nominal_cost_usd", 0), "nominal request cost")
+                required_nonnegative_decimal(row, "nominal_cost_usd")
                 for row, _ in entries
             )
             promote_entries = [
                 (row, decision)
                 for row, decision in entries
-                if key == args.target_policy_key and decision["selected_tier"] != "strong"
+                if key == args.target_policy_key
+                and decision["static_tier"] == "balanced"
+                and decision["selected_tier"] == "balanced"
             ]
             replacement = sum(strong_cost(row, rates) for row, _ in promote_entries)
             kept = sum(
-                decimal_value(row.get("nominal_cost_usd", 0), "nominal request cost")
+                required_nonnegative_decimal(row, "nominal_cost_usd")
                 for row, decision in entries
                 if (row, decision) not in promote_entries
             )

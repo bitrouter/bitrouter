@@ -138,7 +138,21 @@ class StrongTierPlannerCliTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def run_planner(self, output: Path) -> subprocess.CompletedProcess[str]:
+    def run_planner(
+        self,
+        output: Path,
+        *,
+        control_costs: tuple[str, ...] = (
+            "2.500000000",
+            "3.000000000",
+            "2.800000000",
+        ),
+    ) -> subprocess.CompletedProcess[str]:
+        control_args = [
+            value
+            for cost in control_costs
+            for value in ("--control-attempt-cost", cost)
+        ]
         return subprocess.run(
             [
                 sys.executable,
@@ -149,12 +163,7 @@ class StrongTierPlannerCliTests(unittest.TestCase):
                 str(self.join),
                 "--daemon-log",
                 str(self.log),
-                "--control-attempt-cost",
-                "2.500000000",
-                "--control-attempt-cost",
-                "3.000000000",
-                "--control-attempt-cost",
-                "2.800000000",
+                *control_args,
                 "--control-anchor",
                 "cheapest",
                 "--target-policy-key",
@@ -261,6 +270,75 @@ class StrongTierPlannerCliTests(unittest.TestCase):
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("strict cohort contains errored request", completed.stderr)
+
+    def test_missing_error_field_fails_closed(self) -> None:
+        rows = [json.loads(line) for line in self.join.read_text().splitlines()]
+        del rows[0]["error"]
+        write_jsonl(self.join, rows)
+
+        completed = self.run_planner(self.root / "missing-error")
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("missing explicit error field", completed.stderr)
+
+    def test_missing_or_negative_cost_evidence_fails_closed(self) -> None:
+        original_rows = [
+            json.loads(line) for line in self.join.read_text().splitlines()
+        ]
+        for mutation, expected in (
+            (("uncached_input_tokens", None), "missing uncached_input_tokens"),
+            (("cache_read_tokens", -1), "cache_read_tokens must be non-negative"),
+            (("nominal_cost_usd", None), "missing nominal_cost_usd"),
+            (("nominal_cost_usd", "-0.1"), "nominal_cost_usd must be non-negative"),
+        ):
+            with self.subTest(mutation=mutation):
+                rows = json.loads(json.dumps(original_rows))
+                field, value = mutation
+                if value is None:
+                    del rows[0][field]
+                else:
+                    rows[0][field] = value
+                write_jsonl(self.join, rows)
+
+                completed = self.run_planner(self.root / f"invalid-{field}")
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected, completed.stderr)
+
+    def test_target_must_be_an_observed_balanced_to_balanced_cell(self) -> None:
+        self.log.write_text(
+            self.log.read_text().replace(
+                'static_tier=Some("balanced") selected_tier=Some("balanced")',
+                'static_tier=Some("economy") selected_tier=Some("economy")',
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        completed = self.run_planner(self.root / "wrong-tier")
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("target route must be balanced before promotion", completed.stderr)
+
+    def test_target_must_have_at_least_one_observed_request(self) -> None:
+        self.log.write_text(self.log.read_text().replace(TARGET, OTHER), encoding="utf-8")
+
+        completed = self.run_planner(self.root / "absent-target")
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("target route has no observed requests", completed.stderr)
+
+    def test_cheapest_anchor_uses_unrounded_control_cost(self) -> None:
+        output = self.root / "precise-anchor"
+
+        completed = self.run_planner(
+            output,
+            control_costs=("2.0000000004", "2.0000000003"),
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        summary = json.loads((output / "summary.json").read_text())
+        self.assertEqual(summary["conservative_anchor"]["attempt"], 2)
 
 
 if __name__ == "__main__":
