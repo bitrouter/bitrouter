@@ -159,7 +159,7 @@
           "default": "./bitrouter.sock"
         },
         "log_level": {
-          "description": "Log level.",
+          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bitrouter reload` will not pick it up. Applies to `bitrouter serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string",
           "default": "info"
         },
