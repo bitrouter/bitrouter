@@ -42,12 +42,9 @@ bitrouter status             # prints `running: no` when no daemon is reachable
 bitrouter providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
-| What you see | Go to |
-|---|---|
-| `command not found` | 2 — install |
-| Installed, no active providers | 3 — configure |
-| Providers active, daemon stopped | `bitrouter start`, then 5 |
-| Providers active, daemon running | 5 — wire the harness |
+Branch on what comes back: `command not found` → §2. Installed but no active
+providers → §3. Providers active, daemon stopped → `bitrouter start`, then §5.
+Providers active and daemon running → §5, the harness is all that is left.
 
 These emit **JSON by default** (`--human` renders the readable view) — parse it
 rather than scraping prose. Do not open with a deployment question: self-hosted
@@ -81,10 +78,9 @@ bitrouter init --yes --use-detected --harness claude --after launch
 | `harnesses_installed` | which harness got native wiring |
 | `after` / `snippet` | what the wizard did last, and the env snippet to persist |
 
-Every prompt has a flag: `--provider`/`--provider-api-key`, `--cloud-login`,
-`--api-key`, `--harness`, `--after`, `--model`, `--write-config`, `--reset`.
-Bare `bitrouter` runs the wizard interactively when nothing is configured. Full
-contract: `references/cli.md` → *Setup helpers*.
+Every prompt has a flag (`--provider`, `--cloud-login`, `--harness`, `--after`,
+`--model`, `--reset`, …); bare `bitrouter` runs the wizard interactively when
+nothing is configured. Full contract: `references/cli.md` → *Setup helpers*.
 
 The daemon writes runtime files to `~/.bitrouter/` and merges the public
 provider registry on start. For multi-account, custom endpoints, or ACP agents,
@@ -101,14 +97,19 @@ Codex, log that in first so the harness keeps serving its own models from the
 plan they have already bought instead of from metered API calls.
 
 ```bash
-bitrouter providers login claude-code    # Claude Pro/Max
-bitrouter providers login openai-codex   # ChatGPT/Codex subscription
+bitrouter providers login claude-code    # adopts the live Claude Code session
+bitrouter providers login openai-codex   # ChatGPT PKCE flow in a browser
 ```
+
+Auth method is catalog-derived and differs per provider: `claude-code` adopts
+the session already on the machine, `openai-codex` opens a browser,
+`github-copilot` runs a device flow, everything else takes a pasted key. Do not
+promise a browser prompt that will not appear.
 
 **b. Hosted BitRouter for everything else — the recommended default.** Managed
 provider routing with OAuth built in, so the user never collects a key per
 provider. It is a provider, not a second deployment: signing in adds a
-`bitrouter` provider to this same daemon, routable as `bitrouter:<model-id>`.
+`bitrouter` provider to this daemon, routable as `bitrouter:<model-id>`.
 
 ```bash
 bitrouter providers login bitrouter      # same sign-in as `bitrouter cloud login`
@@ -118,11 +119,8 @@ bitrouter providers login bitrouter      # same sign-in as `bitrouter cloud logi
 the daemon auto-enables every provider whose key is present, and
 `export ...; bitrouter reload` rotates one without a restart.
 
-```bash
-export OPENAI_API_KEY=sk-...        ANTHROPIC_API_KEY=sk-ant-...
-export GEMINI_API_KEY=...           # google (NOT GOOGLE_API_KEY)
-export OPENROUTER_API_KEY=sk-or-... OPENCODE_ZEN_API_KEY=...  # zen AND go
-```
+Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not
+`GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
 
 `providers login` also takes `--api-key` / `--key-stdin`; `github-copilot`,
 `supergrok`, and `google-ai` have their own flows, and `references/cloud-setup.md`
@@ -155,6 +153,11 @@ that is already running; harnesses read their base URL at startup. End with:
 "run `bitrouter launch -a claude` (or restart the harness with the env
 override) to route this session."
 
+One exception exists: the origin MCP server (`bitrouter mcp install --client
+claude|cursor`) exposes a `complete` tool that offloads a subtask *inside* the
+running session. If the user needs cheaper tokens now and cannot relaunch, say it
+exists and send them to `bitrouter mcp --help`; teaching it is out of scope here.
+
 ### 6. Verify
 
 ```bash
@@ -163,12 +166,11 @@ bitrouter models                    # everything routable
 bitrouter status --requests         # settled requests + today's spend
 ```
 
-`status --requests` reads the metering store directly, so it works with no
-daemon and is safe for an agent to call. A routed call showing up there with a
-cost is the proof that activation worked. Canonical ids use slashes
-(`openai/gpt-4o`); a provider pin uses a colon (`openrouter:openai/gpt-4o`,
-`bitrouter:<model-id>`), and bare Anthropic ids from Claude Code resolve through
-the fallback chain — alias one in `bitrouter.yaml` if it does not.
+`status --requests` reads the metering store directly, so it works with no daemon
+and is safe for an agent to call — a routed call appearing there with a cost is
+the proof activation worked. Canonical ids use slashes (`openai/gpt-4o`); a pin
+uses a colon (`openrouter:openai/gpt-4o`, `bitrouter:<model-id>`). Bare Anthropic
+ids resolve through the fallback chain — alias one in `bitrouter.yaml` if not.
 
 ## References — read on demand, not upfront
 
@@ -189,9 +191,8 @@ the fallback chain — alias one in `bitrouter.yaml` if it does not.
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
-- **Google's env var is `GEMINI_API_KEY`** — `GOOGLE_API_KEY` is not detected.
-- **Sign in with `bitrouter cloud login` or `providers login bitrouter`** (same
-  flow). Everything else is `providers login <id>`; there is no top-level `login`.
+- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow);
+  everything else is `providers login <id>`. There is no top-level `login`.
 - **`init --harness` only accepts `claude` and `codex`**; `launch -a` adds
   `opencode` and `pi`. `hermes`, `openclaw`, `grok`, and `agy` are no longer
   `launch`-supported — run them directly or via `spawn`; they remain providers.
