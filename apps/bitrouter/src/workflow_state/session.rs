@@ -20,7 +20,7 @@ pub struct ResolvedSessionSignal {
 }
 
 /// Per-router context-epoch state. Keys include benchmark run, trial, and
-/// parent session so interleaved Terminal-Bench trials cannot share epochs.
+/// parent session so interleaved benchmark trials cannot share epochs.
 #[derive(Default)]
 pub struct WorkflowIdentityTracker {
     states: Mutex<TrackerStates>,

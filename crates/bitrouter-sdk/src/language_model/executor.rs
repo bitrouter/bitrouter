@@ -947,7 +947,7 @@ impl HttpExecutor {
     }
 
     /// The ChatGPT/Codex backend accepts only streaming Responses requests,
-    /// while callers such as Harbor Terminus 2 require one non-streaming result.
+    /// while compatibility callers may require one non-streaming result.
     /// Execute the upstream request as SSE and fold its canonical parts back into
     /// the same [`GenerateResult`] that the ordinary non-streaming path returns.
     async fn execute_codex_stream_bridge(

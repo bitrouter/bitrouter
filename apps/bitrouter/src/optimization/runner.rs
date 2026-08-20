@@ -17,10 +17,14 @@ use crate::policy_lock::{
     CertificateSource, POLICY_LOCKFILE_VERSION, PolicyCertificate, PolicyLock, PromotionVerdict,
     RouteOwner, semantic_digest, validate_document,
 };
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::workflow_state::predictive::{
+    NextStepRole, PredictiveRouteProjection, compiled_predictor_contract,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteObservation {
+    /// Primary canonical projection considered before sparse fallback.
+    pub route_projection: String,
     pub request_key: String,
     pub selected_tier: String,
     #[serde(default)]
@@ -941,6 +945,8 @@ pub fn collect_variant_evidence(
             || subject.decisions[0].decision_id
                 != format!("{request_id}:{}", subject.decisions[0].policy)
             || decision.policy.as_deref() != Some(subject.decisions[0].policy.as_str())
+            || decision.route_projection.as_deref()
+                != Some(subject.decisions[0].route_projection.as_str())
             || subject.decisions[0].request_key != decision.request_key
             || decision.selected_tier.as_deref()
                 != Some(subject.decisions[0].selected_tier.as_str())
@@ -983,6 +989,11 @@ pub fn collect_variant_evidence(
             .checked_add(latency_ms)
             .ok_or_else(|| anyhow::anyhow!("{variant} latency overflow"))?;
         observations.push(RouteObservation {
+            route_projection: decision.route_projection.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{variant} request {request_id} has no primary predictive route projection"
+                )
+            })?,
             request_key: decision.request_key.clone(),
             selected_tier: selected_tier.to_string(),
             input_effort: decision.input_effort,
@@ -1079,15 +1090,15 @@ pub fn select_target_request_key(
 
     let mut summaries = BTreeMap::<String, ObservationSummary>::new();
     for observation in observations {
-        let Some(projection) = RouteProjection::parse_key(&observation.request_key) else {
+        let request_key = observation.route_projection.as_str();
+        let Some(projection) = PredictiveRouteProjection::parse_key(request_key) else {
             continue;
         };
-        if projection.state_kind == WorkflowStateKind::Opening && !policy.adequacy.explore_opening {
+        let opening = projection.next_step_role == NextStepRole::Orchestrate;
+        if opening && !policy.adequacy.explore_opening {
             continue;
         }
-        let summary = summaries
-            .entry(observation.request_key.clone())
-            .or_default();
+        let summary = summaries.entry(request_key.to_owned()).or_default();
         summary.count = summary.count.saturating_add(1);
         summary
             .selected_tiers
@@ -1180,9 +1191,9 @@ pub fn build_experiment_lock(
     if actual_digest != expected_active_digest {
         anyhow::bail!("active policy changed before the controlled experiment was frozen");
     }
-    if RouteProjection::parse_key(target_request_key).is_none() {
-        anyhow::bail!("controlled experiment target is not a canonical route key");
-    }
+    let projection = PredictiveRouteProjection::parse_key(target_request_key).ok_or_else(|| {
+        anyhow::anyhow!("controlled experiment target is not a canonical route key")
+    })?;
     if active
         .policies
         .values()
@@ -1216,7 +1227,14 @@ pub fn build_experiment_lock(
             .routes
             .get(target_request_key)
             .cloned()
+            .or_else(|| {
+                policy
+                    .routes
+                    .get(&projection.unknown_baseline().key())
+                    .cloned()
+            })
             .or_else(|| policy.default_tier.clone());
+        policy.predictor = Some(compiled_predictor_contract());
         policy
             .routes
             .insert(target_request_key.to_string(), economy_tier.to_string());
@@ -1320,27 +1338,79 @@ mod tests {
     fn observations() -> Vec<RouteObservation> {
         vec![
             RouteObservation {
-                request_key: "agent_trace/v2|edit|normal".into(),
+                route_projection: "agent_route/v1|unknown|implement|normal".into(),
+                request_key: "agent_route/v1|unknown|implement|normal".into(),
                 selected_tier: "strong".into(),
                 input_effort: None,
                 selected_effort: None,
                 normalized_cost_micro_usd: Some(900),
             },
             RouteObservation {
-                request_key: "agent_trace/v2|edit|normal".into(),
+                route_projection: "agent_route/v1|unknown|implement|normal".into(),
+                request_key: "agent_route/v1|unknown|implement|normal".into(),
                 selected_tier: "strong".into(),
                 input_effort: None,
                 selected_effort: None,
                 normalized_cost_micro_usd: Some(800),
             },
             RouteObservation {
-                request_key: "agent_trace/v2|test|normal".into(),
+                route_projection: "agent_route/v1|unknown|verify|normal".into(),
+                request_key: "agent_route/v1|unknown|verify|normal".into(),
                 selected_tier: "strong".into(),
                 input_effort: None,
                 selected_effort: None,
                 normalized_cost_micro_usd: Some(4_000),
             },
         ]
+    }
+
+    #[test]
+    fn route_observation_requires_primary_projection() {
+        let missing_primary = serde_json::json!({
+            "request_key": "agent_trace/v2|edit|normal",
+            "selected_tier": "strong",
+            "input_effort": null,
+            "selected_effort": null,
+            "normalized_cost_micro_usd": 900
+        });
+
+        assert!(serde_json::from_value::<RouteObservation>(missing_primary).is_err());
+    }
+
+    #[test]
+    fn optimizer_rejects_observed_telemetry_as_a_policy_target() {
+        let active = active_lock();
+        let observed = [RouteObservation {
+            route_projection: "agent_trace/v2|edit|normal".into(),
+            request_key: "agent_trace/v2|edit|normal".into(),
+            selected_tier: "strong".into(),
+            input_effort: None,
+            selected_effort: None,
+            normalized_cost_micro_usd: Some(900),
+        }];
+        assert!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &observed,
+            )
+            .is_err()
+        );
+        let active_digest = semantic_digest(&active).expect("active digest");
+        assert!(
+            build_experiment_lock(
+                &active,
+                &active_digest,
+                "auto",
+                "agent_trace/v2|edit|normal",
+                "economy",
+            )
+            .is_err()
+        );
     }
 
     fn digest(byte: char) -> String {
@@ -1355,7 +1425,8 @@ mod tests {
             input_model: "@auto".into(),
             input_effort: None,
             key_strategy: "agent_trace".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: Some("agent_route/v1|unknown|implement|normal".into()),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             ledger_key: None,
             policy: Some("auto".into()),
             policy_digest: Some(policy_digest.into()),
@@ -1376,11 +1447,14 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: None,
+            predicted_task_family: None,
             predicted_action: None,
             prediction_confidence_ppm: None,
+            task_family_confidence_ppm: None,
             predictor_contract_digest: None,
             prediction_confidence_kind: None,
             prediction_reason_codes: Vec::new(),
+            task_family_reason_codes: Vec::new(),
             observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,
@@ -1418,7 +1492,8 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "req-1:auto".into(),
                 policy: "auto".into(),
-                request_key: "agent_trace/v2|edit|normal".into(),
+                route_projection: "agent_route/v1|unknown|implement|normal".into(),
+                request_key: "agent_route/v1|unknown|implement|normal".into(),
                 selected_tier: "strong".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
@@ -1460,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn qualitative_profiles_choose_deterministic_observed_keys() -> anyhow::Result<()> {
+    fn qualitative_profiles_choose_deterministic_predictive_keys() -> anyhow::Result<()> {
         let active = active_lock();
         let observations = observations();
         assert_eq!(
@@ -1473,7 +1548,7 @@ mod tests {
                 OptimizationPreference::QualityFirst,
                 &observations,
             )?,
-            "agent_trace/v2|test|normal"
+            "agent_route/v1|unknown|verify|normal"
         );
         assert_eq!(
             select_target_request_key(
@@ -1485,7 +1560,7 @@ mod tests {
                 OptimizationPreference::Balanced,
                 &observations,
             )?,
-            "agent_trace/v2|edit|normal"
+            "agent_route/v1|unknown|implement|normal"
         );
         assert_eq!(
             select_target_request_key(
@@ -1497,8 +1572,160 @@ mod tests {
                 OptimizationPreference::SavingsFirst,
                 &observations,
             )?,
-            "agent_trace/v2|test|normal"
+            "agent_route/v1|unknown|verify|normal"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn optimizer_accepts_task_routes_and_inherits_unknown_baseline() -> anyhow::Result<()> {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        active
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?
+            .progress_guard = None;
+        let target = "agent_route/v1|code:generation|implement|normal";
+        let observations = [RouteObservation {
+            route_projection: target.into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            selected_tier: "strong".into(),
+            input_effort: None,
+            selected_effort: None,
+            normalized_cost_micro_usd: Some(900),
+        }];
+
+        assert_eq!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &observations,
+            )?,
+            target
+        );
+
+        let active_digest = semantic_digest(&active)?;
+        let baseline_target = "agent_route/v1|unknown|implement|normal";
+        let baseline_observations = [RouteObservation {
+            route_projection: baseline_target.into(),
+            request_key: baseline_target.into(),
+            selected_tier: "strong".into(),
+            input_effort: None,
+            selected_effort: None,
+            normalized_cost_micro_usd: Some(900),
+        }];
+        assert_eq!(
+            select_target_request_key(
+                &active,
+                "auto",
+                "strong",
+                None,
+                "economy",
+                OptimizationPreference::Balanced,
+                &baseline_observations,
+            )?,
+            baseline_target
+        );
+        let baseline_experiment =
+            build_experiment_lock(&active, &active_digest, "auto", baseline_target, "economy")?;
+        assert_eq!(
+            baseline_experiment.certificates["auto"][baseline_target]
+                .baseline_tier
+                .as_deref(),
+            Some("balanced")
+        );
+        let experiment = build_experiment_lock(&active, &active_digest, "auto", target, "economy")?;
+        assert_eq!(
+            experiment.certificates["auto"][target]
+                .baseline_tier
+                .as_deref(),
+            Some("balanced")
+        );
+        let exact_target = "agent_route/v1|code:review|verify|normal";
+        let exact =
+            build_experiment_lock(&active, &active_digest, "auto", exact_target, "economy")?;
+        assert_eq!(
+            exact.certificates["auto"][exact_target]
+                .baseline_tier
+                .as_deref(),
+            Some("strong")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn optimizer_treats_predictive_orchestrate_as_opening() -> anyhow::Result<()> {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        let targets = [
+            (
+                "agent_route/v1|unknown|orchestrate|normal",
+                "agent_route/v1|unknown|orchestrate|normal",
+            ),
+            (
+                "agent_route/v1|agent:multi_step_planning|orchestrate|normal",
+                "agent_route/v1|unknown|orchestrate|normal",
+            ),
+        ];
+        for (target, matched) in targets {
+            let observations = [RouteObservation {
+                route_projection: target.into(),
+                request_key: matched.into(),
+                selected_tier: "strong".into(),
+                input_effort: None,
+                selected_effort: None,
+                normalized_cost_micro_usd: Some(900),
+            }];
+            assert!(
+                select_target_request_key(
+                    &active,
+                    "auto",
+                    "strong",
+                    None,
+                    "economy",
+                    OptimizationPreference::Balanced,
+                    &observations,
+                )
+                .is_err()
+            );
+        }
+        active
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?
+            .adequacy
+            .explore_opening = true;
+        for (target, matched) in targets {
+            let observations = [RouteObservation {
+                route_projection: target.into(),
+                request_key: matched.into(),
+                selected_tier: "strong".into(),
+                input_effort: None,
+                selected_effort: None,
+                normalized_cost_micro_usd: Some(900),
+            }];
+            assert_eq!(
+                select_target_request_key(
+                    &active,
+                    "auto",
+                    "strong",
+                    None,
+                    "economy",
+                    OptimizationPreference::Balanced,
+                    &observations,
+                )?,
+                target
+            );
+        }
         Ok(())
     }
 
@@ -1521,7 +1748,7 @@ mod tests {
                 OptimizationPreference::Balanced,
                 &observations,
             )?,
-            "agent_trace/v2|edit|normal"
+            "agent_route/v1|unknown|implement|normal"
         );
 
         observations[0].selected_effort = Some(ReasoningEffort::Low);
@@ -1535,7 +1762,7 @@ mod tests {
                 OptimizationPreference::Balanced,
                 &observations,
             )?,
-            "agent_trace/v2|test|normal"
+            "agent_route/v1|unknown|verify|normal"
         );
         for observation in &mut observations {
             observation.selected_effort = Some(ReasoningEffort::Low);
@@ -1564,7 +1791,7 @@ mod tests {
             &active,
             &active_digest,
             "auto",
-            "agent_trace/v2|edit|normal",
+            "agent_route/v1|unknown|implement|normal",
             "economy",
         )?;
 
@@ -1580,17 +1807,18 @@ mod tests {
                 .and_then(|artifact| artifact.parent_digest.as_deref()),
             Some(active_digest.as_str())
         );
-        let certificate = &experiment.certificates["auto"]["agent_trace/v2|edit|normal"];
+        let certificate =
+            &experiment.certificates["auto"]["agent_route/v1|unknown|implement|normal"];
         assert_eq!(certificate.owner, RouteOwner::Operator);
         assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
         assert_eq!(
-            experiment.policies["auto"].routes["agent_trace/v2|edit|normal"],
+            experiment.policies["auto"].routes["agent_route/v1|unknown|implement|normal"],
             "economy"
         );
         assert!(
             !experiment.policies["auto"]
                 .routes
-                .contains_key("agent_trace/v2|test|normal")
+                .contains_key("agent_route/v1|unknown|verify|normal")
         );
         assert_ne!(semantic_digest(&experiment)?, active_digest);
         let dir = tempfile::tempdir()?;
@@ -1616,7 +1844,8 @@ mod tests {
     fn selection_rejects_unobserved_or_already_economy_routes() {
         let active = active_lock();
         let observations = vec![RouteObservation {
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             input_effort: None,
             selected_effort: None,
@@ -1637,17 +1866,16 @@ mod tests {
     }
 
     #[test]
-    fn selection_skips_operator_owned_v1_routes() -> anyhow::Result<()> {
-        let mut active = active_lock();
-        active.lockfile_version = crate::policy_lock::LEGACY_POLICY_LOCKFILE_VERSION;
-        active.artifact = None;
-        active.certificates.clear();
-        active
-            .policies
-            .get_mut("auto")
-            .ok_or_else(|| anyhow::anyhow!("auto policy is unavailable"))?
-            .routes
-            .insert("agent_trace/v2|edit|normal".into(), "strong".into());
+    fn selection_skips_operator_owned_routes() -> anyhow::Result<()> {
+        let base = active_lock();
+        let base_digest = semantic_digest(&base)?;
+        let active = build_experiment_lock(
+            &base,
+            &base_digest,
+            "auto",
+            "agent_route/v1|unknown|implement|normal",
+            "economy",
+        )?;
         assert_eq!(
             select_target_request_key(
                 &active,
@@ -1658,7 +1886,7 @@ mod tests {
                 OptimizationPreference::Balanced,
                 &observations(),
             )?,
-            "agent_trace/v2|test|normal"
+            "agent_route/v1|unknown|verify|normal"
         );
         Ok(())
     }
@@ -1895,17 +2123,35 @@ mod tests {
             launches: 1,
             cwd: "/tmp/project".into(),
         };
+        let mut routed_decision = decision(&policy_digest);
+        routed_decision.route_projection =
+            Some("agent_route/v1|code:generation|implement|normal".into());
+        routed_decision.request_key = "agent_route/v1|unknown|implement|normal".into();
+        let mut routed_subject = subject(&policy_digest)?;
+        routed_subject.decisions[0].route_projection = routed_decision
+            .route_projection
+            .clone()
+            .expect("test decision has a primary predictive route");
+        routed_subject.decisions[0].request_key = routed_decision.request_key.clone();
         let evidence = collect_variant_evidence(
             "baseline",
             &policy_digest,
             execution.clone(),
-            &[decision(&policy_digest)],
-            &[subject(&policy_digest)?],
+            &[routed_decision],
+            &[routed_subject],
             &[normalized_usage()],
         )?;
         assert_eq!(evidence.normalized_cost_micro_usd, 400);
         assert_eq!(evidence.observed_latency_ms, 250);
         assert_eq!(evidence.request_count, 1);
+        assert_eq!(
+            evidence.observations[0].route_projection,
+            "agent_route/v1|code:generation|implement|normal"
+        );
+        assert_eq!(
+            evidence.observations[0].request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
 
         let mut failed_execution = execution.clone();
         failed_execution.exit_code = Some(2);

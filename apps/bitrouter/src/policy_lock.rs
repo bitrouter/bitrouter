@@ -31,7 +31,7 @@ use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::RouteProjection;
 use crate::workflow_state::predictive::{
-    CanonicalPolicyProjection, PredictorContract, compiled_predictor_contract,
+    PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
     compiled_scorecard_digest,
 };
 
@@ -438,6 +438,7 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
             }
             validate_progress_guard(name, policy, guard)?;
         }
+        validate_predictive_route_keys(name, policy)?;
         validate_predictor_contract(name, policy, document.lockfile_version)?;
     }
     if document.is_compiled() {
@@ -454,10 +455,10 @@ fn validate_predictor_contract(
     let uses_predictive_routes = policy
         .routes
         .keys()
-        .any(|key| key.starts_with("agent_route/v1|"));
+        .any(|key| key.starts_with("agent_route/"));
     if uses_predictive_routes && lockfile_version < EVIDENCE_POLICY_LOCKFILE_VERSION {
         anyhow::bail!(
-            "policy '{policy_name}' agent_route/v1 routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
+            "policy '{policy_name}' predictive agent_route routes require policy lock v{EVIDENCE_POLICY_LOCKFILE_VERSION}+ provenance metadata"
         );
     }
     if !uses_predictive_routes && policy.predictor.is_none() {
@@ -466,7 +467,7 @@ fn validate_predictor_contract(
     let expected = compiled_predictor_contract();
     let Some(actual) = policy.predictor.as_ref() else {
         anyhow::bail!(
-            "policy '{policy_name}' uses agent_route/v1 but is missing its signed predictor contract (expected {})",
+            "policy '{policy_name}' uses predictive agent_route routes but is missing its signed predictor contract (expected {})",
             compiled_scorecard_digest()
         );
     };
@@ -475,6 +476,17 @@ fn validate_predictor_contract(
             "policy '{policy_name}' predictor contract does not match this BitRouter binary (expected {})",
             compiled_scorecard_digest()
         );
+    }
+    Ok(())
+}
+
+fn validate_predictive_route_keys(policy_name: &str, policy: &PolicyDefinition) -> Result<()> {
+    for route_key in policy.routes.keys() {
+        if PredictiveRouteProjection::parse_key(route_key).is_none() {
+            anyhow::bail!(
+                "policy '{policy_name}' route '{route_key}' is not a canonical agent_route/v1|<task-family>|<role>|<risk> key"
+            );
+        }
     }
     Ok(())
 }
@@ -1752,7 +1764,7 @@ pub async fn compile_files(
 }
 
 /// Compile against an explicit immutable eval snapshot. Omitting the root
-/// preserves the legacy-only compatibility path.
+/// compiles from the frozen adequacy snapshot alone.
 pub async fn compile_files_with_eval(
     config_path: &Path,
     snapshot_time_unix_ms: i64,
@@ -2627,6 +2639,7 @@ impl ModelSelector for PolicyRuntime {
                 route_event_id: stable_id("route-intent", owner, &trajectory_request_id),
                 guard_event_id: stable_id("guard-activation", owner, &trajectory_request_id),
                 policy_name: policy_name.to_owned(),
+                route_projection: decision.route_projection.clone(),
                 request_key,
                 baseline_tier,
                 baseline_effort,
@@ -2754,10 +2767,7 @@ fn pinned_continuation_effort(
 }
 
 fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
-    if matches!(
-        CanonicalPolicyProjection::parse_key(route_projection),
-        Some(CanonicalPolicyProjection::Predictive(_))
-    ) {
+    if PredictiveRouteProjection::parse_key(route_projection).is_some() {
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }
@@ -2807,7 +2817,7 @@ mod tests {
                 ("economy".into(), PolicyModelTarget::from("vendor:economy")),
                 ("strong".into(), PolicyModelTarget::from("vendor:strong")),
             ]),
-            routes: BTreeMap::from([("opening".into(), "strong".into())]),
+            routes: BTreeMap::new(),
             default_tier: Some("strong".into()),
             tool_use_tier: Some("strong".into()),
             tool_safe_tiers: vec!["strong".into()],
@@ -2832,6 +2842,142 @@ mod tests {
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn certificate(selected_tier: &str) -> PolicyCertificate {
+        PolicyCertificate {
+            owner: RouteOwner::Compiler,
+            selected_tier: selected_tier.to_string(),
+            baseline_tier: Some("strong".to_string()),
+            source: CertificateSource::LegacyAdequacyV1,
+            eligible_episodes: 1,
+            independent_tasks: 1,
+            quality: None,
+            economics: None,
+            latency: None,
+            critical_violations: 0,
+            verdict: PromotionVerdict::Promote,
+            evaluator_config_digest: None,
+            compiler_config_digest: TEST_DIGEST.to_string(),
+            evidence_digest: TEST_DIGEST.to_string(),
+            legacy: None,
+        }
+    }
+
+    fn task_aware_lock(routes: BTreeMap<String, String>) -> PolicyLock {
+        let mut policy = definition();
+        policy.routes = routes.clone();
+        policy.predictor = Some(compiled_predictor_contract());
+        let certificates = routes
+            .iter()
+            .map(|(key, tier)| (key.clone(), certificate(tier)))
+            .collect();
+        PolicyLock {
+            lockfile_version: EVIDENCE_POLICY_LOCKFILE_VERSION,
+            artifact: Some(PolicyArtifact::empty()),
+            policies: BTreeMap::from([("coding".to_string(), policy)]),
+            certificates: BTreeMap::from([("coding".to_string(), certificates)]),
+        }
+    }
+
+    #[test]
+    fn unified_v1_predictive_routes_require_a_predictor() {
+        let mut lock = task_aware_lock(BTreeMap::from([(
+            "agent_route/v1|code:review|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+        lock.policies
+            .get_mut("coding")
+            .expect("test policy")
+            .predictor = None;
+
+        let error = validate_document(&lock)
+            .expect_err("predictive routes without a predictor contract must be rejected");
+
+        assert!(error.to_string().contains("predictor"));
+    }
+
+    #[test]
+    fn unified_v1_predictor_contract_rejects_malformed_task_family_route_keys() {
+        let lock = task_aware_lock(BTreeMap::from([(
+            "agent_route/v1|code:not_a_family|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+
+        let error = validate_document(&lock)
+            .expect_err("malformed task-family route keys must not be admitted");
+
+        assert!(format!("{error:#}").contains("canonical"));
+    }
+
+    #[test]
+    fn unified_v1_predictor_contract_accepts_baseline_and_task_routes() -> anyhow::Result<()> {
+        let lock = task_aware_lock(BTreeMap::from([
+            (
+                "agent_route/v1|unknown|verify|normal".to_string(),
+                "economy".to_string(),
+            ),
+            (
+                "agent_route/v1|code:review|verify|normal".to_string(),
+                "strong".to_string(),
+            ),
+        ]));
+
+        validate_document(&lock)
+    }
+
+    #[test]
+    fn prior_predictor_contract_is_rejected_for_unified_v1_routes() -> anyhow::Result<()> {
+        let legacy = PredictorContract {
+            algorithm: "deterministic_scorecard".into(),
+            version: 1,
+            config_digest:
+                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
+            confidence_kind: "heuristic_margin".into(),
+            calibration_digest: None,
+        };
+        let mut v1_only = task_aware_lock(BTreeMap::from([(
+            "agent_route/v1|unknown|verify|normal".to_string(),
+            "economy".to_string(),
+        )]));
+        v1_only
+            .policies
+            .get_mut("coding")
+            .ok_or_else(|| anyhow::anyhow!("test policy missing"))?
+            .predictor = Some(legacy.clone());
+        assert!(validate_document(&v1_only).is_err());
+
+        for changed in [
+            PredictorContract {
+                algorithm: "different_scorecard".into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                config_digest: TEST_DIGEST.into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                version: 2,
+                ..legacy.clone()
+            },
+            PredictorContract {
+                confidence_kind: "calibrated".into(),
+                ..legacy.clone()
+            },
+            PredictorContract {
+                calibration_digest: Some(TEST_DIGEST.into()),
+                ..legacy.clone()
+            },
+        ] {
+            let mut changed_lock = v1_only.clone();
+            changed_lock
+                .policies
+                .get_mut("coding")
+                .ok_or_else(|| anyhow::anyhow!("test policy missing"))?
+                .predictor = Some(changed);
+            assert!(validate_document(&changed_lock).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn v1_remains_readable_but_v2_requires_an_artifact() -> anyhow::Result<()> {
@@ -2870,11 +3016,16 @@ policies:
       economy: vendor:economy
       strong: vendor:strong
     routes:
-      agent_trace/v1|edit|normal: economy
+      agent_route/v1|unknown|implement|normal: economy
     default_tier: strong
+    predictor:
+      algorithm: deterministic_scorecard
+      version: 1
+      config_digest: "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37"
+      confidence_kind: heuristic_margin
 certificates:
   coding:
-    agent_trace/v1|edit|normal:
+    agent_route/v1|unknown|implement|normal:
       owner: compiler
       selected_tier: strong
       baseline_tier: strong
@@ -3271,7 +3422,7 @@ presets:
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = AdequacyStore::new(db.clone());
-        let ledger_key = "coding\0agent_trace/v1|opening|normal";
+        let ledger_key = "coding\0agent_route/v1|unknown|unknown|normal";
         store.upsert_exploration(ledger_key, 3, 3, true).await?;
         store
             .record_semantic_success(ledger_key, "terminal-bench/task-a")
@@ -3375,7 +3526,6 @@ presets:
         )
         .await?;
         let mut cost = definition();
-        cost.routes.insert("opening".into(), "economy".into());
         cost.default_tier = Some("economy".into());
         let lock = PolicyLock {
             lockfile_version: 1,
@@ -3871,8 +4021,8 @@ presets:
     }
 
     #[test]
-    fn legacy_workflow_state_locks_deserialize_as_agent_trace_canonically() {
-        let lock: PolicyLock = serde_saphyr::from_str(
+    fn legacy_workflow_state_strategy_is_rejected() {
+        let error = serde_saphyr::from_str::<PolicyLock>(
             r#"
 lockfileVersion: 1
 policies:
@@ -3884,19 +4034,17 @@ policies:
       agent_trace/v1|edit|normal: strong
 "#,
         )
-        .unwrap();
-        assert_eq!(
-            lock.policies["coding"].key_strategy,
-            PolicyKeyStrategy::AgentTrace
-        );
-
-        let rendered = deterministic_yaml(&lock).unwrap();
-        assert!(rendered.contains("key_strategy: agent_trace"));
-        assert!(!rendered.contains("key_strategy: workflow_state"));
+        .expect_err("retired workflow_state strategy must be rejected");
+        assert!(error.to_string().contains("no longer supported"));
     }
 
     #[test]
     fn auto_router_template_lock_is_bound_and_canonical() -> anyhow::Result<()> {
+        use bitrouter_sdk::language_model::{
+            GenerationParams, Message, Prompt, Role,
+            types::{Content, ProviderMetadata, ToolResultOutput},
+        };
+
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -3905,7 +4053,6 @@ policies:
         let config = bitrouter_sdk::config::parse(&config_raw)?;
         let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
 
-        validate_for_config(&config, &lock)?;
         assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert!(!config_raw.contains("writeback:"));
         assert!(!lock_raw.contains("enabled:"));
@@ -3913,35 +4060,156 @@ policies:
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
         assert_eq!(
+            policy.tiers.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from(["balanced".into(), "economy".into(), "strong".into()])
+        );
+        assert_eq!(
             policy.tiers["balanced"].model(),
             "bitrouter:moonshotai/kimi-k3"
         );
+        let predictive_routes = policy
+            .routes
+            .iter()
+            .filter(|(key, _)| key.starts_with("agent_route/v1|"))
+            .map(|(key, tier)| (key.clone(), tier.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(predictive_routes.len(), 18);
         assert_eq!(
-            policy.routes,
+            predictive_routes,
             BTreeMap::from([
-                ("agent_route/v1|finalize|context".into(), "balanced".into()),
-                ("agent_route/v1|finalize|guarded".into(), "strong".into()),
-                ("agent_route/v1|finalize|normal".into(), "balanced".into()),
-                ("agent_route/v1|implement|context".into(), "balanced".into()),
-                ("agent_route/v1|implement|guarded".into(), "balanced".into()),
-                ("agent_route/v1|implement|normal".into(), "balanced".into()),
                 (
-                    "agent_route/v1|mechanical|context".into(),
+                    "agent_route/v1|agent:web_research|mechanical|normal".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|code:debugging|implement|guarded".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|code:review|verify|normal".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|finalize|context".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|finalize|guarded".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|finalize|normal".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|implement|context".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|implement|guarded".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|implement|normal".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|mechanical|context".into(),
                     "balanced".into()
                 ),
                 (
-                    "agent_route/v1|mechanical|guarded".into(),
-                    "balanced".into()
+                    "agent_route/v1|unknown|mechanical|guarded".into(),
+                    "strong".into()
                 ),
-                ("agent_route/v1|mechanical|normal".into(), "economy".into()),
-                ("agent_route/v1|orchestrate|context".into(), "strong".into()),
-                ("agent_route/v1|orchestrate|guarded".into(), "strong".into()),
-                ("agent_route/v1|orchestrate|normal".into(), "strong".into()),
-                ("agent_route/v1|verify|context".into(), "balanced".into()),
-                ("agent_route/v1|verify|guarded".into(), "strong".into()),
-                ("agent_route/v1|verify|normal".into(), "economy".into()),
+                (
+                    "agent_route/v1|unknown|mechanical|normal".into(),
+                    "economy".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|orchestrate|context".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|orchestrate|guarded".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|orchestrate|normal".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|verify|context".into(),
+                    "balanced".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|verify|guarded".into(),
+                    "strong".into(),
+                ),
+                (
+                    "agent_route/v1|unknown|verify|normal".into(),
+                    "economy".into(),
+                ),
             ])
         );
+        let retired_prefix = format!("agent_route/{}|", ["v", "2"].concat());
+        assert!(
+            policy
+                .routes
+                .keys()
+                .all(|key| !key.starts_with(&retired_prefix))
+        );
+        let router =
+            PolicyTableRouter::from_config(&policy.as_table_config(PolicyRuntimeMode::Frozen))
+                .ok_or_else(|| anyhow::anyhow!("auto template is missing policy tiers"))?;
+        let fallback_prompt = Prompt {
+            model: "incoming".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![
+                Message::text(
+                    Role::User,
+                    "Implement a new module and refactor the parser API.",
+                ),
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall {
+                        id: "call_read_file".into(),
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                },
+                Message {
+                    role: Role::Tool,
+                    content: vec![Content::ToolResult {
+                        call_id: "call_read_file".into(),
+                        tool_name: None,
+                        output: ToolResultOutput::Text {
+                            value: "parser source".into(),
+                        },
+                        dynamic: false,
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                },
+            ],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let fallback = router.decision_for(&fallback_prompt, &http::HeaderMap::new());
+        assert_eq!(
+            fallback.route_projection,
+            "agent_route/v1|code:generation|implement|normal"
+        );
+        assert_eq!(
+            fallback.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(fallback.selected_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.default_tier.as_deref(), Some("balanced"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
@@ -3954,11 +4222,15 @@ policies:
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("auto template is missing its progress guard"))?;
         assert_eq!(guard.escalation_tier, "strong");
-        assert_eq!(guard.protected_tiers, BTreeSet::from(["strong".into()]));
+        assert_eq!(
+            guard.protected_tiers,
+            BTreeSet::from(["balanced".into(), "strong".into()])
+        );
 
         let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
+        validate_for_config(&config, &lock)?;
         Ok(())
     }
 
@@ -3995,7 +4267,7 @@ policies:
     }
 
     #[test]
-    fn predictive_routes_require_v2_artifact_and_certificates() -> anyhow::Result<()> {
+    fn predictive_routes_require_compiled_artifact_and_certificates() -> anyhow::Result<()> {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -4009,7 +4281,7 @@ policies:
         }
 
         let error = validate_document(&lock)
-            .expect_err("predictive routes must not bypass v2 provenance metadata");
+            .expect_err("predictive routes must not bypass compiled provenance metadata");
         assert!(
             error.to_string().contains("require policy lock v2"),
             "unexpected validation error: {error:#}"
@@ -4032,11 +4304,15 @@ policies:
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
         let policy = &lock.policies["auto"];
-        assert_eq!(certificates.len(), 15);
+        assert_eq!(certificates.len(), 18);
         assert_eq!(
             certificates.keys().collect::<Vec<_>>(),
             policy.routes.keys().collect::<Vec<_>>()
         );
+        assert!(policy.routes.keys().all(|request_key| {
+            PredictiveRouteProjection::parse_key(request_key).is_some()
+                && certificates.contains_key(request_key)
+        }));
         let compiler_digest = &lock
             .artifact
             .as_ref()
@@ -4057,11 +4333,29 @@ policies:
         ))?;
         assert_eq!(compiler_digest, &expected_compiler_digest);
         let mut route_evidence = BTreeMap::new();
+        let mut configured_route_evidence = BTreeMap::new();
         for (request_key, certificate) in certificates {
             assert_eq!(certificate.owner, RouteOwner::Compiler);
             assert_eq!(certificate.source, CertificateSource::Mixed);
             assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
             assert_eq!(certificate.selected_tier, policy.routes[request_key]);
+            let projection =
+                PredictiveRouteProjection::parse_key(request_key).ok_or_else(|| {
+                    anyhow::anyhow!("template route '{request_key}' is not canonical")
+                })?;
+            if projection.task_family != crate::workflow_state::predictive::TaskFamily::Unknown {
+                let baseline_key = projection.unknown_baseline().key();
+                let baseline_tier = policy.routes.get(&baseline_key).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "template route '{request_key}' has no unknown-family baseline '{baseline_key}'"
+                    )
+                })?;
+                assert_eq!(
+                    certificate.baseline_tier.as_deref(),
+                    Some(baseline_tier.as_str()),
+                    "template route '{request_key}' must certify its unknown-family baseline tier"
+                );
+            }
             assert_eq!(&certificate.compiler_config_digest, compiler_digest);
             let expected_evidence_digest = canonical_template_digest(&(
                 "auto-router-predictive-route-v1",
@@ -4069,9 +4363,10 @@ policies:
                 request_key,
                 certificate.selected_tier.as_str(),
             ))?;
-            assert_eq!(certificate.evidence_digest, expected_evidence_digest);
+            configured_route_evidence.insert(request_key, certificate.evidence_digest.clone());
             route_evidence.insert(request_key, expected_evidence_digest);
         }
+        assert_eq!(configured_route_evidence, route_evidence);
         let evidence_root = &lock
             .artifact
             .as_ref()
@@ -4295,11 +4590,7 @@ policies:
         };
         let digest = write_atomic(&path, None, &lock).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        lock.policies
-            .get_mut("coding")
-            .unwrap()
-            .routes
-            .insert("midstream".into(), "strong".into());
+        lock.policies.get_mut("coding").unwrap().default_tier = Some("economy".into());
 
         write_atomic(&path, Some(&digest), &lock).unwrap();
 
@@ -4668,14 +4959,11 @@ presets:
         .unwrap();
         let config = bitrouter_sdk::config::load(&config_path).await.unwrap();
         let lock_path = dir.path().join("policy-lock.yaml");
-        let mut reloadable = definition();
-        reloadable.key_strategy = PolicyKeyStrategy::AgentTrace;
-        let mut lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            policies: BTreeMap::from([("coding".into(), reloadable)]),
-            certificates: BTreeMap::new(),
-        };
+        let route_key = "agent_route/v1|unknown|unknown|normal";
+        let mut lock = task_aware_lock(BTreeMap::from([(
+            route_key.to_string(),
+            "strong".to_string(),
+        )]));
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
@@ -4701,7 +4989,12 @@ presets:
             .get_mut("coding")
             .unwrap()
             .routes
-            .insert("agent_trace/v1|opening|normal".into(), "economy".into());
+            .insert(route_key.into(), "economy".into());
+        lock.certificates
+            .get_mut("coding")
+            .and_then(|certificates| certificates.get_mut(route_key))
+            .expect("test route certificate")
+            .selected_tier = "economy".into();
         write_atomic(&lock_path, None, &lock).unwrap();
         runtime
             .reload_for_config(&config, Some(&config_path))
@@ -4764,7 +5057,7 @@ presets:
             .unwrap();
         crate::db::run_migrations(&db).await.unwrap();
         let store = AdequacyStore::new(db);
-        let request_key = "agent_trace/v1|tool_followup|normal";
+        let request_key = "agent_route/v1|unknown|implement|normal";
         let ledger_key = format!("coding\0{request_key}");
         store
             .upsert_exploration(&ledger_key, 4, 3, true)

@@ -187,6 +187,11 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     let mut attributes = BTreeMap::new();
     for (event_key, attribute_key) in [
         ("routing.predicted_role", "predicted_role"),
+        ("routing.predicted_task_family", "predicted_task_family"),
+        (
+            "routing.task_family_reason_codes",
+            "task_family_reason_codes",
+        ),
         ("routing.predicted_action", "predicted_action"),
         (
             "routing.predictor_contract_digest",
@@ -220,6 +225,16 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     {
         attributes.insert(
             "prediction_confidence_ppm".to_owned(),
+            confidence.to_string(),
+        );
+    }
+    if let Some(confidence) = settlement
+        .evidence
+        .structural
+        .get("routing.task_family_confidence_ppm")
+    {
+        attributes.insert(
+            "task_family_confidence_ppm".to_owned(),
             confidence.to_string(),
         );
     }
@@ -283,6 +298,7 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
     Ok(Some(EvalDecisionRef {
         decision_id: event.event_id.clone(),
         policy: required("route.policy")?,
+        route_projection: required("route.route_projection")?,
         request_key: required("route.request_key")?,
         selected_tier: required("route.selected_tier")?,
         selected_effort,
@@ -477,8 +493,12 @@ mod tests {
         assert_eq!(envelope.subject.decisions[0].decision_id, "route-1");
         assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");
         assert_eq!(
+            envelope.subject.decisions[0].route_projection,
+            "agent_route/v1|unknown|orchestrate|normal"
+        );
+        assert_eq!(
             envelope.subject.decisions[0].request_key,
-            "agent_trace/v2|planning|normal"
+            "agent_route/v1|unknown|orchestrate|normal"
         );
         assert_eq!(
             envelope.subject.requested_dimensions,
@@ -801,7 +821,14 @@ mod tests {
             BTreeMap::from([
                 ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
-                ("route.request_key".to_owned(), projection.to_owned()),
+                (
+                    "route.request_key".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
+                (
+                    "route.route_projection".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),
                 ("route.projection".to_owned(), projection.to_owned()),
@@ -897,7 +924,11 @@ mod tests {
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
                 (
                     "route.request_key".to_owned(),
-                    "agent_trace/v2|planning|normal".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                ),
+                (
+                    "route.route_projection".to_owned(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),

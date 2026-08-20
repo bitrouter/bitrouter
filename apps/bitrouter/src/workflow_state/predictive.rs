@@ -3,9 +3,13 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use bitrouter_sdk::config::parse_agent_route_key;
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
 use crate::workflow_state::extractors::generic::tool_result_reports_failure;
+use crate::workflow_state::extractors::terminus_2::{
+    assistant_action_executes_commands, normalized_action_history_from,
+};
 use crate::workflow_state::ir::{
     EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
     RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
@@ -20,6 +24,64 @@ pub enum NextStepRole {
     Verify,
     Finalize,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskFamily {
+    CodeGeneration,
+    CodeDebugging,
+    CodeReview,
+    CodeSqlDatabase,
+    CodeFrontendUi,
+    CodeDevopsConfig,
+    CodeRepositoryAnalysis,
+    AgentMultiStepPlanning,
+    AgentWorkflowExecution,
+    AgentWebResearch,
+    AgentMemoryOperations,
+    AgentGeneral,
+    #[default]
+    Unknown,
+}
+
+impl TaskFamily {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::CodeGeneration => "code:generation",
+            Self::CodeDebugging => "code:debugging",
+            Self::CodeReview => "code:review",
+            Self::CodeSqlDatabase => "code:sql_database",
+            Self::CodeFrontendUi => "code:frontend_ui",
+            Self::CodeDevopsConfig => "code:devops_config",
+            Self::CodeRepositoryAnalysis => "code:repository_analysis",
+            Self::AgentMultiStepPlanning => "agent:multi_step_planning",
+            Self::AgentWorkflowExecution => "agent:workflow_execution",
+            Self::AgentWebResearch => "agent:web_research",
+            Self::AgentMemoryOperations => "agent:memory_operations",
+            Self::AgentGeneral => "agent:general",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_key(value: &str) -> Option<Self> {
+        match value {
+            "code:generation" => Some(Self::CodeGeneration),
+            "code:debugging" => Some(Self::CodeDebugging),
+            "code:review" => Some(Self::CodeReview),
+            "code:sql_database" => Some(Self::CodeSqlDatabase),
+            "code:frontend_ui" => Some(Self::CodeFrontendUi),
+            "code:devops_config" => Some(Self::CodeDevopsConfig),
+            "code:repository_analysis" => Some(Self::CodeRepositoryAnalysis),
+            "agent:multi_step_planning" => Some(Self::AgentMultiStepPlanning),
+            "agent:workflow_execution" => Some(Self::AgentWorkflowExecution),
+            "agent:web_research" => Some(Self::AgentWebResearch),
+            "agent:memory_operations" => Some(Self::AgentMemoryOperations),
+            "agent:general" => Some(Self::AgentGeneral),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
 }
 
 impl NextStepRole {
@@ -112,6 +174,12 @@ pub struct PredictiveRouteIR {
     pub predictor_contract_digest: String,
     #[serde(default)]
     pub confidence_kind: String,
+    #[serde(default)]
+    pub task_family: TaskFamily,
+    #[serde(default)]
+    pub task_family_confidence: f32,
+    #[serde(default)]
+    pub task_family_evidence: Vec<PredictiveEvidence>,
 }
 
 /// Signed-lock descriptor for the deterministic predictor compiled into this
@@ -131,13 +199,19 @@ pub struct PredictorContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PredictiveRouteProjection {
+    pub task_family: TaskFamily,
     pub next_step_role: NextStepRole,
     pub risk: RouteRisk,
 }
 
 impl PredictiveRouteProjection {
-    pub const fn new(next_step_role: NextStepRole, risk: RouteRisk) -> Self {
+    pub const fn new(
+        task_family: TaskFamily,
+        next_step_role: NextStepRole,
+        risk: RouteRisk,
+    ) -> Self {
         Self {
+            task_family,
             next_step_role,
             risk,
         }
@@ -148,39 +222,27 @@ impl PredictiveRouteProjection {
     }
 
     pub fn key(&self) -> String {
-        format!("agent_route/v1|{}|{}", self.next_step_role.key(), self.risk)
+        format!(
+            "agent_route/v1|{}|{}|{}",
+            self.task_family.key(),
+            self.next_step_role.key(),
+            self.risk
+        )
+    }
+
+    pub const fn unknown_baseline(&self) -> Self {
+        Self::new(TaskFamily::Unknown, self.next_step_role, self.risk)
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
-        let mut segments = value.split('|');
-        let (Some(namespace_version), Some(next_step_role), Some(risk), None) = (
-            segments.next(),
-            segments.next(),
-            segments.next(),
-            segments.next(),
-        ) else {
-            return None;
-        };
-        if namespace_version != "agent_route/v1" {
-            return None;
-        }
+        let (task_family, next_step_role, risk) = parse_agent_route_key(value)?;
         let risk = parse_route_risk(risk)?;
 
-        Some(Self::new(NextStepRole::parse_key(next_step_role)?, risk))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CanonicalPolicyProjection {
-    Observed(RouteProjection),
-    Predictive(PredictiveRouteProjection),
-}
-
-impl CanonicalPolicyProjection {
-    pub fn parse_key(value: &str) -> Option<Self> {
-        RouteProjection::parse_key(value)
-            .map(Self::Observed)
-            .or_else(|| PredictiveRouteProjection::parse_key(value).map(Self::Predictive))
+        Some(Self::new(
+            TaskFamily::parse_key(task_family)?,
+            NextStepRole::parse_key(next_step_role)?,
+            risk,
+        ))
     }
 }
 
@@ -188,7 +250,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec";
+    "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -212,6 +274,19 @@ struct PredictorScorecardV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TaskFamilyScorecard {
+    weights: BTreeMap<String, i16>,
+    debugging_failure_fix_bonus: i16,
+    review_bonus: i16,
+    minimum_top_score: i16,
+    minimum_evidence_count: u8,
+    minimum_margin: i16,
+    maximum_evidence: usize,
+    confidence_ppm: u32,
+    unknown_confidence_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PredictorBehaviorV1 {
     scorecard: PredictorScorecardV1,
     instruction_terms: BTreeMap<String, Vec<String>>,
@@ -223,6 +298,15 @@ struct PredictorBehaviorV1 {
     role_actions: BTreeMap<String, NextActionClass>,
     narrow_read_action: NextActionClass,
     algorithm_versions: BTreeMap<String, u8>,
+    task_classifier_algorithm_version: u8,
+    task_family_scorecard: TaskFamilyScorecard,
+    task_family_terms: BTreeMap<String, Vec<String>>,
+    task_family_modifier_families: BTreeMap<String, Vec<TaskFamily>>,
+    task_family_intent_terms: BTreeMap<String, Vec<String>>,
+    task_family_failure_terms: BTreeMap<String, Vec<String>>,
+    task_family_anchor_terms: BTreeMap<String, Vec<String>>,
+    task_family_code_subject_terms: Vec<String>,
+    task_family_tie_order: Vec<TaskFamily>,
 }
 
 impl PredictorScorecardV1 {
@@ -260,11 +344,11 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
                 ("opening_broad".into(), 9),
                 ("continuing_broad".into(), 5),
                 ("concrete_mutation".into(), 7),
-                ("mutation".into(), 4),
-                ("verification".into(), 4),
+                ("mutation".into(), 5),
+                ("verification".into(), 5),
                 ("narrow_poll".into(), 9),
                 ("narrow_read".into(), 9),
-                ("finalize".into(), 3),
+                ("finalize".into(), 5),
                 ("read_result".into(), 9),
                 ("mutation_result".into(), 9),
                 ("test_failed_once".into(), 9),
@@ -377,9 +461,7 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             ),
             (
                 "read".into(),
-                string_terms(&[
-                    "read ", "show ", "inspect ", "open ", "print ", "locate ", "find ",
-                ]),
+                string_terms(&["read", "show", "inspect", "open", "print", "locate", "find"]),
             ),
             (
                 "finalize".into(),
@@ -479,19 +561,240 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
         ]),
         narrow_read_action: NextActionClass::InspectOrRead,
         algorithm_versions: BTreeMap::from([
-            ("instruction_features".into(), 1),
-            ("history_pairing".into(), 1),
+            ("instruction_features".into(), 2),
+            ("history_pairing".into(), 3),
             ("tool_result_failure".into(), 1),
-            ("visible_causal_history".into(), 1),
-            ("role_scoring".into(), 1),
+            ("visible_causal_history".into(), 2),
+            ("role_scoring".into(), 2),
             ("task_complexity".into(), 1),
-            ("risk_mapping".into(), 1),
+            ("risk_mapping".into(), 2),
+            ("task_family_boundary_matching".into(), 1),
         ]),
+        task_classifier_algorithm_version: 4,
+        task_family_scorecard: TaskFamilyScorecard {
+            weights: BTreeMap::from([
+                ("agent:general".into(), 2),
+                ("code:generation".into(), 3),
+                ("code:debugging".into(), 4),
+                ("code:review".into(), 4),
+                ("code:sql_database".into(), 4),
+                ("code:frontend_ui".into(), 4),
+                ("code:devops_config".into(), 4),
+                ("code:repository_analysis".into(), 4),
+                ("agent:multi_step_planning".into(), 4),
+                ("agent:workflow_execution".into(), 4),
+                ("agent:web_research".into(), 4),
+                ("agent:memory_operations".into(), 4),
+            ]),
+            debugging_failure_fix_bonus: 24,
+            review_bonus: 24,
+            minimum_top_score: 6,
+            minimum_evidence_count: 2,
+            minimum_margin: 1,
+            maximum_evidence: MAX_PREDICTIVE_EVIDENCE,
+            confidence_ppm: 800_000,
+            unknown_confidence_ppm: 350_000,
+        },
+        task_family_terms: BTreeMap::from([
+            (
+                "code:generation".into(),
+                string_terms(&["implement", "extend", "refactor", "new api", "new module"]),
+            ),
+            (
+                "code:debugging".into(),
+                string_terms(&[
+                    "fix",
+                    "panic",
+                    "error",
+                    "failed",
+                    "failure",
+                    "regression",
+                    "exception",
+                    "bug",
+                ]),
+            ),
+            (
+                "code:review".into(),
+                string_terms(&[
+                    "review",
+                    "audit",
+                    "pull request",
+                    "diff",
+                    "security",
+                    "vulnerability",
+                ]),
+            ),
+            (
+                "code:sql_database".into(),
+                string_terms(&["sql", "migration", "schema", "database", "query"]),
+            ),
+            (
+                "code:frontend_ui".into(),
+                string_terms(&[
+                    "react",
+                    "frontend",
+                    "ui",
+                    "css",
+                    "dom",
+                    "component",
+                    "layout",
+                ]),
+            ),
+            (
+                "code:devops_config".into(),
+                string_terms(&[
+                    "deployment",
+                    "ci",
+                    "infrastructure",
+                    "kubernetes",
+                    "container",
+                    "configuration",
+                    "service",
+                ]),
+            ),
+            (
+                "code:repository_analysis".into(),
+                string_terms(&[
+                    "repository",
+                    "codebase",
+                    "dependency",
+                    "dependencies",
+                    "trace",
+                    "call graph",
+                    "scan",
+                ]),
+            ),
+            (
+                "agent:multi_step_planning".into(),
+                string_terms(&[
+                    "plan",
+                    "multi-step",
+                    "decompose",
+                    "architecture",
+                    "strategy",
+                ]),
+            ),
+            (
+                "agent:workflow_execution".into(),
+                string_terms(&[
+                    "orchestrate",
+                    "workflow",
+                    "pipeline",
+                    "handoff",
+                    "hand off",
+                    "execute",
+                ]),
+            ),
+            (
+                "agent:web_research".into(),
+                string_terms(&["browse", "web", "research", "sources", "current", "latest"]),
+            ),
+            (
+                "agent:memory_operations".into(),
+                string_terms(&["memory", "durable facts", "context", "synthesize", "saved"]),
+            ),
+            (
+                "agent:general".into(),
+                string_terms(&["agent", "assistant", "coordinate", "manage", "task"]),
+            ),
+        ]),
+        task_family_modifier_families: BTreeMap::from([
+            (
+                "specific".into(),
+                vec![
+                    TaskFamily::CodeDebugging,
+                    TaskFamily::CodeReview,
+                    TaskFamily::CodeSqlDatabase,
+                    TaskFamily::CodeFrontendUi,
+                    TaskFamily::CodeDevopsConfig,
+                    TaskFamily::CodeRepositoryAnalysis,
+                    TaskFamily::AgentMultiStepPlanning,
+                    TaskFamily::AgentWorkflowExecution,
+                    TaskFamily::AgentWebResearch,
+                    TaskFamily::AgentMemoryOperations,
+                ],
+            ),
+            (
+                "generic".into(),
+                vec![TaskFamily::CodeGeneration, TaskFamily::AgentGeneral],
+            ),
+        ]),
+        task_family_intent_terms: BTreeMap::from([
+            (
+                "debugging".into(),
+                string_terms(&["fix", "repair", "correct", "debug"]),
+            ),
+            ("review".into(), string_terms(&["review", "audit"])),
+        ]),
+        task_family_failure_terms: BTreeMap::from([(
+            "debugging".into(),
+            string_terms(&[
+                "panic",
+                "error",
+                "failed",
+                "failure",
+                "regression",
+                "exception",
+                "bug",
+            ]),
+        )]),
+        task_family_anchor_terms: BTreeMap::from([(
+            "agent:workflow_execution".into(),
+            string_terms(&[
+                "agent",
+                "orchestrate",
+                "handoff",
+                "hand off",
+                "workflow control",
+                "workflow controller",
+            ]),
+        )]),
+        task_family_code_subject_terms: string_terms(&[
+            "bug",
+            "regression",
+            "panic",
+            "error",
+            "code",
+            "patch",
+            "diff",
+            "pull request",
+            "security",
+            "vulnerability",
+            "parser",
+            "api",
+            "module",
+            "function",
+            "repository",
+            "src/",
+            ".rs",
+            ".py",
+            ".ts",
+            ".js",
+            ".go",
+        ]),
+        task_family_tie_order: vec![
+            TaskFamily::CodeDebugging,
+            TaskFamily::CodeReview,
+            TaskFamily::CodeSqlDatabase,
+            TaskFamily::CodeFrontendUi,
+            TaskFamily::CodeDevopsConfig,
+            TaskFamily::CodeRepositoryAnalysis,
+            TaskFamily::AgentMultiStepPlanning,
+            TaskFamily::AgentWorkflowExecution,
+            TaskFamily::AgentWebResearch,
+            TaskFamily::AgentMemoryOperations,
+            TaskFamily::CodeGeneration,
+            TaskFamily::AgentGeneral,
+        ],
     })
 }
 
 fn compiled_scorecard_v1() -> &'static PredictorScorecardV1 {
     &compiled_predictor_behavior().scorecard
+}
+
+fn task_family_scorecard() -> &'static TaskFamilyScorecard {
+    &compiled_predictor_behavior().task_family_scorecard
 }
 
 fn string_terms(terms: &[&str]) -> Vec<String> {
@@ -500,6 +803,209 @@ fn string_terms(terms: &[&str]) -> Vec<String> {
 
 fn behavior_terms<'a>(terms: &'a BTreeMap<String, Vec<String>>, key: &str) -> &'a [String] {
     terms.get(key).map(Vec::as_slice).unwrap_or_default()
+}
+
+fn behavior_families<'a>(
+    families: &'a BTreeMap<String, Vec<TaskFamily>>,
+    key: &str,
+) -> &'a [TaskFamily] {
+    families.get(key).map(Vec::as_slice).unwrap_or_default()
+}
+
+fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>) {
+    let behavior = compiled_predictor_behavior();
+    let scorecard = task_family_scorecard();
+    let mut scores = BTreeMap::<TaskFamily, i16>::new();
+    let mut evidence_counts = BTreeMap::<TaskFamily, u8>::new();
+
+    for family in &behavior.task_family_tie_order {
+        let key = family.key();
+        let matched_count = behavior_terms(&behavior.task_family_terms, key)
+            .iter()
+            .filter(|term| contains_task_term(text, term))
+            .count()
+            .min(u8::MAX as usize) as u8;
+        let weight = scorecard.weights.get(key).copied().unwrap_or_default();
+        scores.insert(*family, weight.saturating_mul(i16::from(matched_count)));
+        evidence_counts.insert(*family, matched_count);
+    }
+
+    let debugging_intent_position = first_bounded_term_position(
+        text,
+        behavior_terms(&behavior.task_family_intent_terms, "debugging"),
+    );
+    let debugging_intent = debugging_intent_position.is_some();
+    let debugging_failure = contains_any_task_terms(
+        text,
+        behavior_terms(&behavior.task_family_failure_terms, "debugging"),
+    );
+    let review_intent_position = first_bounded_term_position(
+        text,
+        behavior_terms(&behavior.task_family_intent_terms, "review"),
+    );
+    let code_subject = contains_any_task_terms(text, &behavior.task_family_code_subject_terms);
+    let supported_debugging = debugging_intent && code_subject;
+    if debugging_intent && (debugging_failure || code_subject) {
+        add_task_family_bonus(
+            &mut scores,
+            TaskFamily::CodeDebugging,
+            scorecard.debugging_failure_fix_bonus,
+        );
+        evidence_counts
+            .entry(TaskFamily::CodeDebugging)
+            .and_modify(|count| *count = (*count).max(scorecard.minimum_evidence_count));
+    }
+    let review_intent = review_intent_position.is_some();
+    let supported_review = review_intent && code_subject;
+    if supported_review {
+        add_task_family_bonus(&mut scores, TaskFamily::CodeReview, scorecard.review_bonus);
+        evidence_counts
+            .entry(TaskFamily::CodeReview)
+            .and_modify(|count| *count = (*count).max(scorecard.minimum_evidence_count));
+    }
+
+    let workflow_family = TaskFamily::AgentWorkflowExecution;
+    let workflow_anchor = contains_any_task_terms(
+        text,
+        behavior_terms(&behavior.task_family_anchor_terms, workflow_family.key()),
+    );
+    if !workflow_anchor {
+        scores.insert(workflow_family, 0);
+        evidence_counts.insert(workflow_family, 0);
+    }
+
+    let first_supported_intent = match (
+        debugging_intent_position.filter(|_| supported_debugging),
+        review_intent_position.filter(|_| supported_review),
+    ) {
+        (Some(debugging), Some(review)) if debugging < review => Some(TaskFamily::CodeDebugging),
+        (Some(_), Some(_)) => Some(TaskFamily::CodeReview),
+        (Some(_), None) => Some(TaskFamily::CodeDebugging),
+        (None, Some(_)) => Some(TaskFamily::CodeReview),
+        (None, None) => None,
+    };
+    if let Some(family) = first_supported_intent {
+        let score = scores.get(&family).copied().unwrap_or_default();
+        return accepted_task_family(family, scorecard, score);
+    }
+
+    let has_specific_family =
+        behavior_families(&behavior.task_family_modifier_families, "specific")
+            .iter()
+            .any(|family| {
+                evidence_counts.get(family).copied().unwrap_or_default()
+                    >= scorecard.minimum_evidence_count
+            });
+    if has_specific_family {
+        for family in behavior_families(&behavior.task_family_modifier_families, "generic") {
+            scores.insert(*family, 0);
+        }
+    }
+
+    let mut best_family = TaskFamily::Unknown;
+    let mut top_score = 0_i16;
+    let mut runner_up = 0_i16;
+    for family in &behavior.task_family_tie_order {
+        let score = scores.get(family).copied().unwrap_or_default();
+        if score > top_score {
+            runner_up = top_score;
+            best_family = *family;
+            top_score = score;
+        } else {
+            runner_up = runner_up.max(score);
+        }
+    }
+    let evidence_count = evidence_counts
+        .get(&best_family)
+        .copied()
+        .unwrap_or_default();
+    let margin = top_score.saturating_sub(runner_up);
+    if top_score < scorecard.minimum_top_score
+        || evidence_count < scorecard.minimum_evidence_count
+        || margin < scorecard.minimum_margin
+    {
+        return (
+            TaskFamily::Unknown,
+            scorecard.unknown_confidence_ppm as f32 / 1_000_000.0,
+            Vec::new(),
+        );
+    }
+
+    accepted_task_family(best_family, scorecard, top_score)
+}
+
+fn accepted_task_family(
+    family: TaskFamily,
+    scorecard: &TaskFamilyScorecard,
+    score: i16,
+) -> (TaskFamily, f32, Vec<PredictiveEvidence>) {
+    let evidence = (scorecard.maximum_evidence > 0)
+        .then(|| PredictiveEvidence {
+            code: task_family_reason_code(family).to_owned(),
+            weight: score,
+            confidence: scorecard.confidence_ppm as f32 / 1_000_000.0,
+        })
+        .into_iter()
+        .collect();
+    (
+        family,
+        scorecard.confidence_ppm as f32 / 1_000_000.0,
+        evidence,
+    )
+}
+
+fn contains_any_task_terms<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
+    terms
+        .iter()
+        .any(|term| contains_task_term(text, term.as_ref()))
+}
+
+fn contains_task_term(text: &str, term: &str) -> bool {
+    bounded_term_position(text, term).is_some()
+}
+
+fn add_task_family_bonus(scores: &mut BTreeMap<TaskFamily, i16>, family: TaskFamily, bonus: i16) {
+    let score = scores.entry(family).or_default();
+    *score = score.saturating_add(bonus);
+}
+
+fn task_family_reason_code(family: TaskFamily) -> &'static str {
+    match family {
+        TaskFamily::CodeGeneration => "task_code_generation",
+        TaskFamily::CodeDebugging => "task_code_debugging",
+        TaskFamily::CodeReview => "task_code_review",
+        TaskFamily::CodeSqlDatabase => "task_code_sql_database",
+        TaskFamily::CodeFrontendUi => "task_code_frontend_ui",
+        TaskFamily::CodeDevopsConfig => "task_code_devops_config",
+        TaskFamily::CodeRepositoryAnalysis => "task_code_repository_analysis",
+        TaskFamily::AgentMultiStepPlanning => "task_agent_multi_step_planning",
+        TaskFamily::AgentWorkflowExecution => "task_agent_workflow_execution",
+        TaskFamily::AgentWebResearch => "task_agent_web_research",
+        TaskFamily::AgentMemoryOperations => "task_agent_memory_operations",
+        TaskFamily::AgentGeneral => "task_agent_general",
+        TaskFamily::Unknown => "task_unknown",
+    }
+}
+
+/// Returns true only for a bounded categorical task-family reason emitted by
+/// the deterministic classifier.
+pub fn is_task_family_reason_code(code: &str) -> bool {
+    matches!(
+        code,
+        "task_code_generation"
+            | "task_code_debugging"
+            | "task_code_review"
+            | "task_code_sql_database"
+            | "task_code_frontend_ui"
+            | "task_code_devops_config"
+            | "task_code_repository_analysis"
+            | "task_agent_multi_step_planning"
+            | "task_agent_workflow_execution"
+            | "task_agent_web_research"
+            | "task_agent_memory_operations"
+            | "task_agent_general"
+            | "task_unknown"
+    )
 }
 
 pub fn compiled_scorecard_digest() -> &'static str {
@@ -635,6 +1141,13 @@ struct InstructionFeatures {
     contradictory: bool,
 }
 
+#[derive(Debug)]
+struct CausalInstruction {
+    text: String,
+    message_index: Option<usize>,
+    starts_new_epoch: bool,
+}
+
 impl InstructionFeatures {
     fn has_signal(&self) -> bool {
         self.broad
@@ -659,9 +1172,18 @@ struct HistoryFeatures {
 
 pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> PredictiveRouteIR {
     let scorecard = compiled_scorecard_v1();
-    let history = history_features(prompt, observed);
-    let instruction = instruction_features(prompt, observed.normalized_action_history.is_some());
+    let causal_instruction =
+        causal_instruction(prompt, observed.normalized_action_history.is_some());
+    let history = history_features(prompt, observed, causal_instruction.message_index);
+    let instruction = instruction_features(&causal_instruction.text);
     let observed_projection = observed.route_projection();
+    let route_risk = epoch_route_risk(
+        observed,
+        observed_projection.risk,
+        &history,
+        causal_instruction.starts_new_epoch,
+        scorecard.repeated_failure_count,
+    );
     let mut evidence = Vec::new();
 
     if instruction.contradictory
@@ -690,8 +1212,19 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             scorecard.weight("incomplete_history"),
             scorecard.evidence_confidence(code),
         );
-        return unknown_prediction(observed_projection, history.completeness, evidence);
+        return unknown_prediction(
+            observed_projection,
+            route_risk,
+            history.completeness,
+            evidence,
+            TaskFamily::Unknown,
+            task_family_scorecard().unknown_confidence_ppm as f32 / 1_000_000.0,
+            Vec::new(),
+        );
     }
+
+    let (task_family, task_family_confidence, task_family_evidence) =
+        classify_task_family(&causal_instruction.text);
 
     let mut scores = [0_i16; ROLE_COUNT];
     let opening = observed.state_kind == WorkflowStateKind::Opening && !history.has_trajectory;
@@ -917,7 +1450,13 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         + u8::from(observed.confidence > 0.0);
     let (role, top_score, runner_up) = choose_role(scores);
     let margin = top_score.saturating_sub(runner_up);
-    if top_score < scorecard.minimum_top_score
+    let direct_instruction = instruction.has_signal()
+        && !history.has_trajectory
+        && causal_instruction
+            .message_index
+            .is_some_and(|index| index > 0)
+        && has_complete_visible_causal_history(prompt);
+    if (!direct_instruction && top_score < scorecard.minimum_top_score)
         || margin < scorecard.minimum_margin
         || coverage < scorecard.minimum_coverage
     {
@@ -927,7 +1466,15 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
             scorecard.weight("low_margin"),
             scorecard.evidence_confidence(PredictiveReasonCode::ScoreMarginLow),
         );
-        return unknown_prediction(observed_projection, history.completeness, evidence);
+        return unknown_prediction(
+            observed_projection,
+            route_risk,
+            history.completeness,
+            evidence,
+            task_family,
+            task_family_confidence,
+            task_family_evidence,
+        );
     }
 
     let next_action_class = action_for_role(role, instruction.narrow_read);
@@ -949,14 +1496,8 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     } else {
         ProgressState::Progressing
     };
-    let route_risk = if history.failure_count >= scorecard.repeated_failure_count {
-        RouteRisk::Guarded
-    } else {
-        observed_projection.risk
-    };
-
     PredictiveRouteIR {
-        schema_version: 1,
+        schema_version: 2,
         observed: observed_projection,
         next_step_role: role,
         next_action_class,
@@ -968,49 +1509,41 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         evidence,
         predictor_contract_digest: compiled_scorecard_digest().to_owned(),
         confidence_kind: PREDICTOR_CONFIDENCE_KIND.to_owned(),
+        task_family,
+        task_family_confidence,
+        task_family_evidence,
     }
 }
 
-fn instruction_features(
-    prompt: &Prompt,
-    normalized_plain_text_history: bool,
-) -> InstructionFeatures {
+fn instruction_features(text: &str) -> InstructionFeatures {
     let behavior = compiled_predictor_behavior();
-    let messages = if normalized_plain_text_history {
-        let boundary = prompt
-            .messages
-            .iter()
-            .position(|message| message.role == Role::Assistant)
-            .unwrap_or(prompt.messages.len());
-        &prompt.messages[..boundary]
-    } else {
-        &prompt.messages
+    let broad = contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "broad"));
+    let mutate_position =
+        first_bounded_term_position(text, behavior_terms(&behavior.instruction_terms, "mutate"));
+    let verify_position =
+        first_bounded_term_position(text, behavior_terms(&behavior.instruction_terms, "verify"));
+    let (mutate, verify) = match (mutate_position, verify_position) {
+        (Some(mutate), Some(verify)) if mutate < verify => (true, false),
+        (Some(_), Some(_)) => (false, true),
+        (Some(_), None) => (true, false),
+        (None, Some(_)) => (false, true),
+        (None, None) => (false, false),
     };
-    let text = messages
-        .iter()
-        .rev()
-        .filter(|message| matches!(message.role, Role::User | Role::System))
-        .find_map(message_text)
-        .or_else(|| prompt.system.clone())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let broad = contains_any(&text, behavior_terms(&behavior.instruction_terms, "broad"));
-    let mutate = contains_any(&text, behavior_terms(&behavior.instruction_terms, "mutate"));
-    let verify = contains_any(&text, behavior_terms(&behavior.instruction_terms, "verify"));
-    let poll = contains_any(&text, behavior_terms(&behavior.instruction_terms, "poll"));
-    let read_requested = contains_any(&text, behavior_terms(&behavior.instruction_terms, "read"));
+    let poll = contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "poll"));
+    let read_requested =
+        contains_any_bounded(text, behavior_terms(&behavior.instruction_terms, "read"));
     let finalize = !mutate
         && !verify
         && !read_requested
-        && contains_any(
-            &text,
+        && contains_any_bounded(
+            text,
             behavior_terms(&behavior.instruction_terms, "finalize"),
         );
-    let concrete = has_concrete_evidence(&text);
+    let concrete = has_concrete_evidence(text);
     let narrow_read = read_requested && concrete && !broad && !mutate && !verify && !poll;
     let contradictory = mutate
-        && contains_any(
-            &text,
+        && contains_any_bounded(
+            text,
             behavior_terms(&behavior.instruction_terms, "contradiction"),
         );
 
@@ -1023,6 +1556,70 @@ fn instruction_features(
         finalize,
         concrete,
         contradictory,
+    }
+}
+
+fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> CausalInstruction {
+    let mut latest_user = None;
+    let mut latest_system = None;
+    let mut awaiting_plain_text_action_result = false;
+    let mut user_instruction_count = 0_u8;
+    for (message_index, message) in prompt.messages.iter().enumerate() {
+        match message.role {
+            Role::Assistant
+                if normalized_plain_text_history && assistant_action_executes_commands(message) =>
+            {
+                awaiting_plain_text_action_result = true;
+            }
+            Role::User if awaiting_plain_text_action_result => {
+                awaiting_plain_text_action_result = false;
+            }
+            Role::User => {
+                if let Some(text) = message_text(message) {
+                    user_instruction_count = user_instruction_count.saturating_add(1);
+                    latest_user = Some((text, message_index));
+                }
+            }
+            Role::System => {
+                if let Some(text) = message_text(message) {
+                    latest_system = Some((text, message_index));
+                }
+            }
+            _ => {}
+        }
+    }
+    let starts_new_epoch = latest_user.is_some() && user_instruction_count > 1;
+    let (text, message_index) = latest_user
+        .or(latest_system)
+        .map(|(text, message_index)| (text, Some(message_index)))
+        .unwrap_or_else(|| (prompt.system.clone().unwrap_or_default(), None));
+    CausalInstruction {
+        text: text.to_ascii_lowercase(),
+        message_index,
+        starts_new_epoch,
+    }
+}
+
+fn epoch_route_risk(
+    observed: &WorkflowStateIR,
+    observed_risk: RouteRisk,
+    history: &HistoryFeatures,
+    starts_new_epoch: bool,
+    repeated_failure_count: u8,
+) -> RouteRisk {
+    if history.last_failed || history.failure_count >= repeated_failure_count {
+        RouteRisk::Guarded
+    } else if starts_new_epoch
+        && history.failure_count == 0
+        && observed.recovery_signal == RecoverySignal::LikelyRecovery
+    {
+        if observed.capability_constraints.context_pressure == RequirementLevel::High {
+            RouteRisk::Context
+        } else {
+            RouteRisk::Normal
+        }
+    } else {
+        observed_risk
     }
 }
 
@@ -1047,7 +1644,39 @@ fn contains_any<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
     terms.iter().any(|term| text.contains(term.as_ref()))
 }
 
-fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatures {
+fn contains_any_bounded<T: AsRef<str>>(text: &str, terms: &[T]) -> bool {
+    first_bounded_term_position(text, terms).is_some()
+}
+
+fn first_bounded_term_position<T: AsRef<str>>(text: &str, terms: &[T]) -> Option<usize> {
+    terms
+        .iter()
+        .filter_map(|term| bounded_term_position(text, term.as_ref()))
+        .min()
+}
+
+fn bounded_term_position(text: &str, term: &str) -> Option<usize> {
+    if term.is_empty() {
+        return None;
+    }
+
+    text.match_indices(term).find_map(|(start, _)| {
+        let end = start + term.len();
+        (term_boundary(text[..start].chars().next_back())
+            && term_boundary(text[end..].chars().next()))
+        .then_some(start)
+    })
+}
+
+fn term_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+}
+
+fn history_features(
+    prompt: &Prompt,
+    observed: &WorkflowStateIR,
+    instruction_index: Option<usize>,
+) -> HistoryFeatures {
     let mut calls = Vec::<(String, ObservedAction, bool)>::new();
     let mut failure_count = 0_u8;
     let mut mutation_count = 0_u8;
@@ -1056,7 +1685,8 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
     let mut unmatched_result = false;
     let mut result_count = 0_u8;
 
-    for content in prompt.messages.iter().flat_map(|message| &message.content) {
+    let history_messages = &prompt.messages[instruction_index.unwrap_or(0)..];
+    for content in history_messages.iter().flat_map(|message| &message.content) {
         match content {
             Content::ToolCall {
                 id,
@@ -1104,7 +1734,10 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
         };
     }
     if calls.is_empty()
-        && let Some(normalized) = observed.normalized_action_history.as_ref()
+        && observed.normalized_action_history.is_some()
+        && let Some(normalized) = instruction_index.and_then(|instruction_index| {
+            normalized_action_history_from(prompt, instruction_index.saturating_add(1))
+        })
     {
         let last_action = normalized.last_action.map(|action| match action {
             NormalizedActionKind::Read => ObservedAction::Read,
@@ -1128,11 +1761,11 @@ fn history_features(prompt: &Prompt, observed: &WorkflowStateIR) -> HistoryFeatu
         };
     }
     let unmatched_call = calls.iter().any(|(_, _, matched)| !matched);
-    let first_role = prompt.messages.first().map(|message| message.role);
+    let first_role = history_messages.first().map(|message| message.role);
     let server_side_context_gap = observed.evidence.iter().any(|evidence| {
         evidence.kind == "server_side_context_gap" && evidence.level == EvidenceLevel::Missing
     });
-    let completeness = if prompt.messages.is_empty()
+    let completeness = if history_messages.is_empty()
         || (server_side_context_gap && !has_complete_visible_causal_history(prompt))
     {
         PredictiveHistoryCompleteness::Unknown
@@ -1238,11 +1871,11 @@ fn classify_action(name: &str, arguments: &str, observed: &WorkflowStateIR) -> O
     if contains_any(&name, behavior_terms(&behavior.tool_name_terms, "command"))
         && let Some(command) = command_argument(arguments)
     {
-        if command_is_test(&command) {
-            return ObservedAction::Test;
-        }
         if command_is_read(&command) {
             return ObservedAction::Read;
+        }
+        if command_is_test(&command) {
+            return ObservedAction::Test;
         }
     }
     match observed.state_kind {
@@ -1266,15 +1899,24 @@ fn command_argument(arguments: &str) -> Option<String> {
 }
 
 fn command_is_test(command: &str) -> bool {
-    contains_any(command, &compiled_predictor_behavior().command_test_terms)
+    compiled_predictor_behavior()
+        .command_test_terms
+        .iter()
+        .any(|head| command_has_head(command, head))
 }
 
 fn command_is_read(command: &str) -> bool {
-    let command = command.trim_start();
     compiled_predictor_behavior()
         .command_read_prefixes
         .iter()
-        .any(|prefix| command.starts_with(prefix))
+        .any(|prefix| command_has_head(command, prefix.trim_end()))
+}
+
+fn command_has_head(command: &str, head: &str) -> bool {
+    let command = command.trim_start();
+    command.strip_prefix(head).is_some_and(|remaining| {
+        remaining.is_empty() || remaining.chars().next().is_some_and(char::is_whitespace)
+    })
 }
 
 fn add_score(
@@ -1350,12 +1992,16 @@ fn push_evidence(
 
 fn unknown_prediction(
     observed: RouteProjection,
+    route_risk: RouteRisk,
     history_completeness: PredictiveHistoryCompleteness,
     evidence: Vec<PredictiveEvidence>,
+    task_family: TaskFamily,
+    task_family_confidence: f32,
+    task_family_evidence: Vec<PredictiveEvidence>,
 ) -> PredictiveRouteIR {
     PredictiveRouteIR {
-        schema_version: 1,
-        route_risk: observed.risk,
+        schema_version: 2,
+        route_risk,
         observed,
         next_step_role: NextStepRole::Unknown,
         next_action_class: NextActionClass::Unknown,
@@ -1366,6 +2012,9 @@ fn unknown_prediction(
         evidence,
         predictor_contract_digest: compiled_scorecard_digest().to_owned(),
         confidence_kind: PREDICTOR_CONFIDENCE_KIND.to_owned(),
+        task_family,
+        task_family_confidence,
+        task_family_evidence,
     }
 }
 
@@ -1380,6 +2029,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::workflow_state::extractors::generic::GenericPromptExtractor;
+    use crate::workflow_state::extractors::terminus_2::Terminus2Extractor;
     use crate::workflow_state::extractors::{
         ExtractorInput, WorkflowStateExtractor, extract_workflow_state,
     };
@@ -1457,6 +2107,18 @@ mod tests {
         })
     }
 
+    fn terminus_observed(prompt: &Prompt) -> crate::workflow_state::ir::WorkflowStateIR {
+        let headers = HeaderMap::new();
+        let raw_body = serde_json::json!({});
+        Terminus2Extractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::ChatCompletions,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt,
+        })
+    }
+
     fn fixture_input(text: &str) -> Option<(crate::workflow_state::ir::WorkflowStateIR, Prompt)> {
         let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
         let fixture = WorkflowTraceFixture::from_value(value).ok()?;
@@ -1472,21 +2134,63 @@ mod tests {
 
     #[test]
     fn predictive_projection_uses_a_stable_canonical_key() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeGeneration,
+            NextStepRole::Implement,
+            RouteRisk::Normal,
+        );
 
-        assert_eq!(projection.key(), "agent_route/v1|implement|normal");
+        assert_eq!(
+            projection.key(),
+            "agent_route/v1|code:generation|implement|normal"
+        );
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
-        assert!(CanonicalPolicyProjection::parse_key("agent_trace/v2|edit|normal").is_some());
-        assert!(CanonicalPolicyProjection::parse_key("agent_route/v1|implement|normal").is_some());
-        assert!(CanonicalPolicyProjection::parse_key("agent_route/v2|implement|normal").is_none());
+        assert!(RouteProjection::parse_key("agent_trace/v2|edit|normal").is_some());
+        let retired_short_v1 = format!("agent_route/v1|{}|normal", "implement");
+        let retired_v2 = format!(
+            "agent_route/{}|code:review|verify|normal",
+            ["v", "2"].concat()
+        );
+        assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
+        assert!(PredictiveRouteProjection::parse_key(&retired_v2).is_none());
+    }
+
+    #[test]
+    fn predictive_projection_has_one_v1_task_aware_shape() {
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeReview,
+            NextStepRole::Verify,
+            RouteRisk::Normal,
+        );
+
+        assert_eq!(projection.key(), "agent_route/v1|code:review|verify|normal");
+        assert_eq!(
+            projection.unknown_baseline().key(),
+            "agent_route/v1|unknown|verify|normal"
+        );
+        assert_eq!(
+            PredictiveRouteProjection::parse_key(&projection.key()),
+            Some(projection)
+        );
+        let retired_short_v1 = format!("agent_route/v1|{}|normal", "verify");
+        let retired_v2 = format!(
+            "agent_route/{}|code:review|verify|normal",
+            ["v", "2"].concat()
+        );
+        assert!(PredictiveRouteProjection::parse_key(&retired_short_v1).is_none());
+        assert!(PredictiveRouteProjection::parse_key(&retired_v2).is_none());
     }
 
     #[test]
     fn predictive_projection_round_trips_exactly() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeReview,
+            NextStepRole::Verify,
+            RouteRisk::Normal,
+        );
 
         assert_eq!(projection.schema_version(), 1);
         assert_eq!(
@@ -1495,7 +2199,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<PredictiveRouteProjection>(
-                r#"{"schema_version":2,"next_step_role":"implement","risk":"normal"}"#
+                r#"{"task_family":"code_review","next_step_role":"verify","risk":"normal","compatibility":true}"#
             )
             .is_err()
         );
@@ -1523,6 +2227,10 @@ mod tests {
             serde_json::to_string(&PredictiveHistoryCompleteness::BoundedPrefix),
             Ok(value) if value == "\"bounded_prefix\""
         ));
+        assert!(matches!(
+            serde_json::to_string(&TaskFamily::CodeDebugging),
+            Ok(value) if value == "\"code_debugging\""
+        ));
     }
 
     #[test]
@@ -1536,10 +2244,14 @@ mod tests {
 
     #[test]
     fn predictive_key_excludes_source_specific_identity() {
-        let projection = PredictiveRouteProjection::new(NextStepRole::Implement, RouteRisk::Normal);
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeDebugging,
+            NextStepRole::Implement,
+            RouteRisk::Normal,
+        );
         let key = projection.key();
 
-        assert_eq!(key, "agent_route/v1|implement|normal");
+        assert_eq!(key, "agent_route/v1|code:debugging|implement|normal");
         for source_identity in ["codex", "claude_code", "hermes", "smithers", "openclaw"] {
             assert!(!key.contains(source_identity), "{source_identity}");
         }
@@ -1912,10 +2624,12 @@ mod tests {
 
         assert_eq!(
             PredictiveRouteProjection::new(
+                named_prediction.task_family,
                 named_prediction.next_step_role,
                 named_prediction.route_risk
             ),
             PredictiveRouteProjection::new(
+                renamed_prediction.task_family,
                 renamed_prediction.next_step_role,
                 renamed_prediction.route_risk
             )
@@ -1966,7 +2680,7 @@ mod tests {
     }
 
     #[test]
-    fn predictor_contract_digest_covers_behavior_lexicon_and_role_mapping() -> anyhow::Result<()> {
+    fn predictor_contract_digest_covers_every_behavior_component() -> anyhow::Result<()> {
         let mut changed_lexicon = compiled_predictor_behavior().clone();
         changed_lexicon
             .instruction_terms
@@ -1986,6 +2700,84 @@ mod tests {
             predictor_behavior_digest(&changed_mapping)?,
             compiled_scorecard_digest()
         );
+
+        for component in [
+            "instruction_features",
+            "history_pairing",
+            "visible_causal_history",
+            "role_scoring",
+            "risk_mapping",
+        ] {
+            let mut changed = compiled_predictor_behavior().clone();
+            let version = changed
+                .algorithm_versions
+                .get_mut(component)
+                .ok_or_else(|| anyhow::anyhow!("{component} algorithm version is missing"))?;
+            *version += 1;
+            assert_ne!(
+                predictor_behavior_digest(&changed)?,
+                compiled_scorecard_digest(),
+                "{component} version must be digest-bound"
+            );
+        }
+
+        let mut task_changes = Vec::new();
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_terms
+            .get_mut("code:debugging")
+            .ok_or_else(|| anyhow::anyhow!("debugging terms missing"))?
+            .push("new debug signal".into());
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_modifier_families
+            .get_mut("specific")
+            .ok_or_else(|| anyhow::anyhow!("specific modifier group missing"))?
+            .pop();
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_intent_terms
+            .get_mut("debugging")
+            .ok_or_else(|| anyhow::anyhow!("debugging intent terms missing"))?
+            .push("new intent".into());
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_failure_terms
+            .get_mut("debugging")
+            .ok_or_else(|| anyhow::anyhow!("debugging failure terms missing"))?
+            .push("new failure".into());
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_anchor_terms
+            .get_mut("agent:workflow_execution")
+            .ok_or_else(|| anyhow::anyhow!("workflow anchor terms missing"))?
+            .push("new anchor".into());
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed
+            .task_family_code_subject_terms
+            .push("new subject".into());
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed.task_family_scorecard.review_bonus += 1;
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed.task_family_tie_order.swap(0, 1);
+        task_changes.push(changed);
+        let mut changed = compiled_predictor_behavior().clone();
+        changed.task_classifier_algorithm_version += 1;
+        task_changes.push(changed);
+
+        for changed in task_changes {
+            assert_ne!(
+                predictor_behavior_digest(&changed)?,
+                compiled_scorecard_digest()
+            );
+        }
         Ok(())
     }
 
@@ -2011,6 +2803,43 @@ mod tests {
             assert_eq!(
                 prediction.next_action_class, expected_action,
                 "{instruction}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_role_intent_uses_bounded_terms_and_first_action() {
+        let explicit_roles = [
+            ("Implement a new module.", NextStepRole::Implement),
+            ("Verify the result.", NextStepRole::Verify),
+            ("Summarize the result.", NextStepRole::Finalize),
+            ("Review the bug fix.", NextStepRole::Verify),
+            ("Fix the bug found in code review.", NextStepRole::Implement),
+        ];
+        for (instruction, expected_role) in explicit_roles {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            assert_eq!(
+                predict_next_step(&observed(&prompt), &prompt).next_step_role,
+                expected_role,
+                "{instruction}"
+            );
+        }
+
+        let false_role_reasons = [
+            ("Show the latest result.", "verification_requested"),
+            ("Address the issue.", "mutation_requested"),
+            ("Give an explanation.", "opening_broad_goal"),
+            ("Await the response.", "narrow_poll_requested"),
+        ];
+        for (instruction, absent_reason) in false_role_reasons {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+            assert!(
+                prediction
+                    .evidence
+                    .iter()
+                    .all(|evidence| evidence.code != absent_reason),
+                "{instruction}: {absent_reason}"
             );
         }
     }
@@ -2093,5 +2922,628 @@ mod tests {
         let labeled_prediction = pure_predictor(&observed(&header_shaped), &header_shaped);
 
         assert_eq!(neutral_prediction, labeled_prediction);
+    }
+
+    #[test]
+    fn predictive_projection_rejects_noncanonical_family_and_segments() {
+        let projection = PredictiveRouteProjection::new(
+            TaskFamily::CodeDebugging,
+            NextStepRole::Implement,
+            RouteRisk::Guarded,
+        );
+
+        assert_eq!(
+            projection.key(),
+            "agent_route/v1|code:debugging|implement|guarded"
+        );
+        assert_eq!(
+            PredictiveRouteProjection::parse_key(&projection.key()),
+            Some(projection)
+        );
+        assert!(
+            PredictiveRouteProjection::parse_key("agent_route/v1|debugging|implement|guarded")
+                .is_none()
+        );
+        assert!(
+            PredictiveRouteProjection::parse_key(
+                "agent_route/v1|code:debugging|implement|guarded|extra"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn task_family_classifies_canonical_prompt_families() {
+        let cases = [
+            (
+                "code generation",
+                "Implement a new module and refactor the parser API.",
+                TaskFamily::CodeGeneration,
+            ),
+            (
+                "debugging outranks sql",
+                "Fix the panic in the SQL migration runner after this regression failed.",
+                TaskFamily::CodeDebugging,
+            ),
+            (
+                "review outranks frontend",
+                "Review this React pull request for security bugs and audit the diff.",
+                TaskFamily::CodeReview,
+            ),
+            (
+                "sql database",
+                "Write a SQL schema migration and optimize the database query.",
+                TaskFamily::CodeSqlDatabase,
+            ),
+            (
+                "frontend ui",
+                "Build a React component with CSS and fix the DOM layout.",
+                TaskFamily::CodeFrontendUi,
+            ),
+            (
+                "devops config",
+                "Update the CI deployment configuration for the Kubernetes service.",
+                TaskFamily::CodeDevopsConfig,
+            ),
+            (
+                "repository analysis",
+                "Analyze the repository dependencies and trace the codebase call graph.",
+                TaskFamily::CodeRepositoryAnalysis,
+            ),
+            (
+                "multi step planning",
+                "Plan a multi-step agent handoff and decompose the architecture work.",
+                TaskFamily::AgentMultiStepPlanning,
+            ),
+            (
+                "workflow execution",
+                "Orchestrate the agent workflow pipeline and execute the handoff.",
+                TaskFamily::AgentWorkflowExecution,
+            ),
+            (
+                "web research",
+                "Browse the web for current sources and research the latest release.",
+                TaskFamily::AgentWebResearch,
+            ),
+            (
+                "memory operations",
+                "Extract durable facts into memory and synthesize the saved context.",
+                TaskFamily::AgentMemoryOperations,
+            ),
+            (
+                "general agent",
+                "Coordinate the agent task and manage its assistant work.",
+                TaskFamily::AgentGeneral,
+            ),
+            (
+                "action is not a family",
+                "Run the shell command and report its output.",
+                TaskFamily::Unknown,
+            ),
+        ];
+
+        for (name, instruction, expected_family) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.task_family, expected_family, "{name}");
+            assert!(
+                prediction.task_family_evidence.len() <= MAX_PREDICTIVE_EVIDENCE,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_family_review_intent_precedes_debugging_subject_terms() {
+        let cases = [
+            ("Review the bug fix.", TaskFamily::CodeReview),
+            ("Audit the regression patch.", TaskFamily::CodeReview),
+            ("Fix the bug.", TaskFamily::CodeDebugging),
+            ("Repair a regression.", TaskFamily::CodeDebugging),
+            ("Review the schedule.", TaskFamily::Unknown),
+        ];
+
+        for (instruction, expected) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.task_family, expected, "{instruction}");
+        }
+    }
+
+    #[test]
+    fn task_family_prefers_the_first_review_or_debugging_intent() {
+        let family = |instruction| {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            predict_next_step(&observed(&prompt), &prompt).task_family
+        };
+
+        assert_eq!(family("Review the bug fix."), TaskFamily::CodeReview);
+        assert_eq!(
+            family("Fix the bug found in code review."),
+            TaskFamily::CodeDebugging
+        );
+    }
+
+    #[test]
+    fn task_family_uses_earliest_supported_code_intent_symmetrically() {
+        let family = |instruction| {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            predict_next_step(&observed(&prompt), &prompt).task_family
+        };
+        let cases = [
+            ("Fix the code found in review.", TaskFamily::CodeDebugging),
+            (
+                "Correct the parser code from review.",
+                TaskFamily::CodeDebugging,
+            ),
+            ("Repair the patch from audit.", TaskFamily::CodeDebugging),
+            ("Debug the module from review.", TaskFamily::CodeDebugging),
+            ("Review the code to fix.", TaskFamily::CodeReview),
+            ("Review the parser code to correct.", TaskFamily::CodeReview),
+            ("Audit the patch to repair.", TaskFamily::CodeReview),
+            ("Review the module to debug.", TaskFamily::CodeReview),
+            ("Fix the schedule.", TaskFamily::Unknown),
+            ("Review the schedule.", TaskFamily::Unknown),
+        ];
+
+        for (instruction, expected) in cases {
+            assert_eq!(family(instruction), expected, "{instruction}");
+        }
+    }
+
+    #[test]
+    fn shell_action_uses_the_bounded_command_head_before_test_text() {
+        let observed = observed(&prompt(Vec::new()));
+        let action = |command| {
+            classify_action(
+                "bash",
+                &serde_json::json!({ "cmd": command }).to_string(),
+                &observed,
+            )
+        };
+
+        assert_eq!(action("rg 'cargo test' README.md"), ObservedAction::Read);
+        assert_eq!(action("cargo test -p bitrouter"), ObservedAction::Test);
+    }
+
+    #[test]
+    fn normalized_history_skips_only_actual_action_results() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Review the parser patch."),
+            Message::text(Role::Assistant, "Which branch should I inspect?"),
+            Message::text(Role::User, "Fix the regression in src/parser.rs."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "All parser tests passed."),
+        ]);
+        let mut ir = observed(&prompt);
+        ir.normalized_action_history = Some(crate::workflow_state::ir::NormalizedActionHistory {
+            last_action: Some(NormalizedActionKind::Test),
+            last_failed: false,
+            failure_count: 0,
+            mutation_count: 0,
+            complete: true,
+        });
+
+        let prediction = predict_next_step(&ir, &prompt);
+
+        assert_eq!(prediction.task_family, TaskFamily::CodeDebugging);
+    }
+
+    #[test]
+    fn empty_terminus_json_completion_does_not_consume_new_instruction() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Review the parser patch."),
+            Message::text(Role::Assistant, r#"{"commands":[],"task_complete":true}"#),
+            Message::text(
+                Role::User,
+                "Implement a new parser module and refactor the parser API.",
+            ),
+        ]);
+
+        let observed = terminus_observed(&prompt);
+        assert!(observed.normalized_action_history.is_none());
+        let prediction = predict_next_step(&observed, &prompt);
+
+        assert_eq!(prediction.next_step_role, NextStepRole::Implement);
+        assert_eq!(prediction.task_family, TaskFamily::CodeGeneration);
+    }
+
+    #[test]
+    fn empty_terminus_xml_completion_does_not_consume_new_instruction() {
+        let prompt = prompt(vec![
+            Message::text(
+                Role::User,
+                "Implement the new parser diagnostics in src/parser.rs.",
+            ),
+            Message::text(
+                Role::Assistant,
+                "<response><commands></commands><task_complete>true</task_complete></response>",
+            ),
+            Message::text(Role::User, "Review the parser patch."),
+        ]);
+
+        let observed = terminus_observed(&prompt);
+        assert!(observed.normalized_action_history.is_none());
+        let prediction = predict_next_step(&observed, &prompt);
+
+        assert_eq!(prediction.next_step_role, NextStepRole::Verify);
+        assert_eq!(prediction.task_family, TaskFamily::CodeReview);
+    }
+
+    #[test]
+    fn summarizes_after_an_old_read_without_reopening_implementation() {
+        let prompt = prompt(vec![
+            Message::text(
+                Role::User,
+                "Read src/parser.rs and inspect the parser error.",
+            ),
+            assistant_call("read-1", "read_file", r#"{"path":"src/parser.rs"}"#),
+            tool_result(
+                "read-1",
+                ToolResultOutput::Text {
+                    value: "the parser source is available".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Summarize the parser findings for me."),
+        ]);
+
+        let summary_after_old_read = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(
+            summary_after_old_read.next_step_role,
+            NextStepRole::Finalize
+        );
+    }
+
+    #[test]
+    fn implements_a_new_request_after_an_old_successful_test() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Fix src/parser.rs and pass its parser tests."),
+            assistant_call("edit-1", "Edit", r#"{"file_path":"src/parser.rs"}"#),
+            tool_result(
+                "edit-1",
+                ToolResultOutput::Text {
+                    value: "parser updated".to_owned(),
+                },
+            ),
+            assistant_call("test-1", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-1",
+                ToolResultOutput::Text {
+                    value: "all parser tests passed".to_owned(),
+                },
+            ),
+            Message::text(
+                Role::User,
+                "Implement the new parser diagnostics in src/parser.rs.",
+            ),
+        ]);
+
+        let implementation_after_old_success = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(
+            implementation_after_old_success.next_step_role,
+            NextStepRole::Implement
+        );
+    }
+
+    #[test]
+    fn starts_a_new_epoch_without_guarding_on_old_failures() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            assistant_call("test-1", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-1",
+                ToolResultOutput::ErrorText {
+                    value: "parser assertion failed".to_owned(),
+                },
+            ),
+            assistant_call("test-2", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "test-2",
+                ToolResultOutput::ErrorText {
+                    value: "parser assertion failed again".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+        ]);
+
+        let new_epoch_after_old_failures = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(new_epoch_after_old_failures.route_risk, RouteRisk::Normal);
+    }
+
+    #[test]
+    fn generic_new_epoch_preserves_independent_context_risk() {
+        let stale_recovery_with_context = prompt(vec![
+            Message::text(
+                Role::User,
+                format!(
+                    "Run the parser tests with this context: {}",
+                    "context ".repeat(8_000)
+                ),
+            ),
+            assistant_call("old-test", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "old-test",
+                ToolResultOutput::ErrorText {
+                    value: "error: old parser test failed".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+        ]);
+
+        let prediction = predict_next_step(
+            &observed(&stale_recovery_with_context),
+            &stale_recovery_with_context,
+        );
+
+        assert_eq!(prediction.route_risk, RouteRisk::Context);
+    }
+
+    #[test]
+    fn generic_current_epoch_failure_remains_guarded() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Inspect the parser source."),
+            assistant_call("old-read", "read_file", r#"{"path":"src/parser.rs"}"#),
+            tool_result(
+                "old-read",
+                ToolResultOutput::Text {
+                    value: "parser source available".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Run the parser tests."),
+            assistant_call(
+                "current-test",
+                "Bash",
+                r#"{"command":"cargo test -p parser"}"#,
+            ),
+            tool_result(
+                "current-test",
+                ToolResultOutput::ErrorText {
+                    value: "error: current parser test failed".to_owned(),
+                },
+            ),
+        ]);
+
+        let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(prediction.route_risk, RouteRisk::Guarded);
+    }
+
+    #[test]
+    fn generic_unknown_pivot_clears_old_recovery_risk() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            assistant_call("old-test", "Bash", r#"{"command":"cargo test -p parser"}"#),
+            tool_result(
+                "old-test",
+                ToolResultOutput::ErrorText {
+                    value: "error: old parser test failed".to_owned(),
+                },
+            ),
+            Message::text(Role::User, "Proceed with the schedule."),
+        ]);
+
+        let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
+        assert_eq!(prediction.route_risk, RouteRisk::Normal);
+    }
+
+    #[test]
+    fn terminus_new_epoch_preserves_independent_context_risk() {
+        let stale_recovery_with_context = prompt(vec![
+            Message::text(
+                Role::User,
+                format!(
+                    "Run the parser tests with this context: {}",
+                    "context ".repeat(8_000)
+                ),
+            ),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: old parser test failed."),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+        ]);
+
+        let prediction = predict_next_step(
+            &terminus_observed(&stale_recovery_with_context),
+            &stale_recovery_with_context,
+        );
+
+        assert_eq!(prediction.route_risk, RouteRisk::Context);
+    }
+
+    #[test]
+    fn terminus_current_epoch_failure_remains_guarded() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Inspect the parser source."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"git diff -- src/parser.rs"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "The parser source is available."),
+            Message::text(Role::User, "Run the parser tests."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: current parser test failed."),
+        ]);
+
+        let prediction = predict_next_step(&terminus_observed(&prompt), &prompt);
+
+        assert_eq!(prediction.route_risk, RouteRisk::Guarded);
+    }
+
+    #[test]
+    fn terminus_unknown_pivot_clears_old_recovery_risk() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: old parser test failed."),
+            Message::text(Role::User, "Proceed with the schedule."),
+        ]);
+
+        let prediction = predict_next_step(&terminus_observed(&prompt), &prompt);
+
+        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
+        assert_eq!(prediction.route_risk, RouteRisk::Normal);
+    }
+
+    #[test]
+    fn ignores_an_old_normalized_action_after_a_new_instruction() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Inspect the parser source."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"git diff -- src/parser.rs"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "The parser source was inspected."),
+            Message::text(Role::User, "Summarize the parser findings."),
+        ]);
+        let mut ir = observed(&prompt);
+        ir.normalized_action_history = Some(crate::workflow_state::ir::NormalizedActionHistory {
+            last_action: Some(NormalizedActionKind::Read),
+            last_failed: false,
+            failure_count: 0,
+            mutation_count: 0,
+            complete: true,
+        });
+
+        let normalized_pivot = predict_next_step(&ir, &prompt);
+
+        assert_eq!(normalized_pivot.next_step_role, NextStepRole::Finalize);
+    }
+
+    #[test]
+    fn normalized_history_excludes_old_failures_when_current_epoch_has_an_action() {
+        let prompt = prompt(vec![
+            Message::text(Role::User, "Run the parser tests."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: parser test failed."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "error: parser test failed again."),
+            Message::text(Role::User, "Summarize the unrelated release notes."),
+            Message::text(
+                Role::Assistant,
+                r#"{"commands":[{"keystrokes":"cargo test -p parser"}],"task_complete":false}"#,
+            ),
+            Message::text(Role::User, "The current observation completed."),
+        ]);
+        let ir = terminus_observed(&prompt);
+
+        let normalized_current_epoch = predict_next_step(&ir, &prompt);
+
+        assert_eq!(
+            normalized_current_epoch.next_step_role,
+            NextStepRole::Finalize
+        );
+        assert_eq!(normalized_current_epoch.route_risk, RouteRisk::Normal);
+    }
+
+    #[test]
+    fn task_family_workflow_requires_an_orchestration_anchor() {
+        let cases = [
+            (
+                "Execute the shell pipeline and report its output.",
+                TaskFamily::Unknown,
+            ),
+            (
+                "Execute the file pipeline and report its output.",
+                TaskFamily::Unknown,
+            ),
+            (
+                "Dispatch the tool pipeline and report its output.",
+                TaskFamily::Unknown,
+            ),
+            (
+                "Orchestrate the agent pipeline.",
+                TaskFamily::AgentWorkflowExecution,
+            ),
+            (
+                "Hand off the workflow to another agent.",
+                TaskFamily::AgentWorkflowExecution,
+            ),
+        ];
+
+        for (instruction, expected) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.task_family, expected, "{instruction}");
+        }
+    }
+
+    #[test]
+    fn task_family_excludes_harness_and_private_identity_metadata() {
+        let base_prompt = prompt(vec![Message::text(
+            Role::User,
+            "Fix generated-task-a in src/solver.rs after the parser panic failed.",
+        )]);
+        let renamed_prompt = prompt(vec![Message::text(
+            Role::User,
+            "Fix generated-task-b in src/solver.rs after the parser panic failed.",
+        )]);
+        let mut private_ir = observed(&base_prompt);
+        private_ir.harness_id = HarnessId::Codex;
+        private_ir.active_workflow = Some("private-release-workflow".to_owned());
+        private_ir.subagent_role = Some("generated-reviewer".to_owned());
+        let mut adapter_ir = observed(&renamed_prompt);
+        adapter_ir.harness_id = HarnessId::Terminus2;
+        adapter_ir.active_workflow = Some("another-private-workflow".to_owned());
+        adapter_ir.subagent_role = Some("generated-implementer".to_owned());
+
+        let private_prediction = predict_next_step(&private_ir, &base_prompt);
+        let adapter_prediction = predict_next_step(&adapter_ir, &renamed_prompt);
+
+        assert_eq!(private_prediction.task_family, TaskFamily::CodeDebugging);
+        assert_eq!(
+            private_prediction.task_family,
+            adapter_prediction.task_family
+        );
+        assert_eq!(
+            private_prediction.task_family_evidence,
+            adapter_prediction.task_family_evidence
+        );
+    }
+
+    #[test]
+    fn task_family_does_not_match_short_terms_inside_action_words() {
+        let cases = [
+            (
+                "dom and ui inside random and build",
+                "Run the random build command and report its output.",
+            ),
+            (
+                "ci fix and error inside civic prefix and terror",
+                "Run the civic prefix terror command and report its output.",
+            ),
+        ];
+
+        for (name, instruction) in cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(prediction.task_family, TaskFamily::Unknown, "{name}");
+            assert!(prediction.task_family_evidence.is_empty(), "{name}");
+        }
     }
 }

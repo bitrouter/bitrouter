@@ -325,7 +325,7 @@ providers:
     models:
       - id: cheap-model
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     capable: strong:strong-model
     cheap_tool_safe: cheap:cheap-model
@@ -437,7 +437,7 @@ providers:
           levels: [low, high]
           default: high
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     high:
       model: mock:same-model
@@ -542,7 +542,7 @@ providers:
     models:
       - id: cheap-model
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     capable: strong:strong-model
     cheap: cheap:cheap-model
@@ -675,7 +675,7 @@ providers:
       - id: strong-model
       - id: cheap-model
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     capable: mock:strong-model
     cheap: mock:cheap-model
