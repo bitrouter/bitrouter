@@ -1684,6 +1684,7 @@ mod tests {
             max_episode_cost_micro_usd: Some(50_000),
             hold_for_requests: 2,
             incomplete_history: IncompleteHistoryAction::Observe,
+            route_budget: None,
         };
         let mut current = PolicyLock::default();
         let mut definition = policy(None);

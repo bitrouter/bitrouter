@@ -52,6 +52,8 @@ pub enum PolicyDecisionReason {
     ToolGuardrail,
     ProgressGuard,
     ProgressGuardToolGuardrail,
+    RouteBudget,
+    RouteBudgetToolGuardrail,
     ContinuationPin,
     NoMatch,
 }
@@ -63,6 +65,8 @@ impl PolicyDecisionReason {
             Self::ToolGuardrail => "tool_guardrail",
             Self::ProgressGuard => "progress_guard",
             Self::ProgressGuardToolGuardrail => "progress_guard_tool_guardrail",
+            Self::RouteBudget => "route_budget",
+            Self::RouteBudgetToolGuardrail => "route_budget_tool_guardrail",
             Self::ContinuationPin => "continuation_pin",
             Self::NoMatch => "no_match",
         }
@@ -116,8 +120,8 @@ pub struct PolicyDecision {
     pub trajectory_sequence: Option<u64>,
     pub trajectory_completeness: Option<HistoryCompleteness>,
     pub trajectory_health_digest: Option<String>,
-    pub progress_candidate_tier: Option<String>,
-    pub progress_clause_ids: Vec<String>,
+    pub route_candidate_tier: Option<String>,
+    pub route_clause_ids: Vec<String>,
 }
 
 impl PolicyDecision {
@@ -612,8 +616,8 @@ impl PolicyTableRouter {
             trajectory_sequence: None,
             trajectory_completeness: None,
             trajectory_health_digest: None,
-            progress_candidate_tier: None,
-            progress_clause_ids: Vec::new(),
+            route_candidate_tier: None,
+            route_clause_ids: Vec::new(),
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -721,6 +725,7 @@ impl PolicyTableRouter {
         decision: &mut PolicyDecision,
         selected_tier: Option<&str>,
         guard_applied: bool,
+        budget_applied: bool,
         tool_floor_applied: bool,
     ) {
         decision.selected_tier = selected_tier.map(ToOwned::to_owned);
@@ -731,14 +736,16 @@ impl PolicyTableRouter {
         decision.selected_effort = selected_tier
             .and_then(|tier| table.effort_of_tier(tier))
             .or(decision.input_effort);
-        decision.reason = match (guard_applied, tool_floor_applied) {
-            (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
-            (true, false) => PolicyDecisionReason::ProgressGuard,
-            (false, true) => PolicyDecisionReason::ToolGuardrail,
-            (false, false) if decision.selected_model.is_some() => {
+        decision.reason = match (guard_applied, budget_applied, tool_floor_applied) {
+            (_, true, true) => PolicyDecisionReason::RouteBudgetToolGuardrail,
+            (_, true, false) => PolicyDecisionReason::RouteBudget,
+            (true, false, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
+            (true, false, false) => PolicyDecisionReason::ProgressGuard,
+            (false, false, true) => PolicyDecisionReason::ToolGuardrail,
+            (false, false, false) if decision.selected_model.is_some() => {
                 PolicyDecisionReason::StaticTable
             }
-            (false, false) => PolicyDecisionReason::NoMatch,
+            (false, false, false) => PolicyDecisionReason::NoMatch,
         };
     }
 
@@ -855,8 +862,8 @@ impl PolicyTableRouter {
             trajectory_sequence = ?decision.trajectory_sequence,
             trajectory_completeness = ?decision.trajectory_completeness,
             trajectory_health_digest = ?decision.trajectory_health_digest,
-            progress_candidate_tier = ?decision.progress_candidate_tier,
-            progress_clause_ids = ?decision.progress_clause_ids,
+            route_candidate_tier = ?decision.route_candidate_tier,
+            route_clause_ids = ?decision.route_clause_ids,
             reason = %decision.reason,
             pinned = decision.pinned,
             request_qualified = decision.request_qualified,
@@ -971,8 +978,8 @@ impl PolicyTableRouter {
                     })
                     .map(ToOwned::to_owned),
                 trajectory_health_digest: decision.trajectory_health_digest.clone(),
-                candidate_tier: decision.progress_candidate_tier.clone(),
-                progress_clause_ids: decision.progress_clause_ids.clone(),
+                candidate_tier: decision.route_candidate_tier.clone(),
+                route_clause_ids: decision.route_clause_ids.clone(),
                 reason: decision.reason.to_string(),
                 pinned: decision.pinned,
                 request_qualified: decision.request_qualified,
@@ -1611,7 +1618,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(900_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
+            Some("sha256:894dd28d06edd723768604c4bf05f36dbf0cbf156627b18c8f785ab89bd738ae")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -2973,7 +2980,7 @@ mod tests {
         let mut decision =
             router.candidate_for_guarded_policy(&prompt("inbound"), &HeaderMap::new());
 
-        router.apply_guarded_route(&mut decision, Some("flagship"), true, true);
+        router.apply_guarded_route(&mut decision, Some("flagship"), true, false, true);
 
         assert_eq!(
             decision.reason,
@@ -2981,6 +2988,19 @@ mod tests {
         );
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
         assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+    }
+
+    #[test]
+    fn decision_reason_records_route_budget_independently() {
+        let router = router();
+        let mut decision =
+            router.candidate_for_guarded_policy(&prompt("inbound"), &HeaderMap::new());
+
+        router.apply_guarded_route(&mut decision, Some("cheap"), false, true, false);
+
+        assert_eq!(decision.reason, PolicyDecisionReason::RouteBudget);
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
     }
 
     #[test]

@@ -59,6 +59,12 @@ When a task family is confidently classified, its primary key is
 `agent:memory_operations`, and `agent:general`. The template deliberately
 publishes only three task-specific experiments:
 
+Code-generation evidence requires both a generation intent and a bounded code
+artifact subject, so phrases such as “write a report” do not become code tasks.
+A continuation-only user turn can inherit the most recent known task family
+only from complete visible causal history; incomplete or truncated histories
+remain unknown.
+
 - `agent_route/v1|code:review|verify|normal` → `strong`
 - `agent_route/v1|code:debugging|implement|guarded` → `strong`
 - `agent_route/v1|agent:web_research|mechanical|normal` → `balanced`
@@ -108,6 +114,15 @@ unless another clause fires. Episode request and elapsed-time limits are
 monotonic once reached; consecutive and same-projection limits bound repeated
 unprotected routing. The example omits a cost limit because unknown cost must
 remain unknown rather than act like zero or trigger a fabricated threshold.
+
+The nested `route_budget` adds two episode-local quality/cost controls without
+changing those safety rules. The first guarded selection below `strong` is
+promoted only when that episode has not selected `strong` before. Three
+consecutive `strong` selections at the same observed projection select
+`balanced` once; that checkpoint resets the selected-tier streak. Active holds
+and newly applied progress clauses suppress this saturation checkpoint, and the
+tool floor runs after it. Both controls emit stable `route_budget.*` clauses in
+the route intent, separately from `GuardActivated` evidence.
 
 Raw prompt text, response text, and tool arguments are not persisted as routing
 evidence. The ledger retains structural ancestry, categorical projections and

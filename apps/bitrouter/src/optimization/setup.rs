@@ -982,6 +982,7 @@ providers:
                 max_episode_cost_micro_usd: None,
                 hold_for_requests: 2,
                 incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+                route_budget: None,
             }),
             ..Default::default()
         };

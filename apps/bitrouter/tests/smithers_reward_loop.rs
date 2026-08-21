@@ -164,7 +164,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         trajectory_completeness: None,
         trajectory_health_digest: None,
         candidate_tier: None,
-        progress_clause_ids: Vec::new(),
+        route_clause_ids: Vec::new(),
         reason: "exploration_trial".to_string(),
         pinned: false,
         request_qualified: true,

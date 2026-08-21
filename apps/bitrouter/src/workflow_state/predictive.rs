@@ -250,7 +250,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37";
+    "sha256:894dd28d06edd723768604c4bf05f36dbf0cbf156627b18c8f785ab89bd738ae";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -276,6 +276,7 @@ struct PredictorScorecardV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct TaskFamilyScorecard {
     weights: BTreeMap<String, i16>,
+    generation_bonus: i16,
     debugging_failure_fix_bonus: i16,
     review_bonus: i16,
     minimum_top_score: i16,
@@ -306,6 +307,7 @@ struct PredictorBehaviorV1 {
     task_family_failure_terms: BTreeMap<String, Vec<String>>,
     task_family_anchor_terms: BTreeMap<String, Vec<String>>,
     task_family_code_subject_terms: Vec<String>,
+    task_family_continuation_terms: Vec<String>,
     task_family_tie_order: Vec<TaskFamily>,
 }
 
@@ -570,7 +572,7 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             ("risk_mapping".into(), 2),
             ("task_family_boundary_matching".into(), 1),
         ]),
-        task_classifier_algorithm_version: 4,
+        task_classifier_algorithm_version: 5,
         task_family_scorecard: TaskFamilyScorecard {
             weights: BTreeMap::from([
                 ("agent:general".into(), 2),
@@ -586,6 +588,7 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
                 ("agent:web_research".into(), 4),
                 ("agent:memory_operations".into(), 4),
             ]),
+            generation_bonus: 24,
             debugging_failure_fix_bonus: 24,
             review_bonus: 24,
             minimum_top_score: 6,
@@ -721,6 +724,10 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
         ]),
         task_family_intent_terms: BTreeMap::from([
             (
+                "generation".into(),
+                string_terms(&["write", "create", "build", "generate"]),
+            ),
+            (
                 "debugging".into(),
                 string_terms(&["fix", "repair", "correct", "debug"]),
             ),
@@ -762,6 +769,12 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             "vulnerability",
             "parser",
             "api",
+            "cli",
+            "library",
+            "program",
+            "script",
+            "crate",
+            "binary",
             "module",
             "function",
             "repository",
@@ -771,6 +784,13 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             ".ts",
             ".js",
             ".go",
+        ]),
+        task_family_continuation_terms: string_terms(&[
+            "continue",
+            "keep going",
+            "proceed",
+            "go ahead",
+            "carry on",
         ]),
         task_family_tie_order: vec![
             TaskFamily::CodeDebugging,
@@ -830,6 +850,22 @@ fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>
         evidence_counts.insert(*family, matched_count);
     }
 
+    let generation_intent = contains_any_task_terms(
+        text,
+        behavior_terms(&behavior.task_family_intent_terms, "generation"),
+    );
+    let code_subject = contains_any_task_terms(text, &behavior.task_family_code_subject_terms);
+    if generation_intent && code_subject {
+        add_task_family_bonus(
+            &mut scores,
+            TaskFamily::CodeGeneration,
+            scorecard.generation_bonus,
+        );
+        evidence_counts
+            .entry(TaskFamily::CodeGeneration)
+            .and_modify(|count| *count = (*count).max(scorecard.minimum_evidence_count));
+    }
+
     let debugging_intent_position = first_bounded_term_position(
         text,
         behavior_terms(&behavior.task_family_intent_terms, "debugging"),
@@ -843,7 +879,6 @@ fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>
         text,
         behavior_terms(&behavior.task_family_intent_terms, "review"),
     );
-    let code_subject = contains_any_task_terms(text, &behavior.task_family_code_subject_terms);
     let supported_debugging = debugging_intent && code_subject;
     if debugging_intent && (debugging_failure || code_subject) {
         add_task_family_bonus(
@@ -932,6 +967,38 @@ fn classify_task_family(text: &str) -> (TaskFamily, f32, Vec<PredictiveEvidence>
     }
 
     accepted_task_family(best_family, scorecard, top_score)
+}
+
+fn classify_task_family_with_visible_history(
+    instruction: &CausalInstruction,
+    complete_visible_history: bool,
+) -> (TaskFamily, f32, Vec<PredictiveEvidence>) {
+    let current = classify_task_family(&instruction.text);
+    if current.0 != TaskFamily::Unknown
+        || !complete_visible_history
+        || !is_continuation_instruction(&instruction.text)
+    {
+        return current;
+    }
+
+    instruction
+        .prior_user_instructions
+        .iter()
+        .rev()
+        .map(|text| classify_task_family(text))
+        .find(|classified| classified.0 != TaskFamily::Unknown)
+        .unwrap_or(current)
+}
+
+fn is_continuation_instruction(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .trim_matches(|character: char| character.is_ascii_punctuation())
+        .trim();
+    compiled_predictor_behavior()
+        .task_family_continuation_terms
+        .iter()
+        .any(|term| term == normalized)
 }
 
 fn accepted_task_family(
@@ -1146,6 +1213,7 @@ struct CausalInstruction {
     text: String,
     message_index: Option<usize>,
     starts_new_epoch: bool,
+    prior_user_instructions: Vec<String>,
 }
 
 impl InstructionFeatures {
@@ -1224,7 +1292,10 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     }
 
     let (task_family, task_family_confidence, task_family_evidence) =
-        classify_task_family(&causal_instruction.text);
+        classify_task_family_with_visible_history(
+            &causal_instruction,
+            has_complete_visible_causal_history(prompt),
+        );
 
     let mut scores = [0_i16; ROLE_COUNT];
     let opening = observed.state_kind == WorkflowStateKind::Opening && !history.has_trajectory;
@@ -1560,10 +1631,9 @@ fn instruction_features(text: &str) -> InstructionFeatures {
 }
 
 fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> CausalInstruction {
-    let mut latest_user = None;
+    let mut visible_user_instructions = Vec::new();
     let mut latest_system = None;
     let mut awaiting_plain_text_action_result = false;
-    let mut user_instruction_count = 0_u8;
     for (message_index, message) in prompt.messages.iter().enumerate() {
         match message.role {
             Role::Assistant
@@ -1576,8 +1646,7 @@ fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> C
             }
             Role::User => {
                 if let Some(text) = message_text(message) {
-                    user_instruction_count = user_instruction_count.saturating_add(1);
-                    latest_user = Some((text, message_index));
+                    visible_user_instructions.push((text.to_ascii_lowercase(), message_index));
                 }
             }
             Role::System => {
@@ -1588,15 +1657,30 @@ fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> C
             _ => {}
         }
     }
-    let starts_new_epoch = latest_user.is_some() && user_instruction_count > 1;
+    let starts_new_epoch = visible_user_instructions.len() > 1;
+    let latest_user = visible_user_instructions.pop();
+    let prior_user_instructions = visible_user_instructions
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
     let (text, message_index) = latest_user
-        .or(latest_system)
+        .or(latest_system.map(|(text, index)| (text.to_ascii_lowercase(), index)))
         .map(|(text, message_index)| (text, Some(message_index)))
-        .unwrap_or_else(|| (prompt.system.clone().unwrap_or_default(), None));
+        .unwrap_or_else(|| {
+            (
+                prompt
+                    .system
+                    .clone()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase(),
+                None,
+            )
+        });
     CausalInstruction {
-        text: text.to_ascii_lowercase(),
+        text,
         message_index,
         starts_new_epoch,
+        prior_user_instructions,
     }
 }
 
@@ -3032,6 +3116,83 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn task_family_requires_generation_intent_and_code_artifact() {
+        let code_cases = [
+            "Write a parser for the response format.",
+            "Create a CLI for local development.",
+            "Build a Rust library for signed policies.",
+        ];
+        for instruction in code_cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(
+                prediction.task_family,
+                TaskFamily::CodeGeneration,
+                "{instruction}"
+            );
+        }
+
+        let non_code_cases = [
+            "Write a report for leadership.",
+            "Create a plan for the launch.",
+            "Build a deployment pipeline for the service.",
+        ];
+        for instruction in non_code_cases {
+            let prompt = prompt(vec![Message::text(Role::User, instruction)]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_ne!(
+                prediction.task_family,
+                TaskFamily::CodeGeneration,
+                "{instruction}"
+            );
+        }
+    }
+
+    #[test]
+    fn task_family_inherits_only_bounded_continuations_from_visible_history() {
+        for continuation in ["Continue.", "Keep going.", "Proceed."] {
+            let prompt = prompt(vec![
+                Message::text(Role::User, "Implement and extend a parser module."),
+                Message::text(Role::Assistant, "I have started the parser module."),
+                Message::text(Role::User, continuation),
+            ]);
+            let prediction = predict_next_step(&observed(&prompt), &prompt);
+
+            assert_eq!(
+                prediction.task_family,
+                TaskFamily::CodeGeneration,
+                "{continuation}"
+            );
+        }
+
+        let explicit_new_task = prompt(vec![
+            Message::text(Role::User, "Implement and extend a parser module."),
+            Message::text(Role::Assistant, "I have started the parser module."),
+            Message::text(Role::User, "Review the release schedule."),
+        ]);
+        assert_eq!(
+            predict_next_step(&observed(&explicit_new_task), &explicit_new_task).task_family,
+            TaskFamily::Unknown
+        );
+
+        let incomplete_history = prompt(vec![
+            Message::text(Role::User, "Implement and extend a parser module."),
+            assistant_call(
+                "call-1",
+                "bash",
+                r#"{"cmd":"sed -n '1,80p' src/parser.rs"}"#,
+            ),
+            Message::text(Role::User, "Continue."),
+        ]);
+        assert_eq!(
+            predict_next_step(&observed(&incomplete_history), &incomplete_history).task_family,
+            TaskFamily::Unknown
+        );
     }
 
     #[test]

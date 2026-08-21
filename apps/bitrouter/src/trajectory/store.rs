@@ -10,7 +10,7 @@ use super::correlation::CorrelationSource;
 use super::evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation};
 use super::guard::{
     ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
-    RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
+    RouteIntentClauseDisposition, evaluate_with_route_budget, validate_persisted_route_intent,
 };
 use super::health::{PrefixReduction, reduce, reduce_prefix};
 use super::types::{
@@ -220,6 +220,7 @@ pub(crate) struct GuardedRouteResult {
     pub snapshot: super::types::TrajectorySnapshot,
     pub intent: RouteIntent,
     pub guard_activated: bool,
+    pub budget_applied: bool,
     pub tool_floor_applied: bool,
     pub route_sequence: u64,
     pub causal_completeness: HistoryCompleteness,
@@ -2146,7 +2147,17 @@ fn build_guarded_route_batch(
     through_start.extend_from_slice(prior_events);
     through_start.push(start.clone());
     let pre_intent_snapshot = reduce(&through_start, &input.policy.protected_tiers)?;
-    let mut evaluation = evaluate(
+    let selected_tiers = prior_events.iter().filter_map(|event| {
+        (event.kind == TrajectoryEventKind::RouteIntentRecorded)
+            .then(|| event.evidence.categorical.get("route.selected_tier"))
+            .flatten()
+            .map(String::as_str)
+    });
+    let prior_selected_tier = selected_tiers.clone().next_back();
+    let prior_escalation_seen = selected_tiers
+        .into_iter()
+        .any(|tier| tier == input.policy.escalation_tier);
+    let mut evaluation = evaluate_with_route_budget(
         &input.policy,
         ProgressGuardInput {
             prior_snapshot: prior_snapshot.as_ref(),
@@ -2156,6 +2167,8 @@ fn build_guarded_route_batch(
             candidate_tier: input.candidate_tier.as_deref(),
             policy_digest: &input.policy_digest,
         },
+        prior_selected_tier,
+        prior_escalation_seen,
     )?;
     let before_tool_floor = evaluation.intent.selected_tier.clone();
     let tool_floor_applied = input.carries_tools
@@ -2341,6 +2354,7 @@ fn build_guarded_route_batch(
             snapshot: pre_intent_snapshot,
             intent: evaluation.intent,
             guard_activated: evaluation.activated,
+            budget_applied: evaluation.budget_applied,
             tool_floor_applied,
             route_sequence,
             causal_completeness: evaluation.causal_completeness,
@@ -3626,6 +3640,53 @@ mod tests {
             clause.clause_id == "tool_safety.floor"
                 && clause.disposition == RouteIntentClauseDisposition::Applied
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn route_budget_is_persisted_and_tool_floor_runs_after_it() -> anyhow::Result<()> {
+        let mut input = guarded_route_input("route-1", "guard-1");
+        input.policy.max_episode_requests = None;
+        input
+            .policy
+            .protected_tiers
+            .extend(["balanced".to_string(), "tool-protected".to_string()]);
+        input.policy.route_budget = Some(crate::trajectory::guard::RouteBudgetPolicy {
+            diversity_tier: "balanced".into(),
+            first_guarded_escalation: false,
+            same_projection_saturation_threshold: Some(2),
+        });
+        input.candidate_tier = Some("strong".into());
+
+        let first = guarded_start("request-1", 1)?;
+        let first_batch =
+            build_guarded_route_batch(&[], &first, HistoryCompleteness::Complete, &input)?;
+        assert_eq!(
+            first_batch.result.intent.selected_tier.as_deref(),
+            Some("strong")
+        );
+        let events = vec![first, first_batch.route_event];
+
+        let second = guarded_start("request-2", 3)?;
+        input.route_event_id = "route-2".into();
+        input.guard_event_id = "guard-2".into();
+        input.carries_tools = true;
+        input.tool_use_tier = Some("tool-protected".into());
+        input.tool_safe_tiers = BTreeSet::from(["strong".into(), "tool-protected".into()]);
+        let second_batch =
+            build_guarded_route_batch(&events, &second, HistoryCompleteness::Complete, &input)?;
+
+        assert!(second_batch.result.budget_applied);
+        assert!(second_batch.result.tool_floor_applied);
+        assert_eq!(
+            second_batch.result.intent.selected_tier.as_deref(),
+            Some("tool-protected")
+        );
+        assert!(second_batch.result.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "route_budget.same_projection_saturation"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+        validate_event(&second_batch.route_event)?;
         Ok(())
     }
 
@@ -5618,6 +5679,7 @@ mod tests {
                 max_episode_cost_micro_usd: None,
                 hold_for_requests: 2,
                 incomplete_history: IncompleteHistoryAction::Observe,
+                route_budget: None,
             },
             carries_tools: false,
             tool_use_tier: Some("strong".into()),

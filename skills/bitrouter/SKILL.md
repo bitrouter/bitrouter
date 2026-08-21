@@ -1,22 +1,12 @@
 ---
 name: bitrouter
 description: >
-  Use this skill when the user wants to install, configure, run, or
-  troubleshoot BitRouter — an LLM proxy that runs two ways: a local Rust
-  daemon at http://localhost:4356 (BYOK) or BitRouter Cloud at
-  https://api.bitrouter.ai/v1 (managed, brk_* keys, Stripe credits or
-  x402 wallet). Unifies OpenAI, Anthropic, Google, OpenRouter, GitHub
-  Copilot, and OpenCode Zen/Go behind one endpoint. Also covers signup
-  on bitrouter.ai, minting brk_ API keys, running auditable benchmarks,
-  migrating off LiteLLM /
-  OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
-  bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
-  Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing agent workflows
-  against eval quality and normalized routed cost. Trigger on "set up a local LLM proxy",
-  "managed AI gateway", "replace litellm", "point claude code at a
-  proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
-  port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
-  BitRouter directly.
+  Use when installing, configuring, running, troubleshooting, benchmarking,
+  or optimizing BitRouter locally or on BitRouter Cloud; editing
+  bitrouter.yaml or signed policy locks; migrating from LiteLLM, OpenRouter,
+  or another OpenAI-/Anthropic-compatible gateway; or wiring Claude Code,
+  Codex, Hermes Agent, Harbor Terminus-2, or OpenClaw to port 4356 or
+  api.bitrouter.ai. Also trigger on brk_* keys and managed AI gateway requests.
 license: Apache-2.0
 metadata:
   author: BitRouterAI

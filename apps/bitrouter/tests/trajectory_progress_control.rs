@@ -148,6 +148,7 @@ impl HttpHarness {
                 max_episode_cost_micro_usd: None,
                 hold_for_requests: 2,
                 incomplete_history: IncompleteHistoryAction::Observe,
+                route_budget: None,
             }),
             ..PolicyDefinition::default()
         };
@@ -291,6 +292,7 @@ presets:
                 max_episode_cost_micro_usd: None,
                 hold_for_requests: 2,
                 incomplete_history: IncompleteHistoryAction::Observe,
+                route_budget: None,
             }),
             ..PolicyDefinition::default()
         };
@@ -2672,7 +2674,8 @@ async fn predictive_policy_route_keeps_observed_projection_in_progress_guard() -
 }
 
 #[tokio::test]
-async fn auto_template_balanced_recovery_activates_balanced_hold() -> anyhow::Result<()> {
+async fn auto_template_promotes_first_recovery_then_releases_to_balanced_hold() -> anyhow::Result<()>
+{
     let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
         "../../../templates/auto-router/policy-lock.yaml"
     ))?;
@@ -2699,8 +2702,8 @@ async fn auto_template_balanced_recovery_activates_balanced_hold() -> anyhow::Re
     let outcome = normalized_outcome(&assembled.db, "template-hold-owner").await?;
     assert_eq!(
         outcome.selected_tiers,
-        ["balanced", "balanced", "balanced"],
-        "the balanced recovery candidate stays protected and holds balanced for the next route"
+        ["balanced", "strong", "balanced"],
+        "the first guarded recovery gets strong coverage before the protected balanced hold"
     );
     assert_eq!(outcome.recovery_count, 1);
     assert_eq!(outcome.active_hold_remaining, 1);
@@ -2759,8 +2762,8 @@ async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_follo
     let outcome = normalized_outcome(&assembled.db, owner).await?;
     assert_eq!(
         outcome.selected_tiers,
-        ["balanced", "balanced", "strong"],
-        "recovery preserves its protected candidate, then hold escalates the next unprotected candidate"
+        ["balanced", "strong", "strong"],
+        "the route budget promotes recovery, then hold escalates the next unprotected candidate"
     );
     assert_eq!(outcome.active_hold_remaining, 1);
     let events = events_for_only_episode(&assembled.db, owner).await?;

@@ -344,7 +344,7 @@ async fn release_behavior_routes_three_stock_protocols_once_without_semantic_rew
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
         assert_eq!(
             decision.predictor_contract_digest.as_deref(),
-            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
+            Some("sha256:894dd28d06edd723768604c4bf05f36dbf0cbf156627b18c8f785ab89bd738ae")
         );
         assert_eq!(
             decision.prediction_confidence_kind.as_deref(),
@@ -543,7 +543,7 @@ async fn explicit_non_policy_routes_retain_generic_multi_account_fallback() {
 }
 
 #[tokio::test]
-async fn auto_template_preserves_balanced_across_progress_guards() {
+async fn auto_template_promotes_the_first_guarded_balanced_route() {
     let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
     let template = template_config();
     for model in ["@auto", "@auto:cost"] {
@@ -752,12 +752,13 @@ async fn auto_template_preserves_balanced_across_progress_guards() {
         "agent_route/v1|unknown|implement|guarded"
     );
     assert_eq!(decisions[13].static_tier.as_deref(), Some("balanced"));
-    assert_eq!(decisions[13].selected_tier.as_deref(), Some("balanced"));
+    assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
         decisions[13].selected_model.as_deref(),
-        Some(MOCK_BALANCED_MODEL)
+        Some(MOCK_STRONG_MODEL)
     );
-    assert!(!decisions[13].progress_clause_ids.is_empty());
+    assert_eq!(decisions[13].reason, "route_budget");
+    assert!(!decisions[13].route_clause_ids.is_empty());
     assert_eq!(
         decisions[14].request_key,
         "agent_route/v1|unknown|unknown|normal"
@@ -768,7 +769,7 @@ async fn auto_template_preserves_balanced_across_progress_guards() {
         decisions[14].trajectory_completeness.as_deref(),
         Some("incomplete")
     );
-    assert!(!decisions[14].progress_clause_ids.is_empty());
+    assert!(!decisions[14].route_clause_ids.is_empty());
 }
 
 #[tokio::test]
@@ -824,10 +825,10 @@ async fn native_literal_histories_receive_exact_template_decisions() {
                 ClaudeFixture::ToolFollowup,
                 Some("error: cargo test failed"),
             ),
-            "balanced",
-            MOCK_BALANCED_MODEL,
-            "balanced",
-            MOCK_BALANCED_MODEL,
+            "strong",
+            MOCK_STRONG_MODEL,
+            "strong",
+            MOCK_STRONG_MODEL,
         ),
     ];
 
@@ -988,7 +989,7 @@ fn equivalent_native_histories_share_predictions_reasons_and_tiers() {
             );
             assert_eq!(
                 record.predictor_contract_digest,
-                "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37",
+                "sha256:894dd28d06edd723768604c4bf05f36dbf0cbf156627b18c8f785ab89bd738ae",
                 "{history:?} {}",
                 fixture.id
             );

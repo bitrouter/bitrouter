@@ -539,6 +539,36 @@ fn validate_progress_guard(
     if thresholds.into_iter().flatten().any(|value| value == 0) {
         anyhow::bail!("policy '{policy_name}' progress_guard thresholds must be positive")
     }
+    if let Some(budget) = &guard.route_budget {
+        if budget.diversity_tier.trim().is_empty()
+            || !policy.tiers.contains_key(&budget.diversity_tier)
+        {
+            anyhow::bail!(
+                "policy '{policy_name}' progress_guard route_budget diversity_tier must reference a defined tier"
+            )
+        }
+        if !guard.protected_tiers.contains(&budget.diversity_tier) {
+            anyhow::bail!(
+                "policy '{policy_name}' progress_guard route_budget diversity_tier must be protected"
+            )
+        }
+        if !policy.tool_safe_tiers.contains(&budget.diversity_tier) {
+            anyhow::bail!(
+                "policy '{policy_name}' progress_guard route_budget diversity_tier must be tool-safe"
+            )
+        }
+        let budget_threshold = budget.same_projection_saturation_threshold;
+        if !budget.first_guarded_escalation && budget_threshold.is_none() {
+            anyhow::bail!(
+                "policy '{policy_name}' progress_guard route_budget must configure a routing control"
+            )
+        }
+        if budget_threshold.is_some_and(|value| value == 0) {
+            anyhow::bail!(
+                "policy '{policy_name}' progress_guard route_budget thresholds must be positive"
+            )
+        }
+    }
     Ok(())
 }
 
@@ -1001,6 +1031,24 @@ fn guard_fields(guard: Option<&ProgressGuardPolicy>) -> BTreeMap<String, String>
         if let Some(value) = value {
             fields.insert(field.to_string(), value);
         }
+    }
+    if let Some(budget) = &guard.route_budget {
+        fields.insert(
+            "progress_guard.route_budget.diversity_tier".to_string(),
+            budget.diversity_tier.clone(),
+        );
+        for (field, value) in [(
+            "progress_guard.route_budget.same_projection_saturation_threshold",
+            optional(budget.same_projection_saturation_threshold),
+        )] {
+            if let Some(value) = value {
+                fields.insert(field.to_string(), value);
+            }
+        }
+        fields.insert(
+            "progress_guard.route_budget.first_guarded_escalation".to_string(),
+            budget.first_guarded_escalation.to_string(),
+        );
     }
     fields
 }
@@ -2684,6 +2732,7 @@ impl ModelSelector for PolicyRuntime {
                 &mut decision,
                 guarded.intent.selected_tier.as_deref(),
                 guard_applied,
+                guarded.budget_applied,
                 guarded.tool_floor_applied,
             );
             decision.trajectory_episode_id = Some(guarded.snapshot.episode_id.clone());
@@ -2691,8 +2740,8 @@ impl ModelSelector for PolicyRuntime {
             decision.trajectory_completeness = Some(guarded.causal_completeness);
             decision.trajectory_health_digest =
                 Some(guarded.intent.trajectory_snapshot_digest.clone());
-            decision.progress_candidate_tier = guarded.intent.candidate_tier.clone();
-            decision.progress_clause_ids = guarded
+            decision.route_candidate_tier = guarded.intent.candidate_tier.clone();
+            decision.route_clause_ids = guarded
                 .intent
                 .clauses
                 .iter()
@@ -2837,6 +2886,7 @@ mod tests {
             max_episode_cost_micro_usd: Some(50_000),
             hold_for_requests: 2,
             incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
+            route_budget: None,
         }
     }
 
@@ -3021,7 +3071,7 @@ policies:
     predictor:
       algorithm: deterministic_scorecard
       version: 1
-      config_digest: "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37"
+      config_digest: "sha256:894dd28d06edd723768604c4bf05f36dbf0cbf156627b18c8f785ab89bd738ae"
       confidence_kind: heuristic_margin
 certificates:
   coding:
@@ -3171,6 +3221,7 @@ certificates:
             max_episode_cost_micro_usd: Some(5_000),
             hold_for_requests: 2,
             incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+            route_budget: None,
         });
         guarded.policies.insert("coding".into(), policy);
         let guarded_bytes = deterministic_yaml(&guarded)?;
@@ -3228,6 +3279,72 @@ certificates:
             "policy_table:\n  progress_guard:\n    escalation_tier: strong\n",
         );
         assert!(legacy_global.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn route_budget_validation_and_diff_are_strict_and_deterministic() -> anyhow::Result<()> {
+        let mut policy = definition();
+        policy.tiers.insert(
+            "balanced".into(),
+            PolicyModelTarget::from("vendor:balanced"),
+        );
+        policy.tool_safe_tiers.push("balanced".into());
+        let mut guard = progress_guard();
+        guard.protected_tiers.insert("balanced".into());
+        guard.route_budget = Some(crate::trajectory::guard::RouteBudgetPolicy {
+            diversity_tier: "balanced".into(),
+            first_guarded_escalation: true,
+            same_projection_saturation_threshold: Some(3),
+        });
+
+        validate_progress_guard("coding", &policy, &guard)?;
+        let mut lock = PolicyLock::default();
+        policy.progress_guard = Some(guard.clone());
+        lock.policies.insert("coding".into(), policy.clone());
+        let encoded = deterministic_yaml(&lock)?;
+        assert!(encoded.contains("route_budget:"));
+        assert_eq!(
+            deterministic_yaml(&serde_saphyr::from_str(&encoded)?)?,
+            encoded
+        );
+
+        let mut missing_tier = guard.clone();
+        missing_tier
+            .route_budget
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("route budget is missing"))?
+            .diversity_tier = "missing".into();
+        assert!(validate_progress_guard("coding", &policy, &missing_tier).is_err());
+
+        let mut zero_threshold = guard.clone();
+        zero_threshold
+            .route_budget
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("route budget is missing"))?
+            .same_projection_saturation_threshold = Some(0);
+        assert!(validate_progress_guard("coding", &policy, &zero_threshold).is_err());
+
+        let mut active = lock.clone();
+        active
+            .policies
+            .get_mut("coding")
+            .ok_or_else(|| anyhow::anyhow!("coding policy is missing"))?
+            .progress_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("progress guard is missing"))?
+            .route_budget = None;
+        let fields = diff_progress_guards(&active, &lock)
+            .into_iter()
+            .map(|difference| difference.field)
+            .collect::<BTreeSet<_>>();
+        for field in [
+            "progress_guard.route_budget.diversity_tier",
+            "progress_guard.route_budget.first_guarded_escalation",
+            "progress_guard.route_budget.same_projection_saturation_threshold",
+        ] {
+            assert!(fields.contains(field), "missing {field}");
+        }
         Ok(())
     }
 
@@ -3683,6 +3800,7 @@ presets:
             max_episode_cost_micro_usd: None,
             hold_for_requests: 2,
             incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
+            route_budget: None,
         });
         let mut lock = PolicyLock::default();
         lock.policies.insert("coding".into(), guarded_definition);
@@ -3780,7 +3898,7 @@ presets:
         );
         assert!(guarded_record.trajectory_health_digest.is_some());
         assert_eq!(guarded_record.candidate_tier.as_deref(), Some("strong"));
-        assert_eq!(guarded_record.progress_clause_ids.len(), 9);
+        assert_eq!(guarded_record.route_clause_ids.len(), 11);
         assert_eq!(
             guarded_record.request_id.as_deref(),
             Some(baseline_correlation.request_id.as_str())
@@ -4226,6 +4344,13 @@ policies:
             guard.protected_tiers,
             BTreeSet::from(["balanced".into(), "strong".into()])
         );
+        let budget = guard
+            .route_budget
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing its route budget"))?;
+        assert_eq!(budget.diversity_tier, "balanced");
+        assert!(budget.first_guarded_escalation);
+        assert_eq!(budget.same_projection_saturation_threshold, Some(3));
 
         let rendered = deterministic_yaml(&lock)?;
         assert!(rendered.contains("key_strategy: agent_trace"));

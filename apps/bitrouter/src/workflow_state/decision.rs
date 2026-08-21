@@ -107,7 +107,7 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub candidate_tier: Option<String>,
     #[serde(default)]
-    pub progress_clause_ids: Vec<String>,
+    pub route_clause_ids: Vec<String>,
     pub reason: String,
     pub pinned: bool,
     #[serde(default)]
@@ -485,7 +485,7 @@ mod tests {
             trajectory_completeness: None,
             trajectory_health_digest: None,
             candidate_tier: None,
-            progress_clause_ids: Vec::new(),
+            route_clause_ids: Vec::new(),
             reason: "static_table".to_string(),
             pinned: false,
             request_qualified: true,

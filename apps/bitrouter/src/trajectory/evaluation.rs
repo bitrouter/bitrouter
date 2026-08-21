@@ -849,6 +849,8 @@ mod tests {
             "progress_guard.max_episode_requests",
             "progress_guard.max_episode_elapsed_ms",
             "progress_guard.max_episode_cost_micro_usd",
+            "route_budget.first_guarded_escalation",
+            "route_budget.same_projection_saturation",
             "tool_safety.floor",
         ]
         .into_iter()
@@ -953,6 +955,8 @@ mod tests {
             "progress_guard.max_episode_requests",
             "progress_guard.max_episode_elapsed_ms",
             "progress_guard.max_episode_cost_micro_usd",
+            "route_budget.first_guarded_escalation",
+            "route_budget.same_projection_saturation",
             "tool_safety.floor",
         ]
         .into_iter()

@@ -61,6 +61,51 @@ compiler-owned experiments until settled evaluation evidence promotes them.
 Keep `tool_use_tier` and `tool_safe_tiers` in place when changing tier models,
 so capability guardrails still apply.
 
+### Progress guard route budget
+
+An optional signed `route_budget` under `progress_guard` balances quality
+coverage with repeated strong-tier cost. It uses only reducer-derived trajectory
+facts and is scoped to the current episode:
+
+```yaml
+progress_guard:
+  escalation_tier: strong
+  protected_tiers: [strong, balanced]
+  max_consecutive_unprotected: 3
+  max_same_projection_unprotected: 3
+  max_recovery_count: 1
+  max_episode_requests: 24
+  hold_for_requests: 2
+  incomplete_history: escalate
+  route_budget:
+    diversity_tier: balanced
+    first_guarded_escalation: true
+    same_projection_saturation_threshold: 3
+```
+
+`first_guarded_escalation` promotes the first guarded request below
+`escalation_tier` only when the current episode has not selected that escalation
+tier before. `same_projection_saturation_threshold` inserts one
+`diversity_tier` checkpoint at the exact boundary of consecutive
+`escalation_tier` selections with the same observed projection. That checkpoint
+changes the selected-tier streak, so the following request starts a fresh
+budget window.
+
+Progress safety has precedence: an active hold or any newly applied
+`progress_guard.*` clause suppresses saturation. A continuing guarded or
+recovery projection may receive a diversity checkpoint only after its hold has
+expired and no new safety clause applies. The budget is evaluated before the
+tool floor, and the tool floor can replace its selection. The
+`first_guarded_escalation` control is quality-monotonic: it replaces a
+below-escalation selection, including a protected balanced selection, with
+`escalation_tier`.
+
+Validation requires at least one enabled routing control, and any saturation
+threshold must be positive. The `diversity_tier` must name a defined tier
+present in both `protected_tiers` and `tool_safe_tiers`; `escalation_tier`
+retains the ordinary progress-guard requirements. Any signed `progress_guard`,
+including this sub-policy, requires `trajectory.enabled: true`.
+
 Runtime adapters may parse native request formats to enrich diagnostic
 evidence. They do not contribute policy keys, and no private BitRouter headers
 are required for routing. `key_strategy: agent_trace` selects the deterministic

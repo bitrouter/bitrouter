@@ -4,13 +4,23 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::workflow_state::ir::{RouteProjection, RouteRisk, WorkflowStateKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IncompleteHistoryAction {
     Observe,
     Escalate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteBudgetPolicy {
+    pub diversity_tier: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub first_guarded_escalation: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_projection_saturation_threshold: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +42,8 @@ pub struct ProgressGuardPolicy {
     pub max_episode_cost_micro_usd: Option<u64>,
     pub hold_for_requests: u64,
     pub incomplete_history: IncompleteHistoryAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_budget: Option<RouteBudgetPolicy>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,9 +81,13 @@ pub struct GuardEvaluation {
     /// True only for a new trigger. An already-active hold escalates without
     /// re-activating or extending itself.
     pub activated: bool,
+    /// True when a route-budget clause changes the selected tier. Progress
+    /// guard activation and hold semantics remain independent.
+    pub budget_applied: bool,
 }
 
 /// Pure, reducer-derived input at the routing boundary.
+#[derive(Clone, Copy)]
 pub struct ProgressGuardInput<'a> {
     pub prior_snapshot: Option<&'a TrajectorySnapshot>,
     pub pre_intent_snapshot: &'a TrajectorySnapshot,
@@ -231,7 +247,99 @@ pub fn evaluate(
         },
         causal_completeness,
         activated,
+        budget_applied: false,
     })
+}
+
+pub fn evaluate_with_route_budget(
+    policy: &ProgressGuardPolicy,
+    input: ProgressGuardInput<'_>,
+    prior_selected_tier: Option<&str>,
+    prior_escalation_seen: bool,
+) -> Result<GuardEvaluation> {
+    let prior_health = input.prior_snapshot.map(|snapshot| &snapshot.health);
+    let current_projection_key = input.current_projection.key();
+    let mut evaluation = evaluate(policy, input)?;
+    let Some(budget) = &policy.route_budget else {
+        evaluation.intent.clauses.push(clause(
+            "route_budget.first_guarded_escalation",
+            false,
+            "the first guarded route receives escalation-tier coverage",
+            "route budget is not configured",
+        ));
+        evaluation.intent.clauses.push(clause(
+            "route_budget.same_projection_saturation",
+            false,
+            "repeated escalation at one normal projection reached the diversity threshold",
+            "route budget is not configured",
+        ));
+        return Ok(evaluation);
+    };
+
+    let selected_before_budget = evaluation.intent.selected_tier.as_deref();
+    let first_guarded_escalation_applied = budget.first_guarded_escalation
+        && !prior_escalation_seen
+        && input.current_projection.risk == RouteRisk::Guarded
+        && selected_before_budget.is_some()
+        && selected_before_budget != Some(policy.escalation_tier.as_str());
+
+    let progress_safety_applied = evaluation.intent.clauses.iter().any(|clause| {
+        clause.clause_id.starts_with("progress_guard.")
+            && clause.disposition == RouteIntentClauseDisposition::Applied
+    });
+    let prospective_same_escalation_projection = if prior_selected_tier
+        == Some(policy.escalation_tier.as_str())
+        && prior_health.and_then(|health| health.latest_projection.as_deref())
+            == Some(current_projection_key.as_str())
+    {
+        prior_health
+            .map_or(0, |health| {
+                health
+                    .same_selected_tier_streak
+                    .min(health.same_projection_streak)
+            })
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("same escalation projection streak overflow"))?
+    } else {
+        1
+    };
+    let saturation_applied = !first_guarded_escalation_applied
+        && !progress_safety_applied
+        && selected_before_budget == Some(policy.escalation_tier.as_str())
+        && budget
+            .same_projection_saturation_threshold
+            .is_some_and(|threshold| prospective_same_escalation_projection >= threshold);
+
+    evaluation.intent.clauses.push(clause(
+        "route_budget.first_guarded_escalation",
+        first_guarded_escalation_applied,
+        "the first guarded route receives escalation-tier coverage",
+        if budget.first_guarded_escalation {
+            "the episode already has escalation coverage or this route is not guarded"
+        } else {
+            "clause is not configured"
+        },
+    ));
+    evaluation.intent.clauses.push(clause(
+        "route_budget.same_projection_saturation",
+        saturation_applied,
+        "repeated escalation at one normal projection reached the diversity threshold",
+        if progress_safety_applied {
+            "progress safety is active and suppresses a diversity checkpoint"
+        } else if budget.same_projection_saturation_threshold.is_some() {
+            "escalation at one normal projection has not reached the diversity threshold"
+        } else {
+            "clause is not configured"
+        },
+    ));
+
+    if first_guarded_escalation_applied {
+        evaluation.intent.selected_tier = Some(policy.escalation_tier.clone());
+    } else if saturation_applied {
+        evaluation.intent.selected_tier = Some(budget.diversity_tier.clone());
+    }
+    evaluation.budget_applied = first_guarded_escalation_applied || saturation_applied;
+    Ok(evaluation)
 }
 
 fn merge_completeness(
@@ -264,7 +372,29 @@ fn validate_policy_shape(policy: &ProgressGuardPolicy) -> Result<()> {
     if thresholds(policy).any(|value| value == 0) {
         anyhow::bail!("progress guard thresholds must be positive")
     }
+    if let Some(budget) = &policy.route_budget {
+        if budget.diversity_tier.trim().is_empty()
+            || !policy.protected_tiers.contains(&budget.diversity_tier)
+        {
+            anyhow::bail!("route budget diversity tier must be a protected tier")
+        }
+        if [budget.same_projection_saturation_threshold]
+            .into_iter()
+            .flatten()
+            .any(|value| value == 0)
+        {
+            anyhow::bail!("route budget thresholds must be positive")
+        }
+        if !budget.first_guarded_escalation && budget.same_projection_saturation_threshold.is_none()
+        {
+            anyhow::bail!("route budget must configure a routing control")
+        }
+    }
     Ok(())
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn thresholds(policy: &ProgressGuardPolicy) -> impl Iterator<Item = u64> {
@@ -462,7 +592,7 @@ pub(crate) fn validate_persisted_guard_activation(event: &TrajectoryEvent) -> Re
     Ok(has_policy)
 }
 
-const STABLE_CLAUSE_IDS: [&str; 9] = [
+const STABLE_CLAUSE_IDS: [&str; 11] = [
     "progress_guard.active_hold",
     "progress_guard.incomplete_history",
     "progress_guard.max_consecutive_unprotected",
@@ -471,6 +601,8 @@ const STABLE_CLAUSE_IDS: [&str; 9] = [
     "progress_guard.max_episode_requests",
     "progress_guard.max_episode_elapsed_ms",
     "progress_guard.max_episode_cost_micro_usd",
+    "route_budget.first_guarded_escalation",
+    "route_budget.same_projection_saturation",
     "tool_safety.floor",
 ];
 
@@ -498,6 +630,7 @@ mod tests {
             max_episode_cost_micro_usd: Some(500),
             hold_for_requests: 2,
             incomplete_history: IncompleteHistoryAction::Observe,
+            route_budget: None,
         }
     }
 
@@ -545,6 +678,163 @@ mod tests {
             candidate_tier: candidate,
             policy_digest: DIGEST,
         }
+    }
+
+    fn route_budget() -> RouteBudgetPolicy {
+        RouteBudgetPolicy {
+            diversity_tier: "tool-safe".into(),
+            first_guarded_escalation: true,
+            same_projection_saturation_threshold: Some(3),
+        }
+    }
+
+    #[test]
+    fn route_budget_promotes_only_the_first_guarded_route() -> Result<()> {
+        let guarded = projection("agent_trace/v2|edit|guarded")?;
+        let mut prior = snapshot();
+        prior.health.latest_projection = Some(guarded.key());
+        prior.health.same_projection_streak = 2;
+        prior.health.same_selected_tier_streak = 2;
+        let current = snapshot();
+        let mut policy = policy();
+        policy.route_budget = Some(route_budget());
+
+        let before = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &guarded,
+                Some("tool-safe"),
+                HistoryCompleteness::Complete,
+            ),
+            Some("tool-safe"),
+            false,
+        )?;
+
+        assert_eq!(before.intent.selected_tier.as_deref(), Some("protected"));
+        assert!(before.budget_applied);
+        assert!(before.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "route_budget.first_guarded_escalation"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+
+        let already_covered = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &guarded,
+                Some("tool-safe"),
+                HistoryCompleteness::Complete,
+            ),
+            Some("tool-safe"),
+            true,
+        )?;
+        assert_eq!(
+            already_covered.intent.selected_tier.as_deref(),
+            Some("tool-safe")
+        );
+        assert!(!already_covered.budget_applied);
+        Ok(())
+    }
+
+    #[test]
+    fn route_budget_inserts_one_diversity_checkpoint_after_saturation() -> Result<()> {
+        let edit = projection("agent_trace/v2|edit|normal")?;
+        let mut prior = snapshot();
+        prior.health.latest_projection = Some(edit.key());
+        prior.health.same_projection_streak = 2;
+        prior.health.same_selected_tier_streak = 2;
+        let current = snapshot();
+        let mut policy = policy();
+        policy.route_budget = Some(route_budget());
+
+        let saturated = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("protected"),
+                HistoryCompleteness::Complete,
+            ),
+            Some("protected"),
+            true,
+        )?;
+        assert_eq!(saturated.intent.selected_tier.as_deref(), Some("tool-safe"));
+        assert!(saturated.budget_applied);
+        assert!(saturated.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "route_budget.same_projection_saturation"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+
+        prior.health.same_projection_streak = 1;
+        prior.health.same_selected_tier_streak = 1;
+        let reset = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("protected"),
+                HistoryCompleteness::Complete,
+            ),
+            Some("tool-safe"),
+            true,
+        )?;
+        assert_eq!(reset.intent.selected_tier.as_deref(), Some("protected"));
+        assert!(!reset.budget_applied);
+        Ok(())
+    }
+
+    #[test]
+    fn progress_safety_suppresses_route_budget_saturation() -> Result<()> {
+        let edit = projection("agent_trace/v2|edit|normal")?;
+        let mut prior = snapshot();
+        prior.health.latest_projection = Some(edit.key());
+        prior.health.same_projection_streak = 4;
+        prior.health.same_selected_tier_streak = 4;
+        prior.active_hold_remaining = 1;
+        let current = snapshot();
+        let mut policy = policy();
+        policy.route_budget = Some(route_budget());
+
+        let held = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("protected"),
+                HistoryCompleteness::Complete,
+            ),
+            Some("protected"),
+            true,
+        )?;
+        assert_eq!(held.intent.selected_tier.as_deref(), Some("protected"));
+        assert!(!held.budget_applied);
+
+        prior.active_hold_remaining = 0;
+        policy.incomplete_history = IncompleteHistoryAction::Escalate;
+        let incomplete = evaluate_with_route_budget(
+            &policy,
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("protected"),
+                HistoryCompleteness::Incomplete,
+            ),
+            Some("protected"),
+            true,
+        )?;
+        assert_eq!(
+            incomplete.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(!incomplete.budget_applied);
+        Ok(())
     }
 
     #[test]

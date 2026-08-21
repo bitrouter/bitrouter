@@ -1510,6 +1510,7 @@ mod tests {
                     max_episode_cost_micro_usd: None,
                     hold_for_requests: 2,
                     incomplete_history: IncompleteHistoryAction::Observe,
+                    route_budget: None,
                 },
                 carries_tools: false,
                 tool_use_tier: Some("strong".into()),

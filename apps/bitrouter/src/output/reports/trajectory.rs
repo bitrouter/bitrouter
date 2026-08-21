@@ -409,7 +409,7 @@ mod tests {
             value["route_intents"][0]["clauses"]
                 .as_array()
                 .map(Vec::len),
-            Some(9)
+            Some(11)
         );
         assert_eq!(
             value["events"]
@@ -524,6 +524,7 @@ mod tests {
                             max_episode_cost_micro_usd: None,
                             hold_for_requests: 2,
                             incomplete_history: IncompleteHistoryAction::Observe,
+                            route_budget: None,
                         },
                         carries_tools: false,
                         tool_use_tier: Some("strong".into()),

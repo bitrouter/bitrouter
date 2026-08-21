@@ -1461,7 +1461,7 @@ mod tests {
             trajectory_completeness: None,
             trajectory_health_digest: None,
             candidate_tier: None,
-            progress_clause_ids: Vec::new(),
+            route_clause_ids: Vec::new(),
             reason: "static_table".into(),
             pinned: false,
             request_qualified: true,

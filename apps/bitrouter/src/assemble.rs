@@ -2250,6 +2250,7 @@ presets:
             max_episode_cost_micro_usd: None,
             hold_for_requests: 2,
             incomplete_history: IncompleteHistoryAction::Observe,
+            route_budget: None,
         };
         let (assembled, digest) = assemble_named_policy(true, Some(guard)).await?;
 
@@ -2368,6 +2369,7 @@ presets:
                     max_episode_cost_micro_usd: None,
                     hold_for_requests: 2,
                     incomplete_history: IncompleteHistoryAction::Observe,
+                    route_budget: None,
                 }),
                 ..PolicyDefinition::default()
             },
