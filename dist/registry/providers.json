@@ -1894,6 +1894,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "x-ai/grok-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 6.6
+            }
+          },
+          "provider_model_id": "xai.grok-4.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "aws-bedrock",
