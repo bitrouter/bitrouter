@@ -116,12 +116,12 @@
 <text class="model" x="922.0" y="143.0">grok-4.5</text>
 <text class="routes" x="1162.0" y="143.0" text-anchor="end">7</text>
 <rect x="914.0" y="154.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="154.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="922.0" y="169.0">grok-4.3</text>
-<text class="routes" x="1162.0" y="169.0" text-anchor="end">6</text>
+<rect x="914.0" y="154.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="922.0" y="169.0">grok-4.6</text>
+<text class="routes" x="1162.0" y="169.0" text-anchor="end">7</text>
 <rect x="914.0" y="180.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="914.0" y="180.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="922.0" y="195.0">grok-4.6</text>
+<text class="model" x="922.0" y="195.0">grok-4.3</text>
 <text class="routes" x="1162.0" y="195.0" text-anchor="end">6</text>
 <rect x="914.0" y="206.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="914.0" y="206.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
@@ -241,5 +241,5 @@
 <rect x="330.0" y="612.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="338.0" y="627.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="627.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="694.0">50 models · 47 providers · 455 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="694.0">50 models · 47 providers · 456 model→provider routes · 12 providers billed by subscription</text>
 </svg>
