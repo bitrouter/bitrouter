@@ -2,7 +2,7 @@ name: PR
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -21,3 +21,29 @@ jobs:
           add_scope_label: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Every PR that changes observable behaviour describes it in `.changes/`,
+  # because the commit log does not — see `.changes/README.md`. Refactors,
+  # test-only work, and CI plumbing carry the `no-changelog` label instead.
+  change-file:
+    name: change file
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'no-changelog')
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: require a .changes/ entry
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          added=$(git diff --name-only --diff-filter=AM FETCH_HEAD...HEAD -- '.changes/*.md' \
+            | grep -v '^\.changes/README\.md$' || true)
+          if [ -z "$added" ]; then
+            echo "::error::This PR adds no change file. Describe the user-visible change in .changes/<slug>.md (see .changes/README.md), or label the PR 'no-changelog' if nothing observable changed."
+            exit 1
+          fi
+          printf 'change file(s):\n%s\n' "$added"

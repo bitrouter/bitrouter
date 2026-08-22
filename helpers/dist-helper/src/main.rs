@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod changelog;
 mod chart;
 mod registry;
 mod schema;
@@ -30,6 +31,11 @@ enum Command {
     Registry {
         #[command(subcommand)]
         command: RegistryCommand,
+    },
+    /// Per-PR change files (`.changes/*.md`).
+    Changelog {
+        #[command(subcommand)]
+        command: ChangelogCommand,
     },
     /// Render the README registry chart SVGs (light + dark).
     Chart {
@@ -63,6 +69,15 @@ enum RegistryCommand {
     AgenticDiffCheck,
 }
 
+#[derive(Debug, Subcommand)]
+enum ChangelogCommand {
+    /// Validate every pending change file.
+    Check,
+    /// Fold pending change files into the newest `CHANGELOG.md` release
+    /// section and delete them. Runs in the release PR, after release-plz.
+    Fold,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -89,10 +104,15 @@ async fn run(cli: Cli) -> Result<()> {
             }
             RegistryCommand::AgenticDiffCheck => registry::agentic_diff_check(&root),
         },
+        Command::Changelog { command } => match command {
+            ChangelogCommand::Check => changelog::check(&root),
+            ChangelogCommand::Fold => changelog::fold(&root),
+        },
         Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {
             schema::generate(&root, true)?;
-            registry::build(&root, true)
+            registry::build(&root, true)?;
+            changelog::check(&root)
         }
     }
 }
