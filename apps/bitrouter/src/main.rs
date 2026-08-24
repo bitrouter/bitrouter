@@ -386,17 +386,18 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness as an interactive native-TUI child, with
-    /// its API base URL pointed at the local BitRouter daemon. The human drives
-    /// the harness's own TUI directly (use `bitrouter spawn` for headless ACP
-    /// sub-agents). Follows `cargo run`'s separator convention: bitrouter
-    /// options come before `--`, everything after `--` is forwarded to the
-    /// agent verbatim, e.g. `bitrouter launch -a codex -- --search`.
+    /// Launch a coding-agent harness as an interactive native-TUI child. Routed
+    /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
+    /// launch directly and are not redirected. The human drives the harness's
+    /// own TUI directly (use `bitrouter spawn` for headless ACP sub-agents).
+    /// Follows `cargo run`'s separator convention: bitrouter options come
+    /// before `--`, everything after `--` is forwarded to the agent verbatim,
+    /// e.g. `bitrouter launch -a codex -- --search`.
     ///
     /// Harnesses that route by env/args (claude, codex) are launched without
-    /// touching any config file. Those that can only be routed by config
-    /// (opencode, pi) get one synthesized under `.bitrouter/launch/` — your
-    /// own agent config is still never modified.
+    /// touching any config file. Those that route by synthesized config
+    /// (opencode, pi, hermes, openclaw) get it under `.bitrouter/launch/` —
+    /// your own agent config is still never modified.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
@@ -404,10 +405,12 @@ enum Command {
     /// binary is offered for install via its official native installer; other
     /// harnesses report their own install command instead.
     Launch {
-        /// Which agent harness to launch: `claude`, `codex`, `opencode`, or
-        /// `pi` (catalog ids `claude-acp`, `codex-acp`, `pi-acp` also
-        /// resolve). `hermes`, `openclaw`, `grok`, and `agy` are no longer
-        /// launch-supported — run them directly or via `bitrouter spawn`.
+        /// Which agent harness to launch: any catalog harness with an
+        /// interactive binary (`claude`, `codex`, `opencode`, `pi`, `hermes`,
+        /// `openclaw`, `grok`, or `agy`; catalog ids such as `claude-acp`,
+        /// `codex-acp`, `pi-acp`, and `hermes-acp` also resolve). Own-auth
+        /// harnesses such as `grok` and `agy` launch direct and are not
+        /// redirected.
         #[arg(short, long, value_name = "ID")]
         agent: String,
         /// Pin the harness's model to a daemon-routable id (e.g. the explicit
@@ -423,9 +426,9 @@ enum Command {
         /// → zero-config in-memory defaults.
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Override the agent's API base URL instead of deriving it from
-        /// `server.listen` (e.g. when the daemon listens on a non-default
-        /// address or a remote BitRouter).
+        /// Override the BitRouter daemon base URL used by routed harnesses
+        /// instead of deriving it from `server.listen`. Own-auth harnesses are
+        /// not redirected.
         #[arg(long)]
         base_url: Option<String>,
         /// Never offer to install a missing agent — fail with the install

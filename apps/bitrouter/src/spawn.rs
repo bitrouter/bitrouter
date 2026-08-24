@@ -1,10 +1,11 @@
 //! `bitrouter launch` — launch a coding-agent harness (Claude Code, Codex, …)
-//! as an interactive native-TUI child process with its API base URL pointed at
-//! the local BitRouter daemon. This is the interactive surface; headless
-//! ACP sub-agents are `bitrouter spawn` (see [`crate::acp_cli`]). Both draw
-//! their routing knowledge from the shared [`crate::harness`] catalog.
+//! as an interactive native-TUI child process. Routed harnesses are pointed at
+//! the local BitRouter daemon; own-auth harnesses launch directly. This is the
+//! interactive surface; headless ACP sub-agents are `bitrouter spawn` (see
+//! [`crate::acp_cli`]). Both draw their routing knowledge from the shared
+//! [`crate::harness`] catalog.
 //!
-//! The agent's traffic then routes through BitRouter without ever touching the
+//! Routed agent traffic goes through BitRouter without ever touching the
 //! agent's own config files: instead of mutating `~/.claude/config.json` or
 //! `~/.codex/config.toml` (the
 //! "config takeover" model used by some switcher tools — invasive, needs
@@ -17,6 +18,8 @@
 //! repo's `.bitrouter/launch/` and pointing the harness at it with an env var
 //! — still never touching the user's own config
 //! ([`crate::harness::Harness::launch_overlay`]).
+//! Own-auth harnesses (`grok`, `agy`) are subscription clients the daemon
+//! borrows as providers, so `launch` does not redirect or meter them.
 //!
 //! CLI shape follows `cargo run`'s separator convention so there is no
 //! ambiguity about which flags belong to which program:
@@ -202,8 +205,9 @@ pub struct SpawnOptions {
     /// Arguments forwarded verbatim to the agent binary (everything the
     /// caller put after `--`).
     pub agent_args: Vec<String>,
-    /// Explicit base URL override. When `None` it is derived from the
-    /// daemon's `server.listen`.
+    /// Explicit BitRouter daemon base URL override for routed harnesses. When
+    /// `None` it is derived from the daemon's `server.listen`; own-auth
+    /// harnesses are not redirected.
     pub base_url: Option<String>,
     /// When true, never offer to install a missing agent — error instead.
     /// (Set by `--no-install`, or implied when stdin is not a TTY.)
@@ -329,10 +333,10 @@ pub async fn run(
 }
 
 /// Resolve the base URL from `cfg`, locate the agent binary (offering to
-/// install it if missing and permitted), ensure the local daemon is up
-/// (auto-starting it when down), assemble the routing overlay, and state what
-/// the harness is actually getting (§796) — everything up to, but not
-/// including, the child process.
+/// install it if missing and permitted), ensure the local daemon is up when a
+/// routed harness will use it (auto-starting it when down), assemble the launch
+/// overlay, and state what the harness is actually getting (§796) — everything
+/// up to, but not including, the child process.
 pub async fn prepare<'a>(
     source: &'a crate::paths::ConfigSource,
     cfg: &bitrouter_sdk::config::Config,
@@ -360,10 +364,12 @@ pub async fn prepare<'a>(
     // Locate the binary; prompt-to-install when it's missing.
     let binary = ensure_harness_installed(harness, opts.no_install).await?;
 
-    // Make sure the daemon the agent will talk to is up. For the local daemon
-    // we own (derived base URL + a loopback/wildcard bind), probe its control
-    // socket and auto-start it when down; for an explicit `--base-url` or a
-    // non-local bind we can only warn — we can't start someone else's daemon.
+    // Make sure the daemon a routed harness will talk to is up. For the local
+    // daemon we own (derived base URL + a loopback/wildcard bind), probe its
+    // control socket and auto-start it when down; for an explicit `--base-url`
+    // or a non-local bind we can only warn — we can't start someone else's
+    // daemon. Own-auth harnesses are not redirected, but the probe still gives
+    // a useful daemon-readiness signal for provider borrowing.
     if opts.base_url.is_none() && listen_is_local(&cfg.server.listen) {
         ensure_local_daemon(source, cfg, opts.no_start).await;
     } else {
