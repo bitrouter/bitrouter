@@ -116,6 +116,31 @@ models:
         cache_read: 0.2
       output_tokens:
         text: 2.55
+  # OpenRouter catalog: https://openrouter.ai/api/v1/models
+  - id: z-ai/glm-5.3
+    provider_model_id: z-ai/glm-5.3
+    reasoning_effort:
+      levels: [low, high, max]
+      default: max
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities: [reasoning, tools]
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: z-ai/glm-5.3-flash
+    reasoning_effort:
+      levels: [low, high, max]
+      default: max
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.015
+      output_tokens:
+        text: 0.25
+    capabilities: [reasoning, tools]
   - id: openai/gpt-oss-120b
     provider_model_id: openai/gpt-oss-120b
     pricing:
@@ -237,6 +262,32 @@ models:
         cache_write: 1.84375
       output_tokens:
         text: 4.425
+  # OpenRouter catalog: https://openrouter.ai/api/v1/models
+  - id: qwen/qwen3.8-2.4t-a95b
+    provider_model_id: qwen/qwen3.8-2.4t-a95b
+    reasoning_effort:
+      levels: [low, medium, xhigh]
+      default: xhigh
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.25
+      output_tokens:
+        text: 6
+    capabilities: [reasoning, tools]
+  - id: qwen/qwen3.8-27b
+    provider_model_id: qwen/qwen3.8-27b
+    reasoning_effort:
+      levels: [low, medium, xhigh]
+      default: xhigh
+    pricing:
+      input_tokens:
+        no_cache: 0.425
+        cache_read: 0.085
+        cache_write: 0.53125
+      output_tokens:
+        text: 2.55
+    capabilities: [reasoning, tools]
   # OpenRouter tool support catalog: https://openrouter.ai/api/v1/models
   - id: qwen/qwen3.8-max
     provider_model_id: qwen/qwen3.8-max

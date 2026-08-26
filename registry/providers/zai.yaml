@@ -11,6 +11,38 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
+  # Official model: https://docs.z.ai/guides/llm/glm-5.3
+  # Official pricing: https://docs.z.ai/guides/overview/pricing
+  - id: z-ai/glm-5.3
+    provider_model_id: glm-5.3
+    reasoning_effort:
+      levels: [low, high, max]
+      default: max
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  # Official model: https://docs.z.ai/guides/vlm/glm-5.3-flash
+  # The 50% launch pricing expires at 24:00 UTC+8 on 2026-09-09.
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: glm-5.3-flash
+    reasoning_effort:
+      levels: [low, high, max]
+      default: max
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.015
+      output_tokens:
+        text: 0.25
+    capabilities:
+      - reasoning
+      - tools
   - id: z-ai/glm-5.1
     provider_model_id: glm-5.1
     pricing:
