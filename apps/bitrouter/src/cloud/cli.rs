@@ -1,5 +1,5 @@
 //! `bitrouter cloud …` — typed wrappers around the user-facing management
-//! endpoints on [`bitrouter_cloud_sdk::management::ManagementClient`].
+//! endpoints on the application-owned management client.
 //!
 //! The subcommand tree is grouped by resource (`keys`, `usage`,
 //! `billing`, `policy`, `budget`, `preset`, `byok`) plus a top-level
@@ -17,24 +17,22 @@
 //! `bitrouter cloud login --scope "<existing scopes> <missing>"`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
-use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
-use bitrouter_cloud_sdk::auth::credentials::{
-    CredentialKind, CredentialsStore, StoredCredential, default_credentials_path,
-};
-use bitrouter_cloud_sdk::management::types::{
-    BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind,
-};
-use bitrouter_cloud_sdk::management::{
-    Error as SdkError, ManagementClient, billing, budgets, byok, keys, namespaces, policies,
-    presets, usage,
-};
+use bitrouter_providers::hosted::account::credentials::{CredentialKind, StoredCredential};
+use bitrouter_providers::hosted::account::manager::CredentialManager;
 
 use super::api::ApiArgs;
+use super::auth::{LoginInputs, login, logout};
+use super::management::error::Error as SdkError;
+use super::management::types::{BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind};
+use super::management::{
+    ManagementClient, billing, budgets, byok, keys, namespaces, policies, presets, usage,
+};
 
 /// `bitrouter cloud …`. All variants land in [`run`].
 #[derive(Subcommand)]
@@ -558,43 +556,53 @@ pub struct JsonFlag {
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
 pub async fn run(action: CloudAction, format: crate::output::Format) -> Result<()> {
     let _ = CLOUD_FORMAT.set(format);
-    let result = run_inner(action).await;
+    let manager = super::default_manager()?;
+    let result = run_inner(action, Arc::clone(&manager)).await;
     match result {
         Ok(()) => Ok(()),
         Err(err) => {
-            print_error_hint(&err);
+            print_error_hint(&err, &manager).await;
             Err(err.into())
         }
     }
 }
 
-async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
+async fn run_inner(
+    action: CloudAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
     match action {
-        CloudAction::Whoami => whoami().await,
-        CloudAction::Api(args) => super::api::run(args).await.map_err(SdkError::Auth),
+        CloudAction::Whoami => whoami(manager).await,
+        CloudAction::Api(args) => super::api::run(args, manager).await.map_err(SdkError::Auth),
         CloudAction::Login {
             authorization_server,
             client_id,
             scope,
             api_key,
         } => {
-            let credential = login(LoginInputs {
-                authorization_server,
-                client_id,
-                scope,
-                api_key,
-            })
+            let credential = login(
+                Arc::clone(&manager),
+                LoginInputs {
+                    authorization_server,
+                    client_id,
+                    scope,
+                    api_key,
+                },
+            )
             .await
             .map_err(SdkError::Auth)?;
-            let client = client()?;
-            let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
+            let client = client(Arc::clone(&manager)).await?;
+            let current = manager
+                .current()
+                .await
+                .map_err(|error| SdkError::Auth(anyhow::anyhow!(error)))?;
             let body = serde_json::json!({
                 "signed_in": true,
                 "authentication": credential_kind_name(credential.kind()),
                 "namespace": client.namespace_id(),
-                "subject": store.current().and_then(|c| c.subject()),
-                "scope": store.current().and_then(|c| c.scope()),
-                "credentials_path": store.path().display().to_string(),
+                "subject": current.as_ref().and_then(StoredCredential::subject),
+                "scope": current.as_ref().and_then(StoredCredential::scope),
+                "credentials_path": manager.path().display().to_string(),
             });
             emit(false, &body, |_| "signed in".to_string())
         }
@@ -602,47 +610,55 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             authorization_server,
             client_id,
         } => {
-            logout(LoginInputs {
-                authorization_server,
-                client_id,
-                scope: None,
-                api_key: None,
-            })
+            logout(
+                manager,
+                LoginInputs {
+                    authorization_server,
+                    client_id,
+                    scope: None,
+                    api_key: None,
+                },
+            )
             .await
             .map_err(SdkError::Auth)?;
             emit(false, &serde_json::json!({ "signed_out": true }), |_| {
                 "signed out".to_string()
             })
         }
-        CloudAction::Namespace { action } => run_namespace(action).await,
-        CloudAction::Keys { action } => run_keys(action).await,
-        CloudAction::Usage(args) => run_usage(args).await,
-        CloudAction::Requests(args) => run_requests(args).await,
-        CloudAction::Billing { action } => run_billing(action).await,
-        CloudAction::Policy { action } => run_policy(action).await,
-        CloudAction::Budget { action } => run_budget(action).await,
-        CloudAction::Preset { action } => run_preset(action).await,
-        CloudAction::Byok { action } => run_byok(action).await,
+        CloudAction::Namespace { action } => run_namespace(action, manager).await,
+        CloudAction::Keys { action } => run_keys(action, manager).await,
+        CloudAction::Usage(args) => run_usage(args, manager).await,
+        CloudAction::Requests(args) => run_requests(args, manager).await,
+        CloudAction::Billing { action } => run_billing(action, manager).await,
+        CloudAction::Policy { action } => run_policy(action, manager).await,
+        CloudAction::Budget { action } => run_budget(action, manager).await,
+        CloudAction::Preset { action } => run_preset(action, manager).await,
+        CloudAction::Byok { action } => run_byok(action, manager).await,
     }
 }
 
-fn client() -> std::result::Result<ManagementClient, SdkError> {
-    ManagementClient::from_default_credentials()
+async fn client(
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<ManagementClient, SdkError> {
+    ManagementClient::from_manager(manager).await
 }
 
-async fn whoami() -> std::result::Result<(), SdkError> {
+async fn whoami(manager: Arc<CredentialManager>) -> std::result::Result<(), SdkError> {
     // Offline — reads the local credentials file (works without network).
-    let client = client()?;
-    let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
-    let scope = store
+    let client = client(Arc::clone(&manager)).await?;
+    let current = manager
         .current()
+        .await
+        .map_err(|error| SdkError::Auth(anyhow::anyhow!(error)))?;
+    let scope = current
+        .as_ref()
         .and_then(|credential| credential.scope().map(ToOwned::to_owned));
-    let subject = store
-        .current()
+    let subject = current
+        .as_ref()
         .and_then(|credential| credential.subject().map(ToOwned::to_owned));
-    let signed_in = store.current().is_some();
-    let authentication = store
-        .current()
+    let signed_in = current.is_some();
+    let authentication = current
+        .as_ref()
         .map(|credential| credential_kind_name(credential.kind()));
     let body = serde_json::json!({
         "signed_in": signed_in,
@@ -651,7 +667,7 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         "namespace": client.namespace_id(),
         "scope": scope.clone(),
         "subject": subject.clone(),
-        "credentials_path": store.path().display().to_string(),
+        "credentials_path": manager.path().display().to_string(),
     });
     emit(false, &body, |_| {
         let mut out = format!(
@@ -669,7 +685,7 @@ async fn whoami() -> std::result::Result<(), SdkError> {
             if let Some(sub) = &subject {
                 out.push_str(&format!("\nsubject:        {sub}"));
             }
-            out.push_str(&format!("\ncredentials:    {}", store.path().display()));
+            out.push_str(&format!("\ncredentials:    {}", manager.path().display()));
         } else {
             out.push_str("\n(not signed in — run `bitrouter cloud login`)");
         }
@@ -686,8 +702,11 @@ fn credential_kind_name(kind: CredentialKind) -> &'static str {
 
 // ----- Namespace -----
 
-async fn run_namespace(action: NamespaceAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_namespace(
+    action: NamespaceAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         NamespaceAction::List(flag) => {
             let resp = client.list_namespaces().await?;
@@ -726,8 +745,11 @@ fn format_namespace_list(resp: &namespaces::NamespaceListResponse, active: Optio
 
 // ----- Keys -----
 
-async fn run_keys(action: KeysAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_keys(
+    action: KeysAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         KeysAction::List(flag) => emit(flag.json, &client.list_keys().await?, format_keys_list),
         KeysAction::Mint(args) => {
@@ -776,8 +798,11 @@ fn format_mint_key(resp: &keys::MintApiKeyResponse) -> String {
 
 // ----- Usage / requests -----
 
-async fn run_usage(args: UsageArgs) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_usage(
+    args: UsageArgs,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     let resp = client
         .usage_aggregate(&usage::UsageQuery {
             from: args.from,
@@ -797,8 +822,11 @@ async fn run_usage(args: UsageArgs) -> std::result::Result<(), SdkError> {
     })
 }
 
-async fn run_requests(args: RequestsArgs) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_requests(
+    args: RequestsArgs,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     let resp = client
         .list_requests(&usage::RequestsQuery {
             limit: args.limit,
@@ -832,8 +860,11 @@ fn format_requests(resp: &usage::RequestsResponse) -> String {
 
 // ----- Billing -----
 
-async fn run_billing(action: BillingAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_billing(
+    action: BillingAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         BillingAction::Balance(flag) => {
             let resp = client.billing_balance().await?;
@@ -864,8 +895,11 @@ async fn run_billing(action: BillingAction) -> std::result::Result<(), SdkError>
 
 // ----- Policy -----
 
-async fn run_policy(action: PolicyAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_policy(
+    action: PolicyAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         PolicyAction::List(args) => {
             let resp = client
@@ -1039,8 +1073,11 @@ fn format_effective_policy(p: &policies::EffectivePolicy) -> String {
 
 // ----- Budget -----
 
-async fn run_budget(action: BudgetAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_budget(
+    action: BudgetAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         BudgetAction::List(flag) => {
             let resp = client.list_budgets().await?;
@@ -1117,8 +1154,11 @@ fn format_budget_one(b: &budgets::BudgetEnvelope) -> String {
 
 // ----- Preset -----
 
-async fn run_preset(action: PresetAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_preset(
+    action: PresetAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         PresetAction::List(flag) => {
             let resp = client.list_presets().await?;
@@ -1213,8 +1253,11 @@ fn format_preset_one(p: &presets::PresetEnvelope) -> String {
 
 // ----- BYOK -----
 
-async fn run_byok(action: ByokAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
+async fn run_byok(
+    action: ByokAction,
+    manager: Arc<CredentialManager>,
+) -> std::result::Result<(), SdkError> {
+    let client = client(manager).await?;
     match action {
         ByokAction::List(flag) => {
             let resp = client.list_byok_keys().await?;
@@ -1345,7 +1388,7 @@ fn split_scope_args(scopes: &[String]) -> Vec<String> {
     out
 }
 
-fn print_error_hint(err: &SdkError) {
+async fn print_error_hint(err: &SdkError, manager: &CredentialManager) {
     match err {
         SdkError::NotSignedIn => {
             eprintln!();
@@ -1358,11 +1401,8 @@ fn print_error_hint(err: &SdkError) {
         } => {
             eprintln!();
             eprintln!("  This command requires the scope: {scope}");
-            let store = default_credentials_path()
-                .ok()
-                .and_then(|path| CredentialsStore::load(path).ok());
-            let credential = store.as_ref().and_then(CredentialsStore::current);
-            eprintln!("  {}", missing_scope_hint(scope, credential));
+            let credential = manager.current().await.ok().flatten();
+            eprintln!("  {}", missing_scope_hint(scope, credential.as_ref()));
         }
         _ => {}
     }
@@ -1449,7 +1489,7 @@ mod tests {
 
     #[test]
     fn missing_scope_guidance_keeps_api_key_users_on_api_keys() {
-        let credential = bitrouter_cloud_sdk::auth::credentials::StoredCredential::api_key(
+        let credential = StoredCredential::api_key(
             "brk_test.fixture".to_owned(),
             "https://api.bitrouter.ai".to_owned(),
         );

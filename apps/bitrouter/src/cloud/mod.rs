@@ -11,16 +11,16 @@
 //! - [`register_if_configured`] — register the hosted provider applier.
 //!
 //! These are kept here rather than inside `bitrouter-providers` so that
-//! the providers crate stays free of any dependency on
-//! `bitrouter-cloud-sdk`; the SDK and the catalog can be consumed
-//! independently by downstream tooling.
+//! the providers crate stays focused on reusable hosted authentication.
 //!
 //! The [`cli`] sub-module owns the `bitrouter cloud` subcommand surface
-//! — typed wrappers around every endpoint on
-//! [`bitrouter_cloud_sdk::management::ManagementClient`].
+//! — typed wrappers around the application-owned management client.
 
 pub mod api;
+pub mod api_client;
+pub mod auth;
 pub mod cli;
+pub mod management;
 
 use std::sync::Arc;
 
@@ -90,12 +90,12 @@ pub fn register_if_configured(
     Ok(())
 }
 
-/// Live [`TelemetryBearer`] backed by the signed-in account's credential store.
+/// Live [`TelemetryBearer`] backed by the signed-in account manager.
 ///
 /// Resolves the account bearer **on every OTLP export** (not once at startup),
-/// transparently refreshing the short-lived access token via the store's
-/// [`CredentialsStore::current_token`] — which refreshes-if-near-expiry,
-/// single-flights, and writes the rotated token back to disk. This is what keeps
+/// transparently refreshing the short-lived access token through the manager,
+/// which refreshes-if-near-expiry, single-flights, and writes the rotated token
+/// back to disk. This is what keeps
 /// account-attributed telemetry alive across token expiry without a daemon
 /// restart, replacing the old startup-snapshot baked into a static header.
 ///

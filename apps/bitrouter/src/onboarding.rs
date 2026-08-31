@@ -22,14 +22,17 @@
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login as cloud_login};
-use bitrouter_cloud_sdk::auth::credentials::default_credentials_path;
+use bitrouter_providers::hosted::account::credentials::default_credentials_path;
+use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_providers::hosted::applier::PROVIDER_ID;
 use bitrouter_providers::oauth::credential_store::CredentialStore;
 use clap::ValueEnum;
 use serde::Serialize;
 
+use crate::cloud::auth::{LoginInputs, login as cloud_login};
 use crate::commands::{ProviderLoginOptions, ScaffoldOutcome, login_provider_with_options};
 use crate::output::CliReport;
 use crate::output::Output;
@@ -89,7 +92,7 @@ impl ProbeSignals {
     fn already_configured(&self) -> BTreeSet<String> {
         let mut set: BTreeSet<String> = self.env_provider_ids().into_iter().collect();
         if self.cloud_session {
-            set.insert(bitrouter_cloud_sdk::provider::PROVIDER_ID.to_string());
+            set.insert(PROVIDER_ID.to_string());
         }
         for id in &self.subscription_providers {
             set.insert(id.clone());
@@ -358,7 +361,8 @@ pub async fn entry(output: &Output) -> Result<()> {
         return emit(output, &OnboardingStatusReport::from_signals(&signals));
     }
     if std::io::stdin().is_terminal() {
-        run_interactive(OnboardingFlags::default(), &signals, output).await
+        let manager = crate::cloud::default_manager()?;
+        run_interactive(OnboardingFlags::default(), &signals, output, manager).await
     } else {
         // No TTY and nothing configured: the interactive wizard can't run.
         // Print the multi-line hint to stderr and emit an inert envelope so
@@ -371,15 +375,16 @@ pub async fn entry(output: &Output) -> Result<()> {
 /// `bitrouter init [flags]`. Runs the wizard interactively, or headlessly when
 /// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    let manager = crate::cloud::default_manager()?;
     if flags.reset {
         reset_credentials(flags.yes, std::io::stdin().is_terminal()).await?;
     }
     if flags.yes {
-        return run_headless(flags, output).await;
+        return run_headless(flags, output, manager).await;
     }
     if std::io::stdin().is_terminal() {
         let signals = probe();
-        run_interactive(flags, &signals, output).await
+        run_interactive(flags, &signals, output, manager).await
     } else {
         // No TTY and no `--yes`: fall back to the headless runner. Preserve the
         // historical `bitrouter init` behavior (scaffold the starter file) by
@@ -390,6 +395,7 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
                 ..flags
             },
             output,
+            manager,
         )
         .await
     }
@@ -410,7 +416,11 @@ fn empty_report() -> OnboardingReport {
 // §4 — headless runner
 // =====================================================================
 
-async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
+async fn run_headless(
+    flags: OnboardingFlags,
+    output: &Output,
+    manager: Arc<CredentialManager>,
+) -> Result<()> {
     let signals = probe();
     // Already-present credentials always count (spec §4: "consume
     // already-present credentials + flag-supplied keys").
@@ -418,7 +428,7 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
     let mut skipped: Vec<String> = Vec::new();
 
     // --- Step 1: credentials (flag-driven; interactive OAuth reported-and-skipped) ---
-    apply_flag_credentials(&flags, &mut configured, &mut skipped, true).await?;
+    apply_flag_credentials(&flags, &mut configured, &mut skipped, true, manager).await?;
 
     // --- Step 2: harness (resolve only; headless never installs — see §13
     // resolution notes: keeps `--yes` non-blocking and network-free) ---
@@ -498,18 +508,19 @@ async fn apply_flag_credentials(
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
     headless: bool,
+    manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    let cloud = bitrouter_cloud_sdk::provider::PROVIDER_ID;
+    let cloud = PROVIDER_ID;
     // Cloud: a brk_ key is non-interactive; a bare --cloud-login needs the
     // device flow (headless skips, interactive runs it).
     if let Some(key) = flags.api_key.as_deref() {
-        seed_cloud_api_key(key).await?;
+        seed_cloud_api_key(key, Arc::clone(&manager)).await?;
         configured.insert(cloud.to_string());
     } else if flags.cloud_login {
         if headless {
             skipped.push(cloud.to_string());
         } else {
-            match seed_cloud_interactive().await {
+            match seed_cloud_interactive(Arc::clone(&manager)).await {
                 Ok(()) => {
                     configured.insert(cloud.to_string());
                 }
@@ -555,17 +566,20 @@ async fn apply_flag_credentials(
     Ok(())
 }
 
-/// Seed the cloud credential from a `brk_` key. Calls the cloud SDK's `login`
+/// Seed the cloud credential from a `brk_` key. Calls the Cloud login flow
 /// directly (not `cloud::cli::run`) so onboarding emits a single result
 /// envelope on stdout — `login` writes only progress to stderr and persists
 /// the credential to the store.
-async fn seed_cloud_api_key(key: &str) -> Result<()> {
-    cloud_login(LoginInputs {
-        authorization_server: None,
-        client_id: None,
-        scope: None,
-        api_key: Some(key.to_string()),
-    })
+async fn seed_cloud_api_key(key: &str, manager: Arc<CredentialManager>) -> Result<()> {
+    cloud_login(
+        manager,
+        LoginInputs {
+            authorization_server: None,
+            client_id: None,
+            scope: None,
+            api_key: Some(key.to_string()),
+        },
+    )
     .await
     .map(|_| ())
     .context("seeding the cloud credential from --api-key")
@@ -595,6 +609,7 @@ async fn run_interactive(
     flags: OnboardingFlags,
     signals: &ProbeSignals,
     output: &Output,
+    manager: Arc<CredentialManager>,
 ) -> Result<()> {
     eprintln!();
     eprintln!("Welcome to BitRouter — let's get you to first value.");
@@ -606,14 +621,21 @@ async fn run_interactive(
     // Apply any flag-supplied credentials first (so `bitrouter init --api-key …`
     // / `--provider …` seed before we prompt), then either accept the detected
     // set (`--use-detected`) or open the interactive credential menu.
-    apply_flag_credentials(&flags, &mut configured, &mut skipped, false).await?;
+    apply_flag_credentials(
+        &flags,
+        &mut configured,
+        &mut skipped,
+        false,
+        Arc::clone(&manager),
+    )
+    .await?;
     let seeded_from_flags =
         flags.api_key.is_some() || flags.cloud_login || !flags.providers.is_empty();
     if flags.use_detected && signals.is_configured() {
         eprintln!("Step 1/3 — Credentials");
         note("using the detected credential(s)");
     } else if !seeded_from_flags {
-        interactive_credentials(signals, &mut configured, &mut skipped).await?;
+        interactive_credentials(signals, &mut configured, &mut skipped, manager).await?;
     }
 
     // --- Step 2: harness ---
@@ -677,6 +699,7 @@ async fn interactive_credentials(
     signals: &ProbeSignals,
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
+    manager: Arc<CredentialManager>,
 ) -> Result<()> {
     eprintln!("Step 1/3 — Credentials");
     if signals.is_configured() {
@@ -697,9 +720,9 @@ async fn interactive_credentials(
         }
         eprintln!("    0) Skip for now");
         match prompt_line("  Choose [1]: ")?.as_str() {
-            "" | "1" => match seed_cloud_interactive().await {
+            "" | "1" => match seed_cloud_interactive(Arc::clone(&manager)).await {
                 Ok(()) => {
-                    configured.insert(bitrouter_cloud_sdk::provider::PROVIDER_ID.to_string());
+                    configured.insert(PROVIDER_ID.to_string());
                 }
                 Err(e) => note(&format!("cloud sign-in did not complete: {e:#}")),
             },
@@ -739,16 +762,19 @@ async fn interactive_credentials(
     Ok(())
 }
 
-/// The cloud device-flow sign-in. Calls the cloud SDK's `login` directly (not
+/// The cloud device-flow sign-in. Calls the Cloud login flow directly (not
 /// `cloud::cli::run`) so onboarding emits a single result envelope on stdout;
 /// `login` drives the device-flow prompts on stderr and persists the token.
-async fn seed_cloud_interactive() -> Result<()> {
-    cloud_login(LoginInputs {
-        authorization_server: None,
-        client_id: None,
-        scope: None,
-        api_key: None,
-    })
+async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
+    cloud_login(
+        manager,
+        LoginInputs {
+            authorization_server: None,
+            client_id: None,
+            scope: None,
+            api_key: None,
+        },
+    )
     .await
     .map(|_| ())
     .context("BitRouter Cloud sign-in")
@@ -1176,6 +1202,10 @@ mod tests {
                 ..OnboardingFlags::default()
             },
             &Output::new(crate::output::Format::Json),
+            Arc::new(CredentialManager::with_client(
+                directory.path().join("account-credentials.json"),
+                reqwest::Client::new(),
+            )),
         )
         .await?;
 
