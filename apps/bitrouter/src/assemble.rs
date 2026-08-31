@@ -224,7 +224,8 @@ pub async fn build_app_with_path(
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
     // and lets transport return the exact proof used by the sent request.
-    let auth_appliers = build_auth_appliers(config)?;
+    let cloud_manager = crate::cloud::default_manager()?;
+    let auth_appliers = build_auth_appliers(config, Arc::clone(&cloud_manager))?;
     let runtime_home = match config_path.and_then(std::path::Path::parent) {
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
@@ -357,7 +358,11 @@ pub async fn build_app_with_path(
                 let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> =
                     match plan.bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
-                            let source = crate::cloud::cloud_bearer_source().await;
+                            let source = crate::cloud::cloud_bearer_source(
+                                Arc::clone(&cloud_manager),
+                                plan.config.endpoint.clone(),
+                            )
+                            .await;
                             if source.is_none() && warn_if_unmet {
                                 tracing::warn!(
                                     "telemetry: attribution=account but no signed-in session is \
@@ -1043,7 +1048,10 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
 /// OpenAI Codex (ChatGPT-subscription OAuth).
-fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
+fn build_auth_appliers(
+    config: &Config,
+    cloud_manager: Arc<bitrouter_providers::hosted::account::manager::CredentialManager>,
+) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
     let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .map(|s| s.path().to_path_buf())
@@ -1051,7 +1059,7 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     // The `bitrouter` provider's applier reads the user-account credentials
     // store (separate from the upstream-provider store above), so it lives
     // in its own crate and is registered via the `crate::cloud` glue module.
-    crate::cloud::register_if_configured(config, &mut appliers)?;
+    crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
         let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)
             .context("building the github-copilot AuthApplier")?;
@@ -1250,7 +1258,9 @@ pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelE
     };
     let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
-            let source = crate::cloud::cloud_bearer_source().await;
+            let manager = crate::cloud::default_manager().ok()?;
+            let source =
+                crate::cloud::cloud_bearer_source(manager, plan.config.endpoint.clone()).await;
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
                     "telemetry: attribution=account but no signed-in session is available — \

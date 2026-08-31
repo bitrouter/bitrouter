@@ -1,5 +1,4 @@
-//! Glue between [`bitrouter_cloud_sdk`] and the bitrouter assembly
-//! layer, plus the `bitrouter cloud …` CLI entry points (see [`cli`]).
+//! Cloud authentication glue and the `bitrouter cloud …` CLI entry points.
 //!
 //! Two daemon-side responsibilities, both keyed on the `"bitrouter"`
 //! provider id:
@@ -9,9 +8,7 @@
 //!   `bitrouter cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
 //!   already covered by [`bitrouter_providers::zero_config`].
-//! - [`build_auth_applier`] — construct the
-//!   [`bitrouter_cloud_sdk::BitrouterCloudAuthApplier`] for registration
-//!   against the SDK executor.
+//! - [`register_if_configured`] — register the hosted provider applier.
 //!
 //! These are kept here rather than inside `bitrouter-providers` so that
 //! the providers crate stays free of any dependency on
@@ -28,15 +25,12 @@ pub mod cli;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use bitrouter_cloud_sdk::BitrouterCloudAuthApplier;
-use bitrouter_cloud_sdk::auth::credentials::{
-    CredentialKind, CredentialsStore, default_credentials_path,
-};
-use bitrouter_cloud_sdk::auth::metadata::AsMetadata;
-use bitrouter_cloud_sdk::provider::PROVIDER_ID;
 use bitrouter_observe::otel::TelemetryBearer;
+use bitrouter_providers::hosted::account::credentials::default_credentials_path;
+use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_providers::hosted::applier::{BitrouterAuthApplier, PROVIDER_ID};
 use bitrouter_sdk::config::{Config, ProviderConfig};
-use bitrouter_sdk::language_model::{AuthApplier, auth::AuthAppliers};
+use bitrouter_sdk::language_model::auth::AuthAppliers;
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
 /// has run `bitrouter cloud login` (i.e. the credentials file exists at the
@@ -71,23 +65,25 @@ fn enable_in_zero_config_with_path(config: &mut Config, credentials_path: &std::
     );
 }
 
-/// Build the BitRouter Cloud `AuthApplier`. Reads the credentials file at
-/// [`bitrouter_cloud_sdk::auth::credentials::default_credentials_path`].
-pub fn build_auth_applier() -> Result<Arc<dyn AuthApplier>> {
+/// Construct the default hosted account manager without reading its store.
+pub fn default_manager() -> Result<Arc<CredentialManager>> {
     let path = default_credentials_path().context("resolving BitRouter Cloud credentials path")?;
-    let applier =
-        BitrouterCloudAuthApplier::new(path).context("building the BitRouter Cloud AuthApplier")?;
-    Ok(Arc::new(applier))
+    let manager = CredentialManager::new(path)
+        .map_err(|error| anyhow::anyhow!("building BitRouter Cloud credential manager: {error}"))?;
+    Ok(Arc::new(manager))
 }
 
 /// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
 /// provider appears in `config.providers`. No-op otherwise.
-pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> Result<()> {
+pub fn register_if_configured(
+    config: &Config,
+    appliers: &mut AuthAppliers,
+    manager: Arc<CredentialManager>,
+) -> Result<()> {
     if !config.providers.contains_key(PROVIDER_ID) {
         return Ok(());
     }
-    let applier = build_auth_applier()?;
-    appliers.register(PROVIDER_ID, applier);
+    appliers.register(PROVIDER_ID, Arc::new(BitrouterAuthApplier::new(manager)));
     Ok(())
 }
 
@@ -103,23 +99,15 @@ pub fn register_if_configured(config: &Config, appliers: &mut AuthAppliers) -> R
 /// Best-effort: any resolution failure maps to `None`, so the export degrades to
 /// anonymous rather than being dropped.
 pub struct CloudBearer {
-    /// The store is mutated by `current_token` (it writes the refreshed token
-    /// back), so it sits behind an async mutex shared across concurrent exports.
-    /// In practice the OTLP batch processor exports serially, but the mutex makes
-    /// the refresh-and-persist single-flight correct regardless.
-    store: tokio::sync::Mutex<CredentialsStore>,
-    /// Client used for the RFC 6749 §6 refresh exchange.
-    client: reqwest::Client,
-    /// Cached AS metadata for OAuth refresh; absent for a static API key.
-    metadata: Option<AsMetadata>,
+    manager: Arc<CredentialManager>,
+    expected_origin: String,
 }
 
 impl std::fmt::Debug for CloudBearer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the store (it holds the bearer / refresh token) — redact.
         f.debug_struct("CloudBearer")
-            .field("store", &"<redacted>")
-            .field("metadata", &self.metadata)
+            .field("manager", &"<redacted>")
+            .field("expected_origin", &self.expected_origin)
             .finish()
     }
 }
@@ -127,13 +115,10 @@ impl std::fmt::Debug for CloudBearer {
 #[async_trait::async_trait]
 impl TelemetryBearer for CloudBearer {
     async fn bearer(&self) -> Option<String> {
-        // `current_token` refreshes-if-near-expiry, single-flights, and persists
-        // the rotated token. Any error (no stored creds, refresh failure, …) is
-        // swallowed to `None` so the export stays anonymous — best-effort.
-        let mut store = self.store.lock().await;
-        store
-            .current_token(&self.client, self.metadata.as_ref())
+        self.manager
+            .resolve_bearer(None, Some(&self.expected_origin))
             .await
+            .map(|credential| credential.secret().to_owned())
             .ok()
     }
 }
@@ -146,9 +131,15 @@ impl TelemetryBearer for CloudBearer {
 /// daemon startup is never broken. The caller decides whether to build a source
 /// at all — `attribution: anonymous` must never call this (it would read the
 /// credential store).
-pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
-    let store = CredentialsStore::default_path().ok()?;
-    cloud_bearer_source_from_store(store).await
+pub async fn cloud_bearer_source(
+    manager: Arc<CredentialManager>,
+    expected_origin: impl Into<String>,
+) -> Option<Arc<dyn TelemetryBearer>> {
+    manager.current().await.ok()??;
+    Some(Arc::new(CloudBearer {
+        manager,
+        expected_origin: expected_origin.into(),
+    }))
 }
 
 /// Resolve the signed-in Cloud bearer only when `target_base_url` has the
@@ -156,122 +147,186 @@ pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
 /// reuse `bitrouter cloud login` without ever forwarding that credential to
 /// an arbitrary remote host.
 pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
-    let store = CredentialsStore::default_path().ok()?;
-    cloud_bearer_for_base_url_from_store(store, target_base_url).await
+    let manager = default_manager().ok()?;
+    cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
+}
+
+/// Resolve a hosted bearer for `target_base_url` using the supplied manager.
+pub async fn cloud_bearer_for_base_url_with_manager(
+    manager: Arc<CredentialManager>,
+    target_base_url: &str,
+) -> Option<String> {
+    manager
+        .resolve_bearer(None, Some(target_base_url))
+        .await
+        .map(|credential| credential.secret().to_owned())
+        .ok()
 }
 
 /// Resolve only a static inference API key for an exact Cloud origin. OAuth
 /// access tokens use `Authorization: Bearer`; settlement receipts are scoped
 /// by `x-api-key`, so silently coercing OAuth into that header is invalid.
 pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String> {
-    let store = CredentialsStore::default_path().ok()?;
-    cloud_api_key_for_base_url_from_store(store, target_base_url).await
-}
-
-async fn cloud_api_key_for_base_url_from_store(
-    store: CredentialsStore,
-    target_base_url: &str,
-) -> Option<String> {
-    let current = store.current()?;
-    if current.kind() != CredentialKind::ApiKey || !same_origin(current.base_url(), target_base_url)
-    {
-        return None;
-    }
-    cloud_bearer_source_from_store(store).await?.bearer().await
-}
-
-async fn cloud_bearer_for_base_url_from_store(
-    store: CredentialsStore,
-    target_base_url: &str,
-) -> Option<String> {
-    let login_base_url = store.current()?.base_url().to_owned();
-    if !same_origin(&login_base_url, target_base_url) {
-        return None;
-    }
-    cloud_bearer_source_from_store(store).await?.bearer().await
-}
-
-fn same_origin(left: &str, right: &str) -> bool {
-    let (Ok(left), Ok(right)) = (reqwest::Url::parse(left), reqwest::Url::parse(right)) else {
-        return false;
-    };
-    left.scheme() == right.scheme()
-        && left.host_str() == right.host_str()
-        && left.port_or_known_default() == right.port_or_known_default()
-}
-
-/// Inner form of [`cloud_bearer_source`] taking an already-loaded store, so the
-/// "not signed in ⇒ None" decision is testable without the default path or a
-/// live AS-metadata fetch. Requires a current credential (else `None`), then
-/// fetches the AS metadata its `authorization_server` advertises.
-async fn cloud_bearer_source_from_store(
-    store: CredentialsStore,
-) -> Option<Arc<dyn TelemetryBearer>> {
-    let credential = store.current()?;
-    let client = reqwest::Client::new();
-    let metadata = match credential.oauth() {
-        Some(creds) => Some(
-            bitrouter_cloud_sdk::auth::metadata::fetch(&client, &creds.authorization_server)
-                .await
-                .ok()?,
-        ),
-        None => None,
-    };
-    Some(Arc::new(CloudBearer {
-        store: tokio::sync::Mutex::new(store),
-        client,
-        metadata,
-    }))
+    let manager = default_manager().ok()?;
+    manager
+        .resolve_api_key(None, Some(target_base_url))
+        .await
+        .map(|credential| credential.secret().to_owned())
+        .ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_cloud_sdk::auth::credentials::StoredCredential;
-    use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
+    use bitrouter_providers::hosted::account::manager::CredentialManager;
+    use bitrouter_providers::hosted::applier::BitrouterAuthApplier;
+    use bitrouter_sdk::language_model::AuthApplier;
+    use bitrouter_sdk::language_model::types::{ApiProtocol, RoutingTarget};
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+    use wiremock::matchers::{body_string_contains, method, path as wm_path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn fresh_tmp_creds_path(label: &str) -> std::path::PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "bitrouter-cloud-glue-{label}-{}-{id}",
-            std::process::id()
+    fn fresh_tmp_creds_path(label: &str) -> anyhow::Result<std::path::PathBuf> {
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("bitrouter-cloud-glue-{label}-"))
+            .tempdir()?;
+        Ok(directory.keep().join("account-credentials.json"))
+    }
+
+    fn target_for_origin(origin: &str) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: bitrouter_providers::hosted::applier::PROVIDER_ID.to_owned(),
+            service_id: "gpt-4o".to_owned(),
+            api_base: origin.to_owned(),
+            api_key: String::new(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            reasoning_effort: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_manager_single_flights_oauth_refresh_for_auth_and_telemetry()
+    -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        let origin = server.uri();
+        Mock::given(method("GET"))
+            .and(wm_path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": origin,
+                "device_authorization_endpoint": format!("{origin}/oauth/device_authorization"),
+                "token_endpoint": format!("{origin}/oauth/token"),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wm_path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "rotated-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rotated-refresh",
+                "scope": "inference:invoke",
+            })))
+            .mount(&server)
+            .await;
+
+        let path = fresh_tmp_creds_path("shared-refresh")?;
+        let manager = Arc::new(CredentialManager::with_client(
+            path.clone(),
+            reqwest::Client::new(),
         ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir.join("account-credentials.json")
+        manager
+            .save(
+                bitrouter_providers::hosted::account::credentials::StoredCredential::from(
+                    bitrouter_providers::hosted::account::credentials::Credentials {
+                        access_token: "stale-access".to_owned(),
+                        refresh_token: Some("original-refresh".to_owned()),
+                        expires_at: Utc::now() + Duration::seconds(10),
+                        refresh_token_expires_at: None,
+                        token_type: "Bearer".to_owned(),
+                        scope: "inference:invoke".to_owned(),
+                        client_id: "bitrouter-cli".to_owned(),
+                        authorization_server: origin.clone(),
+                        namespace_id: Some("ns-test".to_owned()),
+                        subject: None,
+                    },
+                ),
+            )
+            .await?;
+
+        let applier = BitrouterAuthApplier::new(Arc::clone(&manager));
+        let telemetry = CloudBearer {
+            manager: Arc::clone(&manager),
+            expected_origin: origin.clone(),
+        };
+        let request = reqwest::Client::new().post(&origin).build()?;
+        let target = target_for_origin(&origin);
+        let (applied, bearer) = tokio::join!(applier.apply(request, &target), telemetry.bearer(),);
+        assert_eq!(
+            applied?.headers()[reqwest::header::AUTHORIZATION],
+            "Bearer rotated-access"
+        );
+        assert_eq!(bearer.as_deref(), Some("rotated-access"));
+        let current = manager
+            .current()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("rotated credential was not persisted"))?;
+        let oauth = current
+            .oauth()
+            .ok_or_else(|| anyhow::anyhow!("rotated credential is not OAuth"))?;
+        assert_eq!(oauth.refresh_token.as_deref(), Some("rotated-refresh"));
+        let refreshes = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?
+            .into_iter()
+            .filter(|request| request.method.to_string() == "POST")
+            .count();
+        assert_eq!(refreshes, 1);
+        Ok(())
     }
 
     #[test]
-    fn enable_in_zero_config_noop_when_no_credentials_file() {
-        let path = fresh_tmp_creds_path("noop");
+    fn enable_in_zero_config_noop_when_no_credentials_file() -> anyhow::Result<()> {
+        let path = fresh_tmp_creds_path("noop")?;
         // path's parent exists; the file itself does not.
         let mut config = Config::default();
         enable_in_zero_config_with_path(&mut config, &path);
         assert!(!config.providers.contains_key(PROVIDER_ID));
+        Ok(())
     }
 
     #[test]
-    fn enable_in_zero_config_inserts_when_credentials_file_present() {
-        let path = fresh_tmp_creds_path("inserts");
-        fs::write(&path, "{}").unwrap();
+    fn enable_in_zero_config_inserts_when_credentials_file_present() -> anyhow::Result<()> {
+        let path = fresh_tmp_creds_path("inserts")?;
+        std::fs::write(&path, "{}")?;
         let mut config = Config::default();
         enable_in_zero_config_with_path(&mut config, &path);
-        let provider = config
-            .providers
-            .get(PROVIDER_ID)
-            .expect("`bitrouter` provider should be auto-enabled when creds file is present");
+        let provider = match config.providers.get(PROVIDER_ID) {
+            Some(provider) => provider,
+            None => anyhow::bail!("bitrouter provider was not auto-enabled"),
+        };
         assert!(
             provider.auto_discover,
             "auto_discover should be true so /models populates the routable list"
         );
+        Ok(())
     }
 
     #[test]
-    fn enable_in_zero_config_noop_when_already_configured() {
-        let path = fresh_tmp_creds_path("already");
-        fs::write(&path, "{}").unwrap();
+    fn enable_in_zero_config_noop_when_already_configured() -> anyhow::Result<()> {
+        let path = fresh_tmp_creds_path("already")?;
+        std::fs::write(&path, "{}")?;
         let mut config = Config::default();
         // Pre-populate with a sentinel `api_base` so we can prove we didn't
         // overwrite the existing entry.
@@ -283,85 +338,75 @@ mod tests {
             },
         );
         enable_in_zero_config_with_path(&mut config, &path);
-        assert_eq!(
-            config.providers.get(PROVIDER_ID).unwrap().api_base,
-            "https://example.invalid",
-            "existing entry must not be overwritten"
-        );
-    }
-
-    /// Write a credentials JSON file with the given access token and RFC 3339
-    /// `expires_at`, then load it into a store. The remaining required fields
-    /// are filled with placeholders — only the token + expiry matter here.
-    fn store_with_token(label: &str, access_token: &str, expires_at: &str) -> CredentialsStore {
-        let path = fresh_tmp_creds_path(label);
-        let json = serde_json::json!({
-            "access_token": access_token,
-            "expires_at": expires_at,
-            "token_type": "Bearer",
-            "scope": "telemetry:write",
-            "client_id": "bitrouter-cli",
-            "authorization_server": "https://api.bitrouter.ai",
-        });
-        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
-        CredentialsStore::load(&path).unwrap()
+        let provider = match config.providers.get(PROVIDER_ID) {
+            Some(provider) => provider,
+            None => anyhow::bail!("configured bitrouter provider disappeared"),
+        };
+        assert_eq!(provider.api_base, "https://example.invalid");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn cloud_bearer_source_none_when_not_signed_in() {
-        // Empty store (no credentials file) → no live source, and crucially no
-        // AS-metadata network call (the `store.current()?` short-circuits first).
-        let path = fresh_tmp_creds_path("absent");
-        let store = CredentialsStore::load(&path).unwrap();
-        assert!(store.current().is_none(), "precondition: empty store");
+    async fn cloud_bearer_source_none_when_not_signed_in() -> anyhow::Result<()> {
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("absent")?,
+            reqwest::Client::new(),
+        ));
         assert!(
-            cloud_bearer_source_from_store(store).await.is_none(),
-            "an empty credential store must not build a live bearer source"
+            cloud_bearer_source(manager, "https://telemetry.bitrouter.ai")
+                .await
+                .is_none()
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn cloud_bearer_source_uses_stored_api_key_without_metadata() {
-        let path = fresh_tmp_creds_path("api-key-bearer");
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store
+    async fn cloud_bearer_source_uses_same_origin_api_key() -> anyhow::Result<()> {
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("api-key-bearer")?,
+            reqwest::Client::new(),
+        ));
+        manager
             .save(StoredCredential::api_key(
                 "brk_telemetry.secret".to_owned(),
-                "https://unreachable.invalid".to_owned(),
+                "https://telemetry.bitrouter.ai".to_owned(),
             ))
-            .unwrap();
-
-        let source = cloud_bearer_source_from_store(store).await.unwrap();
-
+            .await?;
+        let source = match cloud_bearer_source(manager, "https://telemetry.bitrouter.ai").await {
+            Some(source) => source,
+            None => anyhow::bail!("stored API key did not produce a telemetry source"),
+        };
         assert_eq!(
             source.bearer().await.as_deref(),
             Some("brk_telemetry.secret")
         );
+        Ok(())
     }
 
     #[tokio::test]
     async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() -> anyhow::Result<()> {
-        let path = fresh_tmp_creds_path("gateway-origin");
-        let mut store = CredentialsStore::load(&path)?;
-        store.save(StoredCredential::api_key(
-            "brk_gateway.secret".to_owned(),
-            "https://api.bitrouter.ai".to_owned(),
-        ))?;
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("gateway-origin")?,
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::api_key(
+                "brk_gateway.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .await?;
 
         assert_eq!(
-            cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai/v1/responses")
-                .await
-                .as_deref(),
+            cloud_bearer_for_base_url_with_manager(
+                Arc::clone(&manager),
+                "https://api.bitrouter.ai/v1/responses",
+            )
+            .await
+            .as_deref(),
             Some("brk_gateway.secret")
         );
-
-        let mut store = CredentialsStore::load(&path)?;
-        store.save(StoredCredential::api_key(
-            "brk_gateway.secret".to_owned(),
-            "https://api.bitrouter.ai".to_owned(),
-        ))?;
         assert!(
-            cloud_bearer_for_base_url_from_store(store, "https://api.bitrouter.ai.evil/v1")
+            cloud_bearer_for_base_url_with_manager(manager, "https://api.bitrouter.ai.evil/v1")
                 .await
                 .is_none()
         );
@@ -371,69 +416,73 @@ mod tests {
     #[tokio::test]
     async fn settlement_resolver_rejects_oauth_but_accepts_same_origin_api_key()
     -> anyhow::Result<()> {
-        let oauth = store_with_token(
-            "settlement-oauth",
-            "oauth-access-token",
-            "2999-01-01T00:00:00Z",
-        );
+        let oauth = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("settlement-oauth")?,
+            reqwest::Client::new(),
+        ));
+        oauth
+            .save(StoredCredential::from(Credentials {
+                access_token: "oauth-access-token".to_owned(),
+                refresh_token: Some("oauth-refresh-token".to_owned()),
+                expires_at: Utc::now() + Duration::minutes(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: "https://api.bitrouter.ai".to_owned(),
+                namespace_id: Some("ns-test".to_owned()),
+                subject: None,
+            }))
+            .await?;
         assert!(
-            cloud_api_key_for_base_url_from_store(oauth, "https://api.bitrouter.ai")
+            oauth
+                .resolve_api_key(None, Some("https://api.bitrouter.ai"))
                 .await
-                .is_none()
+                .is_err()
         );
 
-        let path = fresh_tmp_creds_path("settlement-api-key");
-        let mut api_key = CredentialsStore::load(&path)?;
-        api_key.save(StoredCredential::api_key(
-            "brk_gateway.secret".to_owned(),
-            "https://api.bitrouter.ai".to_owned(),
-        ))?;
-        assert_eq!(
-            cloud_api_key_for_base_url_from_store(api_key, "https://api.bitrouter.ai/v1")
-                .await
-                .as_deref(),
-            Some("brk_gateway.secret")
-        );
+        let api_key = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("settlement-api-key")?,
+            reqwest::Client::new(),
+        ));
+        api_key
+            .save(StoredCredential::api_key(
+                "brk_gateway.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .await?;
+        let resolved = api_key
+            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
+            .await?;
+        assert_eq!(resolved.secret(), "brk_gateway.secret");
         Ok(())
     }
 
     #[test]
-    fn cloud_bearer_debug_redacts_store() {
-        // The `Debug` impl must never render the store (it holds the bearer /
-        // refresh token). A signed-in store would be `Some(creds)`; just prove
-        // the field is redacted on a constructed value.
-        let store = store_with_token("dbg", "bra_secret", "2999-01-01T00:00:00Z");
+    fn cloud_bearer_debug_redacts_manager() -> anyhow::Result<()> {
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("dbg")?,
+            reqwest::Client::new(),
+        ));
         let bearer = CloudBearer {
-            store: tokio::sync::Mutex::new(store),
-            client: reqwest::Client::new(),
-            metadata: Some(AsMetadata {
-                issuer: Some("https://api.bitrouter.ai".to_string()),
-                device_authorization_endpoint: "https://api.bitrouter.ai/device".to_string(),
-                token_endpoint: "https://api.bitrouter.ai/token".to_string(),
-                revocation_endpoint: None,
-            }),
+            manager,
+            expected_origin: "https://telemetry.bitrouter.ai".to_owned(),
         };
         let rendered = format!("{bearer:?}");
-        assert!(
-            !rendered.contains("bra_secret"),
-            "bearer token leaked in Debug: {rendered}"
-        );
         assert!(rendered.contains("<redacted>"));
+        Ok(())
     }
 
-    #[test]
-    fn malformed_credentials_file_is_swallowed_as_anonymous() {
-        // A corrupt credentials file makes `CredentialsStore::load` error; the
-        // `default_path().ok()?` in `cloud_bearer_source` swallows that into
-        // `None` so a broken file degrades to anonymous telemetry rather than
-        // breaking daemon startup. We can't drive the real default path here, so
-        // assert the load error that the `?` consumes.
-        let path = fresh_tmp_creds_path("malformed");
-        fs::write(&path, "{ not valid json").unwrap();
+    #[tokio::test]
+    async fn malformed_credentials_file_is_swallowed_as_anonymous() -> anyhow::Result<()> {
+        let path = fresh_tmp_creds_path("malformed")?;
+        std::fs::write(&path, "{ not valid json")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         assert!(
-            CredentialsStore::load(&path).is_err(),
-            "a malformed credentials file must surface as a load error for \
-             `cloud_bearer_source` to swallow into anonymous"
+            cloud_bearer_source(manager, "https://telemetry.bitrouter.ai")
+                .await
+                .is_none()
         );
+        Ok(())
     }
 }

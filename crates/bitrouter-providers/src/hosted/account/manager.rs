@@ -28,6 +28,18 @@ pub struct OauthIdentity {
     namespace_id: Option<String>,
 }
 
+impl OauthIdentity {
+    /// Return the authorization-server URL that issued the credential.
+    pub fn authorization_server(&self) -> &str {
+        &self.authorization_server
+    }
+
+    /// Return the namespace bound to the credential, if one was issued.
+    pub fn namespace_id(&self) -> Option<&str> {
+        self.namespace_id.as_deref()
+    }
+}
+
 /// A bearer credential resolved for one hosted request.
 pub struct ResolvedCredential {
     secret: String,

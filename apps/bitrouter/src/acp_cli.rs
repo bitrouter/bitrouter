@@ -294,7 +294,12 @@ pub async fn apply_routing(
 
     let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
     let stored_cloud_key = if explicit_key.is_none() && require_key && !target_is_local {
-        crate::cloud::cloud_bearer_for_base_url(&base_url).await
+        match crate::cloud::default_manager() {
+            Ok(manager) => {
+                crate::cloud::cloud_bearer_for_base_url_with_manager(manager, &base_url).await
+            }
+            Err(_) => None,
+        }
     } else {
         None
     };
