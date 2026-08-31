@@ -21,6 +21,7 @@ pub mod api_client;
 pub mod auth;
 pub mod cli;
 pub mod management;
+pub mod settlement;
 
 use std::sync::Arc;
 

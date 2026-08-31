@@ -697,17 +697,18 @@ benchmarks:
 
 ```text
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
-bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
+bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
 bitrouter workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
 bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
 
-`reconcile-metering` accepts either the API-key environment named by
-`--api-key-env` (default `BITROUTER_API_KEY`) or an owner-only BitRouter Cloud
-credential file. The latter resolves static keys and refreshable OAuth without
-putting a bearer in the environment. Price specs use
+`reconcile-metering` reads the API-key environment named by `--api-key-env`
+(default `BITROUTER_API_KEY`) first; a non-empty value takes precedence over
+the optional owner-only BitRouter Cloud credential file. That file must contain
+a static API key: OAuth credentials are rejected and are never refreshed for
+settlement. Price specs use
 `provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
 Repeat the same provider/model pair when a gateway may have applied one of
 several frozen schedules. A computed receipt is accepted only when exactly one
