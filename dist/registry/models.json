@@ -2195,6 +2195,30 @@
           },
           "provider": "qianfan",
           "provider_model_id": "deepseek-v4-flash-0731"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.44
+            },
+            "output_tokens": {
+              "text": 1.32
+            }
+          },
+          "provider": "tencent",
+          "provider_model_id": "deepseek-v4-flash-0731",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-07-31"
@@ -2579,6 +2603,30 @@
           },
           "provider": "openrouter",
           "provider_model_id": "deepseek/deepseek-v4-pro-0813"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.044,
+              "no_cache": 1.32
+            },
+            "output_tokens": {
+              "text": 3.96
+            }
+          },
+          "provider": "tencent",
+          "provider_model_id": "deepseek-v4-pro-0813",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-08-13"
