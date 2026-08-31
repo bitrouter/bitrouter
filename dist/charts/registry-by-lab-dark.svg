@@ -47,13 +47,13 @@
 <text class="model" x="46.0" y="325.0">qwen3.8-max</text>
 <text class="routes" x="286.0" y="325.0" text-anchor="end">5</text>
 <rect x="38.0" y="336.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="336.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
+<rect x="38.0" y="336.0" width="42.8" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="46.0" y="351.0">qwen3.8-2.4t-a95b</text>
-<text class="routes" x="286.0" y="351.0" text-anchor="end">3</text>
+<text class="routes" x="286.0" y="351.0" text-anchor="end">4</text>
 <rect x="38.0" y="362.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="362.0" width="32.1" height="22.0" rx="4" fill="#30363d"/>
+<rect x="38.0" y="362.0" width="42.8" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="46.0" y="377.0">qwen3.8-27b</text>
-<text class="routes" x="286.0" y="377.0" text-anchor="end">3</text>
+<text class="routes" x="286.0" y="377.0" text-anchor="end">4</text>
 <rect x="320.0" y="90.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="330.0" y="109.0">ANTHROPIC</text>
 <text class="lab-count" x="578.0" y="109.0" text-anchor="end">8</text>
@@ -136,23 +136,23 @@
 <text class="model" x="922.0" y="221.0">glm-4.7</text>
 <text class="routes" x="1162.0" y="221.0" text-anchor="end">9</text>
 <rect x="914.0" y="232.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="232.0" width="21.4" height="22.0" rx="4" fill="#30363d"/>
+<rect x="914.0" y="232.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="247.0">glm-5.3</text>
-<text class="routes" x="1162.0" y="247.0" text-anchor="end">2</text>
+<text class="routes" x="1162.0" y="247.0" text-anchor="end">5</text>
 <rect x="914.0" y="258.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="258.0" width="21.4" height="22.0" rx="4" fill="#30363d"/>
+<rect x="914.0" y="258.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="273.0">glm-5.3-flash</text>
-<text class="routes" x="1162.0" y="273.0" text-anchor="end">2</text>
+<text class="routes" x="1162.0" y="273.0" text-anchor="end">5</text>
 <rect x="28.0" y="410.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="38.0" y="429.0">XAI</text>
 <text class="lab-count" x="286.0" y="429.0" text-anchor="end">6</text>
 <rect x="38.0" y="448.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="448.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="463.0">grok-4.5</text>
-<text class="routes" x="286.0" y="463.0" text-anchor="end">7</text>
+<rect x="38.0" y="448.0" width="85.6" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="463.0">grok-4.6</text>
+<text class="routes" x="286.0" y="463.0" text-anchor="end">8</text>
 <rect x="38.0" y="474.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="38.0" y="474.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="489.0">grok-4.6</text>
+<text class="model" x="46.0" y="489.0">grok-4.5</text>
 <text class="routes" x="286.0" y="489.0" text-anchor="end">7</text>
 <rect x="38.0" y="500.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="38.0" y="500.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
@@ -257,5 +257,5 @@
 <rect x="330.0" y="690.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="338.0" y="705.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="705.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="772.0">54 models · 47 providers · 466 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="772.0">54 models · 47 providers · 475 model→provider routes · 12 providers billed by subscription</text>
 </svg>
