@@ -56,6 +56,30 @@ models:
     capabilities:
       - reasoning
       - tools
+  # TokenHub bills these dated GA models at peak/off-peak rates. The registry
+  # is static, so publish the peak rates to avoid underestimating route cost.
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.44
+        cache_read: 0.014
+      output_tokens:
+        text: 1.32
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v4-pro-0813
+    provider_model_id: deepseek-v4-pro-0813
+    pricing:
+      input_tokens:
+        no_cache: 1.32
+        cache_read: 0.044
+      output_tokens:
+        text: 3.96
+    capabilities:
+      - reasoning
+      - tools
   - id: z-ai/glm-5
     provider_model_id: glm-5
     pricing:
