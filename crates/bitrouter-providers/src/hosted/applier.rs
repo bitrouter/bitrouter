@@ -222,6 +222,26 @@ mod tests {
         target
     }
 
+    fn oauth_credential(
+        authorization_server: &str,
+        namespace_id: Option<&str>,
+        access_token: &str,
+        refresh_token: &str,
+    ) -> Credentials {
+        Credentials {
+            access_token: access_token.to_owned(),
+            refresh_token: Some(refresh_token.to_owned()),
+            expires_at: Utc::now() + Duration::hours(1),
+            refresh_token_expires_at: None,
+            token_type: "Bearer".to_owned(),
+            scope: "inference:invoke".to_owned(),
+            client_id: "bitrouter-cli".to_owned(),
+            authorization_server: authorization_server.to_owned(),
+            namespace_id: namespace_id.map(str::to_owned),
+            subject: Some("user-42".to_owned()),
+        }
+    }
+
     #[tokio::test]
     async fn preserves_request_authorization_header() -> anyhow::Result<()> {
         let path = tmp_creds_path("raw-authorization")?;
@@ -268,6 +288,122 @@ mod tests {
             .apply(empty_request()?, &target_with_api_key(""))
             .await?;
         assert_eq!(applied.headers()[AUTHORIZATION], "Bearer brk_stored.secret");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oauth_authority_survives_token_rotation_for_same_issuer_and_namespace()
+    -> anyhow::Result<()> {
+        let origin = "https://issuer.example";
+        let manager = Arc::new(CredentialManager::with_client(
+            tmp_creds_path("oauth-rotation-authority")?,
+            reqwest::Client::new(),
+        ));
+        let applier = BitrouterAuthApplier::new(Arc::clone(&manager));
+        let target = target_for_origin(origin);
+        manager
+            .save(StoredCredential::from(oauth_credential(
+                origin,
+                Some("ns-one"),
+                "access-before",
+                "refresh-before",
+            )))
+            .await?;
+        let before = applier.continuation_authority(&target).await?;
+        manager
+            .save(StoredCredential::from(oauth_credential(
+                origin,
+                Some("ns-one"),
+                "access-after",
+                "refresh-after",
+            )))
+            .await?;
+        let after = applier.continuation_authority(&target).await?;
+        assert_eq!(before, after);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oauth_authority_separates_issuer_and_namespace() -> anyhow::Result<()> {
+        let first_origin = "https://issuer-one.example";
+        let second_origin = "https://issuer-two.example";
+        let first_manager = Arc::new(CredentialManager::with_client(
+            tmp_creds_path("oauth-first-authority")?,
+            reqwest::Client::new(),
+        ));
+        first_manager
+            .save(StoredCredential::from(oauth_credential(
+                first_origin,
+                Some("ns-one"),
+                "access-first",
+                "refresh-first",
+            )))
+            .await?;
+        let first = BitrouterAuthApplier::new(first_manager)
+            .continuation_authority(&target_for_origin(first_origin))
+            .await?;
+
+        let second_manager = Arc::new(CredentialManager::with_client(
+            tmp_creds_path("oauth-second-authority")?,
+            reqwest::Client::new(),
+        ));
+        second_manager
+            .save(StoredCredential::from(oauth_credential(
+                second_origin,
+                Some("ns-two"),
+                "access-second",
+                "refresh-second",
+            )))
+            .await?;
+        let second = BitrouterAuthApplier::new(second_manager)
+            .continuation_authority(&target_for_origin(second_origin))
+            .await?;
+        assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oauth_without_namespace_has_no_continuation_authority() -> anyhow::Result<()> {
+        let origin = "https://issuer.example";
+        let manager = Arc::new(CredentialManager::with_client(
+            tmp_creds_path("oauth-missing-namespace")?,
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::from(oauth_credential(
+                origin,
+                None,
+                "access-token",
+                "refresh-token",
+            )))
+            .await?;
+        assert!(
+            BitrouterAuthApplier::new(manager)
+                .continuation_authority(&target_for_origin(origin))
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_authority_tracks_the_effective_api_key() -> anyhow::Result<()> {
+        let applier = BitrouterAuthApplier::new(Arc::new(CredentialManager::with_client(
+            tmp_creds_path("explicit-authority")?,
+            reqwest::Client::new(),
+        )));
+        let first = applier
+            .continuation_authority(&target_with_api_key("brk_first.secret"))
+            .await?;
+        let second = applier
+            .continuation_authority(&target_with_api_key("brk_second.secret"))
+            .await?;
+        let mut overridden = target_with_api_key("brk_base.secret");
+        overridden.api_key_override = Some("brk_override.secret".to_owned());
+        let override_authority = applier.continuation_authority(&overridden).await?;
+        assert_ne!(first, second);
+        assert_ne!(first, override_authority);
+        assert_ne!(second, override_authority);
         Ok(())
     }
 

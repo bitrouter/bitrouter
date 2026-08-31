@@ -32,6 +32,9 @@ use bitrouter_providers::hosted::applier::{BitrouterAuthApplier, PROVIDER_ID};
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::auth::AuthAppliers;
 
+const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
+const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
+
 /// Insert the `bitrouter` provider into `config.providers` when the user
 /// has run `bitrouter cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
@@ -136,10 +139,26 @@ pub async fn cloud_bearer_source(
     expected_origin: impl Into<String>,
 ) -> Option<Arc<dyn TelemetryBearer>> {
     manager.current().await.ok()??;
+    let expected_origin = credential_origin_for_exporter(&expected_origin.into());
     Some(Arc::new(CloudBearer {
         manager,
-        expected_origin: expected_origin.into(),
+        expected_origin,
     }))
+}
+
+/// Return the credential origin permitted for an OTLP exporter.
+///
+/// Account credentials are normally confined to the exporter's origin. The
+/// sole exception is the first-party telemetry service, which accepts the
+/// account credential registered at the hosted inference origin.
+fn credential_origin_for_exporter(exporter: &str) -> String {
+    let exporter_origin = reqwest::Url::parse(exporter)
+        .ok()
+        .map(|url| url.origin().ascii_serialization());
+    match exporter_origin.as_deref() {
+        Some(FIRST_PARTY_TELEMETRY_ORIGIN) => DEFAULT_ACCOUNT_ORIGIN.to_owned(),
+        _ => exporter.to_owned(),
+    }
 }
 
 /// Resolve the signed-in Cloud bearer only when `target_base_url` has the
@@ -361,7 +380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_bearer_source_uses_same_origin_api_key() -> anyhow::Result<()> {
+    async fn cloud_bearer_source_uses_custom_exporter_same_origin_api_key() -> anyhow::Result<()> {
         let manager = Arc::new(CredentialManager::with_client(
             fresh_tmp_creds_path("api-key-bearer")?,
             reqwest::Client::new(),
@@ -369,10 +388,11 @@ mod tests {
         manager
             .save(StoredCredential::api_key(
                 "brk_telemetry.secret".to_owned(),
-                "https://telemetry.bitrouter.ai".to_owned(),
+                "https://collector.example".to_owned(),
             ))
             .await?;
-        let source = match cloud_bearer_source(manager, "https://telemetry.bitrouter.ai").await {
+        let source = match cloud_bearer_source(manager, "https://collector.example/v1/traces").await
+        {
             Some(source) => source,
             None => anyhow::bail!("stored API key did not produce a telemetry source"),
         };
@@ -380,6 +400,52 @@ mod tests {
             source.bearer().await.as_deref(),
             Some("brk_telemetry.secret")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_first_party_exporter_uses_default_account_credential() -> anyhow::Result<()> {
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("default-telemetry-origin")?,
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::api_key(
+                "brk_default-account.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .await?;
+        let source = match cloud_bearer_source(manager, "https://telemetry.bitrouter.ai/v1/traces")
+            .await
+        {
+            Some(source) => source,
+            None => anyhow::bail!("default account credential did not produce telemetry source"),
+        };
+        assert_eq!(
+            source.bearer().await.as_deref(),
+            Some("brk_default-account.secret")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn custom_exporter_cannot_receive_default_account_credential() -> anyhow::Result<()> {
+        let manager = Arc::new(CredentialManager::with_client(
+            fresh_tmp_creds_path("custom-telemetry-origin")?,
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::api_key(
+                "brk_default-account.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .await?;
+        let source = match cloud_bearer_source(manager, "https://collector.example/v1/traces").await
+        {
+            Some(source) => source,
+            None => anyhow::bail!("stored credential did not produce telemetry source"),
+        };
+        assert!(source.bearer().await.is_none());
         Ok(())
     }
 
