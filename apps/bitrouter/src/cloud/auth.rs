@@ -14,7 +14,7 @@ use bitrouter_providers::hosted::account::flow;
 use bitrouter_providers::hosted::account::manager::CredentialManager;
 use bitrouter_providers::hosted::account::metadata::{self, AsMetadata};
 use bitrouter_providers::hosted::account::settings::{
-    Settings, require_secure_url, resolve_from_env,
+    Settings, require_secure_url, resolve, resolve_from_env,
 };
 
 /// User-supplied flag values for `bitrouter cloud login` / `logout`.
@@ -193,21 +193,34 @@ pub async fn logout(manager: Arc<CredentialManager>, inputs: LoginInputs) -> Res
         .oauth()
         .context("stored OAuth credential is missing its token payload")?
         .clone();
-    // For revoke we re-resolve settings so an explicit `--oauth-as` override
-    // wins. When no flag/env override is set we use the AS recorded in the
-    // credentials file. This handles the case where the user logged in
-    // against one AS and is now in a shell with a different env var set —
-    // the file's AS is the source of truth for revocation.
-    let settings = resolve_from_env(
-        inputs.authorization_server.as_deref(),
-        inputs.client_id.as_deref(),
-        inputs.scope.as_deref(),
-    )
-    .unwrap_or(Settings {
-        authorization_server: prior.authorization_server.clone(),
-        client_id: prior.client_id.clone(),
-        scope: prior.scope.clone(),
-    });
+    // The credential's issuer is the source of truth for revocation. Logout
+    // deliberately ignores ambient OAuth settings so a changed shell cannot
+    // redirect stored tokens to another origin. The CLI's explicit issuer and
+    // client overrides remain available for intentional recovery workflows.
+    let authorization_server = match inputs
+        .authorization_server
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => &prior.authorization_server,
+    };
+    let client_id = match inputs
+        .client_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => &prior.client_id,
+    };
+    let settings = resolve(
+        Some(authorization_server),
+        Some(client_id),
+        Some(&prior.scope),
+        None,
+        None,
+        None,
+    )?;
     let client = http_client()?;
     // Metadata discovery is best-effort for logout — if the AS is
     // unreachable we still delete the local file (so logout is never
@@ -316,7 +329,17 @@ pub async fn whoami(manager: Arc<CredentialManager>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::*;
+
+    const LOGOUT_CHILD_PATH: &str = "BITROUTER_TEST_LOGOUT_CREDENTIAL_PATH";
+    const LOGOUT_OVERRIDE_AS: &str = "BITROUTER_TEST_LOGOUT_OVERRIDE_AS";
+    const LOGOUT_OVERRIDE_CLIENT: &str = "BITROUTER_TEST_LOGOUT_OVERRIDE_CLIENT";
 
     fn test_manager() -> anyhow::Result<(tempfile::TempDir, Arc<CredentialManager>)> {
         let directory = tempfile::tempdir()?;
@@ -325,6 +348,114 @@ mod tests {
             reqwest::Client::new(),
         );
         Ok((directory, Arc::new(manager)))
+    }
+
+    async fn logout_server() -> MockServer {
+        let server = MockServer::start().await;
+        let uri = server.uri();
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": uri,
+                "device_authorization_endpoint": format!("{uri}/oauth/device"),
+                "token_endpoint": format!("{uri}/oauth/token"),
+                "revocation_endpoint": format!("{uri}/oauth/revoke"),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn oauth_credential(authorization_server: String, client_id: &str) -> StoredCredential {
+        StoredCredential::from(Credentials {
+            access_token: "stored-access".to_owned(),
+            refresh_token: Some("stored-refresh".to_owned()),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            refresh_token_expires_at: None,
+            token_type: "Bearer".to_owned(),
+            scope: "stored:scope".to_owned(),
+            client_id: client_id.to_owned(),
+            authorization_server,
+            namespace_id: Some("ns-test".to_owned()),
+            subject: Some("user-test".to_owned()),
+        })
+    }
+
+    async fn received_requests(server: &MockServer) -> anyhow::Result<Vec<wiremock::Request>> {
+        server
+            .received_requests()
+            .await
+            .context("wiremock did not retain received requests")
+    }
+
+    async fn run_logout_child(
+        manager: &CredentialManager,
+        ambient_server: &str,
+        override_server: Option<&str>,
+        override_client: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let executable = std::env::current_exe().context("resolving current test executable")?;
+        let mut command = tokio::process::Command::new(executable);
+        command
+            .arg("--exact")
+            .arg("cloud::auth::tests::logout_child_process")
+            .arg("--nocapture")
+            .env(LOGOUT_CHILD_PATH, manager.path())
+            .env("BITROUTER_OAUTH_AS", ambient_server)
+            .env("BITROUTER_OAUTH_CLIENT_ID", "ambient-client")
+            .env("BITROUTER_OAUTH_SCOPE", "ambient:scope");
+        match override_server {
+            Some(value) => {
+                command.env(LOGOUT_OVERRIDE_AS, value);
+            }
+            None => {
+                command.env_remove(LOGOUT_OVERRIDE_AS);
+            }
+        }
+        match override_client {
+            Some(value) => {
+                command.env(LOGOUT_OVERRIDE_CLIENT, value);
+            }
+            None => {
+                command.env_remove(LOGOUT_OVERRIDE_CLIENT);
+            }
+        }
+        let output = command
+            .output()
+            .await
+            .context("running isolated logout test process")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "logout child failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_child_process() -> anyhow::Result<()> {
+        let path = match std::env::var_os(LOGOUT_CHILD_PATH) {
+            Some(path) => PathBuf::from(path),
+            None => return Ok(()),
+        };
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
+        logout(
+            manager,
+            LoginInputs {
+                authorization_server: std::env::var(LOGOUT_OVERRIDE_AS).ok(),
+                client_id: std::env::var(LOGOUT_OVERRIDE_CLIENT).ok(),
+                scope: None,
+                api_key: None,
+            },
+        )
+        .await
     }
 
     #[test]
@@ -387,6 +518,75 @@ mod tests {
         logout(Arc::clone(&manager), LoginInputs::default()).await?;
 
         assert!(manager.current().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oauth_logout_revokes_at_recorded_origin_despite_ambient_settings() -> anyhow::Result<()>
+    {
+        let recorded = logout_server().await;
+        let ambient = logout_server().await;
+        let (_directory, manager) = test_manager()?;
+        manager
+            .save(oauth_credential(recorded.uri(), "stored-client"))
+            .await?;
+
+        run_logout_child(&manager, &ambient.uri(), None, None).await?;
+
+        let recorded_requests = received_requests(&recorded).await?;
+        let ambient_requests = received_requests(&ambient).await?;
+        assert_eq!(recorded_requests.len(), 3);
+        assert!(ambient_requests.is_empty());
+        let revoke_bodies = recorded_requests
+            .iter()
+            .filter(|request| request.url.path() == "/oauth/revoke")
+            .map(|request| String::from_utf8_lossy(&request.body))
+            .collect::<Vec<_>>();
+        assert_eq!(revoke_bodies.len(), 2);
+        assert!(
+            revoke_bodies
+                .iter()
+                .all(|body| body.contains("client_id=stored-client"))
+        );
+        assert!(manager.current().await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oauth_logout_honors_explicit_origin_and_client_override() -> anyhow::Result<()> {
+        let recorded = logout_server().await;
+        let override_server = logout_server().await;
+        let ambient = logout_server().await;
+        let (_directory, manager) = test_manager()?;
+        manager
+            .save(oauth_credential(recorded.uri(), "stored-client"))
+            .await?;
+
+        run_logout_child(
+            &manager,
+            &ambient.uri(),
+            Some(&override_server.uri()),
+            Some("override-client"),
+        )
+        .await?;
+
+        let recorded_requests = received_requests(&recorded).await?;
+        let override_requests = received_requests(&override_server).await?;
+        let ambient_requests = received_requests(&ambient).await?;
+        assert!(recorded_requests.is_empty());
+        assert_eq!(override_requests.len(), 3);
+        assert!(ambient_requests.is_empty());
+        let revoke_bodies = override_requests
+            .iter()
+            .filter(|request| request.url.path() == "/oauth/revoke")
+            .map(|request| String::from_utf8_lossy(&request.body))
+            .collect::<Vec<_>>();
+        assert_eq!(revoke_bodies.len(), 2);
+        assert!(
+            revoke_bodies
+                .iter()
+                .all(|body| body.contains("client_id=override-client"))
+        );
         Ok(())
     }
 }
