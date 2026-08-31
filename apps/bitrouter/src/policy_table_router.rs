@@ -35,6 +35,8 @@ use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
+use crate::eval::types::{EvalExperimentRef, ExperimentArm};
+use crate::optimization::exploration::RouteExploration;
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
@@ -118,6 +120,7 @@ pub struct PolicyDecision {
     pub trajectory_health_digest: Option<String>,
     pub progress_candidate_tier: Option<String>,
     pub progress_clause_ids: Vec<String>,
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 impl PolicyDecision {
@@ -316,6 +319,7 @@ pub struct PolicyTableRouter {
     identity_tracker: WorkflowIdentityTracker,
     eval_observer: Option<EvalDecisionObserver>,
     progress_guard: Option<ProgressGuardPolicy>,
+    exploration: Option<RouteExploration>,
 }
 
 #[derive(Clone)]
@@ -341,6 +345,7 @@ impl PolicyTableRouter {
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
             progress_guard: None,
+            exploration: None,
         })
     }
 
@@ -423,6 +428,7 @@ impl PolicyTableRouter {
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
             progress_guard: None,
+            exploration: None,
         }
     }
 
@@ -465,6 +471,11 @@ impl PolicyTableRouter {
 
     pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
         self.progress_guard = guard;
+        self
+    }
+
+    pub(crate) fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
+        self.exploration = exploration;
         self
     }
 
@@ -614,6 +625,7 @@ impl PolicyTableRouter {
             trajectory_health_digest: None,
             progress_candidate_tier: None,
             progress_clause_ids: Vec::new(),
+            experiment: None,
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -639,10 +651,32 @@ impl PolicyTableRouter {
         decision.static_effort = table
             .effort_of_tier(raw_static_tier)
             .or(decision.input_effort);
+        let (assigned_tier, experiment) = match self
+            .exploration
+            .as_ref()
+            .filter(|exploration| exploration.target_request_key == decision.route_projection)
+        {
+            Some(exploration) => match exploration
+                .assignment(&decision.workflow_identity)
+                .ok()
+                .flatten()
+            {
+                Some(assignment) => {
+                    let tier = match assignment.arm {
+                        ExperimentArm::Control => exploration.champion_tier.as_str(),
+                        ExperimentArm::Challenger => exploration.challenger_tier.as_str(),
+                    };
+                    (tier, Some(assignment))
+                }
+                None => (exploration.champion_tier.as_str(), None),
+            },
+            None => (raw_static_tier, None),
+        };
+        decision.experiment = experiment;
         let (selected_tier, static_clamped) = if apply_tool_floor {
-            table.guardrail_with_status(raw_static_tier, prompt)
+            table.guardrail_with_status(assigned_tier, prompt)
         } else {
-            (raw_static_tier, false)
+            (assigned_tier, false)
         };
         decision.reason = if static_clamped {
             PolicyDecisionReason::ToolGuardrail
@@ -886,6 +920,7 @@ impl PolicyTableRouter {
                     selected_effort: decision.selected_effort,
                     baseline_tier: baseline_tier.clone(),
                     baseline_effort,
+                    experiment: decision.experiment.clone(),
                     preset: Some(observer.policy.clone()),
                     holdout: false,
                     continuation_proposed_tier: bounded_continuation_label(
@@ -1187,6 +1222,7 @@ mod tests {
         EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
     };
     use crate::metering::PricingTable;
+    use crate::optimization::exploration::{OptimizationGate, RouteExploration};
     use crate::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
     use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
@@ -1502,6 +1538,177 @@ mod tests {
             ),
             "vendor/flagship"
         );
+    }
+
+    #[test]
+    fn exploration_assignment_precedes_tool_clamping() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "strong".into(),
+        );
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+
+        let non_target = router.decision_for(&prompt("inbound"), &HeaderMap::new());
+        assert_eq!(non_target.selected_tier.as_deref(), Some("strong"));
+
+        let mut with_tool = prompt("inbound");
+        with_tool.tools = vec![a_tool()];
+        let clamped = router.decision_for(&with_tool, &headers);
+        assert_eq!(clamped.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            clamped.experiment.as_ref().map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exploration_targets_exact_projection_when_static_route_uses_unknown_fallback()
+    -> anyhow::Result<()> {
+        let config = comparator_config();
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|code:debugging|implement|normal".into(),
+            champion_tier: "economy".into(),
+            challenger_tier: "strong".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+        let mut routed = prompt("inbound");
+        routed.messages = completed_read_step();
+
+        let decision = router.decision_for(&routed, &headers);
+
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:debugging|implement|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            decision
+                .experiment
+                .as_ref()
+                .map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exploration_without_stable_identity_uses_signed_champion_control() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "economy".into(),
+        );
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+
+        let decision = router.decision_for(&prompt("inbound"), &HeaderMap::new());
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(decision.experiment, None);
+        Ok(())
+    }
+
+    #[test]
+    fn progress_guard_clamp_preserves_the_assigned_challenger_arm() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "strong".into(),
+        );
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+        let mut decision = router.candidate_for_guarded_policy(&prompt("inbound"), &headers);
+
+        router.apply_guarded_route(&mut decision, Some("strong"), true, false);
+
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            decision
+                .experiment
+                .as_ref()
+                .map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
     }
 
     #[test]

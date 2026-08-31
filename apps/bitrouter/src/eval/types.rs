@@ -25,6 +25,30 @@ pub enum EvalSubjectStatus {
     Evaluated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentArm {
+    Control,
+    Challenger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentAssignmentUnit {
+    Task,
+    Episode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalExperimentRef {
+    pub experiment_id: String,
+    pub arm: ExperimentArm,
+    pub assignment_unit: ExperimentAssignmentUnit,
+    pub assignment_id_digest: String,
+    pub challenger_propensity_ppm: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalDecisionRef {
@@ -39,6 +63,8 @@ pub struct EvalDecisionRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_effort: Option<ReasoningEffort>,
     pub policy_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +240,21 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
         validate_identifier(&decision.request_key, "decision.request_key")?;
         validate_identifier(&decision.selected_tier, "decision.selected_tier")?;
         validate_digest(&decision.policy_digest, "decision.policy_digest")?;
+        if let Some(experiment) = &decision.experiment {
+            validate_digest(
+                &experiment.experiment_id,
+                "decision.experiment.experiment_id",
+            )?;
+            validate_digest(
+                &experiment.assignment_id_digest,
+                "decision.experiment.assignment_id_digest",
+            )?;
+            if !(1..=1_000_000).contains(&experiment.challenger_propensity_ppm) {
+                anyhow::bail!(
+                    "decision.experiment.challenger_propensity_ppm must be between 1 and 1000000"
+                )
+            }
+        }
     }
     for dimension in &subject.requested_dimensions {
         validate_metric_id(dimension)?;
@@ -549,6 +590,7 @@ mod tests {
             baseline_tier: Some("balanced".into()),
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
+            experiment: None,
         });
         assert!(validate_subject(&subject).is_err());
     }
@@ -566,12 +608,52 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
+            experiment: None,
         };
         subject.decisions = vec![decision.clone(), decision];
 
         let error = validate_subject(&subject).expect_err("duplicate decisions must fail closed");
 
         assert!(error.to_string().contains("duplicate eval decision id"));
+    }
+
+    #[test]
+    fn decision_experiment_metadata_is_backward_compatible_and_canonical() -> anyhow::Result<()> {
+        let legacy = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "route_projection": "agent_route/v1|code:generation|implement|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
+            "selected_tier": "strong",
+            "baseline_tier": "strong",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+        let old: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
+        assert_eq!(old.experiment, None);
+        assert_eq!(serde_json::to_value(old)?, legacy);
+
+        let experiment = EvalExperimentRef {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            arm: ExperimentArm::Challenger,
+            assignment_unit: ExperimentAssignmentUnit::Task,
+            assignment_id_digest:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            challenger_propensity_ppm: 100_000,
+        };
+        let mut decision: EvalDecisionRef = serde_json::from_value(legacy)?;
+        decision.experiment = Some(experiment);
+        assert_eq!(
+            serde_json::to_value(decision)?["experiment"],
+            serde_json::json!({
+                "experiment_id": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "arm": "challenger",
+                "assignment_unit": "task",
+                "assignment_id_digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "challenger_propensity_ppm": 100000
+            })
+        );
+        Ok(())
     }
 
     #[test]

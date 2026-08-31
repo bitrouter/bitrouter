@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login as cloud_login};
@@ -190,24 +190,6 @@ pub struct OnboardingFlags {
     pub model: Option<String>,
     /// (Step 3) Write a starter `bitrouter.yaml`.
     pub write_config: bool,
-    /// Optional generic workflow optimization onboarding.
-    pub optimization: Option<OnboardingOptimization>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OnboardingOptimization {
-    /// Exact argv when already supplied; interactive onboarding fills it in.
-    pub workflow_command: Option<Vec<String>>,
-    /// Ignored/generated dependency or fixture roots frozen for each variant.
-    pub workflow_inputs: Vec<PathBuf>,
-    /// Observable success criteria; interactive onboarding fills it in.
-    pub success_contract: Option<String>,
-    pub strong: Option<String>,
-    pub strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub economy: Option<String>,
-    pub economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    pub normalized_price_overrides: Vec<String>,
-    pub preference: crate::optimization::OptimizationPreference,
 }
 
 impl Default for OnboardingFlags {
@@ -227,7 +209,6 @@ impl Default for OnboardingFlags {
             after: None,
             model: None,
             write_config: false,
-            optimization: None,
         }
     }
 }
@@ -266,19 +247,6 @@ pub struct OnboardingReport {
     pub after: String,
     /// The paste-in snippet for `after: serve`; `null` otherwise.
     pub snippet: Option<Snippet>,
-    /// Version-controlled optimization files configured during onboarding.
-    pub optimization: Option<OptimizationOnboardingReport>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct OptimizationOnboardingReport {
-    pub intent: String,
-    pub lock: String,
-    pub evaluator: String,
-    pub strong: String,
-    pub economy: String,
-    pub normalized_price_overrides: Vec<String>,
-    pub preference: crate::optimization::OptimizationPreference,
 }
 
 impl CliReport for OnboardingReport {
@@ -304,21 +272,6 @@ impl CliReport for OnboardingReport {
             },
         )?;
         h.field("after", &self.after)?;
-        if let Some(optimization) = &self.optimization {
-            h.field("optimization intent", &optimization.intent)?;
-            h.field("optimization lock", &optimization.lock)?;
-            h.field("quality evaluator", &optimization.evaluator)?;
-            h.field("strong route", &optimization.strong)?;
-            h.field("economy route", &optimization.economy)?;
-            h.field(
-                "normalized prices",
-                if optimization.normalized_price_overrides.is_empty() {
-                    "provider catalog".to_string()
-                } else {
-                    optimization.normalized_price_overrides.join(", ")
-                },
-            )?;
-        }
         if let Some(snippet) = &self.snippet {
             h.blank()?;
             h.line(&format!("paste-in wiring ({}):", snippet.base_url))?;
@@ -450,7 +403,6 @@ fn empty_report() -> OnboardingReport {
         harnesses_installed: Vec::new(),
         after: AfterAction::Exit.as_str().to_string(),
         snippet: None,
-        optimization: None,
     }
 }
 
@@ -459,9 +411,6 @@ fn empty_report() -> OnboardingReport {
 // =====================================================================
 
 async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
-    if let Some(optimization) = flags.optimization.as_ref() {
-        preflight_headless_optimization_routes(&flags.config, optimization).await?;
-    }
     let signals = probe();
     // Already-present credentials always count (spec §4: "consume
     // already-present credentials + flag-supplied keys").
@@ -502,15 +451,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         }
     }
 
-    let optimization = match flags.optimization.clone() {
-        Some(optimization) => Some(
-            configure_optimization(&flags.config, optimization, &installed)
-                .await
-                .context("configuring workflow optimization during onboarding")?,
-        ),
-        None => None,
-    };
-
     // --- Step 3: finish ---
     let after = flags.after.unwrap_or(AfterAction::Exit);
     let mut report = OnboardingReport {
@@ -520,7 +460,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
-        optimization,
     };
 
     match after {
@@ -547,32 +486,6 @@ async fn run_headless(flags: OnboardingFlags, output: &Output) -> Result<()> {
         AfterAction::Serve => finish_serve(report, output).await,
         AfterAction::Exit => emit(output, &report),
     }
-}
-
-async fn preflight_headless_optimization_routes(
-    config: &Path,
-    requested: &OnboardingOptimization,
-) -> Result<()> {
-    let (existing_strong, existing_economy) = if config.is_file() {
-        crate::optimization::setup::existing_tier_routes(config, "auto").await?
-    } else {
-        (None, None)
-    };
-    resolve_onboarding_route(
-        "strong",
-        requested.strong.clone(),
-        requested.strong_effort,
-        existing_strong,
-        false,
-    )?;
-    resolve_onboarding_route(
-        "economy",
-        requested.economy.clone(),
-        requested.economy_effort,
-        existing_economy,
-        false,
-    )?;
-    Ok(())
 }
 
 /// Apply the flag-supplied credentials shared by both the headless runner and
@@ -706,27 +619,6 @@ async fn run_interactive(
     // --- Step 2: harness ---
     let installed = interactive_harness(&flags).await?;
 
-    // --- Optional workflow optimization ---
-    let optimization_request = interactive_optimization(&flags)?;
-    let optimization = if let Some(optimization_request) = optimization_request {
-        if !flags.config.is_file() {
-            match crate::commands::write_starter_config(&flags.config, flags.force).await? {
-                ScaffoldOutcome::Wrote => note(&format!(
-                    "wrote starter config to {}",
-                    flags.config.display()
-                )),
-                ScaffoldOutcome::Skipped => {}
-            }
-        }
-        Some(
-            configure_optimization(&flags.config, optimization_request, &installed)
-                .await
-                .context("configuring workflow optimization during onboarding")?,
-        )
-    } else {
-        None
-    };
-
     // --- Step 3: finish ---
     let after = interactive_after(&flags, &installed)?;
 
@@ -737,7 +629,6 @@ async fn run_interactive(
         harnesses_installed: installed.clone(),
         after: after.as_str().to_string(),
         snippet: None,
-        optimization,
     };
 
     match after {
@@ -893,264 +784,6 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
         }
     }
     Ok(installed)
-}
-
-fn interactive_optimization(flags: &OnboardingFlags) -> Result<Option<OnboardingOptimization>> {
-    let requested = match flags.optimization.clone() {
-        Some(requested) => requested,
-        None if !prompt_yes_no(
-            "Optimize an agent workflow with measured quality and cost?",
-            false,
-        ) =>
-        {
-            return Ok(None);
-        }
-        None => OnboardingOptimization {
-            workflow_command: None,
-            workflow_inputs: Vec::new(),
-            success_contract: None,
-            strong: None,
-            strong_effort: None,
-            economy: None,
-            economy_effort: None,
-            normalized_price_overrides: Vec::new(),
-            preference: crate::optimization::OptimizationPreference::Balanced,
-        },
-    };
-    eprintln!();
-    eprintln!("Workflow optimization — generic agentic evaluation");
-    let workflow_command = match requested.workflow_command {
-        Some(command) => command,
-        None => interactive_workflow_command(&flags.config)?,
-    };
-    let success_contract = match requested.success_contract {
-        Some(contract) => contract,
-        None => prompt_line("  What observable output means the workflow succeeded? ")?,
-    };
-    let workflow_inputs = if flags.optimization.is_some() {
-        requested.workflow_inputs
-    } else {
-        let raw = prompt_line(
-            "  Ignored dependency/input paths as JSON (example: [\"node_modules\"]) [[]]: ",
-        )?;
-        if raw.trim().is_empty() {
-            Vec::new()
-        } else {
-            serde_json::from_str::<Vec<PathBuf>>(&raw)
-                .context("workflow inputs must be a JSON string array")?
-        }
-    };
-    if success_contract.trim().is_empty() {
-        anyhow::bail!("workflow success criteria must not be empty");
-    }
-    let preference = if flags.optimization.is_some() {
-        requested.preference
-    } else {
-        let answer =
-            prompt_line("  Trade-off [quality-first/balanced/savings-first] [balanced]: ")?;
-        match answer.trim().to_ascii_lowercase().as_str() {
-            "quality-first" | "quality_first" => {
-                crate::optimization::OptimizationPreference::QualityFirst
-            }
-            "savings-first" | "savings_first" => {
-                crate::optimization::OptimizationPreference::SavingsFirst
-            }
-            _ => crate::optimization::OptimizationPreference::Balanced,
-        }
-    };
-    Ok(Some(OnboardingOptimization {
-        workflow_command: Some(workflow_command),
-        workflow_inputs,
-        success_contract: Some(success_contract),
-        strong: requested.strong,
-        strong_effort: requested.strong_effort,
-        economy: requested.economy,
-        economy_effort: requested.economy_effort,
-        normalized_price_overrides: requested.normalized_price_overrides,
-        preference,
-    }))
-}
-
-fn interactive_workflow_command(config: &Path) -> Result<Vec<String>> {
-    use crate::optimization::discovery::GuidedWorkflow;
-
-    let root = config.parent().unwrap_or_else(|| Path::new("."));
-    match crate::optimization::discovery::resolve_guided_workflow(root, None, Vec::new())? {
-        GuidedWorkflow::Resolved { command, evidence } => {
-            note(&format!("using discovered workflow: {evidence}"));
-            Ok(command)
-        }
-        GuidedWorkflow::Choose(candidates) => {
-            eprintln!("  Candidate agent workflows:");
-            for (index, candidate) in candidates.iter().enumerate() {
-                eprintln!(
-                    "    {}) {}  [{}]",
-                    index + 1,
-                    candidate.command.join(" "),
-                    candidate.evidence
-                );
-            }
-            let answer = prompt_line("  Select workflow [1]: ")?;
-            let selected = if answer.is_empty() {
-                1
-            } else {
-                answer
-                    .parse::<usize>()
-                    .context("workflow selection must be a candidate number")?
-            };
-            candidates
-                .get(selected.saturating_sub(1))
-                .map(|candidate| candidate.command.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("workflow selection {selected} is outside the candidate list")
-                })
-        }
-        GuidedWorkflow::Missing => {
-            let raw =
-                prompt_line("  Workflow argv as JSON (example: [\"npm\",\"run\",\"eval\"]): ")?;
-            let command: Vec<String> = serde_json::from_str(&raw)
-                .context("workflow command must be a JSON string array")?;
-            crate::optimization::WorkflowCommand {
-                command: command.clone(),
-                inputs: Vec::new(),
-                timeout_secs: 1,
-            }
-            .validate()?;
-            Ok(command)
-        }
-    }
-}
-
-fn resolve_onboarding_route(
-    label: &str,
-    requested: Option<String>,
-    requested_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    existing: Option<crate::optimization::setup::ExistingTierRoute>,
-    interactive: bool,
-) -> Result<(
-    String,
-    Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-)> {
-    if let Some(route) = requested {
-        return Ok((route, requested_effort));
-    }
-    if let Some(existing) = existing {
-        if requested_effort.is_some() && requested_effort != existing.effort {
-            anyhow::bail!("optimization {label} effort requires an explicit {label} route");
-        }
-        return Ok((existing.model, existing.effort));
-    }
-    if !interactive {
-        anyhow::bail!(
-            "no {label} route exists in bitrouter/auto; pass --optimize-{label} with a provider-qualified model"
-        );
-    }
-    let route = prompt_line(&format!("  {label} route (provider:model): "))?;
-    if route.trim().is_empty() {
-        anyhow::bail!("{label} route is required");
-    }
-    Ok((route, requested_effort))
-}
-
-async fn configure_optimization(
-    config: &std::path::Path,
-    requested: OnboardingOptimization,
-    installed: &[String],
-) -> Result<OptimizationOnboardingReport> {
-    use std::io::IsTerminal;
-
-    let workflow_command = match requested.workflow_command {
-        Some(command) => command,
-        None => {
-            let root = config.parent().unwrap_or_else(|| Path::new("."));
-            match crate::optimization::discovery::resolve_guided_workflow(root, None, Vec::new())? {
-                crate::optimization::discovery::GuidedWorkflow::Resolved { command, evidence } => {
-                    note(&format!("using discovered workflow: {evidence}"));
-                    command
-                }
-                crate::optimization::discovery::GuidedWorkflow::Choose(candidates) => {
-                    let choices = candidates
-                        .iter()
-                        .map(|candidate| candidate.command.join(" "))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!(
-                        "multiple optimization workflows were discovered ({choices}); pass --optimize-workflow-command and repeated --optimize-workflow-arg values"
-                    );
-                }
-                crate::optimization::discovery::GuidedWorkflow::Missing => anyhow::bail!(
-                    "no optimization workflow was discovered; pass --optimize-workflow-command and repeated --optimize-workflow-arg values"
-                ),
-            }
-        }
-    };
-    let success_contract = requested.success_contract.ok_or_else(|| {
-        anyhow::anyhow!("headless optimization onboarding requires --optimize-success")
-    })?;
-    let (existing_strong, existing_economy) =
-        crate::optimization::setup::existing_tier_routes(config, "auto").await?;
-    let interactive = std::io::stdin().is_terminal();
-    let (strong, strong_effort) = resolve_onboarding_route(
-        "strong",
-        requested.strong,
-        requested.strong_effort,
-        existing_strong,
-        interactive,
-    )?;
-    let (economy, economy_effort) = resolve_onboarding_route(
-        "economy",
-        requested.economy,
-        requested.economy_effort,
-        existing_economy,
-        interactive,
-    )?;
-    let evaluator_agent = if installed.iter().any(|agent| agent.contains("codex")) {
-        "codex-acp"
-    } else if installed.iter().any(|agent| agent.contains("claude")) {
-        "claude-acp"
-    } else {
-        anyhow::bail!(
-            "workflow optimization requires a detected Codex or Claude ACP evaluator; install one and rerun onboarding, or use `bitrouter optimize setup` explicitly"
-        )
-    };
-    let intent_path = config.with_file_name(crate::optimization::DEFAULT_INTENT_FILENAME);
-    let contract_path = config.with_file_name(crate::optimization::DEFAULT_CONTRACT_FILENAME);
-    let outcome = crate::optimization::setup::setup_optimization(
-        crate::optimization::setup::SetupOptimizationRequest {
-            intent_path,
-            source_config: config.to_path_buf(),
-            workflow_command,
-            workflow_inputs: requested.workflow_inputs,
-            timeout_secs: 1800,
-            contract: contract_path,
-            contract_contents: Some(format!(
-                "# Workflow success contract\n\n{success_contract}\n"
-            )),
-            policy: "auto".into(),
-            preset: "auto".into(),
-            strong,
-            strong_effort,
-            economy,
-            economy_effort,
-            normalized_price_overrides: requested.normalized_price_overrides,
-            preference: requested.preference,
-            evaluator_agent: evaluator_agent.into(),
-            evaluator_model: None,
-            evaluator_route: crate::optimization::EvaluatorRoute::Direct,
-        },
-    )
-    .await?;
-    let strong_target = outcome.intent.strong_target().to_string();
-    let economy_target = outcome.intent.economy_target().to_string();
-    Ok(OptimizationOnboardingReport {
-        intent: outcome.paths.intent.display().to_string(),
-        lock: outcome.paths.lock.display().to_string(),
-        evaluator: evaluator_agent.into(),
-        strong: strong_target,
-        economy: economy_target,
-        normalized_price_overrides: outcome.intent.normalized_price_overrides,
-        preference: outcome.intent.preference,
-    })
 }
 
 fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
@@ -1509,7 +1142,6 @@ mod tests {
             harnesses_installed: vec!["claude".to_string()],
             after: "launch".to_string(),
             snippet: None,
-            optimization: None,
         };
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "onboarding");
@@ -1526,6 +1158,39 @@ mod tests {
         // `snippet` is present-but-null when there is nothing to paste.
         assert!(v.get("snippet").is_some());
         assert!(v["snippet"].is_null());
+        assert!(
+            v.get("optimization").is_none(),
+            "onboarding must not expose the removed optimization workflow"
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_init_writes_no_removed_optimization_artifacts() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = directory.path().join("bitrouter.yaml");
+        run_headless(
+            OnboardingFlags {
+                config: config.clone(),
+                yes: true,
+                after: Some(AfterAction::Exit),
+                ..OnboardingFlags::default()
+            },
+            &Output::new(crate::output::Format::Json),
+        )
+        .await?;
+
+        assert!(config.is_file(), "normal starter config was not written");
+        for removed in [
+            "bitrouter.optimize.yaml",
+            "bitrouter.optimize.lock.yaml",
+            "bitrouter.eval.md",
+        ] {
+            assert!(
+                !directory.path().join(removed).exists(),
+                "removed onboarding artifact {removed} was written"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -1648,63 +1313,5 @@ mod tests {
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "status");
         assert_eq!(v["configured"], true);
-    }
-
-    #[test]
-    fn onboarding_route_resolution_is_explicit_or_reuses_auto() -> anyhow::Result<()> {
-        assert_eq!(
-            resolve_onboarding_route(
-                "strong",
-                Some("provider-a:model-a".into()),
-                Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
-                Some(crate::optimization::setup::ExistingTierRoute {
-                    model: "provider-b:model-b".into(),
-                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::Medium,),
-                }),
-                false,
-            )?,
-            (
-                "provider-a:model-a".into(),
-                Some(bitrouter_sdk::language_model::types::ReasoningEffort::High)
-            )
-        );
-        assert_eq!(
-            resolve_onboarding_route(
-                "economy",
-                None,
-                None,
-                Some(crate::optimization::setup::ExistingTierRoute {
-                    model: "provider-b:model-b".into(),
-                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
-                }),
-                false,
-            )?,
-            (
-                "provider-b:model-b".into(),
-                Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low)
-            )
-        );
-        let missing = resolve_onboarding_route("economy", None, None, None, false);
-        assert!(missing.is_err());
-        assert!(
-            missing
-                .err()
-                .map(|error| error.to_string())
-                .is_some_and(|message| message.contains("--optimize-economy"))
-        );
-        assert!(
-            resolve_onboarding_route(
-                "strong",
-                None,
-                Some(bitrouter_sdk::language_model::types::ReasoningEffort::Low),
-                Some(crate::optimization::setup::ExistingTierRoute {
-                    model: "provider-b:model-b".into(),
-                    effort: Some(bitrouter_sdk::language_model::types::ReasoningEffort::High),
-                }),
-                false,
-            )
-            .is_err()
-        );
-        Ok(())
     }
 }

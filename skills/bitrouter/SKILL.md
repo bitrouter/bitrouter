@@ -11,12 +11,11 @@ description: >
   migrating off LiteLLM /
   OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
   bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
-  Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing agent workflows
-  against eval quality and normalized routed cost. Trigger on "set up a local LLM proxy",
+  Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing routes from
+  traces and external evals. Trigger on "set up a local LLM proxy",
   "managed AI gateway", "replace litellm", "point claude code at a
   proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
-  port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
-  BitRouter directly.
+  port 4356, Harbor Terminus-2, or api.bitrouter.ai.
 license: Apache-2.0
 metadata:
   author: BitRouterAI
@@ -109,6 +108,10 @@ Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HO
 
 Two opt-in, restart-only subsystems record routed-request history: `trajectory` (task-neutral progress evidence, off by default) and `continuation` (Responses IDs, always on). Neither hot-reloads. Config keys, validation ranges, the privacy boundary, and `bitrouter trajectory inspect|replay|prune` are in `references/cli.md` → *Durable trajectory operations*.
 
+### History-driven optimization (Local)
+
+Run `bitrouter policy init auto --preset auto --economy provider:model`, use a coding agent or Terminal Bench normally through `bitrouter/auto`, submit external Eval results, then call `bitrouter optimize run --policy auto` and optionally `bitrouter optimize status --policy auto`. Repeat until `optimize run` reports `converged`; status only observes whether the signed policy is `exploring` or `idle`. `run` authorizes publication without manual approval. Champion-only history cold-starts signed exploration; later steps promote, retreat, hold, or converge. Only complete task/episode cohorts gate quality and complete-unit cost; request data only ranks opportunities. Evaluators preserve and never invent or edit router-authored experiment references. See `references/workflow-optimization.md`.
+
 **Subscription / OAuth providers.** Different — local login, not env vars:
 
 ```bash
@@ -171,7 +174,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent persistently (its native plugin; `bitrouter launch -a hermes` synthesizes a throwaway `HERMES_HOME` instead) |
 | `references/harness-openclaw.md` | Wiring OpenClaw persistently (its native plugin; `bitrouter launch -a openclaw` synthesizes a throwaway profile instead) |
 | `references/adaptive-routing.md` | Generic `bitrouter/auto` routing, trace projections, policy locks, and compatibility |
-| `references/workflow-optimization.md` | Version-controlled agentic quality/cost optimization: onboarding, run/review/publish loop, evaluator defaults, and failure semantics |
+| `references/workflow-optimization.md` | History-driven quality/cost optimization: normal traced use, external Eval admission, autonomous controller steps, and cohort rules |
 | `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |

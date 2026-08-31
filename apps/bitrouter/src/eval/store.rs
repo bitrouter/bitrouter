@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -380,7 +381,21 @@ impl EvalStore {
     }
 
     pub async fn freeze_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
-        self.freeze_snapshot_scoped(frozen_at, None, None).await
+        let snapshot = self.materialize_snapshot(frozen_at).await?;
+        self.persist_snapshot_scoped(&snapshot, None).await
+    }
+
+    /// Materialize the current admitted result set as one immutable manifest
+    /// inside a consistent read transaction without persisting a snapshot row.
+    pub async fn materialize_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
+        self.materialize_snapshot_scoped(frozen_at, None, None)
+            .await
+    }
+
+    /// Persist an exact manifest previously returned by
+    /// [`Self::materialize_snapshot`].
+    pub async fn persist_snapshot(&self, snapshot: &EvalSnapshot) -> Result<EvalSnapshot> {
+        self.persist_snapshot_scoped(snapshot, None).await
     }
 
     pub async fn freeze_snapshot_for_owner(
@@ -389,7 +404,10 @@ impl EvalStore {
         owner_user_id: &str,
     ) -> Result<EvalSnapshot> {
         validate_owner(owner_user_id)?;
-        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id), None)
+        let snapshot = self
+            .materialize_snapshot_scoped(frozen_at, Some(owner_user_id), None)
+            .await?;
+        self.persist_snapshot_scoped(&snapshot, Some(owner_user_id))
             .await
     }
 
@@ -407,11 +425,14 @@ impl EvalStore {
         if selected.is_empty() || selected.len() != result_ids.len() {
             anyhow::bail!("snapshot result ids must be a non-empty unique set");
         }
-        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id), Some(&selected))
+        let snapshot = self
+            .materialize_snapshot_scoped(frozen_at, Some(owner_user_id), Some(&selected))
+            .await?;
+        self.persist_snapshot_scoped(&snapshot, Some(owner_user_id))
             .await
     }
 
-    async fn freeze_snapshot_scoped(
+    async fn materialize_snapshot_scoped(
         &self,
         frozen_at: &str,
         owner_user_id: Option<&str>,
@@ -419,7 +440,16 @@ impl EvalStore {
     ) -> Result<EvalSnapshot> {
         chrono::DateTime::parse_from_rfc3339(frozen_at)
             .context("snapshot frozen_at must be RFC3339")?;
-        let latest = self.latest_admissions().await?;
+        let transaction = self.db.begin().await?;
+        let admission_rows = admission_entity::Entity::find()
+            .order_by_asc(admission_entity::Column::Sequence)
+            .all(&transaction)
+            .await?;
+        let mut latest = BTreeMap::new();
+        for row in admission_rows {
+            let event = admission_event(row)?;
+            latest.insert(event.result_id.clone(), event);
+        }
         let mut query = result_entity::Entity::find();
         if let Some(owner_user_id) = owner_user_id {
             query = query.filter(result_entity::Column::OwnerUserId.eq(owner_user_id));
@@ -429,7 +459,7 @@ impl EvalStore {
         }
         let rows = query
             .order_by_asc(result_entity::Column::ResultId)
-            .all(&self.db)
+            .all(&transaction)
             .await?;
         let mut entries = Vec::new();
         for row in rows {
@@ -443,7 +473,7 @@ impl EvalStore {
                 continue;
             }
             let subject = subject_entity::Entity::find_by_id(&row.eval_id)
-                .one(&self.db)
+                .one(&transaction)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -478,8 +508,28 @@ impl EvalStore {
             frozen_at: frozen_at.to_string(),
             entries,
         };
+        transaction.commit().await?;
+        Ok(snapshot)
+    }
+
+    async fn persist_snapshot_scoped(
+        &self,
+        snapshot: &EvalSnapshot,
+        owner_user_id: Option<&str>,
+    ) -> Result<EvalSnapshot> {
+        chrono::DateTime::parse_from_rfc3339(&snapshot.frozen_at)
+            .context("snapshot frozen_at must be RFC3339")?;
+        let snapshot_owner = owner_user_id.unwrap_or("*");
+        let expected_root = canonical_digest(&(
+            snapshot_owner,
+            snapshot.frozen_at.as_str(),
+            &snapshot.entries,
+        ))?;
+        if expected_root != snapshot.evidence_root {
+            anyhow::bail!("eval snapshot manifest does not match its evidence root");
+        }
         if let Some(existing) = self.snapshot_by_root(&snapshot.evidence_root).await? {
-            if existing.entries == snapshot.entries {
+            if existing == *snapshot {
                 return Ok(existing);
             }
             anyhow::bail!("eval snapshot root already exists with different entries");
@@ -488,16 +538,16 @@ impl EvalStore {
         let result_count = i32::try_from(snapshot.entries.len())
             .context("eval snapshot contains too many rows")?;
         snapshot_entity::ActiveModel {
-            evidence_root: Set(evidence_root),
+            evidence_root: Set(snapshot.evidence_root.clone()),
             owner_user_id: Set(snapshot_owner.to_string()),
             manifest_json: Set(manifest_json),
             result_count: Set(result_count),
-            frozen_at: Set(frozen_at.to_string()),
+            frozen_at: Set(snapshot.frozen_at.clone()),
         }
         .insert(&self.db)
         .await
         .context("freezing eval snapshot")?;
-        Ok(snapshot)
+        Ok(snapshot.clone())
     }
 
     pub async fn snapshot_by_root(&self, evidence_root: &str) -> Result<Option<EvalSnapshot>> {
@@ -722,6 +772,7 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
                 policy_digest: subject.policy_digest.clone(),
+                experiment: None,
             }];
             store.insert_subject(&subject).await?;
             let inserted = store.insert_result(&result(EvalVerdict::Pass)).await?;
