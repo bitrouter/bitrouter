@@ -746,15 +746,18 @@ dependencies = [
 name = "bitrouter-providers"
 version = "1.0.0-alpha.27"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bitrouter-sdk",
+ "chrono",
  "keyring",
  "rand 0.10.2",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",
