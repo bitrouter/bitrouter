@@ -186,13 +186,13 @@
 <text class="model" x="338.0" y="515.0">deepseek-v3.2</text>
 <text class="routes" x="578.0" y="515.0" text-anchor="end">13</text>
 <rect x="330.0" y="526.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="330.0" y="526.0" width="117.7" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="330.0" y="526.0" width="128.4" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="338.0" y="541.0">deepseek-v4-flash-0731</text>
-<text class="routes" x="578.0" y="541.0" text-anchor="end">11</text>
+<text class="routes" x="578.0" y="541.0" text-anchor="end">12</text>
 <rect x="330.0" y="552.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="330.0" y="552.0" width="32.1" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="330.0" y="552.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="338.0" y="567.0">deepseek-v4-pro-0813</text>
-<text class="routes" x="578.0" y="567.0" text-anchor="end">3</text>
+<text class="routes" x="578.0" y="567.0" text-anchor="end">4</text>
 <rect x="612.0" y="410.0" width="268.0" height="30.0" rx="5" fill="#0a0a0a"/>
 <text class="lab" x="622.0" y="429.0">GOOGLE</text>
 <text class="lab-count" x="870.0" y="429.0" text-anchor="end">4</text>
@@ -257,5 +257,5 @@
 <rect x="330.0" y="690.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="338.0" y="705.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="705.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="772.0">54 models · 47 providers · 475 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="772.0">54 models · 47 providers · 477 model→provider routes · 12 providers billed by subscription</text>
 </svg>
