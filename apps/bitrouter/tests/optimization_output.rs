@@ -19,7 +19,7 @@ fn report(action: &'static str, decision: &'static str) -> OptimizationControlle
             "sha256:4444444444444444444444444444444444444444444444444444444444444444".into(),
         ),
         treatment: Some(TreatmentReport {
-            target_request_key: "agent_trace/v2|edit|normal".into(),
+            target_request_key: "agent_route/v1|unknown|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 100_000,
@@ -66,7 +66,7 @@ fn status_report_is_a_read_only_controller_view() -> Result<()> {
     let rendered = String::from_utf8(Output::new(Format::Human).render_to_vec(&view))?;
 
     assert!(rendered.contains("optimization is exploring"));
-    assert!(rendered.contains("agent_trace/v2|edit|normal"));
+    assert!(rendered.contains("agent_route/v1|unknown|implement|normal"));
     assert!(!rendered.contains("review"));
     assert!(!rendered.contains("bitrouter optimize publish"));
     assert!(!rendered.contains("workflow"));

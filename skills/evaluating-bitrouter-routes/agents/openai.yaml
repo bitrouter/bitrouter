@@ -1,4 +1,4 @@
 interface:
   display_name: "Evaluate BitRouter Routes"
-  short_description: "Submit evidence-bound route evaluations"
-  default_prompt: "Use $evaluating-bitrouter-routes to create and submit an evidence-bound BitRouter evaluation."
+  short_description: "Build conservative route evidence packets"
+  default_prompt: "Use $evaluating-bitrouter-routes to turn verifier outcomes into conservative BitRouter route evidence."

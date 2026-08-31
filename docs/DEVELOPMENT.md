@@ -13,7 +13,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
-| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
+| `crates/bitrouter-tui`           | crate   | Terminal front-end for one ACP agent session (`bitrouter chat`) — the live `view` and its footer, transcript, tool cards, permission prompt, provider picker, cost figure, the `plain` form for a pipe, plus terminal custody (`lifecycle`) and the line editor (`editor`). Synchronous: no async runtime, no I/O of its own |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
@@ -27,7 +27,7 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`, `down` / `engine` / `up`); subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
-| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
+| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and it is enforced by the build rather than by review: the
@@ -39,6 +39,54 @@ UI lived inside the application, could reach any function in it, and accreted
 verbs with no command-line equivalent until it was deleted; a module boundary
 was a promise, this one is a compiler error. It also depends on neither
 `bitrouter-sdk` — only the ACP schema types, `ratatui`, and `crossterm`.
+
+The line is drawn on **knowledge, not medium**. Rendering something is never by
+itself a reason to keep it in the app, and a method BitRouter is currently
+alone in *serving* is still ACP: `providers/list` renders in the crate because
+`ProviderInfo` is an `agent-client-protocol-schema` type. What stays in the app
+is what the protocol does not carry — the `_meta` key naming a cost figure's
+scope (`apps/bitrouter/src/chat/cost.rs`), this process's stdin and signals,
+and anything needing `Config` or the control socket. The check is mechanical:
+`rg -n "bitrouter/costScope|COST_SCOPE_META_KEY" crates/bitrouter-tui/src`
+must return nothing.
+
+Where a control's honesty depends on something ACP does not carry, the crate
+takes it as a **parameter** rather than inferring it — `Picker::open` takes
+whether the agent serves `providers/*`, `Cost::new` takes whose spend the
+figure is — so there is no constructor that skips the question.
+
+The rule these add up to, and it is enforced rather than agreed:
+
+> **`apps/bitrouter` may touch the terminal. Only `bitrouter-tui` may draw on
+> it.**
+
+`apps/bitrouter` does not depend on `ratatui`. It cannot construct a widget, so
+every drawn thing goes through the renderer crate and the compiler says so —
+adding `ratatui` back to that manifest is the change to refuse in review.
+
+What the app keeps is `crossterm`, and that is the rule rather than an exception
+to it: crossterm is terminal **I/O** (owning stdin, bracketed paste, reading key
+events), which is this process's, while ratatui is **drawing**, which is the
+crate's.
+
+The last surface short of this was `status --watch`, a self-refreshing ratatui
+table over daemon-wide request rows. It could not move to `bitrouter-tui` —
+those rows come from the metering store and cover every caller, most of which
+never speak ACP, so importing them would have put a daemon-wide model inside a
+session-scoped crate. It was removed instead, and `bitrouter status --requests`
+prints the same data as text (`apps/bitrouter/src/tui/`, now a data layer and a
+formatter with no terminal code at all).
+
+The second line, which keeps the crate synchronous, is **meaning vs
+transport**. What a key *means* is a terminal fact and lives in the crate
+(`editor`: the line editor, `is_cancel`, `is_redraw`). *Owning stdin and
+delivering events* is a fact about the host process — what else it selects
+over, and which runtime it has — so the pump stays in the app
+(`apps/bitrouter/src/chat/input.rs`). The same cut keeps signal handling out
+(`crate::tui::lifecycle::Shutdown`) while terminal enter/restore stays in.
+`bitrouter-tui` therefore depends on no async runtime at all, and
+`cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
+checked.
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
 
 The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate while both ACP and the API ride inside the SDK, and only the CLI lives in the binary itself.
@@ -132,9 +180,11 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ### Observability surfaces (`apps/bitrouter/src/tui/`)
 
-One surface, with `render.rs` / `snapshot.rs` as its formatting and data layers:
+One surface remains, with `snapshot.rs` as its data layer and `render.rs` as its formatter:
 
-- `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
+- `bitrouter status --requests` (`-r`) — one plain-text snapshot of settled requests plus daemon-wide spend and request rate. It reads the metering store directly, works with no daemon (`history only`), prints identically when piped, and can be repeated externally with `watch -n1`.
+
+There is no terminal-only status view now. `apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns drawn terminal UI for ACP chat.
 
 The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 

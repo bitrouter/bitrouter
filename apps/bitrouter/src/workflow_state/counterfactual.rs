@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::policy_lock::PolicyDefinition;
 use crate::workflow_state::archive::CloudUsageRecord;
 use crate::workflow_state::fixture::WorkflowTraceFixture;
+use crate::workflow_state::predictive::{PredictiveRouteProjection, predict_next_step};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::extract_fixture_ir;
 use bitrouter_sdk::{BitrouterError, Result};
@@ -111,13 +112,18 @@ pub fn analyze_policy_counterfactual(
             trace.to_replay_fixture_json(&TraceSanitizer::default())?,
         )?;
         let ir = extract_fixture_ir(&fixture);
-        let projection = ir.route_projection();
+        let prediction = predict_next_step(&ir, &fixture.prompt);
+        let projection = PredictiveRouteProjection::new(
+            prediction.task_family,
+            prediction.next_step_role,
+            prediction.route_risk,
+        );
         let primary_request_key = projection.key();
-        let compatibility_request_key = ir.compatibility_route_projection_v1().key();
+        let baseline_request_key = projection.unknown_baseline().key();
         let (selected_tier, request_key) = resolve_tier(
             policy,
             &primary_request_key,
-            &compatibility_request_key,
+            &baseline_request_key,
             !fixture.prompt.tools.is_empty(),
         )
         .ok_or_else(|| {
@@ -274,13 +280,13 @@ fn strict_usage_join<'a>(
 fn resolve_tier<'policy, 'key>(
     policy: &'policy PolicyDefinition,
     primary_request_key: &'key str,
-    compatibility_request_key: &'key str,
+    baseline_request_key: &'key str,
     carries_tools: bool,
 ) -> Option<(&'policy str, &'key str)> {
     let (raw, matched_request_key) = if let Some(tier) = policy.routes.get(primary_request_key) {
         (tier.as_str(), primary_request_key)
-    } else if let Some(tier) = policy.routes.get(compatibility_request_key) {
-        (tier.as_str(), compatibility_request_key)
+    } else if let Some(tier) = policy.routes.get(baseline_request_key) {
+        (tier.as_str(), baseline_request_key)
     } else {
         (policy.default_tier.as_deref()?, primary_request_key)
     };
@@ -425,7 +431,7 @@ mod tests {
                 ("strong".to_string(), "vendor:strong".into()),
             ]),
             routes: BTreeMap::from([(
-                "agent_trace/v1|edit|normal".to_string(),
+                "agent_route/v1|unknown|verify|normal".to_string(),
                 "economy".to_string(),
             )]),
             default_tier: Some("strong".to_string()),
@@ -463,7 +469,7 @@ mod tests {
         assert_eq!(report.uncovered_routes.len(), 1);
         assert_eq!(
             report.uncovered_routes[0].request_key,
-            "agent_trace/v2|opening|normal"
+            "agent_route/v1|unknown|unknown|normal"
         );
         assert_eq!(report.uncovered_routes[0].baseline_cost_micro_usd, 1_000);
         assert_eq!(report.ranked_uncovered_requests[0].request_id, "opening");

@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod chart;
 mod registry;
 mod schema;
 
@@ -29,6 +30,12 @@ enum Command {
     Registry {
         #[command(subcommand)]
         command: RegistryCommand,
+    },
+    /// Render the README registry chart SVGs (light + dark).
+    Chart {
+        /// Directory to write `registry-by-lab{,-dark}.svg` into.
+        #[arg(long, default_value = "dist/charts")]
+        out: PathBuf,
     },
     /// Check every committed dist artifact managed by this helper.
     Check,
@@ -82,6 +89,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
             RegistryCommand::AgenticDiffCheck => registry::agentic_diff_check(&root),
         },
+        Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {
             schema::generate(&root, true)?;
             registry::build(&root, true)

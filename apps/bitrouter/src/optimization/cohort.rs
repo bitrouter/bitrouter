@@ -118,7 +118,7 @@ pub fn assess_cohort(
             .subject
             .decisions
             .iter()
-            .filter(|decision| decision.request_key == exploration.target_request_key)
+            .filter(|decision| decision.route_projection == exploration.target_request_key)
             .collect::<Vec<_>>();
         if target_decisions.is_empty() {
             continue;
@@ -492,7 +492,7 @@ mod tests {
     fn exploration(evaluator_config_digest: Option<&str>) -> RouteExploration {
         RouteExploration {
             experiment_id: EXPERIMENT_ID.into(),
-            target_request_key: "agent_trace/v2|verify|normal".into(),
+            target_request_key: "agent_route/v1|unknown|verify|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 500_000,
@@ -608,7 +608,8 @@ mod tests {
         EvalDecisionRef {
             decision_id: id.into(),
             policy: "auto".into(),
-            request_key: "agent_trace/v2|verify|normal".into(),
+            route_projection: "agent_route/v1|unknown|verify|normal".into(),
+            request_key: "agent_route/v1|unknown|verify|normal".into(),
             selected_tier: match arm {
                 ExperimentArm::Control => "strong",
                 ExperimentArm::Challenger => "economy",
@@ -722,6 +723,29 @@ mod tests {
         assert_eq!(assessment.control.eligible, 1);
         assert_eq!(assessment.excluded_requests, 1);
         assert_eq!(assessment.challenger.excluded, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn cohort_matches_primary_route_projection_over_matched_fallback() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let mut projected = record(spec(
+            "projected-challenger",
+            ExperimentArm::Challenger,
+            EvalVerdict::Pass,
+            700,
+        ));
+        projected.subject.decisions[0].route_projection = route_projection.into();
+        projected.subject.decisions[0].request_key =
+            "agent_route/v1|unknown|implement|normal".into();
+        let mut active = exploration(Some(EVALUATOR_A));
+        active.target_request_key = route_projection.into();
+
+        let assessment = assess_cohort(&snapshot(vec![projected]), POLICY_DIGEST, &active)?;
+
+        assert_eq!(assessment.challenger.observed, 1);
+        assert_eq!(assessment.challenger.eligible, 1);
+        assert_eq!(assessment.challenger.pass, 1);
         Ok(())
     }
 

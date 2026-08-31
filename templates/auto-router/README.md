@@ -1,9 +1,11 @@
 # Predictive `bitrouter/auto:cost` routing
 
-This starter policy predicts the role of the next response from the native
-prompt and causal history, then selects a tier from the resulting
-`agent_route/v1|<role>|<risk>` key. It uses GPT-5.6 as the strong route, Kimi K3
-as the balanced route, and DeepSeek V4 Pro as the economy route.
+This starter policy predicts the task family and role of the next response from
+the native prompt and causal history. It first looks for a sparse exact
+`agent_route/v1|<task-family>|<role>|<risk>` override; when that cell is not
+listed, it falls back to the complete
+`agent_route/v1|unknown|<role>|<risk>` baseline. It uses GPT-5.6 as the strong
+route, Kimi K3 as the balanced route, and DeepSeek V4 Pro as the economy route.
 
 Tier values are model targets. The scalar form above remains compatible and
 preserves a caller-supplied reasoning effort. For a model that positively
@@ -22,9 +24,10 @@ in the upstream protocol's native field.
 
 The frozen mapping is intentionally aggressive: normal mechanical and verify
 work uses economy; implementation, finalization, and context-heavy work mostly
-use balanced; orchestration and selected guarded work use strong. Unknown or
-unmatched predictions use the balanced default. Prediction is deterministic and
-does not add a controller call or modify the request.
+use balanced; orchestration, guarded mechanical work, and selected guarded
+verification or finalization work use strong. Unknown or unmatched predictions
+use the balanced default. Prediction is deterministic and does not add a
+controller call or modify the request.
 
 Start BitRouter from this directory:
 
@@ -43,12 +46,29 @@ the top-level cost routing variant. The generic `@auto` / `@auto:cost` preset
 form addresses the same policy. Physical model ids remain passthrough, so an
 explicit `openai-codex:gpt-5.6-sol` request is not converted to a preset.
 
-The v3 lock uses generic `agent_route/v1|<role>|<risk>` keys. The predicted roles
-are `orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
-bands are `normal`, `context`, and `guarded`. Runtime adapters may enrich
-diagnostics from native request shapes, but headers and harness identity do not
-choose a tier. Existing `agent_trace/v2` and `agent_trace/v1` locks remain
-routable through exact compatibility fallbacks.
+The lock publishes all fifteen
+`agent_route/v1|unknown|<role>|<risk>` baseline cells. The predicted roles are
+`orchestrate`, `implement`, `mechanical`, `verify`, and `finalize`; the risk
+bands are `normal`, `context`, and `guarded`.
+
+When a task family is confidently classified, its primary key is
+`agent_route/v1|<task-family>|<role>|<risk>`. The twelve task families are
+`code:generation`, `code:debugging`, `code:review`, `code:sql_database`,
+`code:frontend_ui`, `code:devops_config`, `code:repository_analysis`,
+`agent:multi_step_planning`, `agent:workflow_execution`, `agent:web_research`,
+`agent:memory_operations`, and `agent:general`. The template deliberately
+publishes only three task-specific experiments:
+
+- `agent_route/v1|code:review|verify|normal` → `strong`
+- `agent_route/v1|code:debugging|implement|guarded` → `strong`
+- `agent_route/v1|agent:web_research|mechanical|normal` → `balanced`
+
+Those are exact overrides, not a full matrix: every other classified task cell
+falls back to the v1 `unknown` task-family baseline for the same role and risk.
+Shell dispatch, file dispatch, and tool dispatch stay bounded action/role
+evidence; they do not create task-family cells or change a task-family route.
+Runtime adapters may enrich diagnostics from native request shapes, but headers
+and harness identity do not choose a tier.
 
 All three tiers are listed in `tool_safe_tiers`. Supplying tools therefore does
 not clamp a predictive selection to another tier, and the template never
@@ -69,9 +89,14 @@ template policy, not hidden runtime defaults: trajectory remains disabled by
 default for existing configurations, and existing locks are unchanged. All
 three `trajectory` settings are restart-only.
 
-The example immediately selects `strong` for incomplete history, a recovery
-edge, or a configured structural bound, then holds that protected tier for the
-next two requests. `max_recovery_count` is edge-triggered: its prospective
+The example treats both `strong` and `balanced` as progress-capable protected
+tiers while retaining `strong` as the structural escalation tier. Ordinary
+balanced work therefore remains balanced through progress accounting instead
+of being promoted solely because it is not strong. Incomplete history, a
+recovery edge, or a configured structural bound activates the guard: an already
+protected candidate stays at its tier, while an unprotected candidate escalates
+to `strong`. The guard then holds a protected tier for the next two requests.
+`max_recovery_count` is edge-triggered: its prospective
 cumulative count is compared only when the current projection enters
 `recovery`; consecutive recovery projections remain protected without counting
 or activating again. The edge always activates hold. If the recovery's static
@@ -88,11 +113,13 @@ Raw prompt text, response text, and tool arguments are not persisted as routing
 evidence. The ledger retains structural ancestry, categorical projections and
 risk, exact counters, and keyed digests.
 
-The fifteen starter routes are compiler-owned experiments with one matching v2
-certificate per route. Certificate evidence digests bind the policy name,
-predictive key, and selected tier; the shared compiler digest binds the complete
-template policy. Cross-agent quality has not been validated; evaluate the policy
-against your own traffic before broad rollout.
+The fifteen unknown-family baseline routes and three sparse task routes are compiler-owned
+experiments with one matching lockfile certificate per explicit route.
+Certificate evidence digests bind the policy name, predictive key, and selected
+tier; the shared compiler digest binds the complete template policy.
+Task-specific cells stay experimental until settled evaluation evidence promotes
+them. Cross-agent quality has not been validated; evaluate the policy against
+your own traffic before broad rollout.
 Admitted evidence can promote or demote compiler-owned routes. Routes explicitly
 authored as operator-owned remain pinned: conflicting evidence is reported
 rather than overriding the operator's route.

@@ -1,4 +1,4 @@
-//! Compatibility import for pre-eval workflow reward artifacts.
+//! Import task reward artifacts into the generic eval exchange.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,7 +14,7 @@ use crate::eval::types::{
 use crate::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
-use crate::workflow_state::predictive::CanonicalPolicyProjection;
+use crate::workflow_state::predictive::PredictiveRouteProjection;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RewardEvalImportSummary {
@@ -25,7 +25,7 @@ pub struct RewardEvalImportSummary {
     pub eval_ids: Vec<String>,
 }
 
-/// Translate legacy benchmark reward artifacts into the generic eval exchange.
+/// Translate benchmark reward artifacts into the generic eval exchange.
 /// This is intentionally one-way: the adapter cannot write policy locks or the
 /// sealed legacy adequacy tables.
 pub async fn import_semantic_reward_feedback(
@@ -37,7 +37,7 @@ pub async fn import_semantic_reward_feedback(
         ..RewardEvalImportSummary::default()
     };
     for candidate in candidates {
-        let Some((policy, request_key)) = candidate_policy_key(candidate) else {
+        let Some((policy, route_projection)) = candidate_policy_key(candidate) else {
             import_skip(&mut summary, "missing_named_policy");
             continue;
         };
@@ -65,7 +65,7 @@ pub async fn import_semantic_reward_feedback(
             candidate.request_id.as_str(),
             candidate.task_id.as_str(),
             policy.as_str(),
-            request_key.as_str(),
+            route_projection.as_str(),
         ))?;
         let eval_id = format!("reward:{}", identity.trim_start_matches("sha256:"));
         let policy_digest = match &candidate.policy_digest {
@@ -104,7 +104,8 @@ pub async fn import_semantic_reward_feedback(
             decisions: vec![EvalDecisionRef {
                 decision_id,
                 policy,
-                request_key,
+                route_projection,
+                request_key: candidate.request_key.clone(),
                 selected_tier: selected_tier.to_string(),
                 selected_effort: candidate.selected_effort,
                 baseline_tier: Some(baseline_tier.to_string()),
@@ -163,13 +164,14 @@ pub async fn import_semantic_reward_feedback(
 }
 
 fn candidate_policy_key(candidate: &SemanticPolicyTransitionCandidate) -> Option<(String, String)> {
+    PredictiveRouteProjection::parse_key(&candidate.route_projection)?;
+    PredictiveRouteProjection::parse_key(&candidate.request_key)?;
     if let Some(policy) = candidate.policy.as_deref() {
-        return CanonicalPolicyProjection::parse_key(&candidate.request_key)
-            .map(|_| (policy.to_string(), candidate.request_key.clone()));
+        return Some((policy.to_string(), candidate.route_projection.clone()));
     }
     let (policy, request_key) = candidate.ledger_key.as_deref()?.split_once('\0')?;
-    (!policy.is_empty() && CanonicalPolicyProjection::parse_key(request_key).is_some())
-        .then(|| (policy.to_string(), request_key.to_string()))
+    (!policy.is_empty() && request_key == candidate.request_key)
+        .then(|| (policy.to_string(), candidate.route_projection.clone()))
 }
 
 fn import_skip(summary: &mut RewardEvalImportSummary, reason: &str) {
@@ -188,7 +190,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
 
-    const TOOL_FOLLOWUP_KEY: &str = "agent_trace/v1|tool_followup|normal";
+    const IMPLEMENT_KEY: &str = "agent_route/v1|unknown|implement|normal";
 
     fn candidate(reward: f64) -> SemanticPolicyTransitionCandidate {
         SemanticPolicyTransitionCandidate {
@@ -200,7 +202,8 @@ mod tests {
             failed_reason: (reward < 1.0).then(|| "verifier_failed".into()),
             request_transport_outcome: RequestTransportOutcome::Completed,
             settlement_outcome: SemanticSettlementOutcome::AuthoritativeComputed,
-            request_key: TOOL_FOLLOWUP_KEY.into(),
+            route_projection: IMPLEMENT_KEY.into(),
+            request_key: IMPLEMENT_KEY.into(),
             ledger_key: None,
             policy: Some("auto:cost".into()),
             policy_digest: Some(
@@ -227,7 +230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compatibility_reward_import_writes_only_the_eval_exchange() -> anyhow::Result<()> {
+    async fn predictive_reward_import_writes_only_the_eval_exchange() -> anyhow::Result<()> {
         let db = db::connect("sqlite::memory:").await?;
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db.clone()), Default::default());
@@ -241,8 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compatibility_reward_import_preserves_the_exact_effort_treatment() -> anyhow::Result<()>
-    {
+    async fn predictive_reward_import_preserves_the_exact_effort_treatment() -> anyhow::Result<()> {
         let db = db::connect("sqlite::memory:").await?;
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
@@ -287,14 +289,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn predictive_legacy_key_is_imported_into_the_eval_exchange() -> anyhow::Result<()> {
+    async fn predictive_v1_key_is_imported_into_the_eval_exchange() -> anyhow::Result<()> {
         let db = db::connect("sqlite::memory:").await?;
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut predictive = candidate(1.0);
         predictive.policy = None;
-        predictive.request_key = "agent_route/v1|implement|normal".into();
-        predictive.ledger_key = Some("auto\0agent_route/v1|implement|normal".into());
+        predictive.request_key = "agent_route/v1|unknown|implement|normal".into();
+        predictive.ledger_key = Some("auto\0agent_route/v1|unknown|implement|normal".into());
 
         let summary = import_semantic_reward_feedback(&service, &[predictive]).await?;
 
@@ -309,7 +311,7 @@ mod tests {
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut malformed = candidate(1.0);
-        malformed.request_key = "agent_route/v2|developer|normal".into();
+        malformed.request_key = "agent_route/v1|developer|normal".into();
 
         let summary = import_semantic_reward_feedback(&service, &[malformed]).await?;
 

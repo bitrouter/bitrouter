@@ -19,6 +19,36 @@ rate_limits:
       requests_per_minute: 60
 models:
   # CNY 12/1.2/15/36 converted at ~7.2 CNY/USD.
+  # Official pricing: https://help.aliyun.com/zh/model-studio/model-pricing
+  - id: qwen/qwen3.8-2.4t-a95b
+    provider_model_id: qwen3.8-2.4t-a95b
+    reasoning_effort:
+      levels: [low, medium, xhigh]
+      default: xhigh
+    pricing:
+      input_tokens:
+        no_cache: 1.667
+        cache_read: 0.167
+        cache_write: 2.083
+      output_tokens:
+        text: 5
+    capabilities: [reasoning, tools]
+  # CNY 3/0.3/3.75/12 converted at ~7.2 CNY/USD.
+  # Official pricing: https://help.aliyun.com/zh/model-studio/qwen3-8-27b
+  - id: qwen/qwen3.8-27b
+    provider_model_id: qwen3.8-27b
+    reasoning_effort:
+      levels: [low, medium, xhigh]
+      default: xhigh
+    pricing:
+      input_tokens:
+        no_cache: 0.417
+        cache_read: 0.042
+        cache_write: 0.521
+      output_tokens:
+        text: 1.667
+    capabilities: [reasoning, tools]
+  # CNY 12/1.2/15/36 converted at ~7.2 CNY/USD.
   # Sources: https://help.aliyun.com/zh/model-studio/model-pricing
   # and https://help.aliyun.com/zh/model-studio/context-cache
   # Official function-calling docs: https://docs.qwencloud.com/developer-guides/text-generation/function-calling

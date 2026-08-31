@@ -1,9 +1,10 @@
-//! Formatting for the live view.
+//! Formatting for `bitrouter status --requests`.
 //!
 //! Everything that decides *what a row says* lives here as plain string
-//! functions, so it is testable without a terminal and reusable by the
-//! non-interactive one-shot. The ratatui widget tree in [`super`] only decides
-//! where those strings go.
+//! functions, testable without a terminal because there is no terminal
+//! involved: [`oneshot`] returns a `String` and the caller prints it. This was
+//! already true when a ratatui view sat on top deciding where the strings went;
+//! that view is gone and this is the whole surface.
 
 use crate::metering::fmt_usd;
 use crate::metering::store::RequestRow;
@@ -105,9 +106,8 @@ pub fn footer(snapshot: &Snapshot) -> String {
     line
 }
 
-/// The whole snapshot as plain text — what a redirected or piped
-/// `status --watch` prints once before exiting, so the view stays scriptable
-/// instead of refusing to run without a terminal.
+/// The whole snapshot as plain text — printed identically whether stdout is a
+/// terminal, a pager, a file, or an agent-readable pipe.
 pub fn oneshot(snapshot: &Snapshot) -> String {
     let mut out = String::new();
     out.push_str(&snapshot.state_line());

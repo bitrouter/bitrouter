@@ -10,7 +10,7 @@ An `EvalSubject` has these required fields:
 | Field | Meaning |
 |---|---|
 | `schema_version` | Integer `1`. |
-| `eval_id`, `subject_id` | Non-empty bounded identifiers. `eval_id` is immutable. |
+| `eval_id`, `subject_id` | Non-empty bounded identifiers. `eval_id` identifies the immutable evaluation attempt; `subject_id` identifies the logical request, episode, or task within its caller-defined namespace. |
 | `scope` | `request`, `episode`, or `task`. Select the smallest scope containing the outcome. |
 | `policy_digest` | The exact `sha256:<64 lowercase hex>` policy digest observed by the router. |
 | `preset`, `cohort` | Optional evaluator metadata. Do not use them to reconstruct policy identity. |
@@ -33,13 +33,21 @@ Decision count and evaluator organization do not determine scope. For example,
 a bounded multi-request enterprise workflow is an `episode` unless its packet
 names an externally defined task and terminal task outcome.
 
+For repeated evaluations of one task, keep each attempt's `eval_id`, result,
+and evidence distinct while keeping `subject_id` stable inside the same
+run/source/policy namespace. The route compiler uses `subject_id` to deduplicate
+independent tasks; attempt-specific subject ids would incorrectly turn retries
+into independent evidence. Include enough namespace in the subject identity to
+avoid collision with an unrelated run or policy population.
+
 Each `decisions[]` entry is exactly:
 
 ```json
 {
   "decision_id": "router-decision-id",
   "policy": "auto",
-  "request_key": "agent_trace/v1|edit|normal",
+  "route_projection": "agent_route/v1|code:generation|implement|normal",
+  "request_key": "agent_route/v1|unknown|implement|normal",
   "selected_tier": "economy",
   "baseline_tier": "strong",
   "policy_digest": "sha256:...",
@@ -140,6 +148,12 @@ available and otherwise accepts evaluator-authored complete cost with the
 `micro_usd` unit. Request subjects can rank optimization opportunities but do
 not enter the quality or cost gate.
 
+`inconclusive` is a quality firewall. Even if an old or malformed packet gives
+positive credit to `quality.pass` or a hard violation, the route compiler does
+not increase eligible episodes, independent tasks, pass/fail weight, total
+quality weight, or critical-violation evidence. Explicitly credited cost and
+latency remain independent observations and may aggregate.
+
 For one decision, omitted `decision_credit` means full credit. To deliberately
 withhold attribution from a one-decision inconclusive result, include that
 decision with `weight_ppm: 0`; an empty map would activate implicit full credit.
@@ -162,6 +176,13 @@ counterfactual policy may credit a route family when a matched baseline differs
 only on that family; shared candidate/baseline failure is inconclusive, not
 negative evidence. If several route families changed and the evaluator cannot
 separate their effects, submit no positive-weight decision credit.
+
+When a provider or transport request fails but the task later obtains an
+authoritative terminal reward, preserve that terminal outcome as the task
+record. Withhold quality credit from the failed request. If contamination makes
+the task-to-route attribution ambiguous, use explicit zero credit for a
+single-decision result or no positive mapping for a multi-decision result;
+reliability, cost, and latency stay separate.
 
 ## Authority, submission, and ownership
 
@@ -250,8 +271,8 @@ submit-ready result.
   "cohort": "evaluation",
   "holdout": false,
   "decisions": [
-    {"decision_id":"decision-edit","policy":"auto","request_key":"agent_trace/v1|edit|normal","selected_tier":"economy","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-    {"decision_id":"decision-review","policy":"auto","request_key":"agent_trace/v1|review|normal","selected_tier":"strong","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    {"decision_id":"decision-edit","policy":"auto","route_projection":"agent_route/v1|code:generation|implement|normal","request_key":"agent_route/v1|unknown|implement|normal","selected_tier":"economy","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"decision_id":"decision-review","policy":"auto","route_projection":"agent_route/v1|code:review|verify|normal","request_key":"agent_route/v1|code:review|verify|normal","selected_tier":"strong","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
   ],
   "requested_dimensions": ["quality.pass", "cost.usd_micros", "latency.ms"],
   "evidence": [

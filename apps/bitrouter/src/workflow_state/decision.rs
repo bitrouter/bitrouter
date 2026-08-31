@@ -29,6 +29,9 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub input_effort: Option<ReasoningEffort>,
     pub key_strategy: String,
+    /// Primary canonical policy projection considered before sparse fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_projection: Option<String>,
     pub request_key: String,
     /// Database key for adequacy state. Named policies namespace this while
     /// keeping `request_key` human-readable. Old records omit it.
@@ -76,15 +79,21 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub predicted_role: Option<String>,
     #[serde(default)]
+    pub predicted_task_family: Option<String>,
+    #[serde(default)]
     pub predicted_action: Option<String>,
     #[serde(default)]
     pub prediction_confidence_ppm: Option<u32>,
+    #[serde(default)]
+    pub task_family_confidence_ppm: Option<u32>,
     #[serde(default)]
     pub predictor_contract_digest: Option<String>,
     #[serde(default)]
     pub prediction_confidence_kind: Option<String>,
     #[serde(default)]
     pub prediction_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub task_family_reason_codes: Vec<String>,
     #[serde(default)]
     pub observed_route_projection: Option<String>,
     #[serde(default)]
@@ -133,6 +142,8 @@ pub struct PolicyDecisionSummary {
     pub by_selected_target: BTreeMap<String, usize>,
     #[serde(default)]
     pub by_predicted_role: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub by_predicted_task_family: BTreeMap<String, usize>,
     #[serde(default)]
     pub by_predicted_action: BTreeMap<String, usize>,
     pub static_tier_replaced_count: usize,
@@ -303,6 +314,12 @@ impl PolicyDecisionSummary {
                     .entry(role.to_string())
                     .or_insert(0) += 1;
             }
+            if let Some(task_family) = record.predicted_task_family.as_deref() {
+                *summary
+                    .by_predicted_task_family
+                    .entry(task_family.to_string())
+                    .or_insert(0) += 1;
+            }
             if let Some(action) = record.predicted_action.as_deref() {
                 *summary
                     .by_predicted_action
@@ -432,6 +449,7 @@ mod tests {
             input_model: "inbound".to_string(),
             input_effort: None,
             key_strategy: "agent_trace".to_string(),
+            route_projection: None,
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
             ledger_key: Some("agent_trace/v1|tool_followup|normal".to_string()),
             policy: None,
@@ -453,11 +471,14 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: None,
+            predicted_task_family: None,
             predicted_action: None,
             prediction_confidence_ppm: None,
+            task_family_confidence_ppm: None,
             predictor_contract_digest: None,
             prediction_confidence_kind: None,
             prediction_reason_codes: Vec::new(),
+            task_family_reason_codes: Vec::new(),
             observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,
@@ -511,12 +532,16 @@ mod tests {
 
         let parsed: PolicyDecisionRecord = serde_json::from_str(legacy).unwrap();
 
+        assert_eq!(parsed.route_projection, None);
         assert_eq!(parsed.predicted_role, None);
+        assert_eq!(parsed.predicted_task_family, None);
         assert_eq!(parsed.predicted_action, None);
         assert_eq!(parsed.prediction_confidence_ppm, None);
+        assert_eq!(parsed.task_family_confidence_ppm, None);
         assert_eq!(parsed.predictor_contract_digest, None);
         assert_eq!(parsed.prediction_confidence_kind, None);
         assert_eq!(parsed.prediction_reason_codes, Vec::<String>::new());
+        assert_eq!(parsed.task_family_reason_codes, Vec::<String>::new());
         assert_eq!(parsed.observed_route_projection, None);
         assert_eq!(parsed.ingress_request_id_sha256, None);
         assert_eq!(parsed.input_effort, None);
@@ -593,6 +618,7 @@ mod tests {
         let parsed: PolicyDecisionSummary = serde_json::from_str(legacy).unwrap();
 
         assert_eq!(parsed.by_predicted_role, BTreeMap::new());
+        assert_eq!(parsed.by_predicted_task_family, BTreeMap::new());
         assert_eq!(parsed.by_predicted_action, BTreeMap::new());
         assert_eq!(parsed.by_selected_effort, BTreeMap::new());
         assert_eq!(parsed.by_selected_target, BTreeMap::new());
@@ -638,6 +664,7 @@ mod tests {
     fn summary_counts_predictions_and_selected_model_exposure() {
         let mut predicted = record();
         predicted.predicted_role = Some("implement".to_string());
+        predicted.predicted_task_family = Some("code:review".to_string());
         predicted.predicted_action = Some("mutate".to_string());
         predicted.selected_model = Some("vendor/cheap".to_string());
 
@@ -649,6 +676,10 @@ mod tests {
         assert_eq!(
             summary.by_predicted_role,
             BTreeMap::from([("implement".to_string(), 1)])
+        );
+        assert_eq!(
+            summary.by_predicted_task_family,
+            BTreeMap::from([("code:review".to_string(), 1)])
         );
         assert_eq!(
             summary.by_predicted_action,

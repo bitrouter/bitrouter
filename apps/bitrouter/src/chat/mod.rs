@@ -8,13 +8,13 @@
 //!
 //! The session holds raw mode from its first prompt (see [`input::Stdin`]), so
 //! every way out has to give it back. There are three, and each reaches
-//! [`crate::tui::lifecycle::restore`] by a different route:
+//! [`bitrouter_tui::lifecycle::restore`] by a different route:
 //!
 //! | exit | route |
 //! |---|---|
 //! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `Stdin`'s `Drop`, which also covers every `?` out of `chat` |
-//! | panic | `lifecycle::install_panic_restore`, chained in front of the existing hook |
-//! | INT / TERM / HUP | `lifecycle::Shutdown` as a `select!` arm, in both the prompt and the turn loop |
+//! | panic | `bitrouter_tui::lifecycle::install_panic_restore`, chained in front of the existing hook |
+//! | INT / TERM / HUP | [`crate::tui::lifecycle::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
 //!
 //! ## Checking it by hand
 //!
@@ -37,18 +37,19 @@
 
 pub mod cost;
 pub mod input;
-pub mod picker;
+pub mod session;
 
 #[cfg(test)]
 mod tests {
-    /// The guard §8 asks for, because the move puts rendering back where it
-    /// *could* reach anything.
+    /// The guard §8 asks for, because what stays here is rendering-adjacent
+    /// code sitting where it *could* reach anything.
     ///
-    /// `cost.rs` and `picker.rs` left `bitrouter-tui` for a reason — they knew
-    /// things ACP does not carry — but the crate boundary that kept them
-    /// honest went with them. What replaces it is this: the chat module may
-    /// read the ACP wire and the terminal, and nothing else. No `Config`, no
-    /// metering store, no control socket.
+    /// `picker.rs` and the rendering half of `cost.rs` went back to
+    /// `bitrouter-tui`, where the compiler keeps them honest. What is left
+    /// here is the part that genuinely is not ACP — the `_meta` key, the wire
+    /// spelling, this process's stdin — and it gets this instead: the chat
+    /// module may read the ACP wire and the terminal, and nothing else. No
+    /// `Config`, no metering store, no control socket.
     ///
     /// Checked against the sources themselves rather than by review, so it
     /// fails the build that breaks it instead of the review that misses it.
@@ -57,7 +58,6 @@ mod tests {
         let sources = [
             ("cost.rs", include_str!("cost.rs")),
             ("input.rs", include_str!("input.rs")),
-            ("picker.rs", include_str!("picker.rs")),
         ];
         // Spelled as paths and type names, so a mention in prose — "the
         // daemon's total", which `cost.rs` explains at length — is not a

@@ -61,18 +61,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outcome JSONL remains serde-compatible (`request_id` defaults to absent),
   but it is analytical-only and strict feedback rejects it.
 
-- **Policy migration:** active `policy_table` routing now defaults to, and only
-  accepts, `key_strategy: agent_trace`. Replace legacy
-  `key_strategy: legacy_fingerprint` and `opening`/`after_*` routes with
-  canonical `agent_trace/v1|<state>|<risk>` routes. Historical policy locks
-  spelling the strategy `workflow_state` remain readable and serialize back as
-  `agent_trace`. `adequacy.max_downgraded_requests_per_session` is rejected:
-  session identity is diagnostic-only and no longer affects routing.
-  `adequacy.explore_opening` is honored for source-neutral opening projections.
+- **Breaking (policy routes):** active `policy_table` routing now uses one
+  predictive route contract:
+  `agent_route/v1|<task-family>|<role>|<risk>`. Exact task-family routes fall
+  back to the corresponding `unknown`-family role/risk baseline, then to the
+  policy default. Observed `agent_trace/v2` keys remain telemetry only. Static
+  `agent_trace` routes, three-segment predictive v1 routes, and all v2
+  predictive routes are rejected during config and lock validation. Regenerate
+  policy locks and certificates with the current predictor contract.
 
-- **Rust API compatibility:** `PolicyKeyStrategy::WorkflowState` remains a
-  compatibility variant and serializes as `agent_trace`; use
-  `PolicyKeyStrategy::AgentTrace` in new code. `PolicyDecision` keeps
+  `key_strategy: agent_trace` selects this deterministic predictor; the retired
+  `workflow_state` and `legacy_fingerprint` spellings are rejected.
+  `adequacy.max_downgraded_requests_per_session` is rejected: session identity
+  is diagnostic-only and no longer affects routing. `adequacy.explore_opening`
+  is honored for source-neutral opening projections.
+
+- **Rust API:** `PolicyKeyStrategy` now exposes only the canonical `AgentTrace`
+  variant. `PolicyDecision` keeps
   `workflow_state_kind` and `workflow_identity`; `PolicyDecisionRecord` keeps
   `workflow_state` and `workflow_identity`; and `PolicyDecisionSummary` keeps
   `by_workflow_state`. Their JSON output uses canonical `trace_state`,

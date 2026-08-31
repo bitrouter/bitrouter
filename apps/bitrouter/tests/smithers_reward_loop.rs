@@ -87,8 +87,8 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
-    let target_key = "agent_trace/v1|opening|normal";
-    let other_key = "agent_trace/v1|tool_followup|normal";
+    let target_key = "agent_route/v1|unknown|orchestrate|normal";
+    let other_key = "agent_route/v1|unknown|implement|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
         id: request_id.to_string(),
@@ -126,6 +126,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         input_model: "@smithers".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
+        route_projection: Some(target_key.to_string()),
         request_key: target_key.to_string(),
         ledger_key: Some(ledger_key.clone()),
         policy: Some("smithers".to_string()),
@@ -149,11 +150,14 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         continuation_proposed_effort: None,
         continuation_adjustment: None,
         predicted_role: None,
+        predicted_task_family: None,
         predicted_action: None,
         prediction_confidence_ppm: None,
+        task_family_confidence_ppm: None,
         predictor_contract_digest: None,
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
+        task_family_reason_codes: Vec::new(),
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,

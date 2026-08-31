@@ -78,15 +78,20 @@ impl EvalEvidenceSnapshot {
                 ) else {
                     continue;
                 };
-                let quality_credited = credit.includes("quality.pass");
+                let conclusive = record.result.verdict != EvalVerdict::Inconclusive;
+                let quality_credited = conclusive && credit.includes("quality.pass");
                 let cost_credited = credit.includes("cost.usd_micros");
                 let latency_credited = credit.includes("latency.ms");
-                let credited_violations = record
-                    .result
-                    .hard_violations
-                    .iter()
-                    .filter(|violation| credit.includes(violation))
-                    .count();
+                let credited_violations = if conclusive {
+                    record
+                        .result
+                        .hard_violations
+                        .iter()
+                        .filter(|violation| credit.includes(violation))
+                        .count()
+                } else {
+                    0
+                };
                 if !quality_credited
                     && !cost_credited
                     && !latency_credited
@@ -94,16 +99,20 @@ impl EvalEvidenceSnapshot {
                 {
                     continue;
                 }
+                let route_projection = &decision.route_projection;
                 let route = routes
-                    .entry((decision.policy.clone(), decision.request_key.clone()))
+                    .entry((decision.policy.clone(), route_projection.clone()))
                     .or_default();
-                if let Some(baseline) = &decision.baseline_tier {
+                route
+                    .matched_request_keys
+                    .insert(decision.request_key.clone());
+                if let Some(baseline) = decision.baseline_tier.as_ref() {
                     match &route.baseline_tier {
                         Some(existing) if existing != baseline => {
                             anyhow::bail!(
                                 "eval route '{}:{}' names conflicting baselines",
                                 decision.policy,
-                                decision.request_key
+                                route_projection
                             );
                         }
                         None => route.baseline_tier = Some(baseline.clone()),
@@ -172,6 +181,7 @@ impl EvalEvidenceSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteEvalEvidence {
     pub baseline_tier: Option<String>,
+    pub matched_request_keys: BTreeSet<String>,
     pub tiers: BTreeMap<String, TierEvalEvidence>,
     pub sources: BTreeSet<EvaluatorKind>,
     pub evaluator_config_digests: BTreeSet<String>,
@@ -306,7 +316,11 @@ mod tests {
 
         let snapshot = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root).await?;
         let routes = snapshot.route_evidence()?;
-        let tier = &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
+        let tier = &routes[&(
+            "auto".into(),
+            "agent_route/v1|unknown|implement|normal".into(),
+        )]
+            .tiers["economy"];
         assert_eq!(tier.pass_rate_ppm(), 1_000_000);
         assert_eq!(tier.independent_tasks.len(), 1);
         Ok(())
@@ -342,16 +356,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inconclusive_credit_cannot_create_quality_evidence() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let service = EvalService::new(store.clone(), EvalConfig::default());
+        let mut subject = subject()?;
+        subject
+            .requested_dimensions
+            .extend(["cost.usd_micros".into(), "latency.ms".into()]);
+        store.insert_subject(&subject).await?;
+        let mut result = result(&subject);
+        result.verdict = EvalVerdict::Inconclusive;
+        result.metrics.insert(
+            "cost.usd_micros".into(),
+            MetricValue::new(420, MetricUnit::MicroUsd),
+        );
+        result.metrics.insert(
+            "latency.ms".into(),
+            MetricValue::new(315, MetricUnit::Milliseconds),
+        );
+        result.hard_violations.push("quality.critical".into());
+        result.decision_credit.insert(
+            "decision-a".into(),
+            DecisionCredit {
+                weight_ppm: 1_000_000,
+                metric_ids: BTreeSet::from([
+                    "quality.pass".into(),
+                    "quality.critical".into(),
+                    "cost.usd_micros".into(),
+                    "latency.ms".into(),
+                ]),
+            },
+        );
+        service
+            .submit(result, SubmissionPrincipal::LocalOperator)
+            .await?;
+        let frozen = store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
+
+        let routes = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
+            .await?
+            .route_evidence()?;
+        let tier = &routes[&(
+            "auto".into(),
+            "agent_route/v1|unknown|implement|normal".into(),
+        )]
+            .tiers["economy"];
+        assert_eq!(tier.eligible_episodes, 0);
+        assert!(tier.independent_tasks.is_empty());
+        assert_eq!(tier.total_weight_ppm, 0);
+        assert_eq!(tier.pass_weight_ppm, 0);
+        assert_eq!(tier.fail_weight_ppm, 0);
+        assert_eq!(tier.critical_violations, 0);
+        assert_eq!(tier.cost_micro_usd.mean(), Some(420));
+        assert_eq!(tier.latency_ms.mean(), Some(315));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn explicit_credit_never_broadcasts_metrics_between_decisions() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db);
         let service = EvalService::new(store.clone(), EvalConfig::default());
         let mut subject = subject()?;
+        subject.decisions[0].route_projection =
+            "agent_route/v1|code:generation|implement|normal".into();
         subject.decisions.push(EvalDecisionRef {
             decision_id: "decision-b".into(),
             policy: "auto".into(),
-            request_key: "agent_trace/v1|review|normal".into(),
+            route_projection: "agent_route/v1|unknown|verify|normal".into(),
+            request_key: "agent_route/v1|unknown|verify|normal".into(),
             selected_tier: "strong".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -390,11 +465,22 @@ mod tests {
         let routes = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
             .await?
             .route_evidence()?;
-        let quality =
-            &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
+        let quality = &routes[&(
+            "auto".into(),
+            "agent_route/v1|code:generation|implement|normal".into(),
+        )]
+            .tiers["economy"];
         assert_eq!(quality.pass_rate_ppm(), 1_000_000);
         assert_eq!(quality.cost_micro_usd.mean(), None);
-        let cost = &routes[&("auto".into(), "agent_trace/v1|review|normal".into())].tiers["strong"];
+        assert_eq!(
+            routes[&(
+                "auto".into(),
+                "agent_route/v1|code:generation|implement|normal".into(),
+            )]
+                .matched_request_keys,
+            BTreeSet::from(["agent_route/v1|unknown|implement|normal".into()])
+        );
+        let cost = &routes[&("auto".into(), "agent_route/v1|unknown|verify|normal".into())].tiers["strong"];
         assert_eq!(cost.pass_rate_ppm(), 0);
         assert_eq!(cost.eligible_episodes, 0);
         assert_eq!(cost.cost_micro_usd.mean(), Some(420));
@@ -416,7 +502,8 @@ mod tests {
             decisions: vec![EvalDecisionRef {
                 decision_id: "decision-a".into(),
                 policy: "auto".into(),
-                request_key: "agent_trace/v1|edit|normal".into(),
+                route_projection: "agent_route/v1|unknown|implement|normal".into(),
+                request_key: "agent_route/v1|unknown|implement|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),

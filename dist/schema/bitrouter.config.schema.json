@@ -159,7 +159,7 @@
           "default": "./bitrouter.sock"
         },
         "log_level": {
-          "description": "Log level.",
+          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bitrouter reload` will not pick it up. Applies to `bitrouter serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string",
           "default": "info"
         },
@@ -1890,11 +1890,11 @@
       ]
     },
     "PolicyTableConfig": {
-      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform projects each request into a source-independent agent\ntrace key and looks that key up in [`fingerprints`](Self::fingerprints) to\nchoose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id\nthe request is rewritten to. A hard tool-use guardrail keeps tool-carrying\nrequests on a tier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
+      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform predicts a source-independent task, workflow role, and\nrisk tuple, then looks its canonical `agent_route/v1` key up in\n[`fingerprints`](Self::fingerprints) to\nchoose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id\nthe request is rewritten to. A hard tool-use guardrail keeps tool-carrying\nrequests on a tier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
       "type": "object",
       "properties": {
         "key_strategy": {
-          "description": "The request-key family used for `fingerprints`. Active policy routing\nuses only the canonical source-independent `agent_trace` projection.",
+          "description": "The predictor strategy used for `fingerprints`. Active policy routing\nuses only canonical source-independent `agent_route/v1` keys.",
           "$ref": "#/$defs/PolicyKeyStrategy"
         },
         "tiers": {
@@ -1905,7 +1905,7 @@
           }
         },
         "fingerprints": {
-          "description": "Canonical agent trace projection key → tier name. A key absent from this\nmap falls back to [`default_tier`](Self::default_tier).",
+          "description": "Canonical `agent_route/v1|<task-family>|<role>|<risk>` key → tier name.\nLookup first tries the exact key, then the same role/risk under the\n`unknown` task-family baseline, then [`default_tier`](Self::default_tier).",
           "type": "object",
           "additionalProperties": {
             "type": "string"
@@ -1946,7 +1946,7 @@
       ]
     },
     "PolicyKeyStrategy": {
-      "description": "Active policy routing uses the canonical source-independent agent trace projection key.",
+      "description": "Active policy routing uses canonical source-independent agent_route/v1 predictive keys.",
       "type": "string",
       "enum": [
         "agent_trace"
@@ -2064,7 +2064,7 @@
           "default": 0
         },
         "explore_opening": {
-          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and Terminal-Bench showed this state is high leverage.",
+          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and make this state high leverage.",
           "type": "boolean",
           "default": false
         },

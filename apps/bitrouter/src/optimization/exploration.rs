@@ -144,7 +144,7 @@ mod tests {
     fn experiment() -> RouteExploration {
         RouteExploration {
             experiment_id: EXPERIMENT_ID.into(),
-            target_request_key: "agent_trace/v2|edit|normal".into(),
+            target_request_key: "agent_route/v1|unknown|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 700_000,
@@ -239,11 +239,11 @@ mod tests {
     fn rejection_round_trips_full_treatment_and_policy_provenance() -> Result<()> {
         let raw = r#"{
             "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            "target_request_key":"agent_trace/v2|edit|normal",
+            "target_request_key":"agent_route/v1|unknown|implement|normal",
             "treatment_context_digest":"sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
             "treatment":{
                 "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "target_request_key":"agent_trace/v2|edit|normal",
+                "target_request_key":"agent_route/v1|unknown|implement|normal",
                 "champion_tier":"strong",
                 "challenger_tier":"economy",
                 "challenger_exposure_ppm":100000,

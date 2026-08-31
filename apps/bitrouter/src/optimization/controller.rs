@@ -19,6 +19,7 @@ use crate::policy_lock::{
     CertificateSource, CompilerIdentity, EconomicsSummary, PolicyArtifact, PolicyCertificate,
     PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, validate_document,
 };
+use crate::workflow_state::predictive::compiled_predictor_contract;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OptimizationOptions {
@@ -177,12 +178,14 @@ pub fn select_opportunity(
             {
                 continue;
             }
-            let route = aggregate.entry(decision.request_key.clone()).or_default();
+            let route = aggregate
+                .entry(decision.route_projection.clone())
+                .or_default();
             match record.subject.scope {
                 EvalScope::Request => {
                     let key = (
                         record.subject.subject_id.clone(),
-                        decision.request_key.clone(),
+                        decision.route_projection.clone(),
                     );
                     request_subjects
                         .entry(key)
@@ -484,6 +487,7 @@ fn active_successor(
                 exploration.target_request_key.clone(),
                 exploration.challenger_tier.clone(),
             );
+            policy.predictor = Some(compiled_predictor_contract());
             (
                 exploration.challenger_tier.clone(),
                 PromotionVerdict::Promote,
@@ -1057,6 +1061,7 @@ mod tests {
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, semantic_digest,
     };
+    use crate::workflow_state::predictive::compiled_predictor_contract;
 
     use super::{
         ControllerAction, HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, OptimizationOptions,
@@ -1089,14 +1094,14 @@ mod tests {
 
     fn lock() -> PolicyLock {
         let request_keys = [
-            "agent_trace/v2|verify|normal",
-            "agent_trace/v2|edit|normal",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|opening|normal",
-            "agent_trace/v2|planning|normal",
-            "agent_trace/v2|test|guarded",
-            "agent_trace/v2|debug|normal",
-            "agent_trace/v2|finalization|normal",
+            "agent_route/v1|unknown|verify|normal",
+            "agent_route/v1|unknown|implement|normal",
+            "agent_route/v1|code:review|verify|normal",
+            "agent_route/v1|unknown|orchestrate|normal",
+            "agent_route/v1|agent:multi_step_planning|orchestrate|normal",
+            "agent_route/v1|unknown|verify|guarded",
+            "agent_route/v1|code:debugging|implement|normal",
+            "agent_route/v1|unknown|finalize|normal",
         ];
         let mut policy = PolicyDefinition::default();
         policy.tiers.insert(
@@ -1110,9 +1115,11 @@ mod tests {
         for request_key in request_keys {
             policy.routes.insert(request_key.into(), "strong".into());
         }
-        policy
-            .routes
-            .insert("agent_trace/v2|planning|normal".into(), "economy".into());
+        policy.routes.insert(
+            "agent_route/v1|agent:multi_step_planning|orchestrate|normal".into(),
+            "economy".into(),
+        );
+        policy.predictor = Some(compiled_predictor_contract());
 
         let certificates = request_keys
             .into_iter()
@@ -1125,14 +1132,14 @@ mod tests {
                 (
                     request_key.into(),
                     PolicyCertificate {
-                        owner: if request_key == "agent_trace/v2|opening|normal" {
+                        owner: if request_key == "agent_route/v1|unknown|orchestrate|normal" {
                             RouteOwner::Operator
                         } else {
                             RouteOwner::Compiler
                         },
                         selected_tier,
                         baseline_tier: None,
-                        source: if request_key == "agent_trace/v2|opening|normal" {
+                        source: if request_key == "agent_route/v1|unknown|orchestrate|normal" {
                             CertificateSource::Operator
                         } else {
                             CertificateSource::TaskNative
@@ -1218,6 +1225,7 @@ mod tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: format!("decision-{subject_id}"),
                     policy: "auto".into(),
+                    route_projection: request_key.into(),
                     request_key: request_key.into(),
                     selected_tier: "strong".into(),
                     selected_effort: None,
@@ -1257,14 +1265,18 @@ mod tests {
     fn snapshot() -> EvalEvidenceSnapshot {
         let mut records = Vec::new();
         let ranked = [
-            ("agent_trace/v2|verify|normal", 900, 4),
-            ("agent_trace/v2|edit|normal", 500, 5),
-            ("agent_trace/v2|review|normal", 900, 3),
-            ("agent_trace/v2|opening|normal", 2_000, 5),
-            ("agent_trace/v2|planning|normal", 1_900, 5),
-            ("agent_trace/v2|test|guarded", 1_800, 5),
-            ("agent_trace/v2|debug|normal", 1_700, 0),
-            ("agent_trace/v2|finalization|normal", 1_600, 5),
+            ("agent_route/v1|unknown|verify|normal", 900, 4),
+            ("agent_route/v1|unknown|implement|normal", 500, 5),
+            ("agent_route/v1|code:review|verify|normal", 900, 3),
+            ("agent_route/v1|unknown|orchestrate|normal", 2_000, 5),
+            (
+                "agent_route/v1|agent:multi_step_planning|orchestrate|normal",
+                1_900,
+                5,
+            ),
+            ("agent_route/v1|unknown|verify|guarded", 1_800, 5),
+            ("agent_route/v1|code:debugging|implement|normal", 1_700, 0),
+            ("agent_route/v1|unknown|finalize|normal", 1_600, 5),
         ];
         for (request_key, cost, units) in ranked {
             records.push(request_record(
@@ -1292,7 +1304,7 @@ mod tests {
             policy.optimization = Some(PolicyOptimizationState {
                 active: Some(crate::optimization::exploration::RouteExploration {
                     experiment_id: EXPERIMENT_ID.into(),
-                    target_request_key: "agent_trace/v2|edit|normal".into(),
+                    target_request_key: "agent_route/v1|unknown|implement|normal".into(),
                     champion_tier: "strong".into(),
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
@@ -1317,7 +1329,7 @@ mod tests {
         cost: i64,
         hard_violation: bool,
     ) -> EvalEvidenceRecord {
-        let mut record = unit_record("agent_trace/v2|edit|normal", subject_id);
+        let mut record = unit_record("agent_route/v1|unknown|implement|normal", subject_id);
         record.subject.decisions[0].selected_tier = match arm {
             ExperimentArm::Control => "strong",
             ExperimentArm::Challenger => "economy",
@@ -1392,7 +1404,7 @@ mod tests {
         };
         let rejected_context = treatment_context_digest(
             "auto",
-            "agent_trace/v2|finalization|normal",
+            "agent_route/v1|unknown|finalize|normal",
             "strong",
             "economy",
             100_000,
@@ -1405,7 +1417,7 @@ mod tests {
             active: None,
             rejections: vec![RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
-                target_request_key: Some("agent_trace/v2|finalization|normal".into()),
+                target_request_key: Some("agent_route/v1|unknown|finalize|normal".into()),
                 treatment_context_digest: Some(rejected_context),
                 treatment: None,
                 experiment_parent_digest: None,
@@ -1425,7 +1437,7 @@ mod tests {
         })?
         .ok_or_else(|| anyhow::anyhow!("expected one eligible historical opportunity"))?;
 
-        assert_eq!(selected.request_key, "agent_trace/v2|verify|normal");
+        assert_eq!(selected.request_key, "agent_route/v1|unknown|verify|normal");
         assert_eq!(selected.observed_cost_micro_usd, 900);
         assert_eq!(selected.independent_units, 4);
         Ok(())
@@ -1468,7 +1480,7 @@ mod tests {
     #[test]
     fn request_result_multiplicity_does_not_change_opportunity_ranking() -> Result<()> {
         let repeated = request_record(
-            "agent_trace/v2|edit|normal",
+            "agent_route/v1|unknown|implement|normal",
             "shared-request-subject",
             Some(600),
         );
@@ -1485,12 +1497,12 @@ mod tests {
             repeated,
             duplicate_result,
             request_record(
-                "agent_trace/v2|verify|normal",
+                "agent_route/v1|unknown|verify|normal",
                 "larger-request-subject",
                 Some(1_000),
             ),
-            unit_record("agent_trace/v2|edit|normal", "edit-task"),
-            unit_record("agent_trace/v2|verify|normal", "verify-task"),
+            unit_record("agent_route/v1|unknown|implement|normal", "edit-task"),
+            unit_record("agent_route/v1|unknown|verify|normal", "verify-task"),
         ];
         let snapshot = EvalEvidenceSnapshot {
             evidence_root: SNAPSHOT_ROOT.into(),
@@ -1509,7 +1521,7 @@ mod tests {
         })?
         .ok_or_else(|| anyhow::anyhow!("expected one opportunity"))?;
 
-        assert_eq!(selected.request_key, "agent_trace/v2|verify|normal");
+        assert_eq!(selected.request_key, "agent_route/v1|unknown|verify|normal");
         assert_eq!(selected.observed_cost_micro_usd, 1_000);
         records.reverse();
         let reversed = EvalEvidenceSnapshot {
@@ -1531,8 +1543,44 @@ mod tests {
     }
 
     #[test]
+    fn opportunity_uses_primary_route_projection_over_matched_fallback() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let mut lock = lock();
+        lock.policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?
+            .routes
+            .insert(route_projection.into(), "strong".into());
+        let mut request = request_record(matched_fallback, "projected-request", Some(1_000));
+        request.subject.decisions[0].route_projection = route_projection.into();
+        let mut task = unit_record(matched_fallback, "projected-task");
+        task.subject.decisions[0].route_projection = route_projection.into();
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: vec![request, task],
+        };
+        let options = options();
+
+        let selected = select_opportunity(OptimizationStepInput {
+            eval: &snapshot,
+            active_policy: &lock,
+            active_policy_digest: ACTIVE_DIGEST,
+            policy_name: "auto",
+            options: &options,
+        })?
+        .ok_or_else(|| anyhow::anyhow!("expected projected route opportunity"))?;
+
+        assert_eq!(selected.request_key, route_projection);
+        assert_eq!(selected.observed_cost_micro_usd, 1_000);
+        assert_eq!(selected.independent_units, 1);
+        Ok(())
+    }
+
+    #[test]
     fn pruning_preserves_explicit_operator_and_other_compiler_certificates() -> Result<()> {
-        let request_key = "agent_trace/v2|edit|normal";
+        let request_key = "agent_route/v1|unknown|implement|normal";
         let mut explicit = lock();
         let artifact = explicit
             .artifact
@@ -1665,7 +1713,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(changed_routes.len(), 1);
         assert_eq!(
-            successor_policy.routes.get("agent_trace/v2|edit|normal"),
+            successor_policy
+                .routes
+                .get("agent_route/v1|unknown|implement|normal"),
             Some(&"economy".to_string())
         );
         assert!(
@@ -1683,7 +1733,7 @@ mod tests {
         assert_eq!(artifact.compiler.id, "bitrouter-history-optimizer");
         assert_eq!(
             successor
-                .certificate("auto", "agent_trace/v2|edit|normal")
+                .certificate("auto", "agent_route/v1|unknown|implement|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Promote)
         );
@@ -1740,12 +1790,12 @@ mod tests {
             successor
                 .policies
                 .get("auto")
-                .and_then(|policy| policy.routes.get("agent_trace/v2|edit|normal")),
+                .and_then(|policy| policy.routes.get("agent_route/v1|unknown|implement|normal")),
             Some(&"strong".to_string())
         );
         assert_eq!(
             successor
-                .certificate("auto", "agent_trace/v2|edit|normal")
+                .certificate("auto", "agent_route/v1|unknown|implement|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Blocked)
         );
@@ -1908,11 +1958,9 @@ mod tests {
         let initial_digest = semantic_digest(&initial)?;
         let mut history = snapshot();
         history.records.retain(|record| {
-            record
-                .subject
-                .decisions
-                .iter()
-                .any(|decision| decision.request_key == "agent_trace/v2|review|normal")
+            record.subject.decisions.iter().any(|decision| {
+                decision.route_projection == "agent_route/v1|code:review|verify|normal"
+            })
         });
         set_snapshot_policy_digest(&mut history, &initial_digest);
         let options = options();
@@ -1940,7 +1988,10 @@ mod tests {
         let mut experiment_history = active_snapshot(3, 20, EvalVerdict::Fail, 1_000, 700);
         set_snapshot_policy_digest(&mut experiment_history, &exploration_digest);
         for record in &mut experiment_history.records {
-            record.subject.decisions[0].request_key = "agent_trace/v2|review|normal".into();
+            record.subject.decisions[0].route_projection =
+                "agent_route/v1|code:review|verify|normal".into();
+            record.subject.decisions[0].request_key =
+                "agent_route/v1|code:review|verify|normal".into();
             if let Some(experiment) = record.subject.decisions[0].experiment.as_mut() {
                 experiment.experiment_id = experiment_id.clone();
             }
@@ -2035,9 +2086,10 @@ mod file_tests {
         RouteOwner, default_history_dir, deterministic_yaml, load, publish_candidate,
         validate_document,
     };
+    use crate::workflow_state::predictive::compiled_predictor_contract;
 
-    const REQUEST_KEY: &str = "agent_trace/v2|edit|normal";
-    const SECOND_REQUEST_KEY: &str = "agent_trace/v2|test|normal";
+    const REQUEST_KEY: &str = "agent_route/v1|unknown|implement|normal";
+    const SECOND_REQUEST_KEY: &str = "agent_route/v1|code:generation|verify|normal";
     const SHA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct Harness {
@@ -2081,6 +2133,7 @@ mod file_tests {
                 ..Default::default()
             };
             policy.routes.insert(REQUEST_KEY.into(), "strong".into());
+            policy.predictor = Some(compiled_predictor_contract());
             policy.adequacy.explore_tier = Some("economy".into());
             let certificate = PolicyCertificate {
                 owner: RouteOwner::Compiler,
@@ -2197,6 +2250,7 @@ mod file_tests {
                     decisions: vec![EvalDecisionRef {
                         decision_id: format!("decision-{id}"),
                         policy: "auto".into(),
+                        route_projection: request_key.into(),
                         request_key: request_key.into(),
                         selected_tier: "strong".into(),
                         selected_effort: None,
@@ -2264,6 +2318,7 @@ mod file_tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: "decision-challenger-hard-failure".into(),
                     policy: "auto".into(),
+                    route_projection: exploration.target_request_key.clone(),
                     request_key: exploration.target_request_key.clone(),
                     selected_tier: exploration.challenger_tier.clone(),
                     selected_effort: None,
@@ -2360,6 +2415,7 @@ mod file_tests {
                         decisions: vec![EvalDecisionRef {
                             decision_id: format!("decision-{subject_id}"),
                             policy: "auto".into(),
+                            route_projection: exploration.target_request_key.clone(),
                             request_key: exploration.target_request_key.clone(),
                             selected_tier: tier.into(),
                             selected_effort: None,
@@ -2570,7 +2626,10 @@ mod file_tests {
             .certificates
             .get_mut("auto")
             .context("retreated certificates are missing")?
-            .insert("agent_trace/v2|test|normal".into(), copied);
+            .insert(
+                "agent_route/v1|code:generation|verify|normal".into(),
+                copied,
+            );
         let forged_error = validate_document(&forged)
             .expect_err("a blocked certificate cannot be copied to another default-derived key");
         assert!(

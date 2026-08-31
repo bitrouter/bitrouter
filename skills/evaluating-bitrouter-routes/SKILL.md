@@ -34,11 +34,11 @@ Choose `evaluator.kind` from the actual source:
 
 ## Build the evaluator packet
 
-1. Copy every decision's `decision_id`, `policy`, `request_key`,
-   `selected_tier`, `baseline_tier`, `policy_digest`, and optional `experiment`
-   object from router-authored evidence. Preserve the experiment object
-   verbatim; never invent or edit its id, arm, assignment unit, assignment-id
-   digest, or challenger propensity.
+1. Copy every decision's `decision_id`, `policy`, `route_projection`,
+   `request_key`, `selected_tier`, `baseline_tier`, `policy_digest`, and
+   optional `experiment` object from router-authored evidence. Preserve the
+   experiment object verbatim; never invent or edit its id, arm, assignment
+   unit, assignment-id digest, or challenger propensity.
 2. Redact evidence before it leaves its private source. Retain raw messages,
    tool arguments, code, and evaluator output with the evaluator; place safe,
    content-addressed evidence items in the subject.
@@ -93,5 +93,11 @@ Choose `evaluator.kind` from the actual source:
 - Preserve the router-authored baseline and selected tiers.
 - Preserve router-authored experiment references exactly.
   Optimizer membership never comes from the evaluator-owned `cohort` string.
+- Treat `inconclusive` as zero quality evidence even if an old or malformed
+  packet assigns positive quality credit. Attribute cost or latency separately.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.
+- Keep `eval_id`, result, and evidence identities attempt-specific. For task
+  scope, keep `subject_id` stable for the canonical task inside its explicit
+  run/source/policy namespace so repeated attempts cannot inflate the generic
+  compiler's independent-task count.

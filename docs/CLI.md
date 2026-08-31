@@ -94,20 +94,18 @@ Any provider API keys present in the current environment are forwarded to the da
 
 ```
 bitrouter status [-c <path>] [--socket <path>]
-bitrouter status --watch             # live view of what the router is doing
+bitrouter status --requests          # what the router has actually done
 ```
 
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
 
-`--watch` (`-w`) opens a live, self-refreshing view instead: a newest-first stream of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a header stating daemon state and a footer carrying today's spend and the trailing-minute rate. It refreshes once a second and reads the metering store directly, so it also works with **no daemon running** (the header says `history only` rather than showing an empty list that looks like idleness).
+`--requests` (`-r`) prints what the router has actually done instead: a newest-first table of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a line stating daemon state and over today's spend and the trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (the state line says `history only` rather than showing an empty list that looks like idleness).
 
-Keys: `↑`/`↓` or `j`/`k` move, `g` jumps to the live edge and re-arms auto-follow, `G` to the oldest row, `?` help, `q` quit. The view is read-only apart from two keys that run existing commands and echo what they ran: `r` reloads the daemon, and `e` opens `bitrouter.yaml` in `$VISUAL`/`$EDITOR` then reloads. It never writes config itself and never handles a credential — use `bitrouter providers login` for those.
+The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for a live view. Bare `bitrouter status` is unchanged.
 
-Moving the cursor off the newest row pauses auto-follow (the footer says `paused`), so reading history is not interrupted by incoming requests.
+Portable — there is no terminal-only path left to gate.
 
-Piped or redirected, `--watch` prints **one** snapshot as a plain table and exits, so `bitrouter status --watch | …` stays scriptable. Bare `bitrouter status` is unchanged.
-
-Unix only; on Windows `--watch` is rejected with a message rather than half-working.
+> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed exactly what `--requests` prints now, so scripts that piped it need only the new flag name.
 
 ---
 
@@ -698,7 +696,6 @@ These commands export and validate the request-scoped evidence used by policy
 benchmarks:
 
 ```text
-bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
