@@ -297,6 +297,26 @@ impl Default for PolicyDefinition {
 }
 
 impl PolicyDefinition {
+    /// Resolve a task-aware predictive projection exactly as the serving
+    /// router does: exact route, unknown-family baseline, then default.
+    /// Defaults retain the primary projection as their matched key.
+    pub(crate) fn resolve_predictive_route(
+        &self,
+        route_projection: &str,
+    ) -> Option<(&str, String)> {
+        let projection = PredictiveRouteProjection::parse_key(route_projection)?;
+        if let Some(tier) = self.routes.get(route_projection) {
+            return Some((tier.as_str(), route_projection.to_owned()));
+        }
+        let baseline_key = projection.unknown_baseline().key();
+        if let Some(tier) = self.routes.get(&baseline_key) {
+            return Some((tier.as_str(), baseline_key));
+        }
+        self.default_tier
+            .as_deref()
+            .map(|tier| (tier, route_projection.to_owned()))
+    }
+
     pub fn as_table_config(&self, mode: PolicyRuntimeMode) -> PolicyTableConfig {
         PolicyTableConfig {
             key_strategy: self.key_strategy,
@@ -508,10 +528,9 @@ fn validate_route_exploration(
 ) -> Result<()> {
     validate_route_exploration_intrinsic(policy_name, policy, exploration)?;
     let champion_route = policy
-        .routes
-        .get(&exploration.target_request_key)
-        .or(policy.default_tier.as_ref());
-    if champion_route != Some(&exploration.champion_tier) {
+        .resolve_predictive_route(&exploration.target_request_key)
+        .map(|(tier, _)| tier);
+    if champion_route != Some(exploration.champion_tier.as_str()) {
         anyhow::bail!(
             "policy '{policy_name}' optimization target_request_key must resolve to champion_tier"
         )
@@ -726,7 +745,7 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
         if let Some(certificates) = certificates {
             for (request_key, certificate) in certificates {
                 if !policy.routes.contains_key(request_key)
-                    && !is_default_derived_optimizer_certificate(
+                    && !is_route_less_optimizer_certificate(
                         document,
                         policy_name,
                         policy,
@@ -782,7 +801,7 @@ fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
     Ok(())
 }
 
-fn is_default_derived_optimizer_certificate(
+fn is_route_less_optimizer_certificate(
     document: &PolicyLock,
     policy_name: &str,
     policy: &PolicyDefinition,
@@ -798,13 +817,15 @@ fn is_default_derived_optimizer_certificate(
     ) else {
         return Ok(false);
     };
+    let Some((resolved_champion_tier, _)) = policy.resolve_predictive_route(request_key) else {
+        return Ok(false);
+    };
     if artifact.compiler.id != HISTORY_OPTIMIZER_ID
         || artifact.compiler.version != HISTORY_OPTIMIZER_VERSION
         || artifact.migration.is_some()
         || certificate.compiler_config_digest != artifact.compiler.config_digest
         || certificate.evidence_digest != artifact.evidence_root
-        || PredictiveRouteProjection::parse_key(request_key).is_none()
-        || policy.default_tier.as_ref() != Some(&certificate.selected_tier)
+        || resolved_champion_tier != certificate.selected_tier
         || certificate.owner != RouteOwner::Compiler
         || certificate.source != CertificateSource::Mixed
     {
@@ -875,11 +896,7 @@ fn is_default_derived_optimizer_certificate(
                 if target_request_key == request_key
                     && treatment.target_request_key == request_key
                     && treatment.champion_tier == certificate.selected_tier
-                    && policy
-                        .routes
-                        .get(request_key)
-                        .or(policy.default_tier.as_ref())
-                        == Some(&treatment.champion_tier)
+                    && resolved_champion_tier == treatment.champion_tier
                     && certificate.baseline_tier.as_ref() == Some(&treatment.champion_tier)
                     && rejection.experiment_id == treatment.experiment_id
                     && treatment.experiment_id == expected_experiment_id
@@ -3168,9 +3185,11 @@ mod tests {
         policy
             .tiers
             .insert("economy".into(), PolicyModelTarget::Model("economy".into()));
-        policy
-            .routes
-            .insert("agent_trace/v2|edit|normal".into(), "strong".into());
+        policy.routes.insert(
+            "agent_route/v1|unknown|implement|normal".into(),
+            "strong".into(),
+        );
+        policy.predictor = Some(compiled_predictor_contract());
         policy
     }
 
@@ -3178,7 +3197,7 @@ mod tests {
         RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "agent_route/v1|unknown|implement|normal".into(),
+            target_request_key: "agent_route/v1|code:debugging|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 100_000,
@@ -3189,6 +3208,107 @@ mod tests {
                 evaluator_config_digest: None,
             },
         }
+    }
+
+    #[test]
+    fn optimization_target_accepts_the_unknown_family_champion_without_a_default() {
+        let policy = valid_optimization_policy();
+
+        validate_route_exploration("auto", &policy, &valid_exploration()).unwrap();
+    }
+
+    #[test]
+    fn route_less_optimizer_certificate_accepts_the_unknown_family_champion() -> Result<()> {
+        let mut policy = valid_optimization_policy();
+        let mut exploration = valid_exploration();
+        let parent_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let evidence_root =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let context_digest = treatment_context_digest(
+            "auto",
+            &exploration.target_request_key,
+            &exploration.champion_tier,
+            &exploration.challenger_tier,
+            exploration.challenger_exposure_ppm,
+            &exploration.gate,
+        )?;
+        exploration.experiment_id = experiment_id(parent_digest, &context_digest)?;
+        let compiler_config_digest = explore_compiler_config_digest(
+            "auto",
+            &exploration.challenger_tier,
+            exploration.challenger_exposure_ppm,
+            &exploration.gate,
+        )?;
+        policy.optimization = Some(PolicyOptimizationState {
+            active: Some(exploration.clone()),
+            rejections: Vec::new(),
+        });
+        let explicit_certificate = PolicyCertificate {
+            owner: RouteOwner::Compiler,
+            selected_tier: "strong".into(),
+            baseline_tier: None,
+            source: CertificateSource::TaskNative,
+            eligible_episodes: 1,
+            independent_tasks: 1,
+            quality: None,
+            economics: None,
+            latency: None,
+            critical_violations: 0,
+            verdict: PromotionVerdict::Retain,
+            evaluator_config_digest: None,
+            compiler_config_digest: parent_digest.into(),
+            evidence_digest: evidence_root.into(),
+            legacy: None,
+        };
+        let exploration_certificate = PolicyCertificate {
+            owner: RouteOwner::Compiler,
+            selected_tier: "strong".into(),
+            baseline_tier: Some("strong".into()),
+            source: CertificateSource::Mixed,
+            eligible_episodes: 1,
+            independent_tasks: 1,
+            quality: None,
+            economics: None,
+            latency: None,
+            critical_violations: 0,
+            verdict: PromotionVerdict::Experiment,
+            evaluator_config_digest: None,
+            compiler_config_digest: compiler_config_digest.clone(),
+            evidence_digest: evidence_root.into(),
+            legacy: None,
+        };
+        let lock = PolicyLock {
+            artifact: Some(PolicyArtifact {
+                parent_digest: Some(parent_digest.into()),
+                evidence_root: evidence_root.into(),
+                eval_snapshot_root: Some(evidence_root.into()),
+                source_snapshot_time_unix_ms: 1,
+                migration: None,
+                compiler: CompilerIdentity {
+                    id: HISTORY_OPTIMIZER_ID.into(),
+                    version: HISTORY_OPTIMIZER_VERSION,
+                    config_digest: compiler_config_digest,
+                },
+            }),
+            policies: BTreeMap::from([("auto".into(), policy)]),
+            certificates: BTreeMap::from([(
+                "auto".into(),
+                BTreeMap::from([
+                    (
+                        "agent_route/v1|unknown|implement|normal".into(),
+                        explicit_certificate,
+                    ),
+                    (
+                        exploration.target_request_key.clone(),
+                        exploration_certificate,
+                    ),
+                ]),
+            )]),
+            ..PolicyLock::default()
+        };
+
+        validate_document(&lock)
     }
 
     #[test]

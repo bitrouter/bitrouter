@@ -148,6 +148,8 @@ struct OpportunityAggregate {
     request_count: u64,
     found_cost: bool,
     independent_units: BTreeSet<(EvalScope, String)>,
+    matched_request_keys: BTreeSet<String>,
+    fallback_baseline_tiers: BTreeSet<String>,
 }
 
 pub fn select_opportunity(
@@ -181,6 +183,14 @@ pub fn select_opportunity(
             let route = aggregate
                 .entry(decision.route_projection.clone())
                 .or_default();
+            route
+                .matched_request_keys
+                .insert(decision.request_key.clone());
+            if decision.request_key != decision.route_projection
+                && let Some(baseline_tier) = decision.baseline_tier.as_ref()
+            {
+                route.fallback_baseline_tiers.insert(baseline_tier.clone());
+            }
             match record.subject.scope {
                 EvalScope::Request => {
                     let key = (
@@ -233,27 +243,34 @@ pub fn select_opportunity(
 
     let gate = input.options.gate();
     let mut candidates = Vec::new();
-    for (request_key, route) in aggregate {
-        let Some(champion_tier) = policy
-            .routes
-            .get(&request_key)
-            .or(policy.default_tier.as_ref())
+    for (route_projection, route) in aggregate {
+        let Some((champion_tier, matched_request_key)) =
+            policy.resolve_predictive_route(&route_projection)
         else {
             continue;
         };
+        if route.matched_request_keys.len() != 1
+            || !route.matched_request_keys.contains(&matched_request_key)
+            || route
+                .fallback_baseline_tiers
+                .iter()
+                .any(|baseline| baseline != champion_tier)
+        {
+            continue;
+        }
         if champion_tier == input.options.candidate_tier()?
-            || request_key.ends_with("|guarded")
+            || route_projection.ends_with("|guarded")
             || route.independent_units.is_empty()
             || input
                 .active_policy
-                .certificate(input.policy_name, &request_key)
+                .certificate(input.policy_name, &matched_request_key)
                 .is_some_and(|certificate| certificate.owner == RouteOwner::Operator)
         {
             continue;
         }
         let context = treatment_context_digest(
             input.policy_name,
-            &request_key,
+            &route_projection,
             champion_tier,
             input.options.candidate_tier()?,
             input.options.challenger_exposure_ppm,
@@ -268,8 +285,8 @@ pub fn select_opportunity(
         }
         let independent_units = u32::try_from(route.independent_units.len()).unwrap_or(u32::MAX);
         candidates.push(HistoricalOpportunity {
-            request_key,
-            champion_tier: champion_tier.clone(),
+            request_key: route_projection,
+            champion_tier: champion_tier.to_owned(),
             observed_cost_micro_usd: if route.found_cost {
                 route.observed_cost_micro_usd
             } else {
@@ -1547,15 +1564,18 @@ mod tests {
         let route_projection = "agent_route/v1|code:debugging|implement|normal";
         let matched_fallback = "agent_route/v1|unknown|implement|normal";
         let mut lock = lock();
-        lock.policies
+        let policy = lock
+            .policies
             .get_mut("auto")
-            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?
-            .routes
-            .insert(route_projection.into(), "strong".into());
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?;
+        policy.routes.remove(route_projection);
+        policy.default_tier = Some("economy".into());
         let mut request = request_record(matched_fallback, "projected-request", Some(1_000));
         request.subject.decisions[0].route_projection = route_projection.into();
+        request.subject.decisions[0].baseline_tier = Some("strong".into());
         let mut task = unit_record(matched_fallback, "projected-task");
         task.subject.decisions[0].route_projection = route_projection.into();
+        task.subject.decisions[0].baseline_tier = Some("strong".into());
         let snapshot = EvalEvidenceSnapshot {
             evidence_root: SNAPSHOT_ROOT.into(),
             frozen_at: "2026-08-17T00:00:02Z".into(),
@@ -1575,6 +1595,156 @@ mod tests {
         assert_eq!(selected.request_key, route_projection);
         assert_eq!(selected.observed_cost_micro_usd, 1_000);
         assert_eq!(selected.independent_units, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn opportunity_uses_matched_fallback_without_a_default_route() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let mut lock = lock();
+        let policy = lock
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?;
+        policy.routes.remove(route_projection);
+        policy.default_tier = None;
+        let mut request = request_record(matched_fallback, "projected-request", Some(1_000));
+        request.subject.decisions[0].route_projection = route_projection.into();
+        request.subject.decisions[0].baseline_tier = Some("strong".into());
+        let mut task = unit_record(matched_fallback, "projected-task");
+        task.subject.decisions[0].route_projection = route_projection.into();
+        task.subject.decisions[0].baseline_tier = Some("strong".into());
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: vec![request, task],
+        };
+
+        let selected = select_opportunity(OptimizationStepInput {
+            eval: &snapshot,
+            active_policy: &lock,
+            active_policy_digest: ACTIVE_DIGEST,
+            policy_name: "auto",
+            options: &options(),
+        })?
+        .ok_or_else(|| anyhow::anyhow!("expected fallback-derived opportunity"))?;
+
+        assert_eq!(selected.request_key, route_projection);
+        assert_eq!(selected.champion_tier, "strong");
+        Ok(())
+    }
+
+    #[test]
+    fn opportunity_rejects_inconsistent_matched_fallback_evidence() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let mismatched_fallback = "agent_route/v1|unknown|verify|normal";
+        let mut lock = lock();
+        let policy = lock
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?;
+        policy.routes.remove(route_projection);
+        policy.default_tier = None;
+        let mut request = request_record(mismatched_fallback, "projected-request", Some(1_000));
+        request.subject.decisions[0].route_projection = route_projection.into();
+        let mut task = unit_record(mismatched_fallback, "projected-task");
+        task.subject.decisions[0].route_projection = route_projection.into();
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: vec![request, task],
+        };
+
+        assert!(
+            select_opportunity(OptimizationStepInput {
+                eval: &snapshot,
+                active_policy: &lock,
+                active_policy_digest: ACTIVE_DIGEST,
+                policy_name: "auto",
+                options: &options(),
+            })?
+            .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn opportunity_rejects_inconsistent_fallback_baseline_tier() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let mut lock = lock();
+        let policy = lock
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?;
+        policy.routes.remove(route_projection);
+        policy.default_tier = None;
+        let mut request = request_record(matched_fallback, "projected-request", Some(1_000));
+        request.subject.decisions[0].route_projection = route_projection.into();
+        request.subject.decisions[0].baseline_tier = Some("economy".into());
+        let mut task = unit_record(matched_fallback, "projected-task");
+        task.subject.decisions[0].route_projection = route_projection.into();
+        task.subject.decisions[0].baseline_tier = Some("economy".into());
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: vec![request, task],
+        };
+
+        assert!(
+            select_opportunity(OptimizationStepInput {
+                eval: &snapshot,
+                active_policy: &lock,
+                active_policy_digest: ACTIVE_DIGEST,
+                policy_name: "auto",
+                options: &options(),
+            })?
+            .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn opportunity_respects_an_operator_owned_matched_fallback() -> Result<()> {
+        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let mut lock = lock();
+        let policy = lock
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing test policy"))?;
+        policy.routes.remove(route_projection);
+        policy.default_tier = None;
+        let certificate = lock
+            .certificates
+            .get_mut("auto")
+            .and_then(|certificates| certificates.get_mut(matched_fallback))
+            .ok_or_else(|| anyhow::anyhow!("missing fallback certificate"))?;
+        certificate.owner = RouteOwner::Operator;
+        certificate.source = CertificateSource::Operator;
+        let mut request = request_record(matched_fallback, "projected-request", Some(1_000));
+        request.subject.decisions[0].route_projection = route_projection.into();
+        request.subject.decisions[0].baseline_tier = Some("strong".into());
+        let mut task = unit_record(matched_fallback, "projected-task");
+        task.subject.decisions[0].route_projection = route_projection.into();
+        task.subject.decisions[0].baseline_tier = Some("strong".into());
+        let snapshot = EvalEvidenceSnapshot {
+            evidence_root: SNAPSHOT_ROOT.into(),
+            frozen_at: "2026-08-17T00:00:02Z".into(),
+            records: vec![request, task],
+        };
+
+        assert!(
+            select_opportunity(OptimizationStepInput {
+                eval: &snapshot,
+                active_policy: &lock,
+                active_policy_digest: ACTIVE_DIGEST,
+                policy_name: "auto",
+                options: &options(),
+            })?
+            .is_none()
+        );
         Ok(())
     }
 
