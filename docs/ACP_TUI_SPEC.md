@@ -2,6 +2,10 @@
 
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
+> **Historical note (2026-08-16):** `status --watch` was later removed in favor
+> of `bitrouter status --requests`; references below to it being untouched or
+> authoritative describe the codebase state when this spec was written.
+
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
 [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. Leaves
@@ -56,8 +60,8 @@ decision at n=4, and the stale text is still in source in two places.
 They are a deliberate split, and each is coherent alone:
 
 - Want Claude Code's own plan mode, slash commands, and native affordances?
-  `bitrouter launch` — inherited, zero BitRouter terminal code, all nine
-  harnesses.
+  `bitrouter launch` — inherited, zero BitRouter terminal code, all launchable
+  catalog harnesses.
 - Want to swap **agent and model** freely with router-measured cost? The ACP
   TUI.
 
@@ -99,8 +103,8 @@ independent of hosting; only `exec_hosted` goes.
 
 Removed dependencies: `alacritty_terminal`, `portable-pty`, `termwiz`,
 `wezterm-input-types` (`termwiz` alone resolves ~107 crates for three imported
-symbols). `ratatui` and `crossterm` stay — `status --watch` and the new TUI
-both need them.
+symbols). The final tree keeps `crossterm` in the app for terminal I/O and
+`ratatui` behind `crates/bitrouter-tui`; `status --watch` was later removed.
 
 **Supporting evidence, verified.** These are not the reason to delete it, but
 they establish that the code was not load-bearing:
@@ -474,10 +478,10 @@ The honesty problem is solved there too
 > way, instead of showing an empty session forever or, worse, showing the
 > daemon's numbers as if they were the session's.*
 
-That is the fix for the fidelity matrix's defect #1, already written. So:
-**share `snapshot.rs` and `Scope`; keep `watch.rs` and this TUI as separate
-renderers over it.** That yields what merging would actually buy — one data
-layer, consistent numbers, honest attribution — without merging the views.
+That was the proposed fix for the fidelity matrix's defect #1. The final tree
+keeps chat cost scope in `crates/bitrouter-tui::cost::Scope` with the
+BitRouter-specific wire key in `apps/bitrouter/src/chat/cost.rs`; the removed
+`status --watch` view no longer shares a renderer with chat.
 
 **Carry the caveat.** For a subscription harness that ignores the injected
 credential (Claude Code on Max), requests never reach the daemon, so session

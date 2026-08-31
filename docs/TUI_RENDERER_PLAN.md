@@ -5,6 +5,13 @@ Companion to [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md). The spec holds the
 criteria*. Scope is the spec's **v1 column only** (§15) — every "later" row is
 out of scope here.
 
+> **Implementation note (2026-08-24):** this plan records an execution plan, not
+> the final mainline boundary. The current tree keeps `ratatui` out of
+> `apps/bitrouter`, keeps `cost.rs` and `picker.rs` in `crates/bitrouter-tui`,
+> deletes `viewport.rs`, and has no `status --watch` / `watch.rs`. Older Phase 4
+> app-only boundary wording is historical and should not be used as current
+> implementation instructions.
+
 Designed to be driven by `/goal`. See §A for the loop protocol and §E for the
 goal strings.
 
@@ -75,8 +82,9 @@ From the spec, restated so this file is usable alone:
 8. **Mode 2026 is emitted unconditionally.** No capability detection (§4.4).
 9. **One owner of stdin, raw mode for the session**, which means we own Ctrl-C
    and Ctrl-D and must supply a single-line editor (§13.1).
-10. **`cost.rs` and `picker.rs` move to `apps/bitrouter` whole**, tests included
-    (§8).
+10. **Final boundary:** `cost.rs` and `picker.rs` stay in
+    `crates/bitrouter-tui`; BitRouter-specific `_meta` keys, metering, control
+    socket, and config access stay in `apps/bitrouter` (§8 update).
 
 ### C.1 Decisions required before Phase 2 starts
 
@@ -101,7 +109,8 @@ These are spec §19 open questions. Phase 1 does not depend on them; Phase 2 doe
   and `ProviderInfo` that way — so the decision is to keep one dependency edge
   rather than add a second to the same crate, which would then have to be held
   in version lockstep and could otherwise compile the app against a different
-  schema than the SDK. Task 4.1 rewrites the moved files' imports; no manifest
+  schema than the SDK. The final boundary keeps renderer imports in
+  `bitrouter-tui` and app wire conversion in `apps/bitrouter`; no manifest
   changes.
 
 ---
@@ -131,8 +140,8 @@ renderer and are worth having even if §19.1 goes the other way.
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/acp_cli.rs`, `apps/bitrouter/src/tui/lifecycle.rs`
   - Do: reuse the existing handle-free `restore()` (`lifecycle.rs:44`) and
-    `install_panic_restore()` (`:56`), and register
-    `ShutdownSignals::install()` (`tui/watch.rs:185`) as a `select!` arm.
+    `install_panic_restore()` (`:56`), and register shutdown-signal handling as
+    a `select!` arm.
     Extend `restore()` to disable raw mode if it does not already. Normal exit,
     panic, and INT/TERM/HUP must all land there.
   - Done when: a test or a documented manual check shows the terminal is out of
@@ -256,7 +265,7 @@ left the old stack intact.
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: replace `Transcript` with `Journal` and `Inline` with the writer.
     Compose the footer (spec §4.5) from cost, route, mode, title and the pending
-    permission — cost still via the crate's `cost.rs`, which moves in 4.1. Drop
+    permission — cost still via the crate's `cost.rs`. Drop
     the turn-end `flush()`. Route `log_tail` to a direct stdout write after
     teardown (spec §10).
   - Done when: `bitrouter chat` renders a session with in-place tool-call
@@ -281,27 +290,31 @@ left the old stack intact.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15 && cargo clippy --all-features 2>&1 | tail -5 && cargo fmt -- --check`
   - Commit: — (tick only)
 
-### Phase 4 — Moves, new surfaces, and lockstep
+### Phase 4 — Final boundary, new surfaces, and lockstep
 
-- [x] **4.1 Move `cost.rs` to the app, whole**
+- [x] **4.1 Keep the cost surface boundary explicit**
   - Depends on: 3.3, and §C.1's §19.5 decision recorded
-  - Files: `crates/bitrouter-tui/src/cost.rs` → `apps/bitrouter/src/chat/cost.rs`
-  - Do: move the constant, `Scope`, `from_usage`, `render`, `unreported`, and
-    **all five tests**. The crate keeps nothing of it — `from_usage` reads the
-    constant, so the split rev 2 proposed does not compile.
-  - Done when: `crates/bitrouter-tui/src/cost.rs` does not exist and the five
-    tests pass in their new home.
+  - Files: `crates/bitrouter-tui/src/cost.rs`,
+    `apps/bitrouter/src/chat/cost.rs`
+  - Do: keep `Cost` / `Scope` rendering in the TUI crate, keep the
+    BitRouter-specific `_meta` key and wire conversion in the app, and make the
+    caller pass a scope explicitly.
+  - Done when: `crates/bitrouter-tui/src/cost.rs` exists, the app owns
+    `COST_SCOPE_META_KEY`, and cost tests pass in both locations.
   - Verify: `cargo nextest run --all-features cost 2>&1 | tail -10`
-  - Commit: `refactor(tui): move the cost surface to the app`
+  - Commit: `refactor(tui): keep cost scope at the boundary`
 
-- [x] **4.2 Move `picker.rs` to the app, whole**
+- [x] **4.2 Keep the provider picker protocol-shaped**
   - Depends on: 4.1
-  - Files: `crates/bitrouter-tui/src/picker.rs` → `apps/bitrouter/src/chat/picker.rs`
-  - Do: move it as plain app code with **no registry entry** — it is not a
-    `_meta` surface (spec §7). Its five tests move with it.
-  - Done when: `crates/bitrouter-tui/src/picker.rs` does not exist.
+  - Files: `crates/bitrouter-tui/src/picker.rs`,
+    `apps/bitrouter/src/acp_cli.rs`
+  - Do: keep the picker in the TUI crate because it renders ACP
+    `ProviderInfo`; the app decides whether it is available and applies the
+    selected route.
+  - Done when: `crates/bitrouter-tui/src/picker.rs` exists, reads only ACP
+    provider data, and picker tests pass.
   - Verify: `cargo nextest run --all-features picker 2>&1 | tail -10`
-  - Commit: `refactor(tui): move the provider picker to the app`
+  - Commit: `refactor(tui): keep picker on ACP provider data`
 
 - [x] **4.3 Render the five forwarded variants**
   - Depends on: 3.3
@@ -332,11 +345,12 @@ left the old stack intact.
   - Do: normalize the one odd fixture path (`log_tail.rs:81`, `:91`) from
     `/home/u/.bitrouter/logs/session-1.log` to `/tmp/session-1.log`, matching
     the file's other three fixtures. Then run spec §16.5's checks.
-  - Done when: `grep -rn "bitrouter/" crates/bitrouter-tui/src` returns nothing;
-    `cargo tree -p bitrouter-tui` shows no `bitrouter`; `cost.rs`, `picker.rs`,
-    and `viewport.rs` do not exist; and the app-side renderer module references
-    no `Config`, metering, or control socket.
-  - Verify: `grep -rn "bitrouter/" crates/bitrouter-tui/src && echo "FAIL: matches above" || echo "PASS: no matches"`
+  - Done when: `cargo tree -p bitrouter-tui` shows no `bitrouter`;
+    `apps/bitrouter` has no direct `ratatui` dependency; `cost.rs` and
+    `picker.rs` remain in the TUI crate; `viewport.rs` does not exist; and the
+    app owns metering, config, control socket, and BitRouter-specific `_meta`
+    keys.
+  - Verify: `cargo tree -p bitrouter-tui && cargo tree -p bitrouter | rg 'bitrouter-tui|ratatui'`
   - Commit: `test(tui): make the crate boundary check satisfiable`
 
 - [x] **4.6 Lockstep the docs**
@@ -385,7 +399,7 @@ Work through Phase 3 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 **Phase 4**
 
 ```
-Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 4.1-4.7 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing, AND the transcript shows `grep -rn "bitrouter/" crates/bitrouter-tui/src` returning nothing. cost.rs and picker.rs move WHOLE to apps/bitrouter, tests included — do not split them. The picker gets no registry entry; it is not a _meta surface. Before task 4.1, confirm the §19.5 schema-types decision is recorded in §C.1 — if it is not, print BLOCKED and stop. A cancelled turn with an outstanding permission must resolve to deny, never to consent. Never use #[allow], .unwrap, .expect or panic!. Print the full Phase 4 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 35 turns.
+Work through Phase 4 of docs/TUI_RENDERER_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 4.1-4.7 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing, AND the transcript shows the final crate boundary: `cargo tree -p bitrouter-tui` has no `bitrouter` crate, `apps/bitrouter` has no direct `ratatui` dependency, `cost.rs` and `picker.rs` remain in `crates/bitrouter-tui`, and `viewport.rs` is gone. Before task 4.1, confirm the §19.5 schema-types decision is recorded in §C.1 — if it is not, print BLOCKED and stop. A cancelled turn with an outstanding permission must resolve to deny, never to consent. Never use #[allow], .unwrap, .expect or panic!. Print the full Phase 4 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 35 turns.
 ```
 
 ---
