@@ -475,7 +475,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn tmp_dir(label: &str) -> PathBuf {
+    fn tmp_dir(label: &str) -> Result<PathBuf> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
@@ -483,8 +483,8 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     fn sample_credentials() -> Credentials {
@@ -503,17 +503,20 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_through_disk() {
-        let dir = tmp_dir("rt");
+    fn round_trip_through_disk() -> Result<()> {
+        let dir = tmp_dir("rt")?;
         let path = dir.join(DEFAULT_FILENAME);
         let creds = sample_credentials();
         {
-            let mut store = CredentialsStore::load(&path).unwrap();
+            let mut store = CredentialsStore::load(&path)?;
             assert!(store.current().is_none());
-            store.save(creds.clone()).unwrap();
+            store.save(creds.clone())?;
         }
-        let reloaded = CredentialsStore::load(&path).unwrap();
-        let got = reloaded.current().unwrap().oauth().unwrap();
+        let reloaded = CredentialsStore::load(&path)?;
+        let got = reloaded
+            .current()
+            .and_then(StoredCredential::oauth)
+            .ok_or_else(|| anyhow::anyhow!("OAuth credential was not persisted"))?;
         assert_eq!(got.access_token, creds.access_token);
         assert_eq!(got.refresh_token, creds.refresh_token);
         assert_eq!(got.scope, creds.scope);
@@ -521,27 +524,35 @@ mod tests {
         assert_eq!(got.authorization_server, creds.authorization_server);
         assert_eq!(got.namespace_id, creds.namespace_id);
         assert_eq!(got.subject, creds.subject);
+        Ok(())
     }
 
     #[test]
-    fn clear_removes_file_and_returns_prior() {
-        let dir = tmp_dir("clear");
+    fn clear_removes_file_and_returns_prior() -> Result<()> {
+        let dir = tmp_dir("clear")?;
         let path = dir.join(DEFAULT_FILENAME);
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store.save(sample_credentials()).unwrap();
+        let mut store = CredentialsStore::load(&path)?;
+        store.save(sample_credentials())?;
         assert!(path.exists());
-        let prior = store.clear().unwrap().unwrap();
-        assert_eq!(prior.oauth().unwrap().access_token, "AT");
+        let prior = store
+            .clear()?
+            .ok_or_else(|| anyhow::anyhow!("stored credential was unexpectedly absent"))?;
+        let oauth = prior
+            .oauth()
+            .ok_or_else(|| anyhow::anyhow!("stored credential was unexpectedly an API key"))?;
+        assert_eq!(oauth.access_token, "AT");
         assert!(!path.exists());
         // Second clear is a no-op.
-        assert!(store.clear().unwrap().is_none());
+        assert!(store.clear()?.is_none());
+        Ok(())
     }
 
     #[test]
-    fn missing_file_loads_empty() {
-        let dir = tmp_dir("missing");
-        let store = CredentialsStore::load(dir.join(DEFAULT_FILENAME)).unwrap();
+    fn missing_file_loads_empty() -> Result<()> {
+        let dir = tmp_dir("missing")?;
+        let store = CredentialsStore::load(dir.join(DEFAULT_FILENAME))?;
         assert!(store.current().is_none());
+        Ok(())
     }
 
     #[test]
@@ -557,64 +568,67 @@ mod tests {
     }
 
     #[test]
-    fn tagged_api_key_round_trips_and_redacts() {
-        let path = tmp_dir("api-key").join(DEFAULT_FILENAME);
+    fn tagged_api_key_round_trips_and_redacts() -> Result<()> {
+        let path = tmp_dir("api-key")?.join(DEFAULT_FILENAME);
         let credential = StoredCredential::api_key(
             "brk_AAAAAAAAAAAAAAAA.secret-value".to_owned(),
             "https://api.bitrouter.ai".to_owned(),
         );
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store.save(credential).unwrap();
+        let mut store = CredentialsStore::load(&path)?;
+        store.save(credential)?;
 
-        let reloaded = CredentialsStore::load(&path).unwrap();
-        let current = reloaded.current().unwrap();
+        let reloaded = CredentialsStore::load(&path)?;
+        let current = reloaded
+            .current()
+            .ok_or_else(|| anyhow::anyhow!("API key credential was not persisted"))?;
         assert_eq!(current.kind(), CredentialKind::ApiKey);
         assert_eq!(current.base_url(), "https://api.bitrouter.ai");
         let rendered = format!("{current:?}");
         assert!(!rendered.contains("secret-value"));
         assert!(rendered.contains("<redacted>"));
+        Ok(())
     }
 
     #[test]
-    fn legacy_untagged_oauth_file_still_loads() {
-        let path = tmp_dir("legacy").join(DEFAULT_FILENAME);
-        fs::write(&path, serde_json::to_vec(&sample_credentials()).unwrap()).unwrap();
+    fn legacy_untagged_oauth_file_still_loads() -> Result<()> {
+        let path = tmp_dir("legacy")?.join(DEFAULT_FILENAME);
+        fs::write(&path, serde_json::to_vec(&sample_credentials())?)?;
 
-        let store = CredentialsStore::load(path).unwrap();
-        let current = store.current().unwrap();
+        let store = CredentialsStore::load(path)?;
+        let current = store
+            .current()
+            .ok_or_else(|| anyhow::anyhow!("legacy OAuth credential did not load"))?;
         assert_eq!(current.kind(), CredentialKind::Oauth);
-        assert_eq!(current.oauth().unwrap().access_token, "AT");
+        let oauth = current
+            .oauth()
+            .ok_or_else(|| anyhow::anyhow!("legacy OAuth credential loaded as API key"))?;
+        assert_eq!(oauth.access_token, "AT");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn api_key_current_token_needs_no_metadata() {
-        let path = tmp_dir("api-key-token").join(DEFAULT_FILENAME);
-        let mut store = CredentialsStore::load(path).unwrap();
-        store
-            .save(StoredCredential::api_key(
-                "brk_AAAAAAAAAAAAAAAA.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .unwrap();
+    async fn api_key_current_token_needs_no_metadata() -> Result<()> {
+        let path = tmp_dir("api-key-token")?.join(DEFAULT_FILENAME);
+        let mut store = CredentialsStore::load(path)?;
+        store.save(StoredCredential::api_key(
+            "brk_AAAAAAAAAAAAAAAA.secret".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        ))?;
 
-        let token = store
-            .current_token(&reqwest::Client::new(), None)
-            .await
-            .unwrap();
+        let token = store.current_token(&reqwest::Client::new(), None).await?;
         assert_eq!(token, "brk_AAAAAAAAAAAAAAAA.secret");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn fresh_oauth_current_token_needs_no_metadata() {
-        let path = tmp_dir("fresh-oauth-token").join(DEFAULT_FILENAME);
-        let mut store = CredentialsStore::load(path).unwrap();
-        store.save(sample_credentials()).unwrap();
+    async fn fresh_oauth_current_token_needs_no_metadata() -> Result<()> {
+        let path = tmp_dir("fresh-oauth-token")?.join(DEFAULT_FILENAME);
+        let mut store = CredentialsStore::load(path)?;
+        store.save(sample_credentials())?;
 
-        let token = store
-            .current_token(&reqwest::Client::new(), None)
-            .await
-            .unwrap();
+        let token = store.current_token(&reqwest::Client::new(), None).await?;
         assert_eq!(token, "AT");
+        Ok(())
     }
 
     #[test]
@@ -646,13 +660,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn file_perms_are_0600_on_unix() {
+    fn file_perms_are_0600_on_unix() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp_dir("perms");
+        let dir = tmp_dir("perms")?;
         let path = dir.join(DEFAULT_FILENAME);
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store.save(sample_credentials()).unwrap();
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let mut store = CredentialsStore::load(&path)?;
+        store.save(sample_credentials())?;
+        let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        Ok(())
     }
 }
