@@ -155,4 +155,4 @@
 - [x] Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
 - [x] Inspect `git diff --check`, `git status --short`, and the complete diff for credentials, generated artifacts, aliases, accidental session persistence, or unrelated user changes.
 - [x] Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch`.
-- [ ] Push `codex/acp-runtime-feasibility-20260901` and open one PR against `main` with a conventional title under 60 characters and a body that maps evidence to P0/P1, test gates, known P2 exclusions, and the localhost proxy test note.
+- [x] Push `codex/acp-runtime-feasibility-20260901` and open one PR against `main` with a conventional title under 60 characters and a body that maps evidence to P0/P1, test gates, known P2 exclusions, and the localhost proxy test note.
