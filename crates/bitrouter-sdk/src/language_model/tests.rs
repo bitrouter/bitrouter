@@ -3646,11 +3646,181 @@ async fn opaque_nonretryable_auth_failure_stays_fail_fast_in_both_modes() {
 
 // ===== non-streaming client-disconnect billing (OpenRouter parity) =====
 
+struct DetachedFallbackExecutor {
+    first_started: Arc<tokio::sync::Notify>,
+    release_first: Arc<tokio::sync::Notify>,
+    first_calls: Arc<AtomicUsize>,
+    second_calls: Arc<AtomicUsize>,
+}
+
+impl DetachedFallbackExecutor {
+    fn successful_result(target: &RoutingTarget) -> ExecutionResult {
+        ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: vec![Content::Text {
+                    text: "fallback succeeded".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 2,
+                    completion_tokens: 3,
+                    ..Default::default()
+                }),
+                finish_reason: Some(FinishReason::Stop),
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            request_duration_ms: 1,
+            upstream_duration_ms: Some(1),
+            server_tool_calls: Vec::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Executor for DetachedFallbackExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        match target.provider_name.as_str() {
+            "first" => {
+                self.first_calls.fetch_add(1, Ordering::SeqCst);
+                self.first_started.notify_one();
+                self.release_first.notified().await;
+                Err(BitrouterError::UpstreamUnavailable)
+            }
+            "second" => {
+                self.second_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Self::successful_result(target))
+            }
+            provider => Err(BitrouterError::internal(format!(
+                "unexpected detached fallback provider: {provider}"
+            ))),
+        }
+    }
+
+    async fn execute_stream(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal(
+            "DetachedFallbackExecutor: streaming not used",
+        ))
+    }
+}
+
+#[derive(Clone, Default)]
+struct LastOutcomeObserver(Arc<std::sync::Mutex<Option<&'static str>>>);
+
+impl LastOutcomeObserver {
+    fn last_outcome(&self) -> Option<&'static str> {
+        match self.0.lock() {
+            Ok(outcome) => *outcome,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+}
+
+#[async_trait]
+impl ObserveHook for LastOutcomeObserver {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let label = match outcome {
+            RequestOutcome::Completed => "completed",
+            RequestOutcome::Failed(_) => "failed",
+            RequestOutcome::ClientDisconnected => "client_disconnected",
+        };
+        match self.0.lock() {
+            Ok(mut last) => *last = Some(label),
+            Err(poisoned) => *poisoned.into_inner() = Some(label),
+        }
+    }
+}
+
+fn detached_fallback_fixture() -> (
+    Arc<Pipeline>,
+    Arc<DetachedFallbackExecutor>,
+    LastOutcomeObserver,
+) {
+    let executor = Arc::new(DetachedFallbackExecutor {
+        first_started: Arc::new(tokio::sync::Notify::new()),
+        release_first: Arc::new(tokio::sync::Notify::new()),
+        first_calls: Arc::new(AtomicUsize::new(0)),
+        second_calls: Arc::new(AtomicUsize::new(0)),
+    });
+    let observer = LastOutcomeObserver::default();
+    let pipeline = pipeline_with(
+        routing_table(&["first", "second"]),
+        executor.clone(),
+        |builder| {
+            builder.observe_hook(observer.clone());
+        },
+    );
+    (pipeline, executor, observer)
+}
+
+#[tokio::test]
+async fn detached_disconnect_stops_fallback() {
+    let (pipeline, executor, observer) = detached_fallback_fixture();
+    let mut caller = Box::pin(pipeline.clone().execute_detached(request()));
+    assert!(
+        futures::poll!(caller.as_mut()).is_pending(),
+        "the first provider remains in flight"
+    );
+    let started =
+        tokio::time::timeout(Duration::from_secs(1), executor.first_started.notified()).await;
+    assert!(started.is_ok(), "the first provider started");
+
+    drop(caller);
+    executor.release_first.notify_one();
+    let drained = pipeline.drain_pending_settlements().await;
+
+    assert!(drained >= 1, "the detached request was drained");
+    assert_eq!(executor.first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.second_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(observer.last_outcome(), Some("client_disconnected"));
+}
+
+#[tokio::test]
+async fn connected_detached_request_still_falls_back() {
+    let (pipeline, executor, observer) = detached_fallback_fixture();
+    let mut caller = Box::pin(pipeline.clone().execute_detached(request()));
+    assert!(
+        futures::poll!(caller.as_mut()).is_pending(),
+        "the first provider remains in flight"
+    );
+    let started =
+        tokio::time::timeout(Duration::from_secs(1), executor.first_started.notified()).await;
+    assert!(started.is_ok(), "the first provider started");
+
+    executor.release_first.notify_one();
+    let response = caller.await;
+    pipeline.drain_pending_settlements().await;
+
+    assert!(response.is_ok(), "the second provider succeeds");
+    assert_eq!(executor.first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.second_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.last_outcome(), Some("completed"));
+}
+
 /// An executor whose `execute` blocks on a gate until the test releases it, so
 /// the test can deterministically drop the request future *while the upstream
 /// call is still in flight* — the exact shape of a mid-request client
 /// disconnect.
 struct GatedExecutor {
+    started: Arc<tokio::sync::Notify>,
     gate: Arc<tokio::sync::Notify>,
     usage: (u64, u64),
 }
@@ -3662,6 +3832,7 @@ impl Executor for GatedExecutor {
         _prompt: &Prompt,
         _ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        self.started.notify_one();
         self.gate.notified().await;
         let (prompt_tokens, completion_tokens) = self.usage;
         Ok(ExecutionResult {
@@ -3724,10 +3895,12 @@ async fn nonstream_execute_detached_returns_full_usage_when_connected() {
 #[tokio::test]
 async fn nonstream_disconnect_still_runs_to_completion_and_bills_full() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let started = Arc::new(tokio::sync::Notify::new());
     let gate = Arc::new(tokio::sync::Notify::new());
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
         Arc::new(GatedExecutor {
+            started: started.clone(),
             gate: gate.clone(),
             usage: (7, 11),
         }),
@@ -3744,6 +3917,8 @@ async fn nonstream_disconnect_still_runs_to_completion_and_bills_full() {
         futures::poll!(fut.as_mut()).is_pending(),
         "detached task spawned but gated; handler future still pending"
     );
+    let provider_started = tokio::time::timeout(Duration::from_secs(1), started.notified()).await;
+    assert!(provider_started.is_ok(), "the provider call is in flight");
     drop(fut); // client disconnected
 
     // The request must still run to completion and settle the real full usage.
