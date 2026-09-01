@@ -164,6 +164,10 @@ pub enum HopOutcome<'a> {
     StreamStarted,
     /// Hop failed before it could complete.
     Failed(&'a BitrouterError),
+    /// Local control stopped the hop after observation began but before the
+    /// provider executor was dispatched. Observers must not treat this as
+    /// provider success, failure, latency, or health evidence.
+    NotDispatched,
 }
 
 /// Terminal outcome of a streaming upstream response body.

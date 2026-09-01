@@ -1035,6 +1035,11 @@ impl Pipeline {
                 return Err(BitrouterError::ClientDisconnected);
             }
             self.observe_hop_start(ctx, target).await;
+            if ctx.client_disconnected() {
+                self.observe_hop_end(ctx, target, HopOutcome::NotDispatched)
+                    .await;
+                return Err(BitrouterError::ClientDisconnected);
+            }
             let outcome = self.executor.execute(target, prompt, ctx).await;
             match &outcome {
                 Ok(result) => {

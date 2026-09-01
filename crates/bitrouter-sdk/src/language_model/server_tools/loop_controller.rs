@@ -50,6 +50,17 @@ pub(crate) struct ServerToolLoopOutcome {
     pub(crate) provider_terminal_exposed: bool,
 }
 
+enum ToolBatchOutcome {
+    Completed {
+        results: Vec<Content>,
+        had_error: bool,
+    },
+    Interrupted {
+        results: Vec<Content>,
+        had_error: bool,
+    },
+}
+
 impl ServerToolLoop {
     /// Build a loop over `registry`, bounded by `config`, gated by `approval`.
     pub fn new(
@@ -164,7 +175,20 @@ impl ServerToolLoop {
                     provider_terminal_exposed: false,
                 });
             }
-            let mut result = upstream.run(&working).await?;
+            let mut result = match upstream.run(&working).await {
+                Ok(result) => result,
+                Err(BitrouterError::ClientDisconnected) => {
+                    if let Some(mut result) = previous_result.take() {
+                        result.server_tool_calls = std::mem::take(&mut server_calls);
+                        return Ok(ServerToolLoopOutcome {
+                            result: truncate(result, total, had_usage, "client_disconnected"),
+                            provider_terminal_exposed: false,
+                        });
+                    }
+                    return Err(BitrouterError::ClientDisconnected);
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(usage) = &result.result.usage {
                 add_usage(&mut total, usage);
                 had_usage = true;
@@ -200,22 +224,38 @@ impl ServerToolLoop {
                         });
                     }
                     record_provider_calls(&mut server_calls, &result.result.content);
-                    let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
-                    // v1: status uses the turn's aggregate error flag, not per-call.
-                    // Denied calls and a single failing call among siblings are both
-                    // surfaced as Error/Ok at turn granularity; per-call status
-                    // (including ServerToolStatus::Denied) is a later refinement.
-                    for call in &calls {
-                        server_calls.push(ServerToolCall {
-                            name: call.name.clone(),
-                            kind: ServerToolKind::Router,
-                            call_id: Some(call.id.clone()),
-                            status: if had_error {
-                                ServerToolStatus::Error
-                            } else {
-                                ServerToolStatus::Ok
-                            },
-                            result_count: 0,
+                    let (tool_results, had_error) = match self
+                        .execute_calls(&calls, ctx, upstream)
+                        .await
+                    {
+                        ToolBatchOutcome::Completed { results, had_error } => {
+                            record_router_calls(
+                                &mut server_calls,
+                                &calls,
+                                results.len(),
+                                had_error,
+                            );
+                            (results, had_error)
+                        }
+                        ToolBatchOutcome::Interrupted { results, had_error } => {
+                            record_router_calls(
+                                &mut server_calls,
+                                &calls,
+                                results.len(),
+                                had_error,
+                            );
+                            result.server_tool_calls = std::mem::take(&mut server_calls);
+                            return Ok(ServerToolLoopOutcome {
+                                result: truncate(result, total, had_usage, "client_disconnected"),
+                                provider_terminal_exposed: false,
+                            });
+                        }
+                    };
+                    if !upstream.should_continue() {
+                        result.server_tool_calls = std::mem::take(&mut server_calls);
+                        return Ok(ServerToolLoopOutcome {
+                            result: truncate(result, total, had_usage, "client_disconnected"),
+                            provider_terminal_exposed: false,
                         });
                     }
                     consecutive_errors = if had_error { consecutive_errors + 1 } else { 0 };
@@ -242,7 +282,17 @@ impl ServerToolLoop {
         call: &RouterCall,
         ctx: &ToolContext,
     ) -> (ToolResultOutput, bool) {
-        if !self.approval.allow(call, ctx.caller()).await {
+        let approved = self.approval.allow(call, ctx.caller()).await;
+        self.execute_approved_call(call, ctx, approved).await
+    }
+
+    async fn execute_approved_call(
+        &self,
+        call: &RouterCall,
+        ctx: &ToolContext,
+        approved: bool,
+    ) -> (ToolResultOutput, bool) {
+        if !approved {
             return (
                 ToolResultOutput::ExecutionDenied {
                     reason: Some("denied by approval policy".to_string()),
@@ -280,13 +330,26 @@ impl ServerToolLoop {
         }
     }
 
-    /// Execute each router-owned call, returning the tool-result content blocks
-    /// and whether any call produced an error.
-    async fn execute_calls(&self, calls: &[RouterCall], ctx: &ToolContext) -> (Vec<Content>, bool) {
+    /// Execute each router-owned call without cancelling one that already
+    /// started. The interrupted form retains results for completed calls while
+    /// preventing approval or side effects for every later call.
+    async fn execute_calls(
+        &self,
+        calls: &[RouterCall],
+        ctx: &ToolContext,
+        upstream: &dyn UpstreamTurn,
+    ) -> ToolBatchOutcome {
         let mut results = Vec::with_capacity(calls.len());
         let mut had_error = false;
         for call in calls {
-            let (output, err) = self.call_one(call, ctx).await;
+            if !upstream.should_continue() {
+                return ToolBatchOutcome::Interrupted { results, had_error };
+            }
+            let approved = self.approval.allow(call, ctx.caller()).await;
+            if !upstream.should_continue() {
+                return ToolBatchOutcome::Interrupted { results, had_error };
+            }
+            let (output, err) = self.execute_approved_call(call, ctx, approved).await;
             had_error |= err;
             results.push(Content::ToolResult {
                 call_id: call.id.clone(),
@@ -295,8 +358,11 @@ impl ServerToolLoop {
                 dynamic: false,
                 provider_metadata: ProviderMetadata::new(),
             });
+            if !upstream.should_continue() {
+                return ToolBatchOutcome::Interrupted { results, had_error };
+            }
         }
-        (results, had_error)
+        ToolBatchOutcome::Completed { results, had_error }
     }
 }
 
@@ -403,6 +469,30 @@ fn record_provider_calls(out: &mut Vec<ServerToolCall>, content: &[Content]) {
     }
 }
 
+/// Record only router calls whose execution produced a result before a batch
+/// interruption. Status intentionally retains the historical per-turn
+/// aggregate error semantics.
+fn record_router_calls(
+    out: &mut Vec<ServerToolCall>,
+    calls: &[RouterCall],
+    completed: usize,
+    had_error: bool,
+) {
+    for call in calls.iter().take(completed) {
+        out.push(ServerToolCall {
+            name: call.name.clone(),
+            kind: ServerToolKind::Router,
+            call_id: Some(call.id.clone()),
+            status: if had_error {
+                ServerToolStatus::Error
+            } else {
+                ServerToolStatus::Ok
+            },
+            result_count: 0,
+        });
+    }
+}
+
 /// Finish a bounded loop: replace usage with the accumulated total and set a
 /// truncation finish reason.
 fn truncate(
@@ -422,7 +512,7 @@ fn truncate(
 mod tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::server_tools::approval::AllowAll;
+    use crate::language_model::server_tools::approval::{AllowAll, ApprovalPolicy};
     use crate::language_model::server_tools::toolset::RouterToolset;
     use crate::language_model::types::{GenerateResult, Tool};
     use std::collections::VecDeque;
@@ -624,11 +714,65 @@ mod tests {
         }
     }
 
+    struct LaterDisconnectUpstream {
+        responses: Mutex<VecDeque<Result<ExecutionResult>>>,
+        calls: AtomicUsize,
+    }
+
+    impl LaterDisconnectUpstream {
+        fn new(responses: Vec<Result<ExecutionResult>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl UpstreamTurn for LaterDisconnectUpstream {
+        async fn run(&self, _prompt: &Prompt) -> Result<ExecutionResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let next = match self.responses.lock() {
+                Ok(mut responses) => responses.pop_front(),
+                Err(poisoned) => poisoned.into_inner().pop_front(),
+            };
+            next.unwrap_or_else(|| {
+                Err(BitrouterError::Internal(
+                    "later-disconnect test exhausted upstream turns".to_string(),
+                ))
+            })
+        }
+    }
+
     struct CountingToolset {
         calls: AtomicUsize,
         finished: AtomicUsize,
         started: Option<Arc<Notify>>,
         release: Option<Arc<Semaphore>>,
+        fail: bool,
+    }
+
+    struct GatedApproval {
+        started: Arc<Notify>,
+        release: Arc<Semaphore>,
+    }
+
+    #[async_trait]
+    impl ApprovalPolicy for GatedApproval {
+        async fn allow(&self, _call: &RouterCall, _caller: &CallerContext) -> bool {
+            self.started.notify_one();
+            match self.release.acquire().await {
+                Ok(permit) => {
+                    permit.forget();
+                    true
+                }
+                Err(_) => false,
+            }
+        }
     }
 
     impl CountingToolset {
@@ -638,6 +782,7 @@ mod tests {
                 finished: AtomicUsize::new(0),
                 started: None,
                 release: None,
+                fail: false,
             }
         }
 
@@ -647,6 +792,17 @@ mod tests {
                 finished: AtomicUsize::new(0),
                 started: Some(started),
                 release: Some(release),
+                fail: false,
+            }
+        }
+
+        fn gated_failing(started: Arc<Notify>, release: Arc<Semaphore>) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                finished: AtomicUsize::new(0),
+                started: Some(started),
+                release: Some(release),
+                fail: true,
             }
         }
 
@@ -688,9 +844,15 @@ mod tests {
                 permit.forget();
             }
             self.finished.fetch_add(1, Ordering::SeqCst);
-            Ok(ToolResultOutput::Text {
-                value: "ran search".to_string(),
-            })
+            if self.fail {
+                Err(BitrouterError::Internal(
+                    "disconnect test tool failed".to_string(),
+                ))
+            } else {
+                Ok(ToolResultOutput::Text {
+                    value: "ran search".to_string(),
+                })
+            }
         }
 
         fn owns(&self, name: &str) -> bool {
@@ -699,10 +861,17 @@ mod tests {
     }
 
     fn disconnect_loop_with(toolset: Arc<CountingToolset>) -> ServerToolLoop {
+        disconnect_loop_with_approval(toolset, Arc::new(AllowAll))
+    }
+
+    fn disconnect_loop_with_approval(
+        toolset: Arc<CountingToolset>,
+        approval: Arc<dyn ApprovalPolicy>,
+    ) -> ServerToolLoop {
         ServerToolLoop::new(
             ToolsetRegistry::new(vec![toolset]),
             ServerToolLoopConfig::default(),
-            Arc::new(AllowAll),
+            approval,
         )
     }
 
@@ -764,8 +933,12 @@ mod tests {
     }
 
     fn tool_call(name: &str) -> Content {
+        tool_call_with_id(name, &format!("{name}-1"))
+    }
+
+    fn tool_call_with_id(name: &str, id: &str) -> Content {
         Content::ToolCall {
-            id: format!("{name}-1"),
+            id: id.to_string(),
             name: name.to_string(),
             arguments: "{}".to_string(),
             provider_executed: false,
@@ -867,6 +1040,184 @@ mod tests {
         assert_eq!(toolset.calls(), 1);
         assert_eq!(toolset.finished(), 1);
         assert_eq!(upstream.calls(), 1);
+        assert!(!outcome.provider_terminal_exposed);
+        assert_eq!(
+            truncation_reason(&outcome.result),
+            Some("client_disconnected")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn server_tool_disconnect_during_approval_starts_no_tool_side_effect() -> Result<()> {
+        let approval_started = Arc::new(Notify::new());
+        let approval_release = Arc::new(Semaphore::new(0));
+        let toolset = Arc::new(CountingToolset::immediate());
+        let loop_ = disconnect_loop_with_approval(
+            Arc::clone(&toolset),
+            Arc::new(GatedApproval {
+                started: Arc::clone(&approval_started),
+                release: Arc::clone(&approval_release),
+            }),
+        );
+        let upstream = Arc::new(DisconnectUpstream::new(
+            vec![
+                exec(vec![tool_call("search")]),
+                exec(vec![text("unexpected later turn")]),
+            ],
+            false,
+        ));
+        let task_upstream = Arc::clone(&upstream);
+
+        let task = tokio::spawn(async move {
+            loop_
+                .run_with_provenance(&base_prompt(), &tool_ctx(), task_upstream.as_ref())
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            approval_started.notified(),
+        )
+        .await
+        .map_err(|_| {
+            BitrouterError::Internal("timed out waiting for disconnect test approval".to_string())
+        })?;
+        upstream.disconnect();
+        approval_release.add_permits(1);
+        let outcome = task.await.map_err(|error| {
+            BitrouterError::Internal(format!("disconnect approval test task failed: {error}"))
+        })??;
+
+        assert_eq!(upstream.calls(), 1);
+        assert_eq!(toolset.calls(), 0);
+        assert!(outcome.result.server_tool_calls.is_empty());
+        assert!(!outcome.provider_terminal_exposed);
+        assert_eq!(
+            truncation_reason(&outcome.result),
+            Some("client_disconnected")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn server_tool_disconnect_after_first_batch_call_starts_no_later_call() -> Result<()> {
+        let first_started = Arc::new(Notify::new());
+        let first_release = Arc::new(Semaphore::new(0));
+        let toolset = Arc::new(CountingToolset::gated_failing(
+            Arc::clone(&first_started),
+            Arc::clone(&first_release),
+        ));
+        let loop_ = ServerToolLoop::new(
+            ToolsetRegistry::new(vec![toolset.clone()]),
+            ServerToolLoopConfig {
+                max_consecutive_errors: 1,
+                ..Default::default()
+            },
+            Arc::new(AllowAll),
+        );
+        let upstream = Arc::new(DisconnectUpstream::new(
+            vec![
+                exec(vec![
+                    tool_call_with_id("search", "first-call"),
+                    tool_call_with_id("search", "second-call"),
+                ]),
+                exec(vec![text("unexpected later turn")]),
+            ],
+            false,
+        ));
+        let task_upstream = Arc::clone(&upstream);
+
+        let task = tokio::spawn(async move {
+            loop_
+                .run_with_provenance(&base_prompt(), &tool_ctx(), task_upstream.as_ref())
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), first_started.notified())
+            .await
+            .map_err(|_| {
+                BitrouterError::Internal(
+                    "timed out waiting for first disconnect test tool".to_string(),
+                )
+            })?;
+        upstream.disconnect();
+        first_release.add_permits(2);
+        let outcome = task.await.map_err(|error| {
+            BitrouterError::Internal(format!("disconnect batch test task failed: {error}"))
+        })??;
+
+        assert_eq!(upstream.calls(), 1);
+        assert_eq!(toolset.calls(), 1);
+        assert_eq!(toolset.finished(), 1);
+        assert_eq!(outcome.result.server_tool_calls.len(), 1);
+        assert_eq!(
+            outcome.result.server_tool_calls[0].call_id.as_deref(),
+            Some("first-call")
+        );
+        assert_eq!(
+            outcome.result.server_tool_calls[0].status,
+            ServerToolStatus::Error
+        );
+        assert!(!outcome.provider_terminal_exposed);
+        assert_eq!(
+            truncation_reason(&outcome.result),
+            Some("client_disconnected")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn later_upstream_disconnect_preserves_prior_usage_and_server_call_evidence() -> Result<()>
+    {
+        let expected_usage = Usage {
+            prompt_tokens: 17,
+            completion_tokens: 6,
+            reasoning_tokens: 2,
+            cache_read_tokens: 4,
+            origin: UsageOrigin::ProviderReported,
+            raw: Some(Box::new(serde_json::json!({
+                "input_tokens": 17,
+                "output_tokens": 6
+            }))),
+            ..Default::default()
+        };
+        let provider_call = Content::ToolCall {
+            id: "provider-call".to_string(),
+            name: "web_search".to_string(),
+            arguments: "{}".to_string(),
+            provider_executed: true,
+            dynamic: false,
+            provider_metadata: ProviderMetadata::new(),
+        };
+        let mut first_result = exec(vec![
+            tool_call_with_id("search", "router-call"),
+            provider_call,
+        ]);
+        first_result.result.usage = Some(expected_usage.clone());
+        let upstream = LaterDisconnectUpstream::new(vec![
+            Ok(first_result),
+            Err(BitrouterError::ClientDisconnected),
+        ]);
+        let toolset = Arc::new(CountingToolset::immediate());
+        let loop_ = disconnect_loop_with(Arc::clone(&toolset));
+
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+
+        assert_eq!(upstream.calls(), 2);
+        assert_eq!(toolset.calls(), 1);
+        assert_eq!(outcome.result.result.usage, Some(expected_usage));
+        assert_eq!(outcome.result.server_tool_calls.len(), 2);
+        assert!(outcome.result.server_tool_calls.iter().any(|call| {
+            call.name == "search"
+                && call.kind == ServerToolKind::Router
+                && call.call_id.as_deref() == Some("router-call")
+        }));
+        assert!(outcome.result.server_tool_calls.iter().any(|call| {
+            call.name == "web_search"
+                && call.kind == ServerToolKind::Provider
+                && call.call_id.as_deref() == Some("provider-call")
+        }));
         assert!(!outcome.provider_terminal_exposed);
         assert_eq!(
             truncation_reason(&outcome.result),
