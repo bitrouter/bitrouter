@@ -112,14 +112,14 @@
 - Modify: `crates/bitrouter-sdk/src/acp/mod.rs`
 - Test: controller conformance tests in `crates/bitrouter-sdk/src/acp/controller.rs`
 
-- [ ] Add a failing two-session conformance test: one fake harness process returns `native-a` and `native-b`; manager new responses, prompts, updates, and cancellations must contain those exact IDs and no BitRouter UUID.
-- [ ] Add failing lifecycle forwarding tests for list, load, resume, close, delete, fork, and set-config-option. Each request must reach the harness even when the controller did not previously observe its ID, and every response/error must remain harness-authored.
-- [ ] Add a failing callback test for permission plus one filesystem or terminal request; manager capability advertisement must enable the harness callback and the response must complete through the conductor.
-- [ ] Add a failing `_meta`/unknown-extension preservation test in both directions.
-- [ ] Rely on conductor transparent forwarding for implementation; add only ephemeral observation hooks needed for shutdown or diagnostics, never a session catalog.
+- [x] Add a two-session conformance test: one fake harness process returns `native-a` and `native-b`; manager new responses, concurrent prompts, updates, and cancellations contain those exact IDs and no BitRouter UUID.
+- [x] Add lifecycle forwarding tests for list, load, resume, close, delete, fork, and set-config-option. Each request reaches the harness even when the controller did not previously observe its ID, and every response/error remains harness-authored.
+- [x] Add a callback test for permission plus filesystem read; manager capability advertisement enables the harness callback and the response completes through the conductor.
+- [x] Add a `_meta`/unknown-extension preservation test in both directions.
+- [x] Rely on conductor transparent forwarding for implementation; add only ephemeral observation hooks needed for shutdown or diagnostics, never a session catalog.
 - [ ] Retire the single-session `down::serve` manager wire so no public BitRouter ACP endpoint can return `SessionState.record_id`. Keep the single-session engine only for local `prompt`/`chat` execution.
-- [ ] Run focused controller conformance tests twice, including under concurrent prompt scheduling.
-- [ ] Commit: `feat(acp): forward native multi-session lifecycle`
+- [x] Run focused controller conformance tests twice, including under concurrent prompt scheduling.
+- [x] Commit: `feat(acp): forward native multi-session lifecycle`
 
 ### Task 6: Wire `acp serve` and update operator guidance
 

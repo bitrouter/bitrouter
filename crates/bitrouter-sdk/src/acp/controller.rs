@@ -316,16 +316,26 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use agent_client_protocol::schema::ProtocolVersion;
     use agent_client_protocol::schema::v1::{
-        AgentCapabilities, ClientCapabilities, Implementation, InitializeRequest,
-        InitializeResponse, ListProvidersResponse, LlmProtocol, Meta, NewSessionRequest,
-        NewSessionResponse, ProviderCurrentConfig, ProviderInfo, ProvidersCapabilities,
-        SessionCapabilities, SessionCloseCapabilities, SessionId, SessionListCapabilities,
-        SessionResumeCapabilities, SetProviderRequest, SetProviderResponse,
+        AgentCapabilities, CancelNotification, ClientCapabilities, CloseSessionRequest,
+        CloseSessionResponse, ContentBlock, ContentChunk, DeleteSessionRequest,
+        DeleteSessionResponse, FileSystemCapabilities, ForkSessionRequest, ForkSessionResponse,
+        Implementation, InitializeRequest, InitializeResponse, ListProvidersResponse,
+        ListSessionsRequest, ListSessionsResponse, LlmProtocol, LoadSessionRequest,
+        LoadSessionResponse, Meta, NewSessionRequest, NewSessionResponse, PermissionOption,
+        PermissionOptionKind, PromptRequest, PromptResponse, ProviderCurrentConfig, ProviderInfo,
+        ProvidersCapabilities, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
+        RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+        ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities,
+        SessionCloseCapabilities, SessionDeleteCapabilities, SessionForkCapabilities, SessionId,
+        SessionInfo, SessionListCapabilities, SessionNotification, SessionResumeCapabilities,
+        SessionUpdate, SetProviderRequest, SetProviderResponse, SetSessionConfigOptionRequest,
+        SetSessionConfigOptionResponse, StopReason, TextContent, ToolCallUpdate,
+        ToolCallUpdateFields,
     };
     use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcResponse};
     use tokio::io::duplex;
@@ -364,6 +374,383 @@ mod tests {
 
     struct ProviderAgent {
         state: Arc<ProviderState>,
+    }
+
+    #[derive(Default)]
+    struct TransparentState {
+        next_session: AtomicUsize,
+        requests: Mutex<Vec<String>>,
+        cancellations: Mutex<Vec<String>>,
+    }
+
+    fn record<T>(values: &Mutex<Vec<T>>, value: T) {
+        match values.lock() {
+            Ok(mut values) => values.push(value),
+            Err(poisoned) => poisoned.into_inner().push(value),
+        }
+    }
+
+    struct TransparentAgent {
+        state: Arc<TransparentState>,
+    }
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+    )]
+    #[request(
+        method = "bitrouter.test/manager_extension",
+        response = ManagerExtensionResponse
+    )]
+    #[serde(transparent)]
+    struct ManagerExtensionRequest(serde_json::Value);
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcResponse,
+    )]
+    #[serde(transparent)]
+    struct ManagerExtensionResponse(serde_json::Value);
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+    )]
+    #[request(
+        method = "bitrouter.test/harness_extension",
+        response = HarnessExtensionResponse
+    )]
+    #[serde(transparent)]
+    struct HarnessExtensionRequest(serde_json::Value);
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcResponse,
+    )]
+    #[serde(transparent)]
+    struct HarnessExtensionResponse(serde_json::Value);
+
+    #[derive(Default)]
+    struct CallbackState {
+        initialize: Mutex<Option<InitializeRequest>>,
+        permission_completed: AtomicBool,
+        read_completed: AtomicBool,
+        extension_completed: AtomicBool,
+    }
+
+    struct CallbackAgent {
+        state: Arc<CallbackState>,
+    }
+
+    impl ConnectTo<Client> for CallbackAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            let initialize_state = Arc::clone(&self.state);
+            let prompt_state = Arc::clone(&self.state);
+            Agent
+                .builder()
+                .name("callback-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        match initialize_state.initialize.lock() {
+                            Ok(mut observed) => *observed = Some(request.clone()),
+                            Err(poisoned) => *poisoned.into_inner() = Some(request.clone()),
+                        }
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ManagerExtensionRequest, responder, _connection| {
+                        responder.respond(ManagerExtensionResponse(serde_json::json!({
+                            "harnessEcho": request.0,
+                            "unknownHarnessField": [1, 2, 3],
+                        })))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest,
+                                responder,
+                                connection: ConnectionTo<Client>| {
+                        let state = Arc::clone(&prompt_state);
+                        connection.clone().spawn(async move {
+                            let permission = receive(
+                                connection.send_request(
+                                    RequestPermissionRequest::new(
+                                        request.session_id.clone(),
+                                        ToolCallUpdate::new(
+                                            "tool-native",
+                                            ToolCallUpdateFields::default(),
+                                        ),
+                                        vec![PermissionOption::new(
+                                            "allow-native",
+                                            "Allow",
+                                            PermissionOptionKind::AllowOnce,
+                                        )],
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.permission".to_string(),
+                                        serde_json::json!({"unknown": true}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let permission = match permission {
+                                Ok(permission) => permission,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let selected = matches!(
+                                permission.outcome,
+                                RequestPermissionOutcome::Selected(ref selected)
+                                    if selected.option_id.0.as_ref() == "allow-native"
+                            );
+                            let permission_meta = permission
+                                .meta
+                                .as_ref()
+                                .is_some_and(|meta| meta.contains_key("manager.permission"));
+                            state
+                                .permission_completed
+                                .store(selected && permission_meta, Ordering::SeqCst);
+
+                            let read = receive(
+                                connection.send_request(
+                                    ReadTextFileRequest::new(
+                                        request.session_id.clone(),
+                                        "/workspace/native.txt",
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.read".to_string(),
+                                        serde_json::json!("opaque"),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let read = match read {
+                                Ok(read) => read,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.read_completed.store(
+                                read.content == "manager-file"
+                                    && read
+                                        .meta
+                                        .as_ref()
+                                        .is_some_and(|meta| meta.contains_key("manager.read")),
+                                Ordering::SeqCst,
+                            );
+
+                            let extension = receive(connection.send_request(
+                                HarnessExtensionRequest(serde_json::json!({
+                                    "sessionId": request.session_id,
+                                    "unknownHarnessRequest": {"nested": true},
+                                })),
+                            ))
+                            .await;
+                            let extension = match extension {
+                                Ok(extension) => extension,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.extension_completed.store(
+                                extension.0
+                                    == serde_json::json!({
+                                        "managerEcho": {
+                                            "sessionId": "native-callback",
+                                            "unknownHarnessRequest": {"nested": true},
+                                        },
+                                        "unknownManagerField": "preserved",
+                                    }),
+                                Ordering::SeqCst,
+                            );
+                            responder.respond(PromptResponse::new(StopReason::EndTurn).meta(
+                                Meta::from_iter([(
+                                    "harness.callbacksComplete".to_string(),
+                                    serde_json::json!(true),
+                                )]),
+                            ))
+                        })?;
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    impl ConnectTo<Client> for TransparentAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            let new_state = Arc::clone(&self.state);
+            let prompt_state = Arc::clone(&self.state);
+            let cancel_state = Arc::clone(&self.state);
+            let list_state = Arc::clone(&self.state);
+            let load_state = Arc::clone(&self.state);
+            let resume_state = Arc::clone(&self.state);
+            let close_state = Arc::clone(&self.state);
+            let delete_state = Arc::clone(&self.state);
+            let fork_state = Arc::clone(&self.state);
+            let config_state = Arc::clone(&self.state);
+            Agent
+                .builder()
+                .name("transparent-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        responder.respond(
+                            InitializeResponse::new(request.protocol_version).agent_capabilities(
+                                AgentCapabilities::new()
+                                    .load_session(true)
+                                    .session_capabilities(
+                                        SessionCapabilities::new()
+                                            .list(SessionListCapabilities::new())
+                                            .delete(SessionDeleteCapabilities::new())
+                                            .fork(SessionForkCapabilities::new())
+                                            .resume(SessionResumeCapabilities::new())
+                                            .close(SessionCloseCapabilities::new()),
+                                    ),
+                            ),
+                        )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: NewSessionRequest, responder, _connection| {
+                        let index = new_state.next_session.fetch_add(1, Ordering::SeqCst);
+                        let session_id = if index == 0 { "native-a" } else { "native-b" };
+                        record(&new_state.requests, format!("new:{session_id}"));
+                        responder.respond(NewSessionResponse::new(session_id).meta(
+                            Meta::from_iter([(
+                                "harness.response".to_string(),
+                                serde_json::json!(session_id),
+                            )]),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, connection| {
+                        let session_id = request.session_id.0.to_string();
+                        record(&prompt_state.requests, format!("prompt:{session_id}"));
+                        connection.send_notification(
+                            SessionNotification::new(
+                                request.session_id,
+                                SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                    ContentBlock::Text(TextContent::new(session_id.clone())),
+                                )),
+                            )
+                            .meta(Meta::from_iter([(
+                                "harness.update".to_string(),
+                                serde_json::json!(session_id),
+                            )])),
+                        )?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn).meta(
+                            Meta::from_iter([(
+                                "harness.prompt".to_string(),
+                                serde_json::json!(true),
+                            )]),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_notification(
+                    async move |notification: CancelNotification, _connection| {
+                        record(
+                            &cancel_state.cancellations,
+                            notification.session_id.0.to_string(),
+                        );
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_request(
+                    async move |request: ListSessionsRequest, responder, _connection| {
+                        record(
+                            &list_state.requests,
+                            format!("list:{}", request.cursor.as_deref().unwrap_or("none")),
+                        );
+                        responder.respond(
+                            ListSessionsResponse::new(vec![
+                                SessionInfo::new("native-a", "/workspace"),
+                                SessionInfo::new("native-b", "/workspace"),
+                            ])
+                            .meta(Meta::from_iter([(
+                                "harness.list".to_string(),
+                                serde_json::json!(true),
+                            )])),
+                        )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: LoadSessionRequest, responder, _connection| {
+                        record(
+                            &load_state.requests,
+                            format!("load:{}", request.session_id.0),
+                        );
+                        responder.respond(LoadSessionResponse::new().meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ResumeSessionRequest, responder, _connection| {
+                        record(
+                            &resume_state.requests,
+                            format!("resume:{}", request.session_id.0),
+                        );
+                        responder.respond(ResumeSessionResponse::new().meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: CloseSessionRequest, responder, _connection| {
+                        record(
+                            &close_state.requests,
+                            format!("close:{}", request.session_id.0),
+                        );
+                        responder.respond(CloseSessionResponse::new().meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: DeleteSessionRequest, responder, _connection| {
+                        let session_id = request.session_id.0.to_string();
+                        record(&delete_state.requests, format!("delete:{session_id}"));
+                        if session_id == "reject-me" {
+                            responder.respond_with_error(
+                                agent_client_protocol::Error::new(-32071, "harness-owned-error")
+                                    .data(serde_json::json!({"owner": "harness"})),
+                            )
+                        } else {
+                            responder.respond(DeleteSessionResponse::new().meta(request.meta))
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ForkSessionRequest, responder, _connection| {
+                        record(
+                            &fork_state.requests,
+                            format!("fork:{}", request.session_id.0),
+                        );
+                        responder
+                            .respond(ForkSessionResponse::new("native-fork").meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+                        record(
+                            &config_state.requests,
+                            format!("config:{}", request.session_id.0),
+                        );
+                        responder.respond(
+                            SetSessionConfigOptionResponse::new(Vec::new()).meta(request.meta),
+                        )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
     }
 
     impl ConnectTo<Client> for ProviderAgent {
@@ -833,6 +1220,374 @@ mod tests {
             },
             1
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_multi_session_lifecycle_is_transparent() -> anyhow::Result<()> {
+        let state = Arc::new(TransparentState::default());
+        let controller = Controller::new(
+            TransparentAgent {
+                state: Arc::clone(&state),
+            },
+            ControllerConfig::new(ControllerIdentity::new(
+                "codex-acp",
+                "@agentclientprotocol/codex-acp",
+                "1.7.0",
+            )),
+        );
+        let updates = Arc::new(Mutex::new(Vec::<(String, Option<Meta>)>::new()));
+        let observed_updates = Arc::clone(&updates);
+        let (manager_out, controller_in) = duplex(16_384);
+        let (controller_out, manager_in) = duplex(16_384);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("multi-session-manager")
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    record(
+                        &observed_updates,
+                        (notification.session_id.0.to_string(), notification.meta),
+                    );
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                        .await?;
+                    let native_a =
+                        receive(connection.send_request(NewSessionRequest::new("/workspace")))
+                            .await?;
+                    let native_b =
+                        receive(connection.send_request(NewSessionRequest::new("/workspace")))
+                            .await?;
+                    assert_eq!(native_a.session_id.0.as_ref(), "native-a");
+                    assert_eq!(native_b.session_id.0.as_ref(), "native-b");
+                    assert_eq!(
+                        native_a
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("harness.response")),
+                        Some(&serde_json::json!("native-a"))
+                    );
+
+                    let prompt_a = receive(connection.send_request(PromptRequest::new(
+                        native_a.session_id.clone(),
+                        vec![ContentBlock::Text(TextContent::new("a"))],
+                    )));
+                    let prompt_b = receive(connection.send_request(PromptRequest::new(
+                        native_b.session_id.clone(),
+                        vec![ContentBlock::Text(TextContent::new("b"))],
+                    )));
+                    let (prompt_a, prompt_b) = tokio::join!(prompt_a, prompt_b);
+                    assert_eq!(prompt_a?.stop_reason, StopReason::EndTurn);
+                    assert_eq!(prompt_b?.stop_reason, StopReason::EndTurn);
+                    connection
+                        .send_notification(CancelNotification::new(native_b.session_id.clone()))?;
+
+                    let list_meta = Meta::from_iter([(
+                        "manager.list".to_string(),
+                        serde_json::json!({"opaque": 1}),
+                    )]);
+                    let listed = receive(
+                        connection.send_request(
+                            ListSessionsRequest::new()
+                                .cursor("harness-cursor".to_string())
+                                .meta(list_meta),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(
+                        listed
+                            .sessions
+                            .iter()
+                            .map(|session| session.session_id.0.as_ref())
+                            .collect::<Vec<_>>(),
+                        vec!["native-a", "native-b"]
+                    );
+                    assert_eq!(
+                        listed
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("harness.list")),
+                        Some(&serde_json::json!(true))
+                    );
+
+                    let request_meta = Meta::from_iter([(
+                        "manager.extension".to_string(),
+                        serde_json::json!({"preserve": true}),
+                    )]);
+                    let loaded = receive(
+                        connection.send_request(
+                            LoadSessionRequest::new("never-observed-load", "/workspace")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(loaded.meta, Some(request_meta.clone()));
+                    let resumed = receive(
+                        connection.send_request(
+                            ResumeSessionRequest::new("never-observed-resume", "/workspace")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(resumed.meta, Some(request_meta.clone()));
+                    let closed = receive(connection.send_request(
+                        CloseSessionRequest::new("never-observed-close").meta(request_meta.clone()),
+                    ))
+                    .await?;
+                    assert_eq!(closed.meta, Some(request_meta.clone()));
+                    let deleted = receive(
+                        connection.send_request(
+                            DeleteSessionRequest::new("never-observed-delete")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(deleted.meta, Some(request_meta.clone()));
+                    let forked = receive(
+                        connection.send_request(
+                            ForkSessionRequest::new("never-observed-fork", "/workspace")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(forked.session_id.0.as_ref(), "native-fork");
+                    assert_eq!(forked.meta, Some(request_meta.clone()));
+                    let configured = receive(
+                        connection.send_request(
+                            SetSessionConfigOptionRequest::new(
+                                "never-observed-config",
+                                "mode",
+                                "review",
+                            )
+                            .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(configured.meta, Some(request_meta));
+
+                    let error =
+                        receive(connection.send_request(DeleteSessionRequest::new("reject-me")))
+                            .await
+                            .err()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("harness error was replaced by success")
+                            })?;
+                    assert_eq!(i32::from(error.code), -32071);
+                    assert_eq!(error.message, "harness-owned-error");
+                    assert_eq!(error.data, Some(serde_json::json!({"owner": "harness"})));
+                    Ok(())
+                },
+            )
+            .await?;
+
+        let requests = match state.requests.lock() {
+            Ok(requests) => requests.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        for expected in [
+            "prompt:native-a",
+            "prompt:native-b",
+            "list:harness-cursor",
+            "load:never-observed-load",
+            "resume:never-observed-resume",
+            "close:never-observed-close",
+            "delete:never-observed-delete",
+            "fork:never-observed-fork",
+            "config:never-observed-config",
+            "delete:reject-me",
+        ] {
+            assert!(requests.iter().any(|request| request == expected));
+        }
+        let cancellations = match state.cancellations.lock() {
+            Ok(cancellations) => cancellations.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(cancellations, vec!["native-b"]);
+        let updates = match updates.lock() {
+            Ok(updates) => updates.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(
+            updates
+                .iter()
+                .map(|(session_id, _meta)| session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["native-a", "native-b"]
+        );
+        assert!(updates.iter().all(|(_, meta)| {
+            meta.as_ref()
+                .is_some_and(|meta| meta.contains_key("harness.update"))
+        }));
+        assert!(
+            !serde_json::to_string(&requests)?.contains("record_id"),
+            "controller generated a local session alias"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn callbacks_and_unknown_extensions_are_bidirectional() -> anyhow::Result<()> {
+        let state = Arc::new(CallbackState::default());
+        let controller = Controller::new(
+            CallbackAgent {
+                state: Arc::clone(&state),
+            },
+            ControllerConfig::new(ControllerIdentity::new(
+                "claude-acp",
+                "@agentclientprotocol/claude-agent-acp",
+                "0.70.0",
+            )),
+        );
+        let (manager_out, controller_in) = duplex(16_384);
+        let (controller_out, manager_in) = duplex(16_384);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("callback-manager")
+            .on_receive_request(
+                async move |request: RequestPermissionRequest, responder, _connection| {
+                    if request
+                        .meta
+                        .as_ref()
+                        .is_none_or(|meta| !meta.contains_key("harness.permission"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("permission meta was changed")),
+                        );
+                    }
+                    responder.respond(
+                        RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                            SelectedPermissionOutcome::new("allow-native"),
+                        ))
+                        .meta(Meta::from_iter([(
+                            "manager.permission".to_string(),
+                            serde_json::json!({"opaque": true}),
+                        )])),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: ReadTextFileRequest, responder, _connection| {
+                    if request.path.to_string_lossy() != "/workspace/native.txt"
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.read"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("read request was changed")),
+                        );
+                    }
+                    responder.respond(ReadTextFileResponse::new("manager-file").meta(
+                        Meta::from_iter([(
+                            "manager.read".to_string(),
+                            serde_json::json!(["preserved"]),
+                        )]),
+                    ))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: HarnessExtensionRequest, responder, _connection| {
+                    responder.respond(HarnessExtensionResponse(serde_json::json!({
+                        "managerEcho": request.0,
+                        "unknownManagerField": "preserved",
+                    })))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    receive(
+                        connection.send_request(
+                            InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                                ClientCapabilities::new()
+                                    .fs(FileSystemCapabilities::new().read_text_file(true))
+                                    .terminal(true),
+                            ),
+                        ),
+                    )
+                    .await?;
+
+                    let extension = receive(connection.send_request(ManagerExtensionRequest(
+                        serde_json::json!({
+                            "unknownManagerRequest": {
+                                "nested": ["value", 7],
+                            },
+                            "_meta": {"manager.extension": true},
+                        }),
+                    )))
+                    .await?;
+                    assert_eq!(
+                        extension.0,
+                        serde_json::json!({
+                            "harnessEcho": {
+                                "unknownManagerRequest": {
+                                    "nested": ["value", 7],
+                                },
+                                "_meta": {"manager.extension": true},
+                            },
+                            "unknownHarnessField": [1, 2, 3],
+                        })
+                    );
+
+                    let prompt = receive(connection.send_request(PromptRequest::new(
+                        "native-callback",
+                        vec![ContentBlock::Text(TextContent::new("callbacks"))],
+                    )))
+                    .await?;
+                    assert_eq!(prompt.stop_reason, StopReason::EndTurn);
+                    assert_eq!(
+                        prompt
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("harness.callbacksComplete")),
+                        Some(&serde_json::json!(true))
+                    );
+                    Ok(())
+                },
+            )
+            .await?;
+
+        let initialize = match state.initialize.lock() {
+            Ok(initialize) => initialize.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+        .ok_or_else(|| anyhow::anyhow!("harness did not receive initialize"))?;
+        assert!(initialize.client_capabilities.fs.read_text_file);
+        assert!(initialize.client_capabilities.terminal);
+        assert!(state.permission_completed.load(Ordering::SeqCst));
+        assert!(state.read_completed.load(Ordering::SeqCst));
+        assert!(state.extension_completed.load(Ordering::SeqCst));
         Ok(())
     }
 }
