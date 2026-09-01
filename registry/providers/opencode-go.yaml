@@ -75,6 +75,12 @@ models:
     provider_model_id: kimi-k3
   - id: openai/gpt-5.6-luna
     provider_model_id: gpt-5.6-luna
+  - id: z-ai/glm-5.3
+    provider_model_id: glm-5.3
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: glm-5.3-flash
+  - id: x-ai/grok-4.6
+    provider_model_id: grok-4.6
 status: active
 auto_sync:
   feed: models_dev

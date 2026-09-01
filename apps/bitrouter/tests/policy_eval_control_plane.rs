@@ -143,8 +143,7 @@ async fn stale_candidate_loses_compare_and_swap_without_touching_active_bytes() 
         .policies
         .get_mut("auto")
         .ok_or_else(|| anyhow::anyhow!("base fixture must contain the auto policy"))?
-        .routes
-        .insert("agent_trace/v1|edit|normal".into(), "strong".into());
+        .default_tier = Some("economy".into());
     let newer_bytes = deterministic_yaml(&newer)?;
     std::fs::write(&active_path, &newer_bytes)?;
 
@@ -241,11 +240,13 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             policy: "auto:cost".into(),
             policy_digest:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -253,8 +254,11 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
+            predicted_task_family: None,
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            task_family_confidence_ppm: None,
+            task_family_reason_codes: Vec::new(),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
@@ -467,12 +471,14 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         decisions: vec![EvalDecisionRef {
             decision_id: "decision-publication".into(),
             policy: "auto".into(),
-            request_key: "agent_trace/v1|edit|normal".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest: semantic_digest(&active)?,
+            experiment: None,
         }],
         requested_dimensions: BTreeSet::from(["quality.pass".into()]),
         evidence_digest: evidence_digest(&evidence)?,
@@ -538,7 +544,7 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         Some(manifest.evidence_root.as_str())
     );
     assert_eq!(
-        published.policies["auto"].routes["agent_trace/v1|edit|normal"],
+        published.policies["auto"].routes["agent_route/v1|unknown|implement|normal"],
         "economy"
     );
     Ok(())

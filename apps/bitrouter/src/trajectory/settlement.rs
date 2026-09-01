@@ -344,6 +344,14 @@ mod tests {
                 .map(String::as_str),
             Some("mutate")
         );
+        assert_eq!(
+            terminal
+                .evidence
+                .categorical
+                .get("routing.task_family_reason_codes")
+                .map(String::as_str),
+            Some("task_code_review")
+        );
         let evaluation = build_operational_evaluation(&events)?;
         let evidence = evaluation
             .subject
@@ -357,6 +365,13 @@ mod tests {
                 .get("observed_action")
                 .map(String::as_str),
             Some("mutate")
+        );
+        assert_eq!(
+            evidence
+                .attributes
+                .get("task_family_reason_codes")
+                .map(String::as_str),
+            Some("task_code_review")
         );
         Ok(())
     }
@@ -1474,6 +1489,7 @@ mod tests {
                 route_event_id: format!("route-{request_id}"),
                 guard_event_id: format!("guard-{request_id}"),
                 policy_name: "auto:cost".into(),
+                route_projection: "agent_route/v1|code:generation|implement|normal".into(),
                 request_key: "agent_trace/v2|edit|normal".into(),
                 baseline_tier: Some("reference".into()),
                 baseline_effort: None,
@@ -1483,6 +1499,7 @@ mod tests {
                     .unwrap_or_else(|| unreachable!()),
                 candidate_tier: Some("economy".into()),
                 policy_digest: POLICY_DIGEST.into(),
+                experiment: None,
                 policy: ProgressGuardPolicy {
                     escalation_tier: "strong".into(),
                     protected_tiers: BTreeSet::from(["strong".into()]),
@@ -1554,11 +1571,13 @@ mod tests {
             decision_id: format!("decision-{request_id}"),
             policy: "auto:cost".into(),
             policy_digest: POLICY_DIGEST.into(),
+            route_projection: "agent_trace/v2|edit|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -1566,8 +1585,15 @@ mod tests {
             continuation_proposed_effort: None,
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
+            predicted_task_family: Some("code:review".into()),
             predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
+            task_family_confidence_ppm: Some(800_000),
+            task_family_reason_codes: vec![
+                "task_code_review".into(),
+                "customer_secret".into(),
+                "task_code_review".into(),
+            ],
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),

@@ -18,8 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp", "otel-http"] }
-bitrouter-cloud-sdk.workspace = true
-bitrouter-providers = { workspace = true, features = ["pkce"] }
+bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
 bitrouter-guardrails.workspace = true
 bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.27" }
 chrono.workspace = true
@@ -43,6 +42,7 @@ toml.workspace = true
 erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
+url.workspace = true
 anyhow = "1"
 tempfile.workspace = true
 thiserror.workspace = true

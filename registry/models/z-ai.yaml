@@ -1,3 +1,29 @@
+- id: z-ai/glm-5.3
+  name: 'Zhipu: GLM-5.3'
+  description: Z.ai flagship reasoning model for complex software engineering and long-horizon agent tasks.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-08-14
+  open_weights: false
+  family: glm
+- id: z-ai/glm-5.3-flash
+  name: 'Zhipu: GLM-5.3 Flash'
+  description: Open-weight native multimodal MoE for efficient coding, professional work, and long-horizon agent tasks.
+  input_modalities:
+  - text
+  - image
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-08-26
+  open_weights: true
+  family: glm
 - id: z-ai/glm-5.1
   name: 'Zhipu: GLM-5.1'
   input_modalities:

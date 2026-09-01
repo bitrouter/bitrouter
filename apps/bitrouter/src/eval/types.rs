@@ -25,11 +25,36 @@ pub enum EvalSubjectStatus {
     Evaluated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentArm {
+    Control,
+    Challenger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentAssignmentUnit {
+    Task,
+    Episode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalExperimentRef {
+    pub experiment_id: String,
+    pub arm: ExperimentArm,
+    pub assignment_unit: ExperimentAssignmentUnit,
+    pub assignment_id_digest: String,
+    pub challenger_propensity_ppm: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalDecisionRef {
     pub decision_id: String,
     pub policy: String,
+    pub route_projection: String,
     pub request_key: String,
     pub selected_tier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,6 +63,8 @@ pub struct EvalDecisionRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_effort: Option<ReasoningEffort>,
     pub policy_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,9 +236,25 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
             anyhow::bail!("duplicate eval decision id '{}';", decision.decision_id)
         }
         validate_identifier(&decision.policy, "decision.policy")?;
+        validate_identifier(&decision.route_projection, "decision.route_projection")?;
         validate_identifier(&decision.request_key, "decision.request_key")?;
         validate_identifier(&decision.selected_tier, "decision.selected_tier")?;
         validate_digest(&decision.policy_digest, "decision.policy_digest")?;
+        if let Some(experiment) = &decision.experiment {
+            validate_digest(
+                &experiment.experiment_id,
+                "decision.experiment.experiment_id",
+            )?;
+            validate_digest(
+                &experiment.assignment_id_digest,
+                "decision.experiment.assignment_id_digest",
+            )?;
+            if !(1..=1_000_000).contains(&experiment.challenger_propensity_ppm) {
+                anyhow::bail!(
+                    "decision.experiment.challenger_propensity_ppm must be between 1 and 1000000"
+                )
+            }
+        }
     }
     for dimension in &subject.requested_dimensions {
         validate_metric_id(dimension)?;
@@ -500,21 +543,116 @@ mod tests {
     }
 
     #[test]
-    fn legacy_decision_without_effort_round_trips_byte_semantically() -> anyhow::Result<()> {
-        let legacy = serde_json::json!({
+    fn decision_without_primary_route_projection_is_rejected() {
+        let incomplete = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "request_key": "agent_trace/v1|edit|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
             "selected_tier": "economy",
             "baseline_tier": "strong",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
+        assert!(serde_json::from_value::<EvalDecisionRef>(incomplete).is_err());
+    }
 
-        let decoded: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
+    #[test]
+    fn retired_predictive_v1_fallback_field_is_rejected() {
+        let mut retired = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "route_projection": "agent_route/v1|code:generation|implement|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
+            "selected_tier": "balanced",
+            "baseline_tier": "balanced",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+        retired
+            .as_object_mut()
+            .expect("decision fixture is an object")
+            .insert(
+                ["predictive_v1", "fallback_tier"].join("_"),
+                serde_json::json!("balanced"),
+            );
 
-        assert_eq!(decoded.selected_effort, None);
-        assert_eq!(decoded.baseline_effort, None);
-        assert_eq!(serde_json::to_value(decoded)?, legacy);
+        assert!(serde_json::from_value::<EvalDecisionRef>(retired).is_err());
+    }
+
+    #[test]
+    fn primary_projection_is_bounded() {
+        let mut subject = subject_fixture();
+        subject.decisions.push(EvalDecisionRef {
+            decision_id: "decision-1".into(),
+            policy: "auto".into(),
+            route_projection: "x".repeat(513),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            selected_tier: "balanced".into(),
+            selected_effort: None,
+            baseline_tier: Some("balanced".into()),
+            baseline_effort: None,
+            policy_digest: subject.policy_digest.clone(),
+            experiment: None,
+        });
+        assert!(validate_subject(&subject).is_err());
+    }
+
+    #[test]
+    fn subject_rejects_duplicate_decision_ids() {
+        let mut subject = subject_fixture();
+        let decision = EvalDecisionRef {
+            decision_id: "decision-duplicate".into(),
+            policy: "auto".into(),
+            route_projection: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            selected_tier: "balanced".into(),
+            selected_effort: None,
+            baseline_tier: Some("strong".into()),
+            baseline_effort: None,
+            policy_digest: subject.policy_digest.clone(),
+            experiment: None,
+        };
+        subject.decisions = vec![decision.clone(), decision];
+
+        let error = validate_subject(&subject).expect_err("duplicate decisions must fail closed");
+
+        assert!(error.to_string().contains("duplicate eval decision id"));
+    }
+
+    #[test]
+    fn decision_experiment_metadata_is_backward_compatible_and_canonical() -> anyhow::Result<()> {
+        let legacy = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "route_projection": "agent_route/v1|code:generation|implement|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
+            "selected_tier": "strong",
+            "baseline_tier": "strong",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+        let old: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
+        assert_eq!(old.experiment, None);
+        assert_eq!(serde_json::to_value(old)?, legacy);
+
+        let experiment = EvalExperimentRef {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            arm: ExperimentArm::Challenger,
+            assignment_unit: ExperimentAssignmentUnit::Task,
+            assignment_id_digest:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            challenger_propensity_ppm: 100_000,
+        };
+        let mut decision: EvalDecisionRef = serde_json::from_value(legacy)?;
+        decision.experiment = Some(experiment);
+        assert_eq!(
+            serde_json::to_value(decision)?["experiment"],
+            serde_json::json!({
+                "experiment_id": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "arm": "challenger",
+                "assignment_unit": "task",
+                "assignment_id_digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "challenger_propensity_ppm": 100000
+            })
+        );
         Ok(())
     }
 

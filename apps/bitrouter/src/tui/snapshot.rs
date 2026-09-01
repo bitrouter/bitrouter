@@ -104,8 +104,8 @@ pub async fn poll(
     // NOTE: which branch ran is *not* recorded, so the bar cannot say whether
     // its figures are the session's or every caller's — the honesty rule
     // `chat`'s cost line keeps (see `crate::chat::cost`) has no equivalent
-    // here yet. Labelling it is a change to what `status --watch` draws, not a
-    // refactor, so it is left to one.
+    // here yet. Labelling it is a change to what the status formatter draws,
+    // not a refactor, so it is left to one.
     if let Some(launch) = launch_id {
         let summary = store
             .spend_summary_for_launch(launch, window)

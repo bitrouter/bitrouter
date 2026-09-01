@@ -224,7 +224,8 @@ pub async fn build_app_with_path(
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
     // and lets transport return the exact proof used by the sent request.
-    let auth_appliers = build_auth_appliers(config)?;
+    let cloud_manager = crate::cloud::default_manager()?;
+    let auth_appliers = build_auth_appliers(config, Arc::clone(&cloud_manager))?;
     let runtime_home = match config_path.and_then(std::path::Path::parent) {
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
@@ -357,7 +358,11 @@ pub async fn build_app_with_path(
                 let bearer: Option<Arc<dyn bitrouter_sdk::otel::TelemetryBearer>> =
                     match plan.bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
-                            let source = crate::cloud::cloud_bearer_source().await;
+                            let source = crate::cloud::cloud_bearer_source(
+                                Arc::clone(&cloud_manager),
+                                plan.config.endpoint.clone(),
+                            )
+                            .await;
                             if source.is_none() && warn_if_unmet {
                                 tracing::warn!(
                                     "telemetry: attribution=account but no signed-in session is \
@@ -1043,15 +1048,18 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
 /// OpenAI Codex (ChatGPT-subscription OAuth).
-fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
+fn build_auth_appliers(
+    config: &Config,
+    cloud_manager: Arc<bitrouter_providers::hosted::account::manager::CredentialManager>,
+) -> Result<AuthAppliers> {
     let mut appliers = AuthAppliers::new();
     let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
-    // The `bitrouter` provider's applier reads the user-account credentials
-    // store (separate from the upstream-provider store above), so it lives
-    // in its own crate and is registered via the `crate::cloud` glue module.
-    crate::cloud::register_if_configured(config, &mut appliers)?;
+    // The `bitrouter` provider's account store and the generic upstream
+    // provider store above are isolated modules within `bitrouter-providers`.
+    // Register the hosted applier through the application Cloud glue.
+    crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
         let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)
             .context("building the github-copilot AuthApplier")?;
@@ -1240,6 +1248,14 @@ enum BearerPlan {
 /// account-bearer plan. Returns `None` when nothing opts telemetry in;
 /// telemetry failures are surfaced as warnings, never as session failures.
 pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    build_otel_exporter_standalone_with_credentials(config, &cloud_credentials).await
+}
+
+pub(crate) async fn build_otel_exporter_standalone_with_credentials(
+    config: &Config,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+) -> Option<Arc<OtelExporter>> {
     let plan = match build_otel_config(config) {
         Ok(Some(plan)) => plan,
         Ok(None) => return None,
@@ -1250,7 +1266,9 @@ pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelE
     };
     let bearer: Option<Arc<dyn bitrouter_sdk::otel::TelemetryBearer>> = match plan.bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
-            let source = crate::cloud::cloud_bearer_source().await;
+            let source = cloud_credentials
+                .telemetry_bearer(&plan.config.endpoint)
+                .await;
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
                     "telemetry: attribution=account but no signed-in session is available — \
@@ -2045,10 +2063,11 @@ mod trajectory_assembly_tests {
     use super::{Config, build_app_with_path};
     use crate::eval::types::EvalScope;
     use crate::policy_lock::{
-        LEGACY_POLICY_LOCKFILE_VERSION, PolicyDefinition, PolicyLock, deterministic_yaml,
-        semantic_digest,
+        CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
+        RouteOwner, deterministic_yaml, semantic_digest,
     };
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    use crate::workflow_state::predictive::compiled_predictor_contract;
 
     async fn assemble_named_policy(
         trajectory_enabled: bool,
@@ -2102,6 +2121,9 @@ presets:
         );
         let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
         let guarded = progress_guard.is_some();
+        const ROUTE_KEY: &str = "agent_route/v1|unknown|unknown|normal";
+        const TEST_DIGEST: &str =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let policy = PolicyDefinition {
             tiers: BTreeMap::from([
                 ("economy".into(), "vendor:economy-model".into()),
@@ -2110,24 +2132,41 @@ presets:
             routes: if guarded {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([("agent_trace/v2|opening|normal".into(), "economy".into())])
+                BTreeMap::from([(ROUTE_KEY.into(), "economy".into())])
             },
             default_tier: Some(if guarded { "economy" } else { "strong" }.into()),
             tool_use_tier: Some("strong".into()),
             tool_safe_tiers: vec!["strong".into()],
             progress_guard,
+            predictor: (!guarded).then(compiled_predictor_contract),
             ..PolicyDefinition::default()
         };
-        let mut lock = if guarded {
-            PolicyLock::default()
-        } else {
-            PolicyLock {
-                lockfile_version: LEGACY_POLICY_LOCKFILE_VERSION,
-                artifact: None,
-                policies: BTreeMap::new(),
-                certificates: BTreeMap::new(),
-            }
-        };
+        let mut lock = PolicyLock::default();
+        if !guarded {
+            lock.certificates.insert(
+                "coding".into(),
+                BTreeMap::from([(
+                    ROUTE_KEY.into(),
+                    PolicyCertificate {
+                        owner: RouteOwner::Operator,
+                        selected_tier: "economy".into(),
+                        baseline_tier: Some("strong".into()),
+                        source: CertificateSource::Operator,
+                        eligible_episodes: 0,
+                        independent_tasks: 0,
+                        quality: None,
+                        economics: None,
+                        latency: None,
+                        critical_violations: 0,
+                        verdict: PromotionVerdict::Promote,
+                        evaluator_config_digest: None,
+                        compiler_config_digest: TEST_DIGEST.into(),
+                        evidence_digest: TEST_DIGEST.into(),
+                        legacy: None,
+                    },
+                )]),
+            );
+        }
         lock.policies.insert("coding".into(), policy);
         let digest = semantic_digest(&lock)?;
         tokio::fs::write(

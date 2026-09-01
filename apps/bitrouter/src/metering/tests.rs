@@ -5,9 +5,6 @@ use std::time::Duration;
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-use bitrouter_cloud_sdk::settlement::{
-    SettlementClient, SettlementReceipt, SettlementState, SettlementUsage,
-};
 use bitrouter_sdk::Result;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
@@ -17,6 +14,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::{
     MeteringRecorder, MeteringSettlementEvent, MeteringStore, ModelPricing, PricingTable,
     TimeWindow,
+};
+use crate::cloud::settlement::{
+    SettlementClient, SettlementReceipt, SettlementState, SettlementUsage,
 };
 use crate::db;
 

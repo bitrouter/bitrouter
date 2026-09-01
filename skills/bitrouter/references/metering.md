@@ -73,10 +73,9 @@ prompt/response content, or tool commands.
 
 ## Reconcile request-scoped receipts
 
-Hosted BitRouter Cloud rows can be reconciled without exporting an OAuth bearer
-into the environment. Point the command at the owner-only credential file used
-by `bitrouter cloud login`; a usable bearer is read directly and a near-expiry
-OAuth token is refreshed before receipt polling:
+Hosted BitRouter Cloud rows can be reconciled without exporting a static API
+key into the environment. Point the command at the owner-only credential file
+used by `bitrouter cloud login`, provided that file contains a static API key:
 
 ```bash
 bitrouter workflow-state reconcile-metering \
@@ -87,8 +86,10 @@ bitrouter workflow-state reconcile-metering \
 ```
 
 For API-key environments, omit `--credentials-file` and provide the variable
-named by `--api-key-env` (default `BITROUTER_API_KEY`). Never place either
-credential in command arguments, logs, or benchmark artifacts.
+named by `--api-key-env` (default `BITROUTER_API_KEY`). A non-empty environment
+value takes precedence over the file. OAuth credentials are rejected and never
+refreshed for settlement. Never place either credential in command arguments,
+logs, or benchmark artifacts.
 
 ## Export an auditable usage snapshot
 

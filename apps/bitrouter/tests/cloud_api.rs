@@ -4,14 +4,55 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
 
-use bitrouter_cloud_sdk::auth::credentials::{Credentials, CredentialsStore, StoredCredential};
+use bitrouter::cloud::auth::login_api_key;
+use bitrouter_providers::hosted::account::credentials::{
+    CredentialKind, Credentials, CredentialsStore, StoredCredential,
+};
+use bitrouter_providers::hosted::account::manager::CredentialManager;
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
 use wiremock::matchers::{body_string, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const API_KEY: &str = "brk_test.fixture";
+
+#[tokio::test]
+async fn api_key_login_replaces_oauth_in_manager_store() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let manager = Arc::new(CredentialManager::with_client(
+        directory.path().join("account-credentials.json"),
+        reqwest::Client::new(),
+    ));
+    manager
+        .save(StoredCredential::from(Credentials {
+            access_token: "oauth-access".to_owned(),
+            refresh_token: Some("oauth-refresh".to_owned()),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+            refresh_token_expires_at: None,
+            token_type: "Bearer".to_owned(),
+            scope: "inference:invoke".to_owned(),
+            client_id: "bitrouter-cli".to_owned(),
+            authorization_server: "https://api.bitrouter.ai".to_owned(),
+            namespace_id: Some("ns-test".to_owned()),
+            subject: None,
+        }))
+        .await?;
+    let stored = login_api_key(
+        Arc::clone(&manager),
+        "brk_replacement.secret".to_owned(),
+        "https://api.bitrouter.ai".to_owned(),
+    )
+    .await?;
+    assert_eq!(stored.kind(), CredentialKind::ApiKey);
+    let current = match manager.current().await? {
+        Some(current) => current,
+        None => anyhow::bail!("credential disappeared"),
+    };
+    assert_eq!(current.kind(), CredentialKind::ApiKey);
+    Ok(())
+}
 
 fn credentials_path(data_home: &Path) -> PathBuf {
     data_home.join("bitrouter/account-credentials.json")

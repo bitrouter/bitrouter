@@ -503,6 +503,7 @@ mod tests {
                         route_event_id: "route-report".into(),
                         guard_event_id: "guard-report".into(),
                         policy_name: "coding".into(),
+                        route_projection: "agent_route/v1|unknown|orchestrate|normal".into(),
                         request_key: "agent_trace/v2|opening|normal".into(),
                         baseline_tier: Some("strong".into()),
                         baseline_effort: None,
@@ -512,6 +513,7 @@ mod tests {
                             .ok_or_else(|| anyhow::anyhow!("invalid fixture projection"))?,
                         candidate_tier: Some("economy".into()),
                         policy_digest: POLICY_DIGEST.into(),
+                        experiment: None,
                         policy: ProgressGuardPolicy {
                             escalation_tier: "strong".into(),
                             protected_tiers: BTreeSet::from(["strong".into()]),

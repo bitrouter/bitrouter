@@ -236,17 +236,22 @@ policies:
       economy: { model: "openai-codex:gpt-5.6-sol", effort: low }
       strong: { model: "openai-codex:gpt-5.6-sol", effort: high }
     routes:
-      "agent_trace/v1|edit|normal": economy
-      "agent_trace/v1|recovery|guarded": strong
+      "agent_route/v1|unknown|implement|normal": economy
+      "agent_route/v1|code:debugging|implement|guarded": strong
     default_tier: strong
     tool_use_tier: strong
     tool_safe_tiers: [strong, economy]
+    predictor:
+      algorithm: deterministic_scorecard
+      version: 1
+      config_digest: "sha256:..."
+      confidence_kind: heuristic_margin
     fallbacks:
       economy: strong
 
 certificates:
   auto:
-    "agent_trace/v1|edit|normal":
+    "agent_route/v1|unknown|implement|normal":
       owner: compiler
       selected_tier: economy
       baseline_tier: strong

@@ -14,15 +14,16 @@
 > must say whose spend it is. `status --requests` still does not label its
 > scope; see `crate::chat::cost` for the rule applied properly.
 
-Status: **`status --watch` implemented and authoritative; the `launch --tui`
-half is superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)** · Author: Claude
-(with Spikel) · Date: 2026-08-10
+Status: **historical; both `status --watch` and `launch --tui` are
+superseded** · Author: Claude (with Spikel) · Date: 2026-08-10
 Issues: #782 (hosted bar) · #797 (live view) · #795 (attribution) · #796 (startup line)
 Supersedes the CLI framing of #782 (`bitrouter top`, `bitrouter tui` deprecation).
 
-> **This spec is half live.** Everything about `bitrouter status --watch` — §1,
-> §§4–8, §10.1, §13.2–13.3 — describes what ships today and remains the
-> authority for that view.
+> **This spec is historical.** Everything about `bitrouter status --watch` — §1,
+> §§4–8, §10.1, §13.2–13.3 — describes the removed ratatui live view. The
+> shipped status implementation is the `Snapshot` data layer rendered by
+> `bitrouter status --requests`; see [`CLI.md`](CLI.md) and
+> [`DEVELOPMENT.md`](DEVELOPMENT.md).
 >
 > Everything about `bitrouter launch --tui` — the hosted mode, the emulator,
 > the PTY host, the pinned status bar, and the fidelity matrix that gated them

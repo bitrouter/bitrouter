@@ -57,11 +57,7 @@ echo "say hi" | bitrouter launch -a claude  # one-shot through the router
 tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
 ```
 
-## Agent plugin
-
-The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. A session spend summary is printed by `bitrouter launch` on exit (a launch feature, independent of the plugin).
-
 ## Notes & gotchas
 
-- A plugin or env change cannot reroute a session that is already running — Claude Code reads `ANTHROPIC_BASE_URL` at startup. Wire first, then (re)launch.
+- An env change cannot reroute a session that is already running — Claude Code reads `ANTHROPIC_BASE_URL` at startup. Wire first, then (re)launch.
 - Streaming, tool use, and subagents ride the same `/v1/messages` surface — no extra wiring beyond the two variables.

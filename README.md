@@ -10,19 +10,23 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/bitrouterai/?viewAsMember=true)
 [![Book a call](https://img.shields.io/badge/Book_a_call-founders-000000?logo=cal.com&logoColor=white)](https://cal.com/kelsenliu)
 
-**The self-improving LLM router that optimizes your agentic workflows with every run, works with any harnesses, any models, any loops.**
+**An open-source, context-aware model router that learns and adapts to your agent workflows.**
 
 > **You're tokenmaxxing in production.**
 > Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
 
-Cost is live today — latency and accuracy are next.
+Works with any harness, any model, any loop. Cost is live today — latency and
+accuracy are next.
 
-## Three primitives, one gateway
+## One gateway for everything the loop consumes
 
-An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and governed:
+BitRouter routes model calls. But *which* model a call should get depends on
+where the loop is — and the loop step is the last tool, skill, or sub-agent it
+touched. So the same gateway that governs those is what gives the router its
+context. Other routers see only the first of these three:
 
 - **Models** — route LLM calls across providers, accounts, and wire protocols: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini. *(the classic router, cross-protocol — any request format to any upstream, and back)*
-- **Capabilities** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. *(The skills gateway folds into the MCP gateway once the [MCP skills extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) reaches production.)*
+- **Capabilities** — an **MCP gateway** that carries both tools *and* skills: skills ride the [MCP skills extension (SEP-2640)](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) over MCP Resources, so tools and skills are one governed, routable namespace instead of hardcoded endpoints. *(Skills transport is unstable while SEP-2640 is in review.)*
 - **Agents** — an **ACP gateway**: sub-agents become first-class routable primitives, so a task can go to the sub-agent that best fits the loop's objective — just as a call routes to the best-fit model. *(Local sub-agents over stdio today; remote gateways arrive with [ACP v2](https://agentclientprotocol.com/rfds/v2/overview).)*
 
 Optimizing a loop isn't just model selection — it's choosing the model, the tool, and the sub-agent that best serve the loop's objective at every step that gets it to its goal.
@@ -50,14 +54,18 @@ route. A target may be a scalar model or an exact `(model, effort)` pair;
 `bitrouter/auto:cost` selects the cost variant when one is defined, while
 explicit physical model IDs remain passthrough.
 
-Against that spec BitRouter provides the control plane for an **act → observe → evaluate → compile** cycle:
+Against that spec BitRouter provides the control plane for an **act → observe → evaluate → improve** cycle:
 
 - **Act — the router** reads the lock and rewrites each `@preset[:variant]` call to its tier's model: policy routing, cross-protocol translation, multi-account failover.
 - **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported as OpenTelemetry traces and metrics to any OTLP backend.
 - **Evaluate — the generic eval exchange** lets task-native tests, humans, enterprise systems, or an external agentic judge submit the same versioned outcome contract. BitRouter admits, disputes, and snapshots evidence; it does not pretend one bundled judge is universal.
-- **Compile — the policy compiler** turns a frozen admitted-evidence snapshot into a deterministic, certificate-backed `policy-lock.yaml` candidate (an npm-style manifest/lock split, git-owned). Review and publication are explicit; the evidence database never changes a live route.
+- **Improve — the policy compiler** turns a frozen admitted-evidence snapshot into a deterministic, certificate-backed `policy-lock.yaml` candidate (an npm-style manifest/lock split, git-owned). Review and publication are explicit; the evidence database never changes a live route.
 
-You choose what the external evaluator measures — cost, latency, quality, or a private objective — while the active lock remains the only authority for live policy routing.
+You choose what the external evaluator measures — cost, latency, quality, or a
+private objective — while the active lock remains the only authority for live
+policy routing. BitRouter adapts by proposing a new lock, never by mutating the
+one in force: **the live route never changes implicitly between publications**,
+and every change is a diff you can read and revert.
 
 ## Benchmarks
 
@@ -77,21 +85,22 @@ This is a mechanism study under a modified protocol, not a Terminal-Bench leader
 
 ## Comparison
 
-Every gateway below routes model calls. BitRouter is the only one that also makes **tools and agents** routable, and optimizes the whole **loop** rather than a single call.
+Automatic model selection is no longer the differentiator — every router below
+picks a model for you. What separates them is **what the decision reads** and
+**whose data makes it better**. Almost all of them classify the prompt. BitRouter
+routes on the *loop step* — where the agent is in its trajectory, keyed by the
+last tool it called — and improves from evaluations you admit, into a lock file
+you own.
 
-|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
-| **Routing key** | **The loop step** (last tool called) | Model name | Model + request tags | Model name | Model + metadata | Model name |
-| **Optimizes** | The **loop**, multi-objective (cost today) | Static routing | Static routing | The model | Static routing | Static routing |
+|  | **BitRouter** | **[OpenRouter Auto](https://openrouter.ai/blog/announcements/introducing-the-new-auto-router/)** | **[Not Diamond Code](https://www.notdiamond.ai/blog/not-diamond-code-intelligent-model-routing-for-coding-agents)** | **[vLLM Semantic Router](https://github.com/vllm-project/semantic-router)** | **[LiteLLM Auto](https://docs.litellm.ai/docs/proxy/auto_routing_benchmark)** |
+| --- | --- | --- | --- | --- | --- |
+| **Routing signal** | **The loop step** — last tool called, over the agent trace | Prompt classified into ~30 task types | Session state, token counts, task complexity, KV-cache state | Prompt signals: classifiers, embeddings, keyword and metadata rules | Prompt embedding similarity to labeled example routes |
+| **Improves from** | **Your** admitted evaluation outcomes, per loop | The community's last-7-days spend across all of OpenRouter | Your implicit accept/reject feedback, in a hosted model | Router models you train offline and redeploy | Labeled examples plus one fitted score threshold |
+| **Optimizes** | Any objective you submit (cost validated today) | Cost tier vs. capability | Cost and quality jointly | Quality, cost, latency, privacy, safety | Cost vs. quality at a chosen threshold |
+| **Policy you own** | Git-owned `policy-lock.yaml` — readable, diffable, explicit publish | Vendor-side, tunable by knobs | Vendor-side | Config recipes plus trained artifacts | Proxy config plus fitted threshold |
 
-_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust._
-
-## What BitRouter is not
-
-- **Not a static gateway** — it observes routed agent loops and compiles admitted external outcomes into a git-owned `policy-lock.yaml` you can read, diff, and revert. The live route never changes implicitly between publications.
-- **Not an orchestration framework** — it doesn't define your agent's control flow, steps, or state; it routes the calls, tools, and sub-agents your loop already makes.
-- **Not an agent harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
+_OpenRouter Auto and Not Diamond are hosted services. BitRouter, vLLM Semantic
+Router, and LiteLLM are open-source and self-hostable; BitRouter is Rust._
 
 ## Install
 
@@ -154,7 +163,7 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --watch                # live request stream + spend
+bitrouter status --requests             # settled requests + spend
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys list               # manage API keys
@@ -198,57 +207,47 @@ Ready-made **policy specs** for common agentic workflows start in [`templates/au
 
 ## Models & providers
 
-BitRouter routes to a *model*, not a provider. Each family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
+BitRouter routes to a *model*, not a provider. Each model below is served by many
+providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways
+(OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest
+route per call. The bars are those routes: the more providers serve a model, the
+more room the router has to move.
 
-| Lab       | Latest models                    |
-| --------- | -------------------------------- |
-| OpenAI    | GPT-5.6 Sol / Terra / Luna       |
-| Anthropic | Claude Opus 5 / Sonnet 5         |
-| Google    | Gemini 3.6 Flash / 3.5 Flash     |
-| xAI       | Grok 4.6 / 4.5                   |
-| DeepSeek  | DeepSeek V4 Flash 0731 / V4 Pro  |
-| Alibaba   | Qwen3.8 Max / Qwen3.7 Max        |
-| Moonshot  | Kimi K3 / K2.7 Code              |
-| Z.ai      | GLM-5.2 / 5.1                    |
-| MiniMax   | MiniMax M3 / M2.7                |
-| Xiaomi    | MiMo V2.5 Pro / V2.5             |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/bitrouter/bitrouter/charts/dist/charts/registry-by-lab-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/bitrouter/bitrouter/charts/dist/charts/registry-by-lab.svg" />
+    <img alt="BitRouter model catalog grouped by lab; bar length is the number of providers routing each model" src="https://raw.githubusercontent.com/bitrouter/bitrouter/charts/dist/charts/registry-by-lab.svg" />
+  </picture>
+</p>
 
-Frontier models from OpenAI, Anthropic, Google, and xAI also route over a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex) instead of a key. Full catalog in the [registry/](registry/).
+**Bring your own key** to any of them, or use one **BitRouter Cloud** account with
+no keys at all. Frontier models from OpenAI, Anthropic, Google, and xAI also route
+over a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex)
+instead of a key.
+
+The chart is generated from [`dist/registry/`](dist/registry/) on every catalog
+change — it is never hand-maintained, so it cannot drift from what the router
+actually resolves. Full catalog in [`registry/`](registry/).
 
 ## Harness integrations
 
-Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For the four harnesses below, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI with its traffic already pointed at the daemon, and never edits the harness's config files.
+BitRouter runs *under* Claude Code, Codex, and the rest — not instead of them.
+Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` for OpenAI-compatible clients or `ANTHROPIC_BASE_URL=http://localhost:4356` for Anthropic-compatible clients. For catalog harnesses with an interactive binary, `bitrouter launch` starts the harness's own native TUI without editing its config files. Routed harnesses start with traffic pointed at the daemon; own-auth harnesses start directly and say so in the startup line.
 
-| Harness | Launch with | How BitRouter routes it |
-| ------- | ----------- | ----------------------- |
-| Claude Code | `bitrouter launch -a claude` | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
-| OpenAI Codex | `bitrouter launch -a codex` | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
-| OpenCode | `bitrouter launch -a opencode` | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
-| Pi-Agent | `bitrouter launch -a pi` | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
+| Name | Launch behavior |
+| ---- | ----------- |
+| Claude Code | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
+| OpenAI Codex | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
+| OpenCode | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
+| Pi-Agent | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
+| Hermes | Synthesized `HERMES_HOME` with a loopback `custom` provider |
+| OpenClaw | Synthesized `OPENCLAW_STATE_DIR` plus `OPENCLAW_CONFIG_PATH` |
+| Grok / Antigravity (`agy`) | Own-auth launch: not redirected or metered by `launch`; those sessions remain usable by the daemon as provider capacity |
 
-`launch` supports these four because every promise it makes — routing, gateway injection, and the hosted terminal below — has to be re-verified per harness against upstream releases nobody controls. Four is a surface that stays honest.
-
-**Other runtimes still work**, just not through `launch`:
-
-| Runtime | How to use it |
-| ------- | ------------- |
-| Hermes Agent | Run it directly, or use the native [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
-| OpenClaw | Run it directly, or use the native [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw) plugin |
-| Grok CLI | Run it directly on your SuperGrok session — the daemon borrows that session separately as the `supergrok` **provider** |
-| Antigravity | Run it directly on your Google session — borrowed separately as the `google-ai` **provider** |
+Routing and gateway injection are per-harness promises, so the table calls out the maintained mechanisms instead of implying one universal redirect path.
 
 Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
-
-### See what it's costing you
-
-`bitrouter status --watch` is a live view of the router: a newest-first stream of settled requests — the provider that **actually** served, tokens, cost, latency — over today's spend and request rate. It reads the metering store directly, so it works even with the daemon stopped. Piped, it prints one snapshot and exits, so it scripts.
-
-```bash
-bitrouter status --watch          # live
-bitrouter status --watch | less   # one snapshot
-```
-
-`bitrouter launch --tui` puts that same readout on a status row pinned under the harness, so cost is visible without leaving the agent. It is **opt-in**, and worth knowing why: hosting the harness inside BitRouter's terminal moves scrollback from your terminal to BitRouter, so terminal search stops finding agent output. Plain `launch` stays the daily driver.
 
 ## Features
 

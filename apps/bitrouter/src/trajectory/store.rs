@@ -19,6 +19,7 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
+use crate::eval::types::EvalExperimentRef;
 use crate::workflow_state::ir::RouteProjection;
 
 mod episode_entity {
@@ -199,6 +200,7 @@ pub(crate) struct GuardedRouteInput {
     pub route_event_id: String,
     pub guard_event_id: String,
     pub policy_name: String,
+    pub route_projection: String,
     pub request_key: String,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
@@ -208,6 +210,7 @@ pub(crate) struct GuardedRouteInput {
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
+    pub experiment: Option<EvalExperimentRef>,
     pub policy: ProgressGuardPolicy,
     pub carries_tools: bool,
     pub tool_use_tier: Option<String>,
@@ -2156,6 +2159,7 @@ fn build_guarded_route_batch(
             policy_digest: &input.policy_digest,
         },
     )?;
+    evaluation.intent.experiment = input.experiment.clone();
     let before_tool_floor = evaluation.intent.selected_tier.clone();
     let tool_floor_applied = input.carries_tools
         && before_tool_floor.as_ref().is_some_and(|tier| {
@@ -2206,6 +2210,10 @@ fn build_guarded_route_batch(
             input.projection.state_kind.to_string(),
         ),
         ("route.policy".to_owned(), input.policy_name.clone()),
+        (
+            "route.route_projection".to_owned(),
+            input.route_projection.clone(),
+        ),
         ("route.request_key".to_owned(), input.request_key.clone()),
         ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
     ]);
@@ -2229,6 +2237,28 @@ fn build_guarded_route_batch(
         if let Some(effort) = input.tier_efforts.get(selected) {
             categorical.insert("route.selected_effort".to_owned(), effort.to_string());
         }
+    }
+    if let Some(experiment) = &evaluation.intent.experiment {
+        categorical.insert(
+            "route.experiment_id".to_owned(),
+            experiment.experiment_id.clone(),
+        );
+        categorical.insert(
+            "route.experiment_arm".to_owned(),
+            match experiment.arm {
+                crate::eval::types::ExperimentArm::Control => "control",
+                crate::eval::types::ExperimentArm::Challenger => "challenger",
+            }
+            .to_owned(),
+        );
+        categorical.insert(
+            "route.experiment_assignment_unit".to_owned(),
+            match experiment.assignment_unit {
+                crate::eval::types::ExperimentAssignmentUnit::Task => "task",
+                crate::eval::types::ExperimentAssignmentUnit::Episode => "episode",
+            }
+            .to_owned(),
+        );
     }
     for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
         let prefix = format!("route.clause_{index:02}");
@@ -2291,6 +2321,16 @@ fn build_guarded_route_batch(
         captured_at: start.captured_at.clone(),
         content_digest: String::new(),
     };
+    if let Some(experiment) = &evaluation.intent.experiment {
+        route_event.evidence.structural.insert(
+            "route.experiment_challenger_propensity_ppm".to_owned(),
+            u64::from(experiment.challenger_propensity_ppm),
+        );
+        route_event.evidence.digests.insert(
+            "route.experiment_assignment_id".to_owned(),
+            experiment.assignment_id_digest.clone(),
+        );
+    }
     route_event.content_digest = route_event.semantic_digest()?;
 
     let guard_event = if evaluation.activated {
@@ -3107,6 +3147,8 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
+    use crate::eval::types::{EvalExperimentRef, ExperimentArm, ExperimentAssignmentUnit};
+    use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
@@ -3621,6 +3663,66 @@ mod tests {
             clause.clause_id == "tool_safety.floor"
                 && clause.disposition == RouteIntentClauseDisposition::Applied
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn guarded_route_producer_emits_complete_experiment_evidence() -> anyhow::Result<()> {
+        let start = guarded_start("request-1", 1)?;
+        let mut input = guarded_route_input("route-experiment", "guard-experiment");
+        input.experiment = Some(EvalExperimentRef {
+            experiment_id: POLICY_DIGEST.into(),
+            arm: ExperimentArm::Challenger,
+            assignment_unit: ExperimentAssignmentUnit::Task,
+            assignment_id_digest:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            challenger_propensity_ppm: 100_000,
+        });
+
+        let batch = build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
+        let evidence = &batch.route_event.evidence;
+        assert_eq!(
+            evidence.categorical.get("route.experiment_id"),
+            Some(&POLICY_DIGEST.into())
+        );
+        assert_eq!(
+            evidence.categorical.get("route.experiment_arm"),
+            Some(&"challenger".into())
+        );
+        assert_eq!(
+            evidence.categorical.get("route.experiment_assignment_unit"),
+            Some(&"task".into())
+        );
+        assert_eq!(
+            evidence.digests.get("route.experiment_assignment_id"),
+            Some(&"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into())
+        );
+        assert_eq!(
+            evidence
+                .structural
+                .get("route.experiment_challenger_propensity_ppm"),
+            Some(&100_000)
+        );
+        let guard = batch
+            .guard_event
+            .ok_or_else(|| anyhow::anyhow!("fixture must trigger the configured progress guard"))?;
+        let settlement = settlement_at("episode-1", "request-1", 4, "settled-experiment");
+        let envelope =
+            build_operational_evaluation(&[start, batch.route_event, guard, settlement.event])?;
+        let experiment = envelope.subject.decisions[0]
+            .experiment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("evaluation must retain producer experiment evidence")
+            })?;
+        assert_eq!(experiment.experiment_id, POLICY_DIGEST);
+        assert_eq!(experiment.arm, ExperimentArm::Challenger);
+        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(
+            experiment.assignment_id_digest,
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         Ok(())
     }
 
@@ -5592,6 +5694,7 @@ mod tests {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
+            route_projection: "agent_route/v1|code:generation|implement|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,
@@ -5601,6 +5704,7 @@ mod tests {
                 .unwrap_or_else(|| unreachable!()),
             candidate_tier: Some("economy".into()),
             policy_digest: POLICY_DIGEST.into(),
+            experiment: None,
             policy: ProgressGuardPolicy {
                 escalation_tier: "strong".into(),
                 protected_tiers: BTreeSet::from(["strong".into()]),

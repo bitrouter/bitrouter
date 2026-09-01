@@ -13,7 +13,6 @@ changelog_path = "CHANGELOG.md" # Single changelog at the repository root
 changelog_update = true
 changelog_include = [           # Include commits from the SDK and built-in hook crates in the bitrouter changelog
     "bitrouter-sdk",
-    "bitrouter-cloud-sdk",
     "bitrouter-guardrails",
 ]
 git_tag_name = "v{{ version }}"     # Customize the git tag name (e.g. v1.0.0 instead of bitrouter-v1.0.0)

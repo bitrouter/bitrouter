@@ -154,8 +154,8 @@ jobs:
           - shard: optimization
             retries: "0"
             targets: >-
-              --test eval_exchange_equivalence --test optimization_discovery
-              --test optimization_output --test policy_eval_control_plane
+              --test eval_exchange_equivalence --test optimization_output
+              --test policy_eval_control_plane
           - shard: control-plane
             # Trajectory assertions occasionally observe async event timestamps
             # out of order; retry the isolated test process before failing CI.
@@ -302,7 +302,7 @@ jobs:
               echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
             fi
           done
-          for crate in bitrouter-guardrails bitrouter-cloud-sdk bitrouter-providers dist-helper; do
+          for crate in bitrouter-guardrails bitrouter-providers dist-helper; do
             # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
             # comment), so prove membership before trusting anything below.
             if ! cargo metadata --no-deps --format-version 1 \

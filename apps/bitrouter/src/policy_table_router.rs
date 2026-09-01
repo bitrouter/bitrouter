@@ -35,6 +35,8 @@ use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
+use crate::eval::types::{EvalExperimentRef, ExperimentArm};
+use crate::optimization::exploration::RouteExploration;
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
@@ -42,6 +44,7 @@ use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::predictive::{
     NextActionClass, NextStepRole, PredictiveEvidence, is_predictive_reason_code,
+    is_task_family_reason_code,
 };
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
@@ -96,11 +99,14 @@ pub struct PolicyDecision {
     pub continuation_proposed_effort: Option<ReasoningEffort>,
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
+    pub predicted_task_family: Option<String>,
     pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
+    pub task_family_confidence_ppm: Option<u32>,
     pub predictor_contract_digest: Option<String>,
     pub prediction_confidence_kind: Option<String>,
     pub prediction_reason_codes: Vec<String>,
+    pub task_family_reason_codes: Vec<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
     pub request_qualified: bool,
@@ -114,6 +120,7 @@ pub struct PolicyDecision {
     pub trajectory_health_digest: Option<String>,
     pub progress_candidate_tier: Option<String>,
     pub progress_clause_ids: Vec<String>,
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 impl PolicyDecision {
@@ -178,25 +185,23 @@ impl PolicyTable {
         })
     }
 
-    /// Resolve the predictive key, then observed v2 and v1 compatibility
-    /// projections, then the default. The returned key is the key that actually
-    /// selected the tier, except that defaults retain the predictive key.
+    /// Resolve the exact task-aware predictive key, its unknown-family
+    /// baseline, then the default. The returned key is the key that actually
+    /// selected the tier, except that defaults retain the primary key.
     fn tier_for_workflow<'table, 'key>(
         &'table self,
-        predictive: &'key str,
-        observed_v2: &'key str,
-        observed_v1: &'key str,
+        predictive_primary: &'key str,
+        unknown_baseline: &'key str,
     ) -> Option<(&'table str, &'key str)> {
-        if let Some(tier) = self.fingerprints.get(predictive) {
-            return Some((tier.as_str(), predictive));
+        if let Some(tier) = self.fingerprints.get(predictive_primary) {
+            return Some((tier.as_str(), predictive_primary));
         }
-        if let Some(tier) = self.fingerprints.get(observed_v2) {
-            return Some((tier.as_str(), observed_v2));
+        if let Some(tier) = self.fingerprints.get(unknown_baseline) {
+            return Some((tier.as_str(), unknown_baseline));
         }
-        if let Some(tier) = self.fingerprints.get(observed_v1) {
-            return Some((tier.as_str(), observed_v1));
-        }
-        self.default_tier.as_deref().map(|tier| (tier, predictive))
+        self.default_tier
+            .as_deref()
+            .map(|tier| (tier, predictive_primary))
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -314,6 +319,7 @@ pub struct PolicyTableRouter {
     identity_tracker: WorkflowIdentityTracker,
     eval_observer: Option<EvalDecisionObserver>,
     progress_guard: Option<ProgressGuardPolicy>,
+    exploration: Option<RouteExploration>,
 }
 
 #[derive(Clone)]
@@ -339,6 +345,7 @@ impl PolicyTableRouter {
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
             progress_guard: None,
+            exploration: None,
         })
     }
 
@@ -421,6 +428,7 @@ impl PolicyTableRouter {
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
             progress_guard: None,
+            exploration: None,
         }
     }
 
@@ -466,6 +474,11 @@ impl PolicyTableRouter {
         self
     }
 
+    pub(crate) fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
+        self.exploration = exploration;
+        self
+    }
+
     pub(crate) fn progress_guard(&self) -> Option<&ProgressGuardPolicy> {
         self.progress_guard.as_ref()
     }
@@ -477,12 +490,16 @@ impl PolicyTableRouter {
     }
 
     pub(crate) fn eval_baseline_tier(&self, decision: &PolicyDecision) -> Option<String> {
+        if decision.request_key != decision.route_projection {
+            return decision.static_tier.clone();
+        }
         self.eval_observer
             .as_ref()
             .and_then(|observer| {
                 observer
                     .route_baselines
-                    .get(&decision.request_key)
+                    .get(&decision.route_projection)
+                    .or_else(|| observer.route_baselines.get(&decision.request_key))
                     .cloned()
                     .or_else(|| observer.default_baseline.clone())
             })
@@ -554,6 +571,7 @@ impl PolicyTableRouter {
         };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
+        let baseline_request_key = online.baseline_routing_key();
         let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
@@ -578,15 +596,22 @@ impl PolicyTableRouter {
             predicted_role: Some(
                 prediction_role_name(online.predictive.next_step_role).to_string(),
             ),
+            predicted_task_family: Some(online.predictive.task_family.key().to_string()),
             predicted_action: Some(
                 prediction_action_name(online.predictive.next_action_class).to_string(),
             ),
             prediction_confidence_ppm: Some(prediction_confidence_ppm(
                 online.predictive.confidence,
             )),
+            task_family_confidence_ppm: Some(prediction_confidence_ppm(
+                online.predictive.task_family_confidence,
+            )),
             predictor_contract_digest: Some(online.predictive.predictor_contract_digest.clone()),
             prediction_confidence_kind: Some(online.predictive.confidence_kind.clone()),
             prediction_reason_codes: prediction_reason_codes(&online.predictive.evidence),
+            task_family_reason_codes: task_family_reason_codes(
+                &online.predictive.task_family_evidence,
+            ),
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
             request_qualified: false,
@@ -600,6 +625,7 @@ impl PolicyTableRouter {
             trajectory_health_digest: None,
             progress_candidate_tier: None,
             progress_clause_ids: Vec::new(),
+            experiment: None,
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -612,11 +638,9 @@ impl PolicyTableRouter {
         // must not let the tier and the model it maps to come from different
         // tables.
         let table = self.table();
-        let Some((raw_static_tier, matched_request_key)) = table.tier_for_workflow(
-            &primary_request_key,
-            &observed_route_projection,
-            online.compatibility_routing_key_v1(),
-        ) else {
+        let Some((raw_static_tier, matched_request_key)) =
+            table.tier_for_workflow(&primary_request_key, baseline_request_key)
+        else {
             return decision;
         };
         decision.request_key = matched_request_key.to_string();
@@ -627,10 +651,32 @@ impl PolicyTableRouter {
         decision.static_effort = table
             .effort_of_tier(raw_static_tier)
             .or(decision.input_effort);
+        let (assigned_tier, experiment) = match self
+            .exploration
+            .as_ref()
+            .filter(|exploration| exploration.target_request_key == decision.route_projection)
+        {
+            Some(exploration) => match exploration
+                .assignment(&decision.workflow_identity)
+                .ok()
+                .flatten()
+            {
+                Some(assignment) => {
+                    let tier = match assignment.arm {
+                        ExperimentArm::Control => exploration.champion_tier.as_str(),
+                        ExperimentArm::Challenger => exploration.challenger_tier.as_str(),
+                    };
+                    (tier, Some(assignment))
+                }
+                None => (exploration.champion_tier.as_str(), None),
+            },
+            None => (raw_static_tier, None),
+        };
+        decision.experiment = experiment;
         let (selected_tier, static_clamped) = if apply_tool_floor {
-            table.guardrail_with_status(raw_static_tier, prompt)
+            table.guardrail_with_status(assigned_tier, prompt)
         } else {
-            (raw_static_tier, false)
+            (assigned_tier, false)
         };
         decision.reason = if static_clamped {
             PolicyDecisionReason::ToolGuardrail
@@ -825,6 +871,9 @@ impl PolicyTableRouter {
             trace_agent_role = decision.workflow_identity.role.as_str(),
             trace_context_epoch = decision.workflow_identity.context_epoch,
             trace_session_fingerprint = %decision.workflow_identity.fingerprint,
+            predicted_task_family = ?decision.predicted_task_family,
+            task_family_confidence_ppm = ?decision.task_family_confidence_ppm,
+            task_family_reason_codes = ?decision.task_family_reason_codes,
             input_effort = ?decision.input_effort,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
@@ -865,11 +914,13 @@ impl PolicyTableRouter {
                     decision_id: format!("{request_id}:{}", observer.policy),
                     policy: observer.policy.clone(),
                     policy_digest: observer.policy_digest.clone(),
+                    route_projection: decision.route_projection.clone(),
                     request_key: decision.request_key.clone(),
                     selected_tier: selected_tier.to_string(),
                     selected_effort: decision.selected_effort,
                     baseline_tier: baseline_tier.clone(),
                     baseline_effort,
+                    experiment: decision.experiment.clone(),
                     preset: Some(observer.policy.clone()),
                     holdout: false,
                     continuation_proposed_tier: bounded_continuation_label(
@@ -886,8 +937,11 @@ impl PolicyTableRouter {
                         32,
                     ),
                     predicted_role: decision.predicted_role.clone(),
+                    predicted_task_family: decision.predicted_task_family.clone(),
                     predicted_action: decision.predicted_action.clone(),
                     prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                    task_family_confidence_ppm: decision.task_family_confidence_ppm,
+                    task_family_reason_codes: decision.task_family_reason_codes.clone(),
                     predictor_contract_digest: decision.predictor_contract_digest.clone(),
                     prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                     observation: None,
@@ -904,6 +958,7 @@ impl PolicyTableRouter {
                 input_model,
                 input_effort,
                 key_strategy: key_strategy_name().to_string(),
+                route_projection: Some(decision.route_projection.clone()),
                 request_key: decision.request_key.clone(),
                 ledger_key: self
                     .state_namespace
@@ -931,11 +986,14 @@ impl PolicyTableRouter {
                 continuation_proposed_effort: decision.continuation_proposed_effort,
                 continuation_adjustment: decision.continuation_adjustment.clone(),
                 predicted_role: decision.predicted_role.clone(),
+                predicted_task_family: decision.predicted_task_family.clone(),
                 predicted_action: decision.predicted_action.clone(),
                 prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                task_family_confidence_ppm: decision.task_family_confidence_ppm,
                 predictor_contract_digest: decision.predictor_contract_digest.clone(),
                 prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                 prediction_reason_codes: decision.prediction_reason_codes.clone(),
+                task_family_reason_codes: decision.task_family_reason_codes.clone(),
                 observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
                 trajectory_sequence: decision.trajectory_sequence,
@@ -1037,6 +1095,18 @@ fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
         .collect()
 }
 
+fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .map(|item| item.code.as_str())
+        .filter(|code| is_task_family_reason_code(code))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_PREDICTION_REASON_CODES)
+        .map(ToString::to_string)
+        .collect()
+}
+
 impl PromptTransform for PolicyTableRouter {
     fn apply(&self, prompt: &mut Prompt) {
         PolicyTableRouter::apply(self, prompt);
@@ -1085,6 +1155,7 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
 
     /// A `providers/set` override must move **only** the traffic of the launch
     /// that asked for it. Keyed by launch tag, so a caller with a real
@@ -1144,15 +1215,28 @@ mod tests {
         }
     }
     use super::*;
+    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::eval::settlement::EvalSettlementRecorder;
+    use crate::eval::store::EvalStore;
+    use crate::eval::types::{
+        EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
+    };
+    use crate::metering::PricingTable;
+    use crate::optimization::exploration::{OptimizationGate, RouteExploration};
+    use crate::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
+    use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
+    use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::PolicyKeyStrategy;
+    use bitrouter_sdk::event::EventBus;
     use bitrouter_sdk::language_model::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -1188,11 +1272,11 @@ mod tests {
             ]),
             fingerprints: HashMap::from([
                 (
-                    "agent_trace/v1|opening|normal".to_string(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_string(),
                     "flagship".to_string(),
                 ),
                 (
-                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "agent_route/v1|unknown|implement|normal".to_string(),
                     "cheap".to_string(),
                 ),
             ]),
@@ -1218,11 +1302,11 @@ mod tests {
             ]),
             fingerprints: HashMap::from([
                 (
-                    "agent_trace/v1|opening|normal".to_string(),
+                    "agent_route/v1|unknown|orchestrate|normal".to_string(),
                     "strong".to_string(),
                 ),
                 (
-                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "agent_route/v1|unknown|implement|normal".to_string(),
                     "economy".to_string(),
                 ),
             ]),
@@ -1361,10 +1445,10 @@ mod tests {
 
     #[test]
     fn opening_request_routes_to_its_tier() {
-        // No model turn yet → `opening` → flagship.
+        // The explicit fix instruction predicts implementation → cheap.
         assert_eq!(
             route("inbound", vec![user("fix the bug")], vec![]),
-            "vendor/flagship"
+            "vendor/cheap"
         );
     }
 
@@ -1416,27 +1500,28 @@ mod tests {
 
     #[test]
     fn after_tool_step_routes_to_its_tier() {
-        // The model last called `read_file` → `after_read_file` → cheap.
+        // An incomplete tool call has unknown predictive role and therefore
+        // uses the policy default rather than observed-state compatibility.
         assert_eq!(
             route(
                 "inbound",
                 vec![user("fix the bug"), assistant_calls("read_file")],
                 vec![],
             ),
-            "vendor/cheap"
+            "vendor/flagship"
         );
     }
 
     #[test]
     fn equivalent_tool_followups_share_the_trace_projection_route() {
-        // Raw tool names do not participate in the agent-trace projection.
+        // Raw tool names do not participate in predictive task routing.
         assert_eq!(
             route(
                 "inbound",
                 vec![user("fix the bug"), assistant_calls("grep")],
                 vec![],
             ),
-            "vendor/cheap"
+            "vendor/flagship"
         );
     }
 
@@ -1453,6 +1538,177 @@ mod tests {
             ),
             "vendor/flagship"
         );
+    }
+
+    #[test]
+    fn exploration_assignment_precedes_tool_clamping() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "strong".into(),
+        );
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+
+        let non_target = router.decision_for(&prompt("inbound"), &HeaderMap::new());
+        assert_eq!(non_target.selected_tier.as_deref(), Some("strong"));
+
+        let mut with_tool = prompt("inbound");
+        with_tool.tools = vec![a_tool()];
+        let clamped = router.decision_for(&with_tool, &headers);
+        assert_eq!(clamped.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            clamped.experiment.as_ref().map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exploration_targets_exact_projection_when_static_route_uses_unknown_fallback()
+    -> anyhow::Result<()> {
+        let config = comparator_config();
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|code:debugging|implement|normal".into(),
+            champion_tier: "economy".into(),
+            challenger_tier: "strong".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+        let mut routed = prompt("inbound");
+        routed.messages = completed_read_step();
+
+        let decision = router.decision_for(&routed, &headers);
+
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:debugging|implement|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            decision
+                .experiment
+                .as_ref()
+                .map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exploration_without_stable_identity_uses_signed_champion_control() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "economy".into(),
+        );
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(exploration));
+
+        let decision = router.decision_for(&prompt("inbound"), &HeaderMap::new());
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(decision.experiment, None);
+        Ok(())
+    }
+
+    #[test]
+    fn progress_guard_clamp_preserves_the_assigned_challenger_arm() -> anyhow::Result<()> {
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|unknown|unknown|normal".into(),
+            "strong".into(),
+        );
+        let table = PolicyTable::from_config(&config)
+            .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
+        let router = PolicyTableRouter::new(table).with_exploration(Some(RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|unknown|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 1_000_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("run-1"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-1"));
+        let mut decision = router.candidate_for_guarded_policy(&prompt("inbound"), &headers);
+
+        router.apply_guarded_route(&mut decision, Some("strong"), true, false);
+
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            decision
+                .experiment
+                .as_ref()
+                .map(|experiment| experiment.arm),
+            Some(ExperimentArm::Challenger)
+        );
+        Ok(())
     }
 
     #[test]
@@ -1485,9 +1741,9 @@ mod tests {
         let mut p = prompt("inbound");
         p.messages = vec![user("fix the bug")];
         assert!(router().apply(&mut p), "first pass routes");
-        assert_eq!(p.model, "vendor/flagship");
+        assert_eq!(p.model, "vendor/cheap");
         assert!(!router().apply(&mut p), "second pass is a no-op");
-        assert_eq!(p.model, "vendor/flagship");
+        assert_eq!(p.model, "vendor/cheap");
     }
 
     #[test]
@@ -1541,7 +1797,7 @@ mod tests {
         p.system = Some(
             "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON commands with task_complete.".to_string(),
         );
-        p.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        p.messages = completed_read_step();
 
         assert!(r.route_prompt(&mut p, &headers));
         assert_eq!(p.model, "vendor/cheap");
@@ -1553,16 +1809,16 @@ mod tests {
         assert_eq!(records[0].input_model, "inbound");
         assert_eq!(
             records[0].ledger_key.as_deref(),
-            Some("coding\0agent_trace/v1|tool_followup|normal")
+            Some("coding\0agent_route/v1|unknown|implement|normal")
         );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
-        assert_eq!(records[0].predicted_role.as_deref(), Some("unknown"));
-        assert_eq!(records[0].predicted_action.as_deref(), Some("unknown"));
-        assert_eq!(records[0].prediction_confidence_ppm, Some(350_000));
+        assert_eq!(records[0].predicted_role.as_deref(), Some("implement"));
+        assert_eq!(records[0].predicted_action.as_deref(), Some("mutate"));
+        assert_eq!(records[0].prediction_confidence_ppm, Some(900_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
+            Some("sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37")
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -1570,7 +1826,7 @@ mod tests {
         );
         assert_eq!(
             records[0].prediction_reason_codes,
-            vec!["history_truncated"]
+            vec!["mutation_requested", "read_result_available"]
         );
         assert_eq!(
             records[0].observed_route_projection.as_deref(),
@@ -1657,8 +1913,55 @@ mod tests {
     }
 
     #[test]
+    fn task_family_reason_codes_allow_only_task_categories_in_sorted_capped_order() {
+        let evidence = [
+            "task_code_review",
+            "task_agent_general",
+            "customer_secret",
+            "task_code_debugging",
+            "task_agent_web_research",
+            "task_code_generation",
+            "task_agent_memory_operations",
+            "task_code_sql_database",
+            "task_code_frontend_ui",
+            "task_code_devops_config",
+            "task_code_repository_analysis",
+            "task_agent_multi_step_planning",
+            "task_agent_workflow_execution",
+            "task_unknown",
+            "task_code_review",
+        ]
+        .into_iter()
+        .map(|code| PredictiveEvidence {
+            code: code.to_string(),
+            weight: 1,
+            confidence: 0.9,
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            task_family_reason_codes(&evidence),
+            vec![
+                "task_agent_general",
+                "task_agent_memory_operations",
+                "task_agent_multi_step_planning",
+                "task_agent_web_research",
+                "task_agent_workflow_execution",
+                "task_code_debugging",
+                "task_code_devops_config",
+                "task_code_frontend_ui",
+            ]
+        );
+    }
+
+    #[test]
     fn explicit_economy_route_uses_strong_baseline_for_pending_eval_decision() {
-        let table = PolicyTable::from_config(&comparator_config()).expect("configured");
+        let mut config = comparator_config();
+        config.fingerprints.insert(
+            "agent_route/v1|code:debugging|implement|normal".to_string(),
+            "economy".to_string(),
+        );
+        let table = PolicyTable::from_config(&config).expect("configured");
         let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
@@ -1673,7 +1976,7 @@ mod tests {
             HeaderValue::from_static("request-1"),
         );
         let mut routed = prompt("inbound");
-        routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        routed.messages = completed_read_step();
         let invocation = EvalInvocation::new("local");
         let decision = router.decision_for_bound_policy(&routed, &headers);
 
@@ -1696,12 +1999,19 @@ mod tests {
         assert_eq!(decision.policy, "auto:cost");
         assert_eq!(decision.selected_tier, "economy");
         assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
-        assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|code:debugging|implement|normal"
+        );
     }
 
     #[test]
     fn certificate_baseline_overrides_policy_default_in_eval_outputs() {
         let mut table_config = comparator_config();
+        table_config.fingerprints.insert(
+            "agent_route/v1|code:debugging|implement|normal".to_string(),
+            "economy".to_string(),
+        );
         table_config.tiers.insert(
             "reference".to_string(),
             PolicyModelTarget::from("vendor/reference"),
@@ -1717,7 +2027,7 @@ mod tests {
                 "auto:cost",
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 HashMap::from([(
-                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "agent_route/v1|code:debugging|implement|normal".to_string(),
                     "reference".to_string(),
                 )]),
                 Some("strong".to_string()),
@@ -1728,7 +2038,7 @@ mod tests {
             HeaderValue::from_static("request-2"),
         );
         let mut routed = prompt("inbound");
-        routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+        routed.messages = completed_read_step();
         let invocation = EvalInvocation::new("local");
         let decision = router.decision_for_bound_policy(&routed, &headers);
 
@@ -1778,37 +2088,33 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_turn_past_a_tool_call_is_midstream_not_after_tool() {
-        // The model called `read_file`, then replied with text, then the user
-        // sent a fresh instruction. The most recent model turn is the text
-        // reply, so this is `midstream` (→ default flagship), NOT the stale
-        // `after_read_file` step (→ cheap).
+    fn latest_user_turn_routes_by_predictive_role_not_stale_tool_state() {
+        // The decisive new user instruction routes to implementation instead
+        // of consulting the stale observed read-tool projection.
         let routed = route(
             "inbound",
             vec![
                 user("fix the bug"),
                 assistant_calls("read_file"),
                 assistant_text("here is what I found"),
-                user("now refactor it"),
+                user("Implement a new parser module now."),
             ],
             vec![],
         );
-        assert_eq!(routed, "vendor/flagship");
-        assert_ne!(routed, "vendor/cheap");
+        assert_eq!(routed, "vendor/cheap");
     }
 
     #[test]
     fn parallel_tool_calls_use_the_last_call_in_the_turn() {
-        // A turn calling [grep, read_file] keys on the last call (`read_file` →
-        // cheap); the unmapped `after_grep` would have fallen to default flagship,
-        // so this proves the last-in-turn call names the step.
+        // An incomplete multi-tool turn has no confident predictive role and
+        // therefore uses the policy default regardless of raw tool names.
         assert_eq!(
             route(
                 "inbound",
                 vec![user("fix"), assistant_calls_multi(&["grep", "read_file"])],
                 vec![],
             ),
-            "vendor/cheap"
+            "vendor/flagship"
         );
     }
 
@@ -1823,7 +2129,7 @@ mod tests {
                 PolicyModelTarget::from("vendor:exact"),
             )]),
             fingerprints: HashMap::from([(
-                "agent_trace/v1|opening|normal".to_string(),
+                "agent_route/v1|unknown|unknown|normal".to_string(),
                 "flagship".to_string(),
             )]),
             default_tier: None,
@@ -2014,7 +2320,7 @@ mod tests {
                 ),
             ]),
             fingerprints: HashMap::from([(
-                "agent_trace/v1|tool_followup|normal".to_string(),
+                "agent_route/v1|unknown|implement|normal".to_string(),
                 "cheap".to_string(),
             )]),
             default_tier: Some("flagship".to_string()),
@@ -2024,7 +2330,7 @@ mod tests {
         };
         let r = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut p = prompt("inbound");
-        p.messages = vec![user("fix"), assistant_calls("read_file")];
+        p.messages = completed_read_step();
         p.tools = vec![a_tool()];
         assert!(r.apply(&mut p));
         assert_eq!(p.model, "vendor/cheap");
@@ -2063,6 +2369,27 @@ mod tests {
                     tool_name: None,
                     output: ToolResultOutput::Text {
                         value: "source contents".to_string(),
+                    },
+                    dynamic: false,
+                    provider_metadata: ProviderMetadata::new(),
+                }],
+            },
+        ]
+    }
+
+    fn completed_task_review_mutation_step() -> Vec<Message> {
+        vec![
+            user(
+                "Review this pull request for security bugs, audit the diff, and verify the test suite.",
+            ),
+            assistant_calls("write_file"),
+            Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult {
+                    call_id: "call_write_file".to_string(),
+                    tool_name: None,
+                    output: ToolResultOutput::Text {
+                        value: "updated source contents".to_string(),
                     },
                     dynamic: false,
                     provider_metadata: ProviderMetadata::new(),
@@ -2114,36 +2441,51 @@ mod tests {
     }
 
     #[test]
-    fn v1_policy_routes_remain_active_as_compatibility_fallbacks() {
+    fn unknown_family_baseline_routes_unlisted_task_cells() {
         let router = router();
         let mut prompt = prompt("inbound");
         prompt.messages = completed_read_step();
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[test]
-    fn predictive_route_wins_before_observed_compatibility_routes() {
+    fn unknown_family_baseline_wins_before_observed_telemetry() {
         let mut cfg = config();
         cfg.fingerprints.insert(
             "agent_trace/v2|tool_followup|normal".to_string(),
             "flagship".to_string(),
         );
         cfg.fingerprints.insert(
-            "agent_route/v1|implement|normal".to_string(),
+            "agent_route/v1|unknown|implement|normal".to_string(),
             "cheap".to_string(),
         );
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut prompt = prompt("inbound");
         prompt.messages = completed_read_step();
 
+        let online = OnlineWorkflowState::for_named_policy(&HeaderMap::new(), &prompt);
+        assert_eq!(
+            online.baseline_routing_key(),
+            "agent_route/v1|unknown|implement|normal"
+        );
+
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_route/v1|implement|normal");
-        assert_eq!(decision.route_projection, "agent_route/v1|implement|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:debugging|implement|normal"
+        );
         assert_eq!(
             decision.observed_route_projection,
             "agent_trace/v2|tool_followup|normal"
@@ -2152,11 +2494,443 @@ mod tests {
     }
 
     #[test]
+    fn observed_route_does_not_participate_in_named_auto_policy_lookup() {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                (
+                    "balanced".to_string(),
+                    PolicyModelTarget::from("vendor/balanced"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
+            ]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v2|tool_followup|normal".to_string(),
+                "strong".to_string(),
+            )]),
+            default_tier: Some("balanced".to_string()),
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:review|verify|normal"
+        );
+        assert_eq!(decision.request_key, decision.route_projection);
+        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
+    }
+
+    #[test]
+    fn exact_task_aware_v1_override_wins_before_unknown_baseline() {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
+            ]),
+            fingerprints: HashMap::from([
+                (
+                    "agent_route/v1|code:review|verify|normal".to_string(),
+                    "strong".to_string(),
+                ),
+                (
+                    "agent_route/v1|unknown|verify|normal".to_string(),
+                    "economy".to_string(),
+                ),
+                (
+                    "agent_trace/v2|tool_followup|normal".to_string(),
+                    "economy".to_string(),
+                ),
+            ]),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:review|verify|normal"
+        );
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|code:review|verify|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+    }
+
+    #[test]
+    fn unknown_family_baseline_wins_before_observed_state() {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                (
+                    "economy".to_string(),
+                    PolicyModelTarget::from("vendor/economy"),
+                ),
+                (
+                    "strong".to_string(),
+                    PolicyModelTarget::from("vendor/strong"),
+                ),
+            ]),
+            fingerprints: HashMap::from([
+                (
+                    "agent_route/v1|unknown|verify|normal".to_string(),
+                    "economy".to_string(),
+                ),
+                (
+                    "agent_trace/v2|tool_followup|normal".to_string(),
+                    "strong".to_string(),
+                ),
+            ]),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:review|verify|normal"
+        );
+        assert_eq!(decision.request_key, "agent_route/v1|unknown|verify|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
+    }
+
+    #[tokio::test]
+    async fn unified_v1_settlement_attributes_exact_route_and_unknown_baseline()
+    -> anyhow::Result<()> {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        active
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?
+            .adequacy
+            .min_semantic_successes_for_lock = 1;
+        let policy_digest = semantic_digest(&active)?;
+        let policy = active
+            .policies
+            .get("auto")
+            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
+        let table = PolicyTable::from_config(
+            &policy.as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen),
+        )
+        .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
+        let route_baselines = active.certificates["auto"]
+            .iter()
+            .filter_map(|(request_key, certificate)| {
+                certificate
+                    .baseline_tier
+                    .as_ref()
+                    .map(|baseline| (request_key.clone(), baseline.clone()))
+            })
+            .collect();
+        let pending = PendingEvalDecisionStore::default();
+        let router = PolicyTableRouter::new(table).with_eval_observer(
+            pending.clone(),
+            "auto",
+            policy_digest.clone(),
+            route_baselines,
+            policy.default_tier.clone(),
+        );
+        let mut prompt = prompt("@auto");
+        prompt.messages = vec![user(
+            "Implement a new module and refactor the parser API in src/parser.rs.",
+        )];
+        let mut decision = router.decision_for_bound_policy(&prompt, &HeaderMap::new());
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|code:generation|implement|normal"
+        );
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
+        let strong_model = policy
+            .tiers
+            .get("strong")
+            .ok_or_else(|| anyhow::anyhow!("template strong tier missing"))?
+            .model()
+            .to_owned();
+        router.apply_continuation_adjustment(
+            &mut decision,
+            &ContinuationAdjustment::Pin {
+                effective_model: strong_model,
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        )?;
+        let invocation = EvalInvocation::new("local");
+        router.record_bound_policy_decision(
+            "request-unified-v1",
+            &invocation,
+            prompt.model,
+            prompt.params.reasoning_effort,
+            decision,
+            &HeaderMap::new(),
+        );
+
+        let correlated = pending
+            .peek(&invocation, "local")
+            .ok_or_else(|| anyhow::anyhow!("pending unified-v1 decision missing"))?;
+        assert_eq!(
+            correlated.route_projection,
+            "agent_route/v1|code:generation|implement|normal"
+        );
+        assert_eq!(
+            correlated.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            correlated.task_family_reason_codes,
+            vec!["task_code_generation"]
+        );
+
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let recorder =
+            EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
+        let mut settlement = SettlementContext {
+            request_id: "request-unified-v1".into(),
+            caller: CallerContext::local(),
+            target: None,
+            model_id: "gpt-5.6-sol".into(),
+            reasoning_effort: None,
+            provider_id: "openai-codex".into(),
+            account_label: None,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            usage_origin: UsageOrigin::ProviderReported,
+            raw_usage: None,
+            web_search_count: 0,
+            media_input_count: 0,
+            media_output_count: 0,
+            server_tool_calls: Vec::new(),
+            streamed: false,
+            request_duration_ms: 100,
+            upstream_duration_ms: Some(90),
+            ttft_ms: None,
+            generation_duration_ms: None,
+            first_token_kind: None,
+            finish_reason: None,
+            error: None,
+            events: EventBus::default(),
+        };
+        settlement.emit(invocation);
+        recorder.record(&mut settlement).await?;
+        let subject = store
+            .subject("request:request-unified-v1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
+        let settled = subject
+            .decisions
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
+        assert_eq!(
+            settled.route_projection,
+            "agent_route/v1|code:generation|implement|normal"
+        );
+        assert_eq!(
+            settled.request_key,
+            "agent_route/v1|unknown|implement|normal"
+        );
+        assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            subject
+                .evidence
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
+                .attributes
+                .get("task_family_reason_codes")
+                .map(String::as_str),
+            Some("task_code_generation")
+        );
+
+        let result = EvaluationResult {
+            schema_version: EVAL_SCHEMA_VERSION,
+            eval_id: subject.eval_id.clone(),
+            evidence_digest: subject.evidence_digest.clone(),
+            evaluator: EvaluatorIdentity {
+                authority_id: "task-native".into(),
+                evaluator_id: "unified-v1-regression".into(),
+                kind: EvaluatorKind::TaskNative,
+                version: "1".into(),
+                config_digest: policy_digest,
+            },
+            verdict: EvalVerdict::Pass,
+            metrics: BTreeMap::new(),
+            hard_violations: Vec::new(),
+            confidence_ppm: Some(1_000_000),
+            evidence_refs: Vec::new(),
+            decision_credit: BTreeMap::new(),
+            idempotency_key: "unified-v1-regression".into(),
+            submitted_at: "2026-08-15T00:00:01Z".into(),
+        };
+        let eval = EvalEvidenceSnapshot {
+            evidence_root:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            frozen_at: "2026-08-15T00:00:02Z".into(),
+            records: vec![EvalEvidenceRecord {
+                result_id: "unified-v1-result".into(),
+                content_digest:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                subject,
+                result,
+            }],
+        };
+        let routes = eval.route_evidence()?;
+        let attributed = routes
+            .get(&(
+                "auto".to_owned(),
+                "agent_route/v1|code:generation|implement|normal".to_owned(),
+            ))
+            .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
+        assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
+        assert_eq!(
+            attributed.matched_request_keys,
+            BTreeSet::from(["agent_route/v1|unknown|implement|normal".to_owned()])
+        );
+        let compiled = compile_candidate(CompileInput {
+            current: &active,
+            parent_digest: None,
+            legacy: &LegacyAdequacySnapshot {
+                snapshot_time_unix_ms: 0,
+                pins: Vec::new(),
+                exploration: Vec::new(),
+                semantic_successes: Vec::new(),
+                reliability_events: Vec::new(),
+            },
+            eval: Some(&eval),
+            proposed_progress_guards: None,
+        })?
+        .document;
+        let certificate = compiled
+            .certificate("auto", "agent_route/v1|code:generation|implement|normal")
+            .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
+        assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+        Ok(())
+    }
+
+    #[test]
+    fn task_aware_policy_unknown_family_uses_unified_v1_key() {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.default_tier = None;
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Run the shell command and report its output.")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            decision.route_projection,
+            "agent_route/v1|unknown|finalize|normal"
+        );
+    }
+
+    #[test]
+    fn unknown_family_uses_an_explicit_v1_route_before_default() -> anyhow::Result<()> {
+        let mut cfg = config();
+        cfg.fingerprints.clear();
+        cfg.fingerprints.insert(
+            "agent_route/v1|unknown|finalize|normal".into(),
+            "economy".into(),
+        );
+        cfg.default_tier = Some("strong".into());
+        let routed = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("configured router missing"))?;
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("Run the shell command and report its output.")];
+
+        let explicit = routed.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(
+            explicit.route_projection,
+            "agent_route/v1|unknown|finalize|normal"
+        );
+        assert_eq!(
+            explicit.request_key,
+            "agent_route/v1|unknown|finalize|normal"
+        );
+        assert_eq!(explicit.selected_tier.as_deref(), Some("economy"));
+
+        cfg.fingerprints.clear();
+        let defaulted = PolicyTableRouter::from_config(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("default router missing"))?;
+        let fallback = defaulted.decision_for(&prompt, &HeaderMap::new());
+        assert_eq!(fallback.selected_tier.as_deref(), Some("strong"));
+        Ok(())
+    }
+
+    #[test]
+    fn task_aware_policy_records_bounded_task_observability() -> anyhow::Result<()> {
+        let path = temp_path("task-aware-decisions.jsonl");
+        let table = PolicyTable::from_config(&config())
+            .ok_or_else(|| anyhow::anyhow!("configured table missing"))?;
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone())?;
+        let router = PolicyTableRouter::new(table).with_decision_recorder(recorder);
+        let mut prompt = prompt("inbound");
+        prompt.messages = completed_task_review_mutation_step();
+
+        assert!(router.route_prompt(&mut prompt, &HeaderMap::new()));
+        let records = PolicyDecisionRecord::load_jsonl(&path)?;
+        let record = records
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("task-aware decision record missing"))?;
+        let value = serde_json::to_value(record)?;
+
+        assert_eq!(value["predicted_task_family"], "code:review");
+        assert_eq!(value["task_family_confidence_ppm"], 800_000);
+        assert_eq!(
+            value["task_family_reason_codes"],
+            serde_json::json!(["task_code_review"])
+        );
+
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
     fn broad_opening_routes_on_predictive_orchestrate_role() {
         let mut cfg = config();
         cfg.fingerprints.clear();
         cfg.fingerprints.insert(
-            "agent_route/v1|orchestrate|normal".to_string(),
+            "agent_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
             "cheap".to_string(),
         );
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
@@ -2165,12 +2939,15 @@ mod tests {
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_route/v1|orchestrate|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|agent:multi_step_planning|orchestrate|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[test]
-    fn v2_policy_route_wins_over_a_v1_compatibility_route() {
+    fn observed_policy_route_is_ignored_in_favor_of_default() {
         let mut cfg = config();
         cfg.fingerprints.insert(
             "agent_trace/v2|tool_followup|normal".to_string(),
@@ -2182,7 +2959,10 @@ mod tests {
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_trace/v2|tool_followup|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|unknown|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
@@ -2195,7 +2975,10 @@ mod tests {
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
-        assert_eq!(decision.request_key, "agent_route/v1|unknown|normal");
+        assert_eq!(
+            decision.request_key,
+            "agent_route/v1|unknown|unknown|normal"
+        );
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
@@ -2203,7 +2986,7 @@ mod tests {
     fn decision_reason_static_table() {
         let router = router();
         let mut p = prompt("inbound");
-        p.messages = read_step();
+        p.messages = completed_read_step();
 
         let decision = router.decision_for(&p, &HeaderMap::new());
 
@@ -2217,7 +3000,7 @@ mod tests {
     fn continuation_pin_records_the_predictive_proposal_and_serving_adjustment() {
         let router = router();
         let mut p = prompt("inbound");
-        p.messages = read_step();
+        p.messages = completed_read_step();
         let mut decision = router.decision_for(&p, &HeaderMap::new());
 
         let applied = router.apply_continuation_adjustment(
@@ -2277,7 +3060,7 @@ mod tests {
             Some("flagship".to_owned()),
         );
         let mut p = prompt("@auto");
-        p.messages = read_step();
+        p.messages = completed_read_step();
         let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
         router
             .apply_continuation_adjustment(&mut decision, &ContinuationAdjustment::RejectLegacy)
@@ -2316,7 +3099,7 @@ mod tests {
         let recorder = PolicyDecisionJsonlRecorder::new(path.clone())?;
         let router = PolicyTableRouter::new(table).with_decision_recorder(recorder);
         let mut p = prompt("@auto");
-        p.messages = read_step();
+        p.messages = completed_read_step();
         let mut decision = router.decision_for_bound_policy(&p, &HeaderMap::new());
         router.apply_continuation_adjustment(
             &mut decision,
@@ -2381,7 +3164,7 @@ mod tests {
     fn decision_reason_tool_guardrail() {
         let router = router();
         let mut p = prompt("inbound");
-        p.messages = read_step();
+        p.messages = completed_read_step();
         p.tools = vec![a_tool()];
 
         let decision = router.decision_for(&p, &HeaderMap::new());
@@ -2413,7 +3196,7 @@ mod tests {
             key_strategy: Default::default(),
             tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
-                "agent_trace/v1|opening|normal".to_string(),
+                "agent_route/v1|code:review|verify|normal".to_string(),
                 "cheap".to_string(),
             )]),
             default_tier: None,

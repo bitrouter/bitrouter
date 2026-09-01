@@ -3,12 +3,12 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use bitrouter_cloud_sdk::settlement::{SettlementReceipt, SettlementState};
 use bitrouter_sdk::language_model::UsageOrigin;
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::cloud::settlement::{SettlementReceipt, SettlementState};
 use crate::metering::pricing::calculate_normalized_charge_micro_usd;
 use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{
@@ -130,6 +130,7 @@ pub struct SemanticPolicyTransitionCandidate {
     pub request_transport_outcome: RequestTransportOutcome,
     #[serde(default)]
     pub settlement_outcome: SemanticSettlementOutcome,
+    pub route_projection: String,
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
@@ -1030,6 +1031,7 @@ fn semantic_policy_transition_candidates(
             if !tier_changed && !model_changed && !effort_changed {
                 return None;
             }
+            let route_projection = decision.route_projection.clone()?;
             Some(SemanticPolicyTransitionCandidate {
                 trace_id: candidate.trace_id.clone(),
                 request_id: request_id.clone(),
@@ -1039,6 +1041,7 @@ fn semantic_policy_transition_candidates(
                 failed_reason: candidate.failed_reason.clone(),
                 request_transport_outcome: request_transport_outcome(usage),
                 settlement_outcome: semantic_settlement_outcome(usage),
+                route_projection,
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
                 policy: decision.policy.clone(),
