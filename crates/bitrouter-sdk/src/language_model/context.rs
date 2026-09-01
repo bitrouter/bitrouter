@@ -483,12 +483,10 @@ impl PipelineContext {
     ///
     /// Contexts without an installed signal remain continuable indefinitely.
     #[allow(dead_code)] // Consumed by cancellable fallback-backoff waits.
-    pub(crate) fn client_disconnected_signal(&self) -> impl std::future::Future<Output = ()> + '_ {
-        async move {
-            match &self.execution_control.client_disconnect {
-                Some(token) => token.cancelled().await,
-                None => std::future::pending().await,
-            }
+    pub(crate) async fn client_disconnected_signal(&self) {
+        match &self.execution_control.client_disconnect {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending().await,
         }
     }
 
