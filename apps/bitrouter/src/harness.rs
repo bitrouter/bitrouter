@@ -210,6 +210,16 @@ impl std::fmt::Debug for HarnessEndpointPlan {
 }
 
 impl HarnessEndpointPlan {
+    /// Replace only the gateway bearer with a daemon-issued controller
+    /// credential. Static controller and harness headers remain unchanged.
+    #[must_use]
+    pub fn controller_credential(mut self, credential: &str) -> Self {
+        self.auth = credential.to_string();
+        self.headers
+            .insert("authorization".to_string(), format!("Bearer {credential}"));
+        self
+    }
+
     /// Render the documented process-environment fallback for this exact
     /// adapter version. No routing configuration is added to adapter argv.
     pub fn fallback_overlay(&self) -> anyhow::Result<RoutingOverlay> {
@@ -1409,6 +1419,30 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(!debug.contains("brk_secret"), "credential leaked: {debug}");
         assert!(debug.contains("[REDACTED]"));
+        Ok(())
+    }
+
+    #[test]
+    fn controller_credential_updates_provider_and_fallback_auth() -> anyhow::Result<()> {
+        let harness = by_id("claude-acp").ok_or_else(|| anyhow::anyhow!("claude-acp missing"))?;
+        let plan = harness
+            .endpoint_plan("http://127.0.0.1:4356", "old", None, "brc_test")
+            .ok_or_else(|| anyhow::anyhow!("Claude endpoint plan missing"))?
+            .controller_credential("brac_new");
+
+        assert_eq!(
+            plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer brac_new")
+        );
+        let env = plan
+            .fallback_overlay()?
+            .env
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("brac_new")
+        );
         Ok(())
     }
 

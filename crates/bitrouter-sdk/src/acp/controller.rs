@@ -1,6 +1,7 @@
 //! Connection-level ACP controller.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use agent_client_protocol::schema::InitializeProxyRequest;
@@ -14,6 +15,7 @@ use agent_client_protocol::{
     Proxy, Responder,
 };
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
+use async_trait::async_trait;
 
 // agent-client-protocol-schema 1.5 exposes the unstable provider payloads,
 // while agent-client-protocol 2.0 does not yet attach its JSON-RPC traits to
@@ -44,6 +46,191 @@ struct ListProvidersRpc(ListProvidersRequest);
 )]
 #[serde(transparent)]
 struct ListProvidersRpcResponse(ListProvidersResponse);
+
+/// Manager request for the routes available to one native ACP session.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_bitrouter/route/list", response = RouteListResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteListRequest {
+    /// Harness-native ACP session id.
+    pub session_id: String,
+}
+
+impl RouteListRequest {
+    /// Build a session-scoped route query.
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+        }
+    }
+}
+
+/// Daemon-confirmed routes and current lease for one session.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcResponse,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteListResponse {
+    /// Route selectors accepted by this daemon snapshot.
+    pub available: Vec<String>,
+    /// Exact installed session route, if one exists.
+    pub current: Option<String>,
+    /// Always `session` for a list query.
+    pub scope: String,
+}
+
+/// Manager request to install or replace one session route lease.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_bitrouter/route/set", response = RouteSetResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteSetRequest {
+    /// Harness-native ACP session id.
+    pub session_id: String,
+    /// BitRouter preset, logical model, or explicit provider/model route.
+    pub route: String,
+}
+
+impl RouteSetRequest {
+    /// Build a session route mutation.
+    pub fn new(session_id: impl Into<String>, route: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            route: route.into(),
+        }
+    }
+}
+
+/// Daemon-confirmed installed session route.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcResponse,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteSetResponse {
+    /// Installed route returned by the daemon.
+    pub current: String,
+    /// Always `session` after a successful set.
+    pub scope: String,
+}
+
+/// Manager request to remove one session route lease.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_bitrouter/route/reset", response = RouteResetResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteResetRequest {
+    /// Harness-native ACP session id.
+    pub session_id: String,
+}
+
+impl RouteResetRequest {
+    /// Build a session route reset.
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+        }
+    }
+}
+
+/// Daemon-confirmed return to default routing.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcResponse,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteResetResponse {
+    /// Always absent after a successful reset.
+    pub current: Option<String>,
+    /// Always `default` after a successful reset.
+    pub scope: String,
+}
+
+/// Daemon-confirmed route state used by the app-supplied controller bridge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteControlState {
+    /// Route selectors accepted by the live daemon.
+    pub available: Vec<String>,
+    /// Exact installed session route, if one exists.
+    pub current: Option<String>,
+}
+
+/// Sanitized application error for the BitRouter route-control plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteControlError {
+    code: &'static str,
+    message: String,
+}
+
+impl RouteControlError {
+    /// The daemon or trusted controller binding is unavailable.
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            code: "route_control_unavailable",
+            message: message.into(),
+        }
+    }
+
+    /// The requested route is not accepted by the live daemon.
+    pub fn invalid_route(message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_route",
+            message: message.into(),
+        }
+    }
+
+    fn into_rpc_error(self) -> agent_client_protocol::Error {
+        agent_client_protocol::Error::new(-32052, "BitRouter route control failed").data(
+            serde_json::json!({
+                "plane": "bitrouter_route_control",
+                "code": self.code,
+                "message": self.message,
+            }),
+        )
+    }
+}
+
+/// App-owned bridge from the protocol controller to daemon route state.
+///
+/// Implementations must acknowledge mutations only after the daemon confirms
+/// them. None of these methods owns or modifies harness conversation data.
+#[async_trait]
+pub trait RouteControl: Send + Sync {
+    /// Query available routes and the exact current lease.
+    async fn list(&self, session_id: &str) -> Result<RouteControlState, RouteControlError>;
+    /// Install or replace one route lease.
+    async fn set(
+        &self,
+        session_id: &str,
+        route: &str,
+    ) -> Result<RouteControlState, RouteControlError>;
+    /// Remove one route lease.
+    async fn reset(&self, session_id: &str) -> Result<RouteControlState, RouteControlError>;
+    /// Remove route state after the harness accepted close/delete.
+    async fn session_closed(&self, session_id: &str) -> Result<(), RouteControlError>;
+    /// Revoke controller-owned authority and leases after disconnect.
+    async fn disconnected(&self) -> Result<(), RouteControlError>;
+}
 
 /// Non-secret identity of the pinned harness adapter behind one controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +318,7 @@ impl ControllerConfig {
 pub struct Controller<A> {
     agent: A,
     config: ControllerConfig,
+    route_control: Option<Arc<dyn RouteControl>>,
 }
 
 impl<A> Controller<A>
@@ -139,7 +327,18 @@ where
 {
     /// Wrap one upstream harness component.
     pub fn new(agent: A, config: ControllerConfig) -> Self {
-        Self { agent, config }
+        Self {
+            agent,
+            config,
+            route_control: None,
+        }
+    }
+
+    /// Install the app-owned bridge for BitRouter session route extensions.
+    #[must_use]
+    pub fn route_control(mut self, route_control: Arc<dyn RouteControl>) -> Self {
+        self.route_control = Some(route_control);
+        self
     }
 
     /// Serve the controller on a manager-facing ACP transport.
@@ -147,20 +346,35 @@ where
         self,
         transport: impl ConnectTo<Agent>,
     ) -> Result<(), agent_client_protocol::Error> {
+        let route_control = self.route_control;
+        let disconnect_control = route_control.clone();
         let proxy = ControllerProxy {
             config: self.config,
+            route_control,
         };
-        ConductorImpl::new_agent(
+        let result = ConductorImpl::new_agent(
             "bitrouter-acp-controller",
             ProxiesAndAgent::new(self.agent).proxy(proxy),
         )
         .run(transport)
-        .await
+        .await;
+        let disconnected = match disconnect_control {
+            Some(control) => control
+                .disconnected()
+                .await
+                .map_err(RouteControlError::into_rpc_error),
+            None => Ok(()),
+        };
+        match result {
+            Err(error) => Err(error),
+            Ok(()) => disconnected,
+        }
     }
 }
 
 struct ControllerProxy {
     config: ControllerConfig,
+    route_control: Option<Arc<dyn RouteControl>>,
 }
 
 const INITIALIZE_NOT_STARTED: u8 = 0;
@@ -173,9 +387,16 @@ impl ConnectTo<Conductor> for ControllerProxy {
         self,
         client: impl ConnectTo<Proxy>,
     ) -> Result<(), agent_client_protocol::Error> {
-        let config = std::sync::Arc::new(self.config);
-        let initialize_state = std::sync::Arc::new(AtomicU8::new(INITIALIZE_NOT_STARTED));
-        let forwarding_state = std::sync::Arc::clone(&initialize_state);
+        let config = Arc::new(self.config);
+        let route_control = self.route_control;
+        let route_control_enabled = route_control.is_some();
+        let list_control = route_control.clone();
+        let set_control = route_control.clone();
+        let reset_control = route_control.clone();
+        let close_control = route_control.clone();
+        let delete_control = route_control.clone();
+        let initialize_state = Arc::new(AtomicU8::new(INITIALIZE_NOT_STARTED));
+        let forwarding_state = Arc::clone(&initialize_state);
         Proxy
             .builder()
             .name("bitrouter-controller-gate")
@@ -222,9 +443,178 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                 initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
                                 return responder.respond_with_error(error);
                             }
-                            decorate_initialize_response(&mut response, &config);
+                            decorate_initialize_response(
+                                &mut response,
+                                &config,
+                                route_control_enabled,
+                            );
                             initialize_state.store(INITIALIZE_READY, Ordering::SeqCst);
                             responder.respond(response)
+                        })?;
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: RouteListRequest,
+                      responder: Responder<RouteListResponse>,
+                      _connection| {
+                    let route_control = list_control.clone();
+                    async move {
+                        let Some(route_control) = route_control else {
+                            return responder.respond_with_error(route_control_unavailable());
+                        };
+                        if request.session_id.trim().is_empty() {
+                            return responder.respond_with_error(invalid_route_params(
+                                "sessionId must not be empty",
+                            ));
+                        }
+                        match route_control.list(&request.session_id).await {
+                            Ok(state) => responder.respond(RouteListResponse {
+                                available: state.available,
+                                current: state.current,
+                                scope: "session".to_string(),
+                            }),
+                            Err(error) => responder.respond_with_error(error.into_rpc_error()),
+                        }
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: RouteSetRequest,
+                      responder: Responder<RouteSetResponse>,
+                      _connection| {
+                    let route_control = set_control.clone();
+                    async move {
+                        let Some(route_control) = route_control else {
+                            return responder.respond_with_error(route_control_unavailable());
+                        };
+                        if request.session_id.trim().is_empty() || request.route.trim().is_empty() {
+                            return responder.respond_with_error(invalid_route_params(
+                                "sessionId and route must not be empty",
+                            ));
+                        }
+                        match route_control.set(&request.session_id, &request.route).await {
+                            Ok(state) => match state.current {
+                                Some(current) => responder.respond(RouteSetResponse {
+                                    current,
+                                    scope: "session".to_string(),
+                                }),
+                                None => responder.respond_with_error(
+                                    RouteControlError::unavailable(
+                                        "daemon did not confirm the installed route",
+                                    )
+                                    .into_rpc_error(),
+                                ),
+                            },
+                            Err(error) => responder.respond_with_error(error.into_rpc_error()),
+                        }
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: RouteResetRequest,
+                      responder: Responder<RouteResetResponse>,
+                      _connection| {
+                    let route_control = reset_control.clone();
+                    async move {
+                        let Some(route_control) = route_control else {
+                            return responder.respond_with_error(route_control_unavailable());
+                        };
+                        if request.session_id.trim().is_empty() {
+                            return responder.respond_with_error(invalid_route_params(
+                                "sessionId must not be empty",
+                            ));
+                        }
+                        match route_control.reset(&request.session_id).await {
+                            Ok(state) if state.current.is_none() => {
+                                responder.respond(RouteResetResponse {
+                                    current: None,
+                                    scope: "default".to_string(),
+                                })
+                            }
+                            Ok(_) => responder.respond_with_error(
+                                RouteControlError::unavailable(
+                                    "daemon did not confirm the route reset",
+                                )
+                                .into_rpc_error(),
+                            ),
+                            Err(error) => responder.respond_with_error(error.into_rpc_error()),
+                        }
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: agent_client_protocol::schema::v1::CloseSessionRequest,
+                      responder: Responder<
+                    agent_client_protocol::schema::v1::CloseSessionResponse,
+                >,
+                      connection: ConnectionTo<Conductor>| {
+                    let route_control = close_control.clone();
+                    async move {
+                        let session_id = request.session_id.0.to_string();
+                        let gate_connection = connection.clone();
+                        connection.spawn(async move {
+                            match gate_connection
+                                .send_request_to(Agent, request)
+                                .block_task()
+                                .await
+                            {
+                                Ok(response) => {
+                                    if let Some(route_control) = route_control
+                                        && let Err(error) =
+                                            route_control.session_closed(&session_id).await
+                                    {
+                                        return responder
+                                            .respond_with_error(error.into_rpc_error());
+                                    }
+                                    responder.respond(response)
+                                }
+                                Err(error) => responder.respond_with_error(error),
+                            }
+                        })?;
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: agent_client_protocol::schema::v1::DeleteSessionRequest,
+                      responder: Responder<
+                    agent_client_protocol::schema::v1::DeleteSessionResponse,
+                >,
+                      connection: ConnectionTo<Conductor>| {
+                    let route_control = delete_control.clone();
+                    async move {
+                        let session_id = request.session_id.0.to_string();
+                        let gate_connection = connection.clone();
+                        connection.spawn(async move {
+                            match gate_connection
+                                .send_request_to(Agent, request)
+                                .block_task()
+                                .await
+                            {
+                                Ok(response) => {
+                                    if let Some(route_control) = route_control
+                                        && let Err(error) =
+                                            route_control.session_closed(&session_id).await
+                                    {
+                                        return responder
+                                            .respond_with_error(error.into_rpc_error());
+                                    }
+                                    responder.respond(response)
+                                }
+                                Err(error) => responder.respond_with_error(error),
+                            }
                         })?;
                         Ok(())
                     }
@@ -237,6 +627,15 @@ impl ConnectTo<Conductor> for ControllerProxy {
             .connect_to(client)
             .await
     }
+}
+
+fn route_control_unavailable() -> agent_client_protocol::Error {
+    agent_client_protocol::Error::method_not_found()
+        .data("BitRouter route control requires a trusted local daemon binding")
+}
+
+fn invalid_route_params(message: &'static str) -> agent_client_protocol::Error {
+    agent_client_protocol::Error::invalid_params().data(message)
 }
 
 async fn configure_provider(
@@ -289,7 +688,11 @@ fn provider_configuration_error(message: &'static str) -> agent_client_protocol:
     agent_client_protocol::Error::internal_error().data(message)
 }
 
-fn decorate_initialize_response(response: &mut InitializeResponse, config: &ControllerConfig) {
+fn decorate_initialize_response(
+    response: &mut InitializeResponse,
+    config: &ControllerConfig,
+    route_control_enabled: bool,
+) {
     let upstream_info = response.agent_info.as_ref().map(|info| {
         serde_json::json!({
             "name": info.name,
@@ -302,6 +705,17 @@ fn decorate_initialize_response(response: &mut InitializeResponse, config: &Cont
         Implementation::new("bitrouter-acp-controller", env!("CARGO_PKG_VERSION"))
             .title("BitRouter ACP Controller"),
     );
+    let route_control = route_control_enabled.then(|| {
+        serde_json::json!({
+            "version": "1",
+            "methods": [
+                "_bitrouter/route/list",
+                "_bitrouter/route/set",
+                "_bitrouter/route/reset"
+            ],
+            "scope": "session"
+        })
+    });
     let controller_meta = serde_json::json!({
         "harnessId": config.identity.harness_id,
         "adapter": {
@@ -309,6 +723,7 @@ fn decorate_initialize_response(response: &mut InitializeResponse, config: &Cont
             "version": config.identity.adapter_version,
         },
         "upstreamAgentInfo": upstream_info,
+        "routeControl": route_control,
     });
     response
         .meta
@@ -377,7 +792,7 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -405,7 +820,9 @@ mod tests {
 
     use super::{
         Controller, ControllerConfig, ControllerIdentity, ListProvidersRpc,
-        ListProvidersRpcResponse, ProviderEndpointPlan, SetProviderRpc, SetProviderRpcResponse,
+        ListProvidersRpcResponse, ProviderEndpointPlan, RouteControl, RouteControlError,
+        RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest, SetProviderRpc,
+        SetProviderRpcResponse,
     };
 
     async fn receive<T: JsonRpcResponse + Send>(
@@ -454,6 +871,64 @@ mod tests {
 
     struct TransparentAgent {
         state: Arc<TransparentState>,
+    }
+
+    #[derive(Default)]
+    struct RecordingRouteControl {
+        routes: Mutex<HashMap<String, String>>,
+        closed: Mutex<Vec<String>>,
+        disconnected: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl RouteControl for RecordingRouteControl {
+        async fn list(&self, session_id: &str) -> Result<RouteControlState, RouteControlError> {
+            let routes = self
+                .routes
+                .lock()
+                .map_err(|_| RouteControlError::unavailable("test route state is unavailable"))?;
+            Ok(RouteControlState {
+                available: vec!["@balanced".to_string(), "openai:gpt-5".to_string()],
+                current: routes.get(session_id).cloned(),
+            })
+        }
+
+        async fn set(
+            &self,
+            session_id: &str,
+            route: &str,
+        ) -> Result<RouteControlState, RouteControlError> {
+            self.routes
+                .lock()
+                .map_err(|_| RouteControlError::unavailable("test route state is unavailable"))?
+                .insert(session_id.to_string(), route.to_string());
+            self.list(session_id).await
+        }
+
+        async fn reset(&self, session_id: &str) -> Result<RouteControlState, RouteControlError> {
+            self.routes
+                .lock()
+                .map_err(|_| RouteControlError::unavailable("test route state is unavailable"))?
+                .remove(session_id);
+            self.list(session_id).await
+        }
+
+        async fn session_closed(&self, session_id: &str) -> Result<(), RouteControlError> {
+            self.routes
+                .lock()
+                .map_err(|_| RouteControlError::unavailable("test route state is unavailable"))?
+                .remove(session_id);
+            self.closed
+                .lock()
+                .map_err(|_| RouteControlError::unavailable("test route state is unavailable"))?
+                .push(session_id.to_string());
+            Ok(())
+        }
+
+        async fn disconnected(&self) -> Result<(), RouteControlError> {
+            self.disconnected.store(true, Ordering::SeqCst);
+            Ok(())
+        }
     }
 
     #[derive(
@@ -1810,6 +2285,113 @@ mod tests {
         assert!(state.permission_completed.load(Ordering::SeqCst));
         assert!(state.read_completed.load(Ordering::SeqCst));
         assert!(state.extension_completed.load(Ordering::SeqCst));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn route_extensions_are_confirmed_and_cleanup_tracks_harness_success()
+    -> anyhow::Result<()> {
+        let agent_state = Arc::new(TransparentState::default());
+        let routes = Arc::new(RecordingRouteControl::default());
+        let controller = Controller::new(
+            TransparentAgent {
+                state: Arc::clone(&agent_state),
+            },
+            ControllerConfig::new(ControllerIdentity::new(
+                "codex-acp",
+                "@agentclientprotocol/codex-acp",
+                "1.7.0",
+            )),
+        )
+        .route_control(routes.clone());
+        let (manager_out, controller_in) = duplex(16_384);
+        let (controller_out, manager_in) = duplex(16_384);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        let controller_task =
+            tokio::spawn(async move { controller.run(controller_transport).await });
+        Client
+            .builder()
+            .name("route-control-manager")
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    let initialized = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await?;
+                    assert_eq!(
+                        initialized
+                            .meta
+                            .as_ref()
+                            .and_then(|meta| meta.get("bitrouter.dev/controller"))
+                            .and_then(|value| value.get("routeControl"))
+                            .and_then(|value| value.get("version")),
+                        Some(&serde_json::json!("1"))
+                    );
+
+                    let listed =
+                        receive(connection.send_request(RouteListRequest::new("native-a"))).await?;
+                    assert_eq!(listed.available, vec!["@balanced", "openai:gpt-5"]);
+                    assert_eq!(listed.current, None);
+                    assert_eq!(listed.scope, "session");
+
+                    let set = receive(
+                        connection.send_request(RouteSetRequest::new("native-a", "openai:gpt-5")),
+                    )
+                    .await?;
+                    assert_eq!(set.current, "openai:gpt-5");
+                    assert_eq!(set.scope, "session");
+
+                    let listed =
+                        receive(connection.send_request(RouteListRequest::new("native-a"))).await?;
+                    assert_eq!(listed.current.as_deref(), Some("openai:gpt-5"));
+
+                    let reset =
+                        receive(connection.send_request(RouteResetRequest::new("native-a")))
+                            .await?;
+                    assert_eq!(reset.current, None);
+                    assert_eq!(reset.scope, "default");
+
+                    receive(connection.send_request(RouteSetRequest::new("close-me", "@balanced")))
+                        .await?;
+                    receive(connection.send_request(CloseSessionRequest::new("close-me"))).await?;
+
+                    receive(
+                        connection.send_request(RouteSetRequest::new("reject-me", "@balanced")),
+                    )
+                    .await?;
+                    assert!(
+                        receive(connection.send_request(DeleteSessionRequest::new("reject-me")))
+                            .await
+                            .is_err()
+                    );
+                    let after_rejection =
+                        receive(connection.send_request(RouteListRequest::new("reject-me")))
+                            .await?;
+                    assert_eq!(after_rejection.current.as_deref(), Some("@balanced"));
+                    Ok(())
+                },
+            )
+            .await?;
+        controller_task
+            .await
+            .map_err(|error| anyhow::anyhow!("controller task failed: {error}"))??;
+
+        let closed = routes
+            .closed
+            .lock()
+            .map_err(|_| anyhow::anyhow!("route close record poisoned"))?
+            .clone();
+        assert_eq!(closed, vec!["close-me"]);
+        assert!(routes.disconnected.load(Ordering::SeqCst));
         Ok(())
     }
 }

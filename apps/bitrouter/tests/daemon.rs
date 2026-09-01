@@ -179,6 +179,142 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
 }
 
 #[tokio::test]
+async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
+    let dir = tempdir("acp-route");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let runtime = assembled.acp_runtime.clone();
+    let app = Arc::new(assembled.app);
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+        socket.clone(),
+        app,
+        "127.0.0.1:1234".to_string(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        None,
+        runtime.clone(),
+    ));
+    wait_until_ready(&socket).await;
+
+    let issued = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpControllerIssue {
+            controller_instance_id: "brc_test".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let credential = match issued {
+        DaemonResponse::AcpControllerCredential {
+            controller_instance_id,
+            credential,
+            ..
+        } => {
+            assert_eq!(controller_instance_id, "brc_test");
+            credential
+        }
+        other => panic!("expected ACP credential, got {other:?}"),
+    };
+    assert_eq!(
+        runtime
+            .authenticate(credential.as_str())
+            .unwrap()
+            .controller_instance_id(),
+        "brc_test"
+    );
+
+    let set = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+            route: "gpt-5".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    match set {
+        DaemonResponse::AcpRouteState {
+            available,
+            current,
+            scope,
+        } => {
+            assert!(available.contains(&"gpt-5".to_string()));
+            assert_eq!(current.as_deref(), Some("gpt-5"));
+            assert_eq!(scope, "session");
+        }
+        other => panic!("expected ACP route state, got {other:?}"),
+    }
+
+    let invalid = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+            route: "missing-model".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(invalid, DaemonResponse::Error { .. }));
+    assert_eq!(
+        runtime
+            .current_route("brc_test", "native-session")
+            .unwrap()
+            .route(),
+        "gpt-5"
+    );
+
+    let other = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteList {
+            controller_instance_id: "brc_other".to_string(),
+            session_id: "native-session".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(other, DaemonResponse::Error { .. }));
+
+    let reset = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteReset {
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        reset,
+        DaemonResponse::AcpRouteState {
+            current: None,
+            scope,
+            ..
+        } if scope == "default"
+    ));
+
+    assert!(matches!(
+        daemon::send_command(
+            &socket,
+            &DaemonCommand::AcpControllerRevoke {
+                controller_instance_id: "brc_test".to_string(),
+            },
+        )
+        .await
+        .unwrap(),
+        DaemonResponse::Ok
+    ));
+    assert!(runtime.authenticate(credential.as_str()).is_none());
+
+    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
 async fn probe_status_reports_ready_when_daemon_is_up() {
     let dir = tempdir("probe-up");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;

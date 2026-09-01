@@ -269,6 +269,13 @@ impl AcpRuntime {
         self.resolve_route(controller_instance_id, &[session_id])
     }
 
+    /// Whether the daemon still recognizes an unexpired controller binding.
+    pub fn is_controller_active(&self, controller_instance_id: &str) -> bool {
+        let mut state = self.write_state();
+        cleanup_expired(&mut state, Utc::now());
+        controller_is_active(&state, controller_instance_id)
+    }
+
     fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, RuntimeState> {
         match self.state.write() {
             Ok(state) => state,
