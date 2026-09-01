@@ -2,14 +2,14 @@
 //! policy registry plus binding, enable/disable, per-principal listing,
 //! and the effective-policy preview.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::policies`. Scopes:
+//! Scopes:
 //! `policy:read` for reads, `policy:write` for everything else. The
 //! `{nsid}` segment is resolved from the credential's baked namespace.
 //!
 //! The shape used for `spec` is the **flat inner body** (e.g. `{
 //! "window": "day", "limit_micro_usd": 1000 }` for a budget), not the
 //! tagged outer form — see the server doc-comment on
-//! `bitrouter_cloud::policy::spec::PolicySpec::from_row`. Callers
+//! the server-side policy schema. Callers
 //! either pass typed sub-structs from [`super::types`] or a raw
 //! [`serde_json::Value`] (e.g. for guardrails / rate-limits which we
 //! don't yet model as Rust structs in this crate).
@@ -153,7 +153,7 @@ pub struct EffectivePolicyQuery {
 }
 
 /// Wire shape returned by `GET /v1/policies/effective`. Mirrors
-/// `bitrouter_cloud::policy::engine::EffectivePolicy` — a flat list
+/// Effective policy response — a flat list
 /// per kind, plus a single guardrail composed under most-restrictive-
 /// wins.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -1,8 +1,8 @@
 //! `/v1/billing/*` — credit balance and Stripe checkout sessions.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::billing`. The
+//! The
 //! checkout endpoint requires `billing:write`, which is *not* in the
-//! default scope set ([`crate::auth::settings::DEFAULT_SCOPE`]); callers
+//! default scope set; callers
 //! who want it must re-login with `--scope '… billing:write'`.
 
 use serde::{Deserialize, Serialize};

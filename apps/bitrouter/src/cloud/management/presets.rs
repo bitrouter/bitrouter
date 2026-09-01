@@ -2,7 +2,7 @@
 //! `policies` rows whose `kind = 'preset'`. A preset is a named bundle
 //! of an optional `guardrail`, `budget`, and / or `rate_limit` clause.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::presets`. The
+//! The
 //! `{nsid}` segment is resolved from the credential's baked namespace.
 
 use chrono::{DateTime, Utc};
@@ -17,7 +17,7 @@ use super::{ManagementClient, Result};
 /// `guardrail` / `budget` / `rate_limit` are deserialised as raw
 /// [`serde_json::Value`] for simplicity — callers that want strong
 /// typing for the inner clauses can do `serde_json::from_value`
-/// against e.g. `crate::management::types::BudgetWindow`.
+/// against e.g. [`super::types::BudgetWindow`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresetEnvelope {
     /// Server-assigned policy id.

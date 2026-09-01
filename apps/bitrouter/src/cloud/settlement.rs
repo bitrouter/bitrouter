@@ -1,4 +1,4 @@
-//! Request-scoped settlement receipts for inference credentials.
+//! Request-scoped settlement receipts for static inference API keys.
 
 use std::fmt;
 use std::time::Duration;
@@ -59,6 +59,9 @@ pub enum SettlementError {
     /// The configured API root was not a valid URL.
     #[error("invalid settlement API root: {0}")]
     InvalidBaseUrl(#[from] url::ParseError),
+    /// The API root embedded credentials that reqwest could send as Basic auth.
+    #[error("settlement API root must not contain userinfo")]
+    UserInfoNotAllowed,
     /// The API root cannot accept hierarchical path segments.
     #[error("settlement API root cannot be used as a hierarchical URL")]
     CannotBeBase,
@@ -121,6 +124,9 @@ impl SettlementClient {
     /// Construct a client from an API root ending in `/v1` and an inference key.
     pub fn new(base_url: impl AsRef<str>, api_key: impl AsRef<str>) -> Result<Self> {
         let mut base_url = url::Url::parse(base_url.as_ref())?;
+        if !base_url.username().is_empty() || base_url.password().is_some() {
+            return Err(SettlementError::UserInfoNotAllowed);
+        }
         if !base_url.path().ends_with('/') {
             let path = format!("{}/", base_url.path());
             base_url.set_path(&path);
@@ -221,7 +227,7 @@ mod tests {
     use super::{SettlementClient, SettlementState};
 
     #[tokio::test]
-    async fn fetches_exact_request_with_inference_key() {
+    async fn fetches_exact_request_with_inference_key() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/requests/req-123/settlement"))
@@ -243,9 +249,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            SettlementClient::new(format!("{}/v1", server.uri()), "brk_test").expect("client");
-        let receipt = client.get("req-123").await.expect("receipt");
+        let client = SettlementClient::new(format!("{}/v1", server.uri()), "brk_test")?;
+        let receipt = client.get("req-123").await?;
 
         assert_eq!(receipt.request_id, "req-123");
         assert_eq!(receipt.state, SettlementState::Computed);
@@ -255,10 +260,19 @@ mod tests {
         assert_eq!(receipt.usage.output_tokens, 7);
         assert_eq!(receipt.usage.reasoning_tokens, 11);
         assert_eq!(receipt.final_charge_micro_usd, Some(29));
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("wiremock did not retain settlement requests"))?;
+        let request = requests
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("settlement request was not received"))?;
+        assert!(request.headers.get("authorization").is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn percent_encodes_request_id_as_one_path_segment() {
+    async fn percent_encodes_request_id_as_one_path_segment() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/requests/case%2Fhop/settlement"))
@@ -269,19 +283,36 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client =
-            SettlementClient::new(format!("{}/v1", server.uri()), "brk_test").expect("client");
-        let error = client.get("case/hop").await.expect_err("not found");
+        let client = SettlementClient::new(format!("{}/v1", server.uri()), "brk_test")?;
+        let error = match client.get("case/hop").await {
+            Ok(_) => anyhow::bail!("settlement unexpectedly resolved"),
+            Err(error) => error,
+        };
 
         assert!(error.is_not_found());
+        Ok(())
     }
 
     #[test]
-    fn client_debug_never_exposes_api_key() {
-        let client = SettlementClient::new("https://example.com/v1", "brk_secret").expect("client");
-
+    fn client_debug_never_exposes_api_key() -> anyhow::Result<()> {
+        let client = SettlementClient::new("https://example.com/v1", "brk_secret")?;
         let rendered = format!("{client:?}");
-
         assert!(!rendered.contains("brk_secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn client_rejects_base_url_userinfo() -> anyhow::Result<()> {
+        for base_url in [
+            "https://settlement-user@example.com/v1",
+            "https://:settlement-password@example.com/v1",
+        ] {
+            let error = match SettlementClient::new(base_url, "brk_test") {
+                Ok(_) => anyhow::bail!("settlement client unexpectedly accepted URL userinfo"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, super::SettlementError::UserInfoNotAllowed));
+        }
+        Ok(())
     }
 }

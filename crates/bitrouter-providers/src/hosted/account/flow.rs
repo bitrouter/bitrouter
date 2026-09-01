@@ -12,7 +12,7 @@
 //! warping the provider-facing API to absorb concerns that don't apply to
 //! upstream LLM-API authentication.
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -24,7 +24,7 @@ use super::metadata::AsMetadata;
 use super::settings::{Settings, require_secure_url};
 
 /// RFC 8628 §3.2 device-authorization response.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct DeviceAuthorizationResponse {
     /// Opaque code identifying *this* device-flow attempt to the AS.
     pub device_code: String,
@@ -44,6 +44,25 @@ pub struct DeviceAuthorizationResponse {
     pub interval: u64,
 }
 
+impl fmt::Debug for DeviceAuthorizationResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceAuthorizationResponse")
+            .field("device_code", &"<redacted>")
+            .field("user_code", &"<redacted>")
+            .field("verification_uri", &self.verification_uri)
+            .field(
+                "verification_uri_complete",
+                &self
+                    .verification_uri_complete
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish()
+    }
+}
+
 fn default_interval() -> u64 {
     5
 }
@@ -51,7 +70,7 @@ fn default_interval() -> u64 {
 /// RFC 6749 §5.1 token response — the union of fields returned by the
 /// device, refresh, and any other grant. Optional fields stay `None`
 /// when omitted so a new grant doesn't break parsing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct TokenResponse {
     access_token: Option<String>,
     #[serde(default)]
@@ -83,10 +102,33 @@ struct TokenResponse {
     error_description: Option<String>,
 }
 
+impl fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("refresh_token_expires_in", &self.refresh_token_expires_in)
+            .field("scope", &self.scope)
+            .field("namespace_id", &self.namespace_id)
+            .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
+            .field("error", &self.error)
+            .field("error_description", &self.error_description)
+            .finish()
+    }
+}
+
 /// Fresh token material returned by a successful token exchange (device
 /// success, refresh, …). Mapped onto a [`Credentials`] by the caller,
 /// who supplies the missing AS-context fields.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TokenSet {
     /// Bearer access token.
     pub access_token: String,
@@ -105,6 +147,24 @@ pub struct TokenSet {
     pub namespace_id: Option<String>,
     /// Subject claim extracted from an `id_token`, when one is present.
     pub subject: Option<String>,
+}
+
+impl fmt::Debug for TokenSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenSet")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("expires_at", &self.expires_at)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("refresh_token_expires_at", &self.refresh_token_expires_at)
+            .field("scope", &self.scope)
+            .field("namespace_id", &self.namespace_id)
+            .field("subject", &self.subject)
+            .finish()
+    }
 }
 
 /// One outcome of a poll against the token endpoint.
@@ -206,11 +266,11 @@ pub async fn poll_token_endpoint(
             anyhow::Error::from(e).context(format!("reading body from {endpoint}")),
         )
     })?;
-    let parsed: TokenResponse = serde_json::from_str(&body).map_err(|e| {
-        PollError::Transport(anyhow::Error::from(e).context(format!(
-            "parsing token endpoint response from {endpoint}: {}",
-            preview(&body)
-        )))
+    let parsed: TokenResponse = serde_json::from_str(&body).map_err(|error| {
+        PollError::Transport(
+            anyhow::Error::from(error)
+                .context(format!("parsing token endpoint response from {endpoint}")),
+        )
     })?;
     if let Some(access_token) = parsed.access_token.clone() {
         return Ok(PollOutcome::Success(token_set_from_response(
@@ -228,8 +288,7 @@ pub async fn poll_token_endpoint(
             description: parsed.error_description,
         })),
         None => Err(PollError::Transport(anyhow::anyhow!(
-            "token endpoint reply at {endpoint} contained neither access_token nor error: {}",
-            preview(&body)
+            "token endpoint reply at {endpoint} contained neither access_token nor error"
         ))),
     }
 }
@@ -329,12 +388,8 @@ pub async fn refresh(
         .text()
         .await
         .with_context(|| format!("reading body from {token_endpoint}"))?;
-    let parsed: TokenResponse = serde_json::from_str(&body).with_context(|| {
-        format!(
-            "parsing refresh response from {token_endpoint}: {}",
-            preview(&body)
-        )
-    })?;
+    let parsed: TokenResponse = serde_json::from_str(&body)
+        .with_context(|| format!("parsing refresh response from {token_endpoint}"))?;
     if let Some(access_token) = parsed.access_token.clone() {
         return Ok(token_set_from_response(access_token, parsed));
     }
@@ -457,13 +512,10 @@ fn extract_id_token_sub(id_token: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn preview(body: &str) -> String {
-    body.chars().take(240).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
 
     fn settings() -> Settings {
         Settings {
@@ -483,45 +535,127 @@ mod tests {
     }
 
     #[test]
-    fn parses_authorization_pending_as_pending() {
-        let response: TokenResponse =
-            serde_json::from_str(r#"{"error":"authorization_pending"}"#).unwrap();
+    fn parses_authorization_pending_as_pending() -> Result<()> {
+        let response: TokenResponse = serde_json::from_str(r#"{"error":"authorization_pending"}"#)?;
         assert!(response.access_token.is_none());
         assert_eq!(response.error.as_deref(), Some("authorization_pending"));
+        Ok(())
     }
 
     #[test]
-    fn token_set_from_response_computes_expires_at() {
+    fn token_set_from_response_computes_expires_at() -> Result<()> {
         let response: TokenResponse = serde_json::from_str(
             r#"{"access_token":"AT","token_type":"Bearer","expires_in":600,"refresh_token":"RT"}"#,
-        )
-        .unwrap();
+        )?;
         let ts = token_set_from_response("AT".into(), response);
         assert_eq!(ts.token_type.as_deref(), Some("Bearer"));
         assert_eq!(ts.refresh_token.as_deref(), Some("RT"));
         // ~ 10 minutes from now, allow generous skew.
         let drift = (ts.expires_at - Utc::now()).num_seconds();
         assert!((595..=605).contains(&drift), "drift was {drift}");
+        Ok(())
     }
 
     #[test]
-    fn token_set_defaults_expiry_when_server_omits_it() {
-        let response: TokenResponse = serde_json::from_str(r#"{"access_token":"AT"}"#).unwrap();
+    fn token_set_defaults_expiry_when_server_omits_it() -> Result<()> {
+        let response: TokenResponse = serde_json::from_str(r#"{"access_token":"AT"}"#)?;
         let ts = token_set_from_response("AT".into(), response);
         let drift = (ts.expires_at - Utc::now()).num_seconds();
         // Default of 1 hour, ±30s.
         assert!((3570..=3630).contains(&drift), "drift was {drift}");
+        Ok(())
     }
 
     #[test]
-    fn token_set_captures_refresh_token_expires_in() {
+    fn token_set_captures_refresh_token_expires_in() -> Result<()> {
         let response: TokenResponse = serde_json::from_str(
             r#"{"access_token":"AT","expires_in":60,"refresh_token":"RT","refresh_token_expires_in":3600}"#,
-        )
-        .unwrap();
+        )?;
         let ts = token_set_from_response("AT".into(), response);
-        let drift = (ts.refresh_token_expires_at.unwrap() - Utc::now()).num_seconds();
+        let refresh_expiry = ts
+            .refresh_token_expires_at
+            .ok_or_else(|| anyhow::anyhow!("refresh expiry was not captured"))?;
+        let drift = (refresh_expiry - Utc::now()).num_seconds();
         assert!((3595..=3605).contains(&drift), "drift was {drift}");
+        Ok(())
+    }
+
+    #[test]
+    fn token_set_debug_redacts_token_values() {
+        let token_set = TokenSet {
+            access_token: "access-token-secret".to_owned(),
+            token_type: Some("Bearer".to_owned()),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            refresh_token: Some("refresh-token-secret".to_owned()),
+            refresh_token_expires_at: None,
+            scope: None,
+            namespace_id: None,
+            subject: None,
+        };
+
+        let rendered = format!("{token_set:?}");
+        assert!(!rendered.contains("access-token-secret"));
+        assert!(!rendered.contains("refresh-token-secret"));
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[tokio::test]
+    async fn malformed_refresh_response_does_not_echo_tokens() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"access_token":"refresh-secret""#),
+            )
+            .mount(&server)
+            .await;
+
+        let error = match refresh(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "cid",
+            "refresh-token",
+            None,
+        )
+        .await
+        {
+            Ok(_) => anyhow::bail!("malformed refresh response unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(!format!("{error:#}").contains("refresh-secret"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_poll_response_does_not_echo_tokens() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"access_token":"poll-secret""#),
+            )
+            .mount(&server)
+            .await;
+        let metadata = AsMetadata {
+            issuer: None,
+            device_authorization_endpoint: server.uri(),
+            token_endpoint: server.uri(),
+            revocation_endpoint: None,
+        };
+
+        let error = match poll_token_endpoint(
+            &reqwest::Client::new(),
+            &metadata,
+            &settings(),
+            "device-code",
+        )
+        .await
+        {
+            Ok(_) => anyhow::bail!("malformed poll response unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(!format!("{error:#}").contains("poll-secret"));
+        Ok(())
     }
 
     #[test]
@@ -569,7 +703,7 @@ mod tests {
     /// parsed bodies — the HTTP layer is covered by the wiremock
     /// integration test.
     #[test]
-    fn rfc_8628_error_code_classification_is_complete() {
+    fn rfc_8628_error_code_classification_is_complete() -> Result<()> {
         let cases: &[(&str, &str)] = &[
             ("authorization_pending", "pending"),
             ("slow_down", "slow_down"),
@@ -579,7 +713,7 @@ mod tests {
         ];
         for (code, bucket) in cases {
             let body = format!(r#"{{"error":"{code}"}}"#);
-            let parsed: TokenResponse = serde_json::from_str(&body).unwrap();
+            let parsed: TokenResponse = serde_json::from_str(&body)?;
             let classification = match parsed.error.as_deref() {
                 Some("authorization_pending") => "pending",
                 Some("slow_down") => "slow_down",
@@ -590,6 +724,7 @@ mod tests {
             };
             assert_eq!(&classification, bucket, "wrong bucket for {code}");
         }
+        Ok(())
     }
 
     #[test]

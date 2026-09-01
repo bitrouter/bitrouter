@@ -1,7 +1,7 @@
 //! `/v1/byok/keys*` — list, upsert, and delete the caller's per-
 //! provider bring-your-own-key entries.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::byok_keys`. The
+//! The
 //! cloud only stores already-sealed ciphertext — callers seal against
 //! the cloud's current X25519 public key (fetched separately via
 //! `GET /v1/byok/encryption-pubkey`; not covered by this client

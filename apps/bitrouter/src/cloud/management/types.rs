@@ -1,4 +1,4 @@
-//! Typed enums mirrored from the BitRouter Cloud crate.
+//! Typed enums for the BitRouter Cloud wire contract.
 //!
 //! These shapes are stable parts of the `/v1/*` wire contract, so we
 //! re-declare them here rather than depend on the server crate. Each
@@ -8,8 +8,6 @@
 use serde::{Deserialize, Serialize};
 
 /// Discriminator stored in `policies.kind`.
-///
-/// Mirrors `bitrouter_cloud::policy::spec::PolicyKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyKind {
@@ -36,8 +34,6 @@ impl PolicyKind {
 }
 
 /// Rolling-spend window for a budget policy.
-///
-/// Mirrors `bitrouter_cloud::policy::spec::BudgetWindow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetWindow {
@@ -50,8 +46,6 @@ pub enum BudgetWindow {
 }
 
 /// BYOK posture for a guardrail policy.
-///
-/// Mirrors `bitrouter_cloud::policy::spec::ByokRequirement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ByokRequirement {
@@ -64,8 +58,6 @@ pub enum ByokRequirement {
 }
 
 /// OAuth client kind.
-///
-/// Mirrors `bitrouter_cloud::oauth::clients::ClientType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientType {
@@ -81,60 +73,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn policy_kind_round_trips_through_json() {
+    fn policy_kind_round_trips_through_json() -> anyhow::Result<()> {
         for k in [
             PolicyKind::Budget,
             PolicyKind::RateLimit,
             PolicyKind::Guardrail,
             PolicyKind::Preset,
         ] {
-            let s = serde_json::to_string(&k).unwrap();
-            let back: PolicyKind = serde_json::from_str(&s).unwrap();
+            let s = serde_json::to_string(&k)?;
+            let back: PolicyKind = serde_json::from_str(&s)?;
             assert_eq!(back, k);
         }
+        Ok(())
     }
 
     #[test]
-    fn budget_window_wire_form_is_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&BudgetWindow::Day).unwrap(),
-            "\"day\""
-        );
-        assert_eq!(
-            serde_json::to_string(&BudgetWindow::Month).unwrap(),
-            "\"month\""
-        );
-        assert_eq!(
-            serde_json::to_string(&BudgetWindow::Total).unwrap(),
-            "\"total\""
-        );
+    fn budget_window_wire_form_is_snake_case() -> anyhow::Result<()> {
+        assert_eq!(serde_json::to_string(&BudgetWindow::Day)?, "\"day\"");
+        assert_eq!(serde_json::to_string(&BudgetWindow::Month)?, "\"month\"");
+        assert_eq!(serde_json::to_string(&BudgetWindow::Total)?, "\"total\"");
+        Ok(())
     }
 
     #[test]
-    fn client_type_wire_form_is_snake_case() {
+    fn client_type_wire_form_is_snake_case() -> anyhow::Result<()> {
         assert_eq!(
-            serde_json::to_string(&ClientType::Confidential).unwrap(),
+            serde_json::to_string(&ClientType::Confidential)?,
             "\"confidential\""
         );
-        assert_eq!(
-            serde_json::to_string(&ClientType::Public).unwrap(),
-            "\"public\""
-        );
+        assert_eq!(serde_json::to_string(&ClientType::Public)?, "\"public\"");
+        Ok(())
     }
 
     #[test]
-    fn byok_requirement_wire_form_is_snake_case() {
+    fn byok_requirement_wire_form_is_snake_case() -> anyhow::Result<()> {
         assert_eq!(
-            serde_json::to_string(&ByokRequirement::Required).unwrap(),
+            serde_json::to_string(&ByokRequirement::Required)?,
             "\"required\""
         );
         assert_eq!(
-            serde_json::to_string(&ByokRequirement::Forbidden).unwrap(),
+            serde_json::to_string(&ByokRequirement::Forbidden)?,
             "\"forbidden\""
         );
         assert_eq!(
-            serde_json::to_string(&ByokRequirement::Optional).unwrap(),
+            serde_json::to_string(&ByokRequirement::Optional)?,
             "\"optional\""
         );
+        Ok(())
     }
 }

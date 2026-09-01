@@ -1,6 +1,6 @@
 //! `/v1/namespaces` — list the namespaces the signed-in user owns.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::namespaces`. This is a
+//! This is a
 //! user-level endpoint (keyed on the subject user server-side, not the
 //! credential's baked namespace), so it works for any signed-in
 //! credential and needs no `{nsid}` segment.

@@ -3,7 +3,7 @@
 //! [`super::policies`] with a flat wire shape and no `kind`/`spec`
 //! envelope.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::budgets`. Same
+//! Uses the same
 //! `policy:read` / `policy:write` scopes as the generic surface. The
 //! `{nsid}` segment is resolved from the credential's baked namespace.
 

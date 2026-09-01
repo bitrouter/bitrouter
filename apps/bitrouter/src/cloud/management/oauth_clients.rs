@@ -1,7 +1,7 @@
 //! `/v1/namespaces/{nsid}/oauth/clients*` — manage the OAuth client
 //! registrations in the client's namespace.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::oauth_clients`. The
+//! The
 //! freshly minted `client_secret` (for confidential clients) is
 //! returned exactly once in the register response and never again. The
 //! `{nsid}` segment is resolved from the credential's baked namespace.
@@ -10,7 +10,7 @@
 //! control-plane scope the server refuses to mint into a namespace-baked
 //! CLI credential, so registering / mutating clients is console-only in
 //! v1; `clients:read` is not in the default scope set
-//! ([`crate::auth::settings::DEFAULT_SCOPE`]) either, so listing needs a
+//! requested by default either, so listing needs a
 //! re-login with `--scope clients:read`.
 
 use serde::{Deserialize, Serialize};

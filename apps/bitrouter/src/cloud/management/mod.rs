@@ -2,17 +2,13 @@
 //!
 //! The surface — `keys`, `usage`, `billing`, `policies`, `budgets`,
 //! `presets`, `byok`, `oauth_clients` — is the same one the web console
-//! consumes. It accepts either a `brk_` API key or a `bra_` OAuth
-//! access token. This client always presents the latter: it reads the
-//! credential persisted by `bitrouter cloud login`
-//! ([`crate::auth::credentials::CredentialsStore`]) and refreshes it
-//! transparently within
-//! [`crate::auth::credentials::REFRESH_WINDOW`] of expiry.
+//! consumes. It accepts either a `brk_` API key or an OAuth access token.
+//! The client resolves a fresh, origin-confined bearer from the shared hosted
+//! account manager for each request.
 //!
 //! ## Namespace scoping
 //!
-//! The server bifurcates the management surface (see
-//! `bitrouter_cloud::v1::http::management`): namespace-scoped endpoints
+//! The server bifurcates the management surface: namespace-scoped endpoints
 //! live under `/v1/namespaces/{nsid}/…`, user-level endpoints stay flat.
 //! The CLI's credential is namespace-baked, so the client captures its
 //! `namespace_id` at construction and resolves the `{nsid}` segment
@@ -46,19 +42,16 @@
 //! parsed into [`Error::Forbidden`] with `missing_scope = Some(s)` so
 //! the CLI can suggest a re-login with the missing scope appended.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use bitrouter_providers::hosted::account::credentials::CredentialKind;
+use bitrouter_providers::hosted::account::manager::CredentialManager;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
-
-use crate::auth::credentials::{CredentialKind, CredentialsStore, default_credentials_path};
-use crate::auth::metadata::{self, AsMetadata};
 
 pub mod billing;
 pub mod budgets;
@@ -75,7 +68,7 @@ pub mod usage;
 #[cfg(test)]
 mod tests;
 
-pub use error::Error;
+use error::Error;
 
 /// Convenience `Result` alias used by every method on
 /// [`ManagementClient`].
@@ -83,10 +76,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Typed client for the BitRouter Cloud `/v1/*` management surface.
 ///
-/// Construct via [`ManagementClient::from_default_credentials`] (which
-/// reads `<data-dir>/account-credentials.json`) and call the per-method
-/// helpers defined in this module's sub-modules.
-#[derive(Debug)]
+/// Construct via [`ManagementClient::from_manager`] and call the per-method
+/// helpers defined in this module's submodules.
 pub struct ManagementClient {
     /// Cloud base URL (no trailing slash). The credentials file's
     /// `authorization_server` field is the source of truth — `bitrouter
@@ -94,17 +85,8 @@ pub struct ManagementClient {
     /// this client target that same host.
     base_url: String,
     http: reqwest::Client,
-    /// Locked across the disk-read → refresh → persist sequence per RFC
-    /// 6749 §6 rotation safety. A concurrent refresh from another task
-    /// would race the AS into invalidating the older refresh token —
-    /// the mutex serialises that path. Matches the pattern used by
-    /// [`crate::provider::BitrouterCloudAuthApplier`].
-    store: Arc<Mutex<CredentialsStore>>,
-    /// AS metadata cached for the process lifetime. The AS URL is
-    /// captured at construction so a re-login against a different AS
-    /// implicitly invalidates the cache (the next `ManagementClient`
-    /// instance reads the new URL from disk).
-    metadata: Arc<Mutex<Option<AsMetadata>>>,
+    /// Shared manager that serializes refresh and persistence.
+    manager: Arc<CredentialManager>,
     /// The namespace the stored credential is baked into, captured at
     /// construction. `Some` for every device-flow token; `None` only
     /// for a namespace-null credential or a pre-namespace credential
@@ -116,26 +98,27 @@ pub struct ManagementClient {
     credential_kind: CredentialKind,
 }
 
-impl ManagementClient {
-    /// Build a client from the default credentials path
-    /// (`<data-dir>/account-credentials.json`). Errors with
-    /// [`Error::NotSignedIn`] when the file is absent so callers can
-    /// print the onboarding hint without a stack trace.
-    pub fn from_default_credentials() -> Result<Self> {
-        let path = default_credentials_path()
-            .context("resolving BitRouter Cloud credentials path")
-            .map_err(Error::Auth)?;
-        Self::from_credentials_path(path)
+impl std::fmt::Debug for ManagementClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ManagementClient")
+            .field("base_url", &self.base_url)
+            .field("namespace_id", &self.namespace_id)
+            .field("credential_kind", &self.credential_kind)
+            .field("manager", &"<redacted>")
+            .finish_non_exhaustive()
     }
+}
 
-    /// Build a client reading the credentials file at `path`. Used by
-    /// tests to point at a temporary directory and by callers that
-    /// override the default location.
-    pub fn from_credentials_path(path: PathBuf) -> Result<Self> {
-        let store = CredentialsStore::load(&path)
-            .with_context(|| format!("reading credentials at {}", path.display()))
+impl ManagementClient {
+    /// Build a client from the current hosted account credential.
+    pub async fn from_manager(manager: Arc<CredentialManager>) -> Result<Self> {
+        let creds = manager
+            .current()
+            .await
+            .context("reading BitRouter Cloud credentials")
             .map_err(Error::Auth)?;
-        let creds = store.current().ok_or(Error::NotSignedIn)?;
+        let creds = creds.ok_or(Error::NotSignedIn)?;
         let base_url = creds.base_url().trim_end_matches('/').to_owned();
         let namespace_id = creds.namespace_id().map(ToOwned::to_owned);
         let credential_kind = creds.kind();
@@ -143,38 +126,10 @@ impl ManagementClient {
         Ok(Self {
             base_url,
             http,
-            store: Arc::new(Mutex::new(store)),
-            metadata: Arc::new(Mutex::new(None)),
+            manager,
             namespace_id,
             credential_kind,
         })
-    }
-
-    /// Construct with an explicit base URL and HTTP client. Used by
-    /// the wiremock test harness so a single mock server stands in
-    /// for both the AS metadata + token endpoints and the `/v1/*`
-    /// management endpoints.
-    #[cfg(test)]
-    pub(crate) fn with_parts(
-        base_url: String,
-        http: reqwest::Client,
-        store: CredentialsStore,
-    ) -> Self {
-        let namespace_id = store
-            .current()
-            .and_then(|credential| credential.namespace_id().map(ToOwned::to_owned));
-        let credential_kind = store
-            .current()
-            .map(|credential| credential.kind())
-            .unwrap_or(CredentialKind::Oauth);
-        Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            http,
-            store: Arc::new(Mutex::new(store)),
-            metadata: Arc::new(Mutex::new(None)),
-            namespace_id,
-            credential_kind,
-        }
     }
 
     /// The base URL this client targets. Exposed primarily for
@@ -205,38 +160,13 @@ impl ManagementClient {
         Ok(format!("/v1/namespaces/{nsid}{suffix}"))
     }
 
-    /// Fetch a current bearer, refreshing if the stored access token
-    /// is within
-    /// [`crate::auth::credentials::REFRESH_WINDOW`] of expiry. The
-    /// rotated refresh token (if any) is persisted before the bearer
-    /// is returned.
+    /// Fetch a fresh bearer confined to the management client's origin.
     async fn bearer(&self) -> Result<String> {
-        let mut store = self.store.lock().await;
-        let authorization_server = store
-            .current()
-            .and_then(|credential| credential.oauth())
-            .map(|credentials| credentials.authorization_server.clone());
-        let metadata = match authorization_server {
-            Some(url) => Some(self.resolve_metadata(&url).await?),
-            None => None,
-        };
-        store
-            .current_token(&self.http, metadata.as_ref())
+        self.manager
+            .resolve_bearer(None, Some(&self.base_url))
             .await
-            .map_err(Error::Auth)
-    }
-
-    async fn resolve_metadata(&self, as_url: &str) -> Result<AsMetadata> {
-        let mut cell = self.metadata.lock().await;
-        if let Some(cached) = cell.as_ref() {
-            return Ok(cached.clone());
-        }
-        let fresh = metadata::fetch(&self.http, as_url)
-            .await
-            .with_context(|| format!("fetching AS metadata at {as_url}"))
-            .map_err(Error::Auth)?;
-        *cell = Some(fresh.clone());
-        Ok(fresh)
+            .map(|credential| credential.secret().to_owned())
+            .map_err(|error| Error::Auth(anyhow::anyhow!(error)))
     }
 
     /// Build a request with `Authorization: Bearer …` already attached.
@@ -295,15 +225,15 @@ impl ManagementClient {
     }
 }
 
-/// Reusable reqwest client with the SDK user-agent and a sensible
+/// Reusable reqwest client with the application user-agent and a sensible
 /// timeout. Centralised so every outgoing call sends a consistent UA
 /// (RFC 9110 §10.1.5).
 fn build_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(concat!("bitrouter-cloud-sdk/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("bitrouter/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
         .build()
-        .context("building bitrouter-cloud-sdk HTTP client")
+        .context("building BitRouter Cloud management HTTP client")
         .map_err(Error::Auth)
 }
 

@@ -703,9 +703,8 @@ enum WorkflowStateAction {
         /// Environment variable containing the inference key.
         #[arg(long, default_value = "BITROUTER_API_KEY")]
         api_key_env: String,
-        /// Protected BitRouter Cloud credential file. When set, resolves either
-        /// a static API key or an OAuth bearer (with refresh) without exporting
-        /// the credential into the process environment.
+        /// Protected BitRouter Cloud credential file containing a static API
+        /// key. OAuth credentials are never refreshed for settlement.
         #[arg(long)]
         credentials_file: Option<PathBuf>,
         /// Exact request id to reconcile. Repeat for every selected row.
@@ -1742,31 +1741,26 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     }
 }
 
-async fn settlement_bearer_from_credentials(path: &Path) -> Result<String> {
-    use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, REFRESH_WINDOW};
+async fn settlement_api_key(
+    explicit_api_key: Option<&str>,
+    credentials_file: Option<&Path>,
+    api_base: &str,
+) -> Result<String> {
+    if let Some(api_key) = explicit_api_key.filter(|api_key| !api_key.is_empty()) {
+        return Ok(api_key.to_owned());
+    }
 
-    let client = reqwest::Client::new();
-    let mut store = CredentialsStore::load(path)
-        .with_context(|| format!("read BitRouter Cloud credentials from {}", path.display()))?;
-    let authorization_server = store
-        .current()
-        .and_then(|credential| credential.oauth())
-        .filter(|credential| credential.access_token_near_expiry(REFRESH_WINDOW))
-        .map(|credential| credential.authorization_server.clone());
-    let metadata = match authorization_server {
-        Some(server) => Some(
-            bitrouter_cloud_sdk::auth::metadata::fetch(&client, &server)
-                .await
-                .with_context(|| {
-                    format!("refresh metadata for credentials at {}", path.display())
-                })?,
-        ),
-        None => None,
-    };
-    store
-        .current_token(&client, metadata.as_ref())
+    let credentials_file = credentials_file.ok_or_else(|| {
+        anyhow::anyhow!("settlement requires a static BitRouter API key or credentials file")
+    })?;
+    let manager =
+        bitrouter_providers::hosted::account::manager::CredentialManager::new(credentials_file)
+            .context("build settlement credential manager")?;
+    manager
+        .resolve_api_key(None, Some(api_base))
         .await
-        .with_context(|| format!("resolve bearer from credentials at {}", path.display()))
+        .map(|credential| credential.secret().to_owned())
+        .map_err(anyhow::Error::from)
 }
 
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
@@ -1950,19 +1944,31 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
         } => {
             use std::time::Duration;
 
+            use bitrouter::cloud::settlement::SettlementClient;
             use bitrouter::metering::{MeteringStore, UsagePriceOverride, reconcile_requests};
-            use bitrouter_cloud_sdk::settlement::SettlementClient;
 
             let prices = prices
                 .iter()
                 .map(|value| UsagePriceOverride::parse(value))
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(anyhow::Error::from)?;
-            let api_key = match credentials_file {
-                Some(path) => settlement_bearer_from_credentials(&path).await?,
-                None => std::env::var(&api_key_env).with_context(|| {
-                    format!("read inference key from environment variable {api_key_env}")
-                })?,
+            let explicit_api_key = std::env::var(&api_key_env)
+                .ok()
+                .filter(|api_key| !api_key.is_empty());
+            let api_key = match settlement_api_key(
+                explicit_api_key.as_deref(),
+                credentials_file.as_deref(),
+                &api_base,
+            )
+            .await
+            {
+                Ok(api_key) => api_key,
+                Err(error) if credentials_file.is_none() => {
+                    return Err(error.context(format!(
+                        "provide a non-empty {api_key_env} environment variable or a credentials file containing a static BitRouter API key"
+                    )));
+                }
+                Err(error) => return Err(error),
             };
             let client = SettlementClient::new(&api_base, api_key)
                 .context("build request settlement client")?;
@@ -5544,29 +5550,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settlement_bearer_reads_fresh_oauth_without_environment_export() {
-        use bitrouter_cloud_sdk::auth::credentials::{Credentials, CredentialsStore};
-        use chrono::{Duration, Utc};
-        let directory = tempfile::tempdir().unwrap();
+    async fn settlement_explicit_key_bypasses_malformed_credentials_file() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
         let path = directory.path().join("account-credentials.json");
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store
-            .save(Credentials {
-                access_token: "protected-test-bearer".into(),
-                refresh_token: Some("protected-test-refresh".into()),
-                expires_at: Utc::now() + Duration::minutes(10),
-                refresh_token_expires_at: None,
-                token_type: "Bearer".into(),
-                scope: "inference:invoke".into(),
-                client_id: "test-client".into(),
-                authorization_server: "https://as.example.com".into(),
-                namespace_id: Some("ns-test".into()),
-                subject: None,
-            })
-            .unwrap();
+        std::fs::write(&path, b"malformed")?;
+        let key = settlement_api_key(
+            Some("brk_explicit.secret"),
+            Some(&path),
+            "https://api.bitrouter.ai/v1",
+        )
+        .await?;
+        assert_eq!(key, "brk_explicit.secret");
+        Ok(())
+    }
 
-        let bearer = settlement_bearer_from_credentials(&path).await.unwrap();
-        assert_eq!(bearer, "protected-test-bearer");
+    #[tokio::test]
+    async fn settlement_credentials_file_rejects_oauth() -> anyhow::Result<()> {
+        use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
+        use bitrouter_providers::hosted::account::manager::CredentialManager;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("account-credentials.json");
+        let manager = CredentialManager::with_client(&path, reqwest::Client::new());
+        manager
+            .save(StoredCredential::from(Credentials {
+                access_token: "oauth-access".to_owned(),
+                refresh_token: Some("oauth-refresh".to_owned()),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: "https://api.bitrouter.ai".to_owned(),
+                namespace_id: Some("ns-test".to_owned()),
+                subject: None,
+            }))
+            .await?;
+        let error = match settlement_api_key(None, Some(&path), "https://api.bitrouter.ai/v1").await
+        {
+            Ok(_) => anyhow::bail!("OAuth unexpectedly resolved for settlement"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("requires a static BitRouter API key")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settlement_credentials_file_rejects_wrong_origin() -> anyhow::Result<()> {
+        use bitrouter_providers::hosted::account::credentials::StoredCredential;
+        use bitrouter_providers::hosted::account::manager::CredentialManager;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("account-credentials.json");
+        let manager = CredentialManager::with_client(&path, reqwest::Client::new());
+        manager
+            .save(StoredCredential::api_key(
+                "brk_stored.secret".to_owned(),
+                "https://other.example".to_owned(),
+            ))
+            .await?;
+        let error = match settlement_api_key(None, Some(&path), "https://api.bitrouter.ai/v1").await
+        {
+            Ok(_) => anyhow::bail!("credential unexpectedly crossed origins"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("does not match"));
+        Ok(())
     }
 
     #[test]

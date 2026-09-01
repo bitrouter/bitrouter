@@ -3,14 +3,14 @@
 //! taxonomy without depending on the server crate.
 //!
 //! The server response shape is `{ "error": <code>, "error_description":
-//! <msg> }` per `bitrouter_cloud::v1::http::management::error`. Codes
+//! <msg> }`. Codes
 //! are: `bad_request | unauthorized | forbidden | not_found | conflict |
 //! internal`.
 
 use serde::Deserialize;
 use thiserror::Error;
 
-/// Error returned by every [`crate::management::ManagementClient`] call.
+/// Error returned by every [`super::ManagementClient`] call.
 ///
 /// Variants 1:1 with the server's wire error codes, plus the local
 /// failure modes (no credentials, network, JSON decode). The CLI maps
@@ -119,8 +119,7 @@ impl Error {
     }
 }
 
-/// Server-side error envelope as defined by
-/// `bitrouter_cloud::v1::http::management::error::ErrorBody`.
+/// Server-side error envelope returned by management endpoints.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ErrorBody {
     pub error: String,
@@ -159,8 +158,7 @@ impl ErrorBody {
 }
 
 /// Server-side `require_scope` rejection text is exactly
-/// `"missing required scope: <scope>"` (see
-/// `bitrouter_cloud::v1::http::management::auth::require_scope`).
+/// `"missing required scope: <scope>"`.
 /// Match that prefix exactly so we never mis-parse a future, broader
 /// 403 message into a fake scope hint.
 fn parse_missing_scope(description: &str) -> Option<String> {
@@ -186,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn body_maps_unknown_code_to_server() {
+    fn body_maps_unknown_code_to_server() -> anyhow::Result<()> {
         let body = ErrorBody {
             error: "something_new".into(),
             error_description: "huh".into(),
@@ -197,8 +195,9 @@ mod tests {
                 assert_eq!(status, 500);
                 assert_eq!(message, "huh");
             }
-            other => panic!("expected Server, got {other:?}"),
+            other => anyhow::bail!("expected Server, got {other:?}"),
         }
+        Ok(())
     }
 
     #[test]

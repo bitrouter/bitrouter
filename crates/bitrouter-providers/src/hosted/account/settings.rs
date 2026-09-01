@@ -159,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flag_beats_env() {
+    fn flag_beats_env() -> Result<()> {
         let r = resolve(
             Some("https://flag.example.com"),
             Some("flag-id"),
@@ -167,15 +167,15 @@ mod tests {
             Some("https://env.example.com"),
             Some("env-id"),
             None,
-        )
-        .unwrap();
+        )?;
         assert_eq!(r.authorization_server, "https://flag.example.com");
         assert_eq!(r.client_id, "flag-id");
         assert_eq!(r.scope, DEFAULT_SCOPE);
+        Ok(())
     }
 
     #[test]
-    fn env_used_when_flag_absent() {
+    fn env_used_when_flag_absent() -> Result<()> {
         let r = resolve(
             None,
             None,
@@ -183,24 +183,25 @@ mod tests {
             Some("https://env.example.com/"),
             Some("env-id"),
             Some("custom:scope"),
-        )
-        .unwrap();
+        )?;
         // Trailing slash trimmed.
         assert_eq!(r.authorization_server, "https://env.example.com");
         assert_eq!(r.client_id, "env-id");
         assert_eq!(r.scope, "custom:scope");
+        Ok(())
     }
 
     #[test]
-    fn no_inputs_fall_back_to_defaults() {
-        let r = resolve(None, None, None, None, None, None).unwrap();
+    fn no_inputs_fall_back_to_defaults() -> Result<()> {
+        let r = resolve(None, None, None, None, None, None)?;
         assert_eq!(r.authorization_server, DEFAULT_AS);
         assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
         assert_eq!(r.scope, DEFAULT_SCOPE);
+        Ok(())
     }
 
     #[test]
-    fn only_as_overridden_keeps_default_client_id() {
+    fn only_as_overridden_keeps_default_client_id() -> Result<()> {
         let r = resolve(
             Some("https://self-hosted.example.com"),
             None,
@@ -208,23 +209,24 @@ mod tests {
             None,
             None,
             None,
-        )
-        .unwrap();
+        )?;
         assert_eq!(r.authorization_server, "https://self-hosted.example.com");
         assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
+        Ok(())
     }
 
     #[test]
-    fn empty_strings_fall_through_to_defaults() {
-        let r = resolve(Some(""), Some(""), Some(""), None, None, None).unwrap();
+    fn empty_strings_fall_through_to_defaults() -> Result<()> {
+        let r = resolve(Some(""), Some(""), Some(""), None, None, None)?;
         assert_eq!(r.authorization_server, DEFAULT_AS);
         assert_eq!(r.client_id, DEFAULT_CLIENT_ID);
         assert_eq!(r.scope, DEFAULT_SCOPE);
+        Ok(())
     }
 
     #[test]
-    fn rejects_plain_http_for_non_loopback() {
-        let err = resolve(
+    fn rejects_plain_http_for_non_loopback() -> Result<()> {
+        let error = resolve(
             Some("http://as.example.com"),
             Some("cid"),
             None,
@@ -232,13 +234,15 @@ mod tests {
             None,
             None,
         )
-        .unwrap_err();
-        let msg = format!("{err}");
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("plain HTTP authorization server unexpectedly resolved"))?;
+        let msg = format!("{error}");
         assert!(msg.contains("insecure URL"), "msg: {msg}");
+        Ok(())
     }
 
     #[test]
-    fn allows_loopback_http_per_rfc_8252() {
+    fn allows_loopback_http_per_rfc_8252() -> Result<()> {
         let r = resolve(
             Some("http://127.0.0.1:8080"),
             Some("cid"),
@@ -246,9 +250,9 @@ mod tests {
             None,
             None,
             None,
-        )
-        .unwrap();
+        )?;
         assert_eq!(r.authorization_server, "http://127.0.0.1:8080");
+        Ok(())
     }
 
     #[test]
@@ -269,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_exact_loopback_and_https() {
+    fn allows_exact_loopback_and_https() -> Result<()> {
         for url in [
             "http://localhost/token",
             "http://localhost:9000/token",
@@ -278,7 +282,8 @@ mod tests {
             "http://[::1]/token",
             "https://api.bitrouter.ai/token",
         ] {
-            require_secure_url(url).unwrap_or_else(|e| panic!("{url} should be allowed: {e}"));
+            require_secure_url(url)?;
         }
+        Ok(())
     }
 }

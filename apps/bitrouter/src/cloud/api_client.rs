@@ -1,17 +1,14 @@
 //! Raw BitRouter Cloud HTTP API client.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode, Version};
-use tokio::sync::Mutex;
-use url::Url;
 
-use crate::auth::credentials::{CredentialsStore, REFRESH_WINDOW, default_credentials_path};
-use crate::auth::metadata::{self, AsMetadata};
+use bitrouter_providers::hosted::account::manager::CredentialManager;
 
 /// A raw HTTP request to a relative BitRouter Cloud endpoint.
 pub struct ApiRequest {
@@ -127,8 +124,7 @@ impl ApiResponse {
 pub struct CloudApiClient {
     base_url: Url,
     http: reqwest::Client,
-    store: Arc<Mutex<CredentialsStore>>,
-    metadata: Arc<Mutex<Option<AsMetadata>>>,
+    manager: Arc<CredentialManager>,
 }
 
 impl std::fmt::Debug for CloudApiClient {
@@ -141,23 +137,17 @@ impl std::fmt::Debug for CloudApiClient {
 }
 
 impl CloudApiClient {
-    /// Build a client from the default `bitrouter cloud login` credential.
-    pub fn from_default_credentials() -> Result<Self> {
-        Self::from_credentials_path(default_credentials_path()?)
-    }
-
-    /// Build a client from an explicit credentials file.
-    pub fn from_credentials_path(path: impl Into<PathBuf>) -> Result<Self> {
-        let path = path.into();
-        let store = CredentialsStore::load(&path)
-            .with_context(|| format!("reading credentials at {}", path.display()))?;
-        let credential = store
+    /// Build a client from the current hosted account credential.
+    pub async fn from_manager(manager: Arc<CredentialManager>) -> Result<Self> {
+        let credential = manager
             .current()
+            .await
+            .context("reading BitRouter Cloud credentials")?
             .context("no stored credentials — run `bitrouter cloud login` first")?;
         let base_url = Url::parse(credential.base_url()).with_context(|| {
             format!(
                 "parsing the BitRouter Cloud URL stored in {}",
-                path.display()
+                manager.path().display()
             )
         })?;
         let http = reqwest::Client::builder()
@@ -169,8 +159,7 @@ impl CloudApiClient {
         Ok(Self {
             base_url,
             http,
-            store: Arc::new(Mutex::new(store)),
-            metadata: Arc::new(Mutex::new(None)),
+            manager,
         })
     }
 
@@ -211,29 +200,11 @@ impl CloudApiClient {
     }
 
     async fn current_bearer(&self) -> Result<String> {
-        let mut store = self.store.lock().await;
-        let refresh_url = store
-            .current()
-            .and_then(|credential| credential.oauth())
-            .filter(|credentials| credentials.access_token_near_expiry(REFRESH_WINDOW))
-            .map(|credentials| credentials.authorization_server.clone());
-        let metadata = match refresh_url {
-            Some(url) => Some(self.resolve_metadata(&url).await?),
-            None => None,
-        };
-        store.current_token(&self.http, metadata.as_ref()).await
-    }
-
-    async fn resolve_metadata(&self, authorization_server: &str) -> Result<AsMetadata> {
-        let mut cached = self.metadata.lock().await;
-        if let Some(metadata) = cached.as_ref() {
-            return Ok(metadata.clone());
-        }
-        let fetched = metadata::fetch(&self.http, authorization_server)
+        self.manager
+            .resolve_bearer(None, Some(self.base_url.as_str()))
             .await
-            .with_context(|| format!("fetching AS metadata at {authorization_server}"))?;
-        *cached = Some(fetched.clone());
-        Ok(fetched)
+            .map(|credential| credential.secret().to_owned())
+            .map_err(|error| anyhow::anyhow!(error))
     }
 }
 
@@ -267,49 +238,37 @@ fn redacted_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
+    use bitrouter_providers::hosted::account::credentials::StoredCredential;
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::auth::credentials::{CredentialsStore, StoredCredential};
-
-    fn tmp_credentials_path(label: &str) -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "bitrouter-cloud-api-{label}-{}-{id}",
-            std::process::id()
+    async fn api_client(base_url: &str) -> anyhow::Result<(tempfile::TempDir, CloudApiClient)> {
+        let directory = tempfile::tempdir()?;
+        let manager = Arc::new(CredentialManager::with_client(
+            directory.path().join("account-credentials.json"),
+            reqwest::Client::new(),
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("account-credentials.json")
-    }
-
-    fn save_api_key(path: &std::path::Path, base_url: &str) {
-        let mut store = CredentialsStore::load(path).unwrap();
-        store
+        manager
             .save(StoredCredential::api_key(
                 "brk_AAAAAAAAAAAAAAAA.secret".to_owned(),
                 base_url.to_owned(),
             ))
-            .unwrap();
+            .await?;
+        let client = CloudApiClient::from_manager(manager).await?;
+        Ok((directory, client))
     }
 
     #[test]
-    fn resolves_only_relative_paths_on_the_login_origin() {
-        let base = url::Url::parse("https://api.bitrouter.ai/oauth").unwrap();
+    fn resolves_only_relative_paths_on_the_login_origin() -> anyhow::Result<()> {
+        let base = reqwest::Url::parse("https://api.bitrouter.ai/oauth")?;
         assert_eq!(
-            resolve_endpoint(&base, "/v1/models?owned=true")
-                .unwrap()
-                .as_str(),
+            resolve_endpoint(&base, "/v1/models?owned=true")?.as_str(),
             "https://api.bitrouter.ai/v1/models?owned=true"
         );
         assert_eq!(
-            resolve_endpoint(&base, "v1/models").unwrap().as_str(),
+            resolve_endpoint(&base, "v1/models")?.as_str(),
             "https://api.bitrouter.ai/v1/models"
         );
         for endpoint in [
@@ -324,6 +283,7 @@ mod tests {
                 "{endpoint} must be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -346,10 +306,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_stored_api_key_and_preserves_response_stream() {
+    async fn sends_stored_api_key_and_preserves_response_stream() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        let credentials_path = tmp_credentials_path("request");
-        save_api_key(&credentials_path, &server.uri());
+        let (_directory, client) = api_client(&server.uri()).await?;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .and(header(
@@ -365,71 +324,90 @@ mod tests {
                     .insert_header("x-api-key", "response-secret")
                     .set_body_raw("{\"data\":[]}", "application/json"),
             )
-            .expect(1)
             .mount(&server)
             .await;
 
-        let client = CloudApiClient::from_credentials_path(credentials_path).unwrap();
         let response = client
             .execute(ApiRequest::new(
                 reqwest::Method::GET,
                 "/v1/models?api_key=query-secret",
             ))
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let rendered = format!("{response:?}");
         assert!(!rendered.contains("query-secret"));
         assert!(!rendered.contains("response-secret"));
-        assert_eq!(
-            response.into_response().text().await.unwrap(),
-            "{\"data\":[]}"
-        );
+        assert_eq!(response.into_response().text().await?, "{\"data\":[]}");
+        let requests = match server.received_requests().await {
+            Some(requests) => requests,
+            None => anyhow::bail!("wiremock did not record the request"),
+        };
+        assert_eq!(requests.len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn does_not_follow_cross_origin_redirects() {
+    async fn does_not_follow_cross_origin_redirects() -> anyhow::Result<()> {
         let destination = MockServer::start().await;
         let origin = MockServer::start().await;
-        let credentials_path = tmp_credentials_path("redirect");
-        save_api_key(&credentials_path, &origin.uri());
+        let (_directory, client) = api_client(&origin.uri()).await?;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .respond_with(
                 ResponseTemplate::new(302)
                     .insert_header("location", format!("{}/stolen", destination.uri())),
             )
-            .expect(1)
             .mount(&origin)
             .await;
 
-        let client = CloudApiClient::from_credentials_path(credentials_path).unwrap();
         let response = client
             .execute(ApiRequest::new(reqwest::Method::GET, "/v1/models"))
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(response.status(), reqwest::StatusCode::FOUND);
-        assert!(
-            destination
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .is_empty()
-        );
+        let destination_requests = match destination.received_requests().await {
+            Some(requests) => requests,
+            None => anyhow::bail!("wiremock did not record destination requests"),
+        };
+        assert!(destination_requests.is_empty());
+        let origin_requests = match origin.received_requests().await {
+            Some(requests) => requests,
+            None => anyhow::bail!("wiremock did not record origin requests"),
+        };
+        assert_eq!(origin_requests.len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn user_authorization_overrides_default_and_repeated_headers_survive() {
+    async fn raw_authorization_bypasses_near_expiry_oauth_resolution() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        let credentials_path = tmp_credentials_path("headers");
-        save_api_key(&credentials_path, &server.uri());
+        let directory = tempfile::tempdir()?;
+        let manager = Arc::new(CredentialManager::with_client(
+            directory.path().join("account-credentials.json"),
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::from(
+                bitrouter_providers::hosted::account::credentials::Credentials {
+                    access_token: "near-expiry-access".to_owned(),
+                    refresh_token: Some("refresh-token".to_owned()),
+                    expires_at: chrono::Utc::now() + chrono::Duration::seconds(10),
+                    refresh_token_expires_at: None,
+                    token_type: "Bearer".to_owned(),
+                    scope: "inference:invoke".to_owned(),
+                    client_id: "bitrouter-cli".to_owned(),
+                    authorization_server: server.uri(),
+                    namespace_id: Some("ns-test".to_owned()),
+                    subject: None,
+                },
+            ))
+            .await?;
+        let client = CloudApiClient::from_manager(manager).await?;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .and(header("authorization", "Bearer user-override"))
             .respond_with(ResponseTemplate::new(200))
-            .expect(1)
             .mount(&server)
             .await;
         let mut headers = HeaderMap::new();
@@ -440,19 +418,35 @@ mod tests {
         headers.append("x-test", HeaderValue::from_static("one"));
         headers.append("x-test", HeaderValue::from_static("two"));
 
-        let client = CloudApiClient::from_credentials_path(credentials_path).unwrap();
         client
             .execute(ApiRequest::new(reqwest::Method::GET, "/v1/models").with_headers(headers))
-            .await
-            .unwrap();
+            .await?;
 
-        let requests = server.received_requests().await.unwrap_or_default();
-        let values = requests[0]
+        let requests = match server.received_requests().await {
+            Some(requests) => requests,
+            None => anyhow::bail!("wiremock did not record the request"),
+        };
+        let request = requests
+            .first()
+            .context("wiremock did not receive a request")?;
+        assert_eq!(request.headers[AUTHORIZATION], "Bearer user-override");
+        let values = request
             .headers
             .get_all("x-test")
             .iter()
-            .map(|value| value.to_str().unwrap())
-            .collect::<Vec<_>>();
+            .map(HeaderValue::to_str)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         assert_eq!(values, ["one", "two"]);
+        let metadata_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/.well-known/oauth-authorization-server")
+            .count();
+        let refresh_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/oauth/token")
+            .count();
+        assert_eq!(metadata_requests, 0);
+        assert_eq!(refresh_requests, 0);
+        Ok(())
     }
 }

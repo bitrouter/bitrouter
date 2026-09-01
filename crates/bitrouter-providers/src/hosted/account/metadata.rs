@@ -4,7 +4,7 @@
 //!
 //! Given an AS base URL `<issuer>`, the metadata document is fetched
 //! from `<issuer>/.well-known/oauth-authorization-server` and JSON-decoded
-//! into [`AsMetadata`]. Only the fields the device-flow client actually
+//! into [`crate::hosted::account::metadata::AsMetadata`]. Only the fields the device-flow client actually
 //! needs (`device_authorization_endpoint`, `token_endpoint`,
 //! `revocation_endpoint`) are extracted; everything else is silently
 //! ignored so an AS adding new fields doesn't break this client.
@@ -48,24 +48,22 @@ pub struct AsMetadata {
 /// `<scheme>://<host>/.well-known/oauth-authorization-server`.
 pub fn metadata_url(authorization_server: &str) -> Result<String> {
     let trimmed = authorization_server.trim_end_matches('/');
-    let parsed = reqwest::Url::parse(trimmed)
+    let mut parsed = reqwest::Url::parse(trimmed)
         .with_context(|| format!("authorization server URL '{trimmed}' is not a valid URL"))?;
-    let host = parsed
+    parsed
         .host_str()
         .with_context(|| format!("authorization server URL '{trimmed}' has no host"))?;
-    let scheme = parsed.scheme();
-    let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
     let path = parsed.path().trim_end_matches('/');
-    if path.is_empty() {
-        Ok(format!(
-            "{scheme}://{host}{port}/.well-known/oauth-authorization-server"
-        ))
+    let metadata_path = if path.is_empty() {
+        "/.well-known/oauth-authorization-server".to_owned()
     } else {
         // RFC 8414 §3.1: `https://example.com/issuer1` → `https://example.com/.well-known/oauth-authorization-server/issuer1`.
-        Ok(format!(
-            "{scheme}://{host}{port}/.well-known/oauth-authorization-server{path}"
-        ))
-    }
+        format!("/.well-known/oauth-authorization-server{path}")
+    };
+    parsed.set_path(&metadata_path);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    Ok(parsed.to_string())
 }
 
 /// Fetch + parse the AS metadata document. The returned metadata is
@@ -116,50 +114,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_url_for_root_issuer() {
-        let url = metadata_url("https://as.example.com").unwrap();
+    fn metadata_url_for_root_issuer() -> Result<()> {
+        let url = metadata_url("https://as.example.com")?;
         assert_eq!(
             url,
             "https://as.example.com/.well-known/oauth-authorization-server"
         );
+        Ok(())
     }
 
     #[test]
-    fn metadata_url_trims_trailing_slash() {
-        let url = metadata_url("https://as.example.com/").unwrap();
+    fn metadata_url_trims_trailing_slash() -> Result<()> {
+        let url = metadata_url("https://as.example.com/")?;
         assert_eq!(
             url,
             "https://as.example.com/.well-known/oauth-authorization-server"
         );
+        Ok(())
     }
 
     #[test]
-    fn metadata_url_preserves_path_component_per_rfc_8414() {
+    fn metadata_url_preserves_path_component_per_rfc_8414() -> Result<()> {
         // RFC 8414 §3.1: the path follows the well-known segment.
-        let url = metadata_url("https://as.example.com/issuer1").unwrap();
+        let url = metadata_url("https://as.example.com/issuer1")?;
         assert_eq!(
             url,
             "https://as.example.com/.well-known/oauth-authorization-server/issuer1"
         );
+        Ok(())
     }
 
     #[test]
-    fn metadata_url_keeps_explicit_port() {
-        let url = metadata_url("http://127.0.0.1:8080").unwrap();
+    fn metadata_url_keeps_explicit_port() -> Result<()> {
+        let url = metadata_url("http://127.0.0.1:8080")?;
         assert_eq!(
             url,
             "http://127.0.0.1:8080/.well-known/oauth-authorization-server"
         );
+        Ok(())
     }
 
     #[test]
-    fn parses_minimal_metadata() {
+    fn metadata_url_keeps_ipv6_brackets() -> anyhow::Result<()> {
+        let url = metadata_url("http://[::1]:8080")?;
+        assert_eq!(
+            url,
+            "http://[::1]:8080/.well-known/oauth-authorization-server"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_minimal_metadata() -> Result<()> {
         let json = r#"{
           "issuer": "https://as.example.com",
           "device_authorization_endpoint": "https://as.example.com/device",
           "token_endpoint": "https://as.example.com/token"
         }"#;
-        let m: AsMetadata = serde_json::from_str(json).unwrap();
+        let m: AsMetadata = serde_json::from_str(json)?;
         assert_eq!(m.issuer.as_deref(), Some("https://as.example.com"));
         assert_eq!(
             m.device_authorization_endpoint,
@@ -167,10 +179,11 @@ mod tests {
         );
         assert_eq!(m.token_endpoint, "https://as.example.com/token");
         assert!(m.revocation_endpoint.is_none());
+        Ok(())
     }
 
     #[test]
-    fn parses_metadata_with_revocation() {
+    fn parses_metadata_with_revocation() -> Result<()> {
         let json = r#"{
           "issuer": "https://as.example.com",
           "device_authorization_endpoint": "https://as.example.com/device",
@@ -178,10 +191,11 @@ mod tests {
           "revocation_endpoint": "https://as.example.com/revoke",
           "unknown_field_for_forward_compat": "ignored"
         }"#;
-        let m: AsMetadata = serde_json::from_str(json).unwrap();
+        let m: AsMetadata = serde_json::from_str(json)?;
         assert_eq!(
             m.revocation_endpoint.as_deref(),
             Some("https://as.example.com/revoke")
         );
+        Ok(())
     }
 }

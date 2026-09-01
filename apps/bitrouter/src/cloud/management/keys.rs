@@ -1,7 +1,7 @@
 //! `/v1/namespaces/{nsid}/keys` — list, mint, and revoke `brk_` API keys
 //! in the client's namespace.
 //!
-//! Mirrors `bitrouter_cloud::v1::http::management::keys`. Scopes:
+//! Scopes:
 //! `keys:read` for list, `keys:write` for mint and revoke. The `{nsid}`
 //! segment is resolved from the credential's baked namespace.
 
