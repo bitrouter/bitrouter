@@ -170,6 +170,8 @@ pub struct SessionIdentityObserved {
     pub route_scope: String,
     /// Matching route lease id, if any.
     pub route_lease_id: Option<String>,
+    /// Matching lease and its applied/skipped precedence outcome, if any.
+    pub route_lease_outcome: Option<RouteLeaseObservation>,
 }
 
 impl PipelineEvent for SessionIdentityObserved {
@@ -382,6 +384,7 @@ fn event_from_context(
             .route_lease
             .as_ref()
             .map(|lease| lease.lease_id.clone()),
+        route_lease_outcome: context.route_lease.clone(),
     }
 }
 
@@ -863,6 +866,17 @@ mod tests {
             normalized.route_lease.as_ref().map(|lease| lease.applied),
             Some(true)
         );
+        let event = context
+            .get_event::<SessionIdentityObserved>()
+            .expect("identity event");
+        let outcome = event
+            .route_lease_outcome
+            .as_ref()
+            .expect("route lease outcome");
+        assert_eq!(outcome.matched_session_id, "claude-root");
+        assert_eq!(outcome.route, "anthropic:claude-opus");
+        assert!(outcome.applied);
+        assert_eq!(outcome.reason, "applied");
     }
 
     #[tokio::test]
@@ -983,6 +997,16 @@ mod tests {
             assert_eq!(
                 normalized.route_lease.as_ref().map(|lease| lease.applied),
                 Some(false)
+            );
+            let event = context
+                .get_event::<SessionIdentityObserved>()
+                .expect("identity event");
+            assert_eq!(
+                event
+                    .route_lease_outcome
+                    .as_ref()
+                    .map(|outcome| outcome.reason.as_str()),
+                Some("explicit_caller_route_precedence")
             );
         }
 

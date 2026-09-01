@@ -19,7 +19,9 @@ use crate::cloud::settlement::{
     SettlementClient, SettlementReceipt, SettlementState, SettlementUsage,
 };
 use crate::db;
-use crate::session_identity::{IdentityEvidence, RequestOrigin, SessionIdentityObserved};
+use crate::session_identity::{
+    IdentityEvidence, RequestOrigin, RouteLeaseObservation, SessionIdentityObserved,
+};
 
 async fn pool() -> DatabaseConnection {
     let db = db::connect("sqlite::memory:").await.unwrap();
@@ -111,6 +113,13 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
         attributed: true,
         route_scope: "session".to_string(),
         route_lease_id: Some("brlease_metering".to_string()),
+        route_lease_outcome: Some(RouteLeaseObservation {
+            lease_id: "brlease_metering".to_string(),
+            matched_session_id: "codex-thread".to_string(),
+            route: "openai:gpt-5".to_string(),
+            applied: true,
+            reason: "applied".to_string(),
+        }),
     });
 
     recorder.record(&mut attributed).await?;
@@ -170,6 +179,18 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
             .get("bitrouter.agent.thread_id")
             .and_then(serde_json::Value::as_str),
         Some("codex-thread")
+    );
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.route_lease_applied")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.route_lease_reason")
+            .and_then(serde_json::Value::as_str),
+        Some("applied")
     );
     Ok(())
 }

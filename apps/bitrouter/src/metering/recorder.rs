@@ -325,6 +325,16 @@ fn session_span_attributes(
             attributes.insert(name.to_string(), serde_json::Value::String(value.clone()));
         }
     }
+    if let Some(outcome) = &event.route_lease_outcome {
+        attributes.insert(
+            "bitrouter.acp.route_lease_applied".to_string(),
+            serde_json::Value::Bool(outcome.applied),
+        );
+        attributes.insert(
+            "bitrouter.acp.route_lease_reason".to_string(),
+            serde_json::Value::String(outcome.reason.clone()),
+        );
+    }
     attributes
 }
 
