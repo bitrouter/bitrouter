@@ -55,7 +55,7 @@ use agent_client_protocol::schema::v1::{
     RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
     SessionUpdate, TextContent, ToolCallUpdate,
 };
-use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Responder};
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
 use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
@@ -247,6 +247,79 @@ pub struct UpstreamConnection {
 /// The ACP-over-stdio transport wired to a spawned agent child.
 type AgentTransport =
     ByteStreams<Compat<tokio::process::ChildStdin>, Compat<tokio::process::ChildStdout>>;
+
+/// Reusable ACP agent-process connector for the connection-level controller.
+///
+/// It shares the established child policy with [`UpstreamConnection`]:
+/// stripped inherited markers, config-authored env precedence, stderr
+/// draining, process-group teardown, and prompt failure when the child dies.
+#[derive(Debug, Clone)]
+pub struct AgentProcess {
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    strip_inherited_env: Vec<String>,
+}
+
+impl AgentProcess {
+    /// Construct a child connector from a configured stdio invocation.
+    pub fn new(
+        command: impl Into<String>,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            args,
+            env,
+            strip_inherited_env: Vec::new(),
+        }
+    }
+
+    /// Remove additional ambient variables before applying the configured
+    /// child environment. Explicit values in `env` still win.
+    #[must_use]
+    pub fn strip_inherited_env(mut self, names: Vec<String>) -> Self {
+        self.strip_inherited_env = names;
+        self
+    }
+}
+
+impl ConnectTo<Client> for AgentProcess {
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<Agent>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let (transport, child) = spawn_agent_process(
+            &self.command,
+            &self.args,
+            &self.env,
+            &self.strip_inherited_env,
+        )
+        .map_err(agent_client_protocol::util::internal_error)?;
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+
+        let protocol = ConnectTo::<Client>::connect_to(transport, client);
+        tokio::pin!(protocol);
+        let result = tokio::select! {
+            result = &mut protocol => result,
+            _ = &mut dead_rx => Err(agent_client_protocol::util::internal_error(
+                "agent process exited while the ACP controller was connected",
+            )),
+        };
+        let _ = kill_tx.send(());
+        if tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
+            .await
+            .is_err()
+        {
+            tracing::warn!("agent child reaper did not confirm within 2s");
+        }
+        result
+    }
+}
 
 /// Inherited env vars an agent child must never see. The substrate launches
 /// an **independent** agent session, so a leaked "you are running inside

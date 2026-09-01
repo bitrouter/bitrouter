@@ -79,7 +79,7 @@
 - [x] Add a table-driven compatibility fixture covering explicit `x-bitrouter-workflow-session`, adapter body hints, first-user-message fallback, generic Responses continuation, Claude-like Messages traffic, Codex-like Responses traffic, and conflicting generic headers.
 - [x] Assert literal legacy `SessionSignal` key/source/confidence plus the route-relevant workflow identity projection for every case; do not derive expectations through extractor helpers.
 - [x] Run the new test before any workflow-state or route-policy production change and confirm it passes, proving the P0/P1 work has a fixed compatibility state independent of the adapter catalog migration.
-- [ ] Rerun it after each controller integration task; any difference is a regression and must be fixed without changing the fixture.
+- [x] Rerun it after each controller integration task; any difference is a regression and must be fixed without changing the fixture.
 - [x] Commit: `test(router): lock pure API sessions`
 
 ### Task 4: Build the manager-first controller initialize gate
@@ -92,16 +92,16 @@
 - Modify: `crates/bitrouter-sdk/Cargo.toml`
 - Test: controller unit/integration tests in `crates/bitrouter-sdk/src/acp/controller.rs`
 
-- [ ] Add a failing in-memory test where the fake harness records initialize; assert the manager's client capabilities and `_meta` reach it exactly, and assert initialize is sent once only after the manager initializes.
-- [ ] Extract a reusable child connector from the existing `up.rs` process transport so the conductor retains inherited-env stripping, stderr draining, process-group teardown, and no leaked nested-agent marker.
-- [ ] Implement `Controller` over the official conductor with one upstream agent component and one BitRouter proxy. Do not create a `Session` or local session ID.
-- [ ] Add a failing test where the harness advertises providers and refuses `session/new` until `providers/set`; assert manager initialize does not resolve until set succeeds.
-- [ ] Implement provider setup using the plan's typed `SetProviderRequest`; when advertised, call `providers/set`, call `providers/list`, and compare provider ID, protocol, and base URL while never comparing or logging secret headers.
-- [ ] Add failing error-path tests for provider set failure, provider list mismatch, and no advertised provider capability. The first two must fail initialize; the last must succeed using launch fallback.
-- [ ] Add failing capability tests requiring upstream lifecycle capabilities to pass through while internal provider capability is removed manager-side.
-- [ ] Set manager-facing `agentInfo` to the BitRouter ACP controller and put sanitized upstream identity, harness ID, and pinned adapter version under namespaced response `_meta`.
-- [ ] Run controller tests and `cargo nextest run -p bitrouter-sdk --features acp`.
-- [ ] Commit: `feat(acp): add controller initialize gate`
+- [x] Add a failing in-memory test where the fake harness records initialize; assert the manager's client capabilities and `_meta` reach it exactly, and assert initialize is sent once only after the manager initializes.
+- [x] Extract a reusable child connector from the existing `up.rs` process transport so the conductor retains inherited-env stripping, stderr draining, process-group teardown, and no leaked nested-agent marker.
+- [x] Implement `Controller` over the official conductor with one upstream agent component and one BitRouter proxy. Do not create a `Session` or local session ID.
+- [x] Add a failing test where the harness advertises providers and refuses `session/new` until `providers/set`; assert manager initialize does not resolve until set succeeds.
+- [x] Implement provider setup using the plan's typed `SetProviderRequest`; when advertised, call `providers/set`, call `providers/list`, and compare provider ID, protocol, and base URL while never comparing or logging secret headers.
+- [x] Add failing error-path tests for provider set failure, provider list mismatch, and no advertised provider capability. The first two fail initialize; the last succeeds using launch fallback.
+- [x] Add failing capability tests requiring upstream lifecycle capabilities to pass through while internal provider capability is removed manager-side.
+- [x] Set manager-facing `agentInfo` to the BitRouter ACP controller and put sanitized upstream identity, harness ID, and pinned adapter version under namespaced response `_meta`.
+- [x] Run controller tests and `cargo nextest run -p bitrouter-sdk --all-features` (the crate's test target requires `config_file` in addition to `acp`).
+- [x] Commit: `feat(acp): add controller initialize gate`
 
 ### Task 5: Prove transparent native multi-session lifecycle
 
