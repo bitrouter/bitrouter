@@ -294,6 +294,23 @@ async fn apply_routing_with_cloud_credentials(
         warn_model_dropped("the harness routes only in the interactive facet");
         return Ok(Routed::default());
     }
+    let uses_maintained_adapter =
+        config
+            .agents
+            .get(agent_id)
+            .is_some_and(|entry| match &entry.transport {
+                AcpTransport::Stdio { command, args, .. } => {
+                    harness.uses_maintained_adapter(command, args)
+                }
+            });
+    if harness.id == "codex-acp" && !uses_maintained_adapter {
+        eprintln!(
+            "note: routing unavailable for '{agent_id}': Codex ACP endpoint configuration \
+             requires @agentclientprotocol/codex-acp@1.7.0; launching direct"
+        );
+        warn_model_dropped("the configured Codex ACP adapter is not the maintained pin");
+        return Ok(Routed::default());
+    }
 
     // Base URL, auth mode, and whether the target is a remote we can't vouch for.
     let base_url = opts
@@ -357,12 +374,16 @@ async fn apply_routing_with_cloud_credentials(
     // returned plan through providers/set; no second route description is
     // constructed. Legacy harnesses retain their existing env/args overlay.
     let controller_instance_id = format!("brc_{}", uuid::Uuid::new_v4().simple());
-    let endpoint_plan = harness.endpoint_plan(
-        &base_url,
-        &auth,
-        opts.model.as_deref(),
-        &controller_instance_id,
-    );
+    let endpoint_plan = if uses_maintained_adapter {
+        harness.endpoint_plan(
+            &base_url,
+            &auth,
+            opts.model.as_deref(),
+            &controller_instance_id,
+        )
+    } else {
+        None
+    };
     let overlay = match &endpoint_plan {
         Some(plan) => {
             plan.fallback_overlay()
@@ -615,11 +636,55 @@ pub async fn spawn_check(
 
 // ── serve ─────────────────────────────────────────────────────────────────────
 
-/// Launch a session for `agent_id` and serve it as a vanilla ACP Agent over
-/// **stdio** until the manager disconnects.
+fn controller_identity(
+    agent_id: &str,
+    command: &str,
+    args: &[String],
+    endpoint: Option<&crate::harness::HarnessEndpointPlan>,
+) -> bitrouter_sdk::acp::controller::ControllerIdentity {
+    if let Some(endpoint) = endpoint {
+        return bitrouter_sdk::acp::controller::ControllerIdentity::new(
+            endpoint.harness_id,
+            endpoint.adapter_package,
+            endpoint.adapter_version,
+        );
+    }
+    if let Some(harness) = crate::harness::match_invocation(command, args)
+        && let Some((package, version)) = harness.maintained_adapter_identity()
+        && harness.uses_maintained_adapter(command, args)
+    {
+        return bitrouter_sdk::acp::controller::ControllerIdentity::new(
+            harness.id, package, version,
+        );
+    }
+    bitrouter_sdk::acp::controller::ControllerIdentity::new(
+        agent_id,
+        "configured-acp-adapter",
+        "configured",
+    )
+}
+
+fn controller_endpoint(
+    endpoint: &crate::harness::HarnessEndpointPlan,
+) -> bitrouter_sdk::acp::controller::ProviderEndpointPlan {
+    let protocol = match endpoint.protocol {
+        crate::harness::HarnessProtocol::Anthropic => LlmProtocol::Anthropic,
+        crate::harness::HarnessProtocol::OpenAi => LlmProtocol::OpenAi,
+    };
+    bitrouter_sdk::acp::controller::ProviderEndpointPlan {
+        provider_id: endpoint.provider_id.to_string(),
+        protocol,
+        base_url: endpoint.base_url.clone(),
+        headers: endpoint.headers.clone(),
+    }
+}
+
+/// Launch one harness process and expose its connection-level ACP controller
+/// over **stdio** until the manager disconnects.
 ///
-/// Config is taken by value (already loaded by the caller); `options` carries
-/// the per-turn timeout resolved from the CLI flags (see [`launch_options`]).
+/// Session creation, identifiers, lifecycle, history, and persistence remain
+/// harness-native. `options` contributes only process-isolation settings here;
+/// prompt deadlines belong to the manager on this transparent serve path.
 pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let SpawnContext {
         source,
@@ -645,81 +710,32 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     )
     .await
     .map_err(anyhow::Error::new)?;
-    let catalog = catalog_from_config(&config)?;
-    let cwd = std::env::current_dir().context("resolving current directory")?;
-    // Deferred open: the upstream `session/new` runs when the manager sends
-    // its own `session/new`, so the manager's cwd + mcpServers are relayed.
-    let session = bitrouter_sdk::acp::engine::Session::launch_deferred(
-        &catalog,
-        agent_id,
-        cwd.clone(),
-        options,
-    )
-    .await
-    .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    // The router-owned surfaces: measured cost (§7) and the routing catalog
-    // (§6). Both are wired before serving so the first turn and the manager's
-    // first `providers/list` already have somewhere to go.
-    let (cost_tx, cost_rx) = tokio::sync::mpsc::unbounded_channel();
-    let exporter = attach_observability(
-        &config,
-        agent_id,
-        &session,
-        Some(CostSink {
-            source: source.clone(),
-            session_start: chrono::Utc::now(),
-            launch_id: routed.launch_id.clone(),
-            updates: cost_tx,
-        }),
-        &cloud_credentials,
-    )
-    .await;
-    let providers = Arc::new(SessionProviders::new(
-        &config,
-        // Both halves are required, and their absence is the difference
-        // between a picker that works and one that lies: a daemon to install
-        // the override in, and a launch id to scope it by.
-        routed
-            .via
-            .as_ref()
-            .and(routed.launch_id.as_ref())
-            .map(|id| RouteControl {
-                socket: crate::daemon::resolve_socket_path(
-                    source.home().join("bitrouter.yaml").as_path(),
-                    &config.server.control_socket,
-                ),
-                launch_id: id.clone(),
-            }),
-    ));
-    let extensions = bitrouter_sdk::acp::down::ServeExtensions {
-        injected_updates: Some(cost_rx),
-        providers: Some(
-            Arc::clone(&providers) as Arc<dyn bitrouter_sdk::acp::down::ProviderSurface>
-        ),
-    };
-    let session = Arc::new(session);
-
-    let served = bitrouter_sdk::acp::down::serve_with(Arc::clone(&session), extensions).await;
-
-    // The override belongs to this session; drop it before anything else so a
-    // later launch cannot inherit a route it never asked for.
-    providers.release().await;
-
-    // No manager left: shut the session down deliberately so the agent child
-    // is reaped (same semantics as `prompt`). Once serving ends, the forwarding
-    // tasks have released their clones, so we are the sole owner.
-    match Arc::try_unwrap(session) {
-        Ok(session) => session
-            .shutdown()
-            .await
-            .context("shutting down acp session")?,
-        Err(_) => tracing::warn!("session still referenced after serve; skipping shutdown"),
+    let agent = config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
+    agent
+        .validate()
+        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
+    let AcpTransport::Stdio { command, args, env } = &agent.transport;
+    let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
+    if let Some(endpoint) = routed.endpoint_plan.as_ref() {
+        controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    if let Some(exporter) = exporter {
-        // Flush the span batch before exit; spans are lost otherwise.
-        exporter.shutdown();
+    if options.turn_timeout.is_some() {
+        eprintln!(
+            "note: --turn-timeout is not enforced by transparent acp serve; \
+             the manager controls prompt deadlines"
+        );
     }
-    served.map_err(|e| anyhow::anyhow!("acp serve: {e}"))
+    let process =
+        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
+            .strip_inherited_env(options.strip_inherited_env);
+    bitrouter_sdk::acp::controller::Controller::new(process, controller_config)
+        .run(agent_client_protocol::Stdio::new())
+        .await
+        .map_err(|error| anyhow::anyhow!("acp serve: {error}"))
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -1363,27 +1379,6 @@ impl SessionProviders {
         self.control.is_some()
     }
 
-    /// Drop this session's override, so it cannot outlive the session that
-    /// asked for it. Best-effort: the daemon may already be gone at teardown,
-    /// and that is not a failure worth surfacing to the manager.
-    pub(crate) async fn release(&self) {
-        let Some(control) = &self.control else { return };
-        if self.effective().is_none() {
-            return;
-        }
-        if let Err(e) = crate::daemon::send_command(
-            &control.socket,
-            &crate::daemon::DaemonCommand::SetRoute {
-                launch_id: control.launch_id.clone(),
-                provider_id: None,
-            },
-        )
-        .await
-        {
-            tracing::debug!(error = %e, "could not clear the session route override");
-        }
-    }
-
     /// The route in force, or `None` while the session is on its configured
     /// default. A poisoned lock reads as "no override" rather than panicking.
     fn effective(&self) -> Option<String> {
@@ -1574,6 +1569,56 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
 pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
     ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
         .context("building acp routing table from config")
+}
+
+#[cfg(test)]
+mod controller_tests {
+    use super::controller_identity;
+
+    #[test]
+    fn direct_maintained_adapter_keeps_exact_identity() {
+        let identity = controller_identity(
+            "codex-acp",
+            "npx",
+            &[
+                "-y".to_string(),
+                "@agentclientprotocol/codex-acp@1.7.0".to_string(),
+            ],
+            None,
+        );
+        assert_eq!(identity.harness_id, "codex-acp");
+        assert_eq!(identity.adapter_package, "@agentclientprotocol/codex-acp");
+        assert_eq!(identity.adapter_version, "1.7.0");
+    }
+
+    #[test]
+    fn custom_adapter_identity_exposes_no_launch_command() {
+        let identity = controller_identity(
+            "private-agent",
+            "/private/bin/agent-with-token-in-path",
+            &["--secret-argument".to_string()],
+            None,
+        );
+        assert_eq!(identity.harness_id, "private-agent");
+        assert_eq!(identity.adapter_package, "configured-acp-adapter");
+        assert_eq!(identity.adapter_version, "configured");
+        let rendered = format!("{identity:?}");
+        assert!(!rendered.contains("token"));
+        assert!(!rendered.contains("secret"));
+    }
+
+    #[test]
+    fn unpinned_catalog_invocation_is_not_reported_as_the_pin() {
+        let identity = controller_identity(
+            "codex-acp",
+            "npx",
+            &["@agentclientprotocol/codex-acp@1.6.0".to_string()],
+            None,
+        );
+        assert_eq!(identity.harness_id, "codex-acp");
+        assert_eq!(identity.adapter_package, "configured-acp-adapter");
+        assert_eq!(identity.adapter_version, "configured");
+    }
 }
 
 #[cfg(test)]

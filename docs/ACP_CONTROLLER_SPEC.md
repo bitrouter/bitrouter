@@ -1,6 +1,15 @@
 # Spec: the ACP controller runtime
 
-Status: **proposed** · Date: 2026-09-01
+Status: **implemented through Phase 1; Phase 2+ proposed** · Date: 2026-09-01
+
+Implementation note: Phase 0 pins the stable-v1 ACP runtime and maintained
+Claude/Codex adapters behind one endpoint plan. Phase 1 ships the manager-first
+connection controller used by `acp serve`, including provider setup gating,
+native multi-session lifecycle forwarding, callbacks, and extension fidelity.
+The existing single-session engine remains the implementation of `acp prompt`
+and `chat`. Authenticated native-identity normalization, route leases,
+`SessionIdentityObserved`, and TUI migration remain Phase 2 work; Phase 1 does
+not claim those observability or routing-isolation acceptance criteria.
 
 This document defines the core runtime beneath BitRouter's ACP-facing products.
 It is authoritative for session ownership, controller topology, capability

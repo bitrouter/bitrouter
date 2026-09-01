@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn pure_model_api_session_compatibility_matrix() -> anyhow::Result<()> {
         let cases: Vec<PureApiCase> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/workflow_state/pure_model_api_sessions.json"
+            "../../tests/fixtures/session_compatibility/pure_model_api_sessions.json"
         ))?;
 
         for case in cases {

@@ -72,7 +72,7 @@
 
 **Files:**
 
-- Add: `apps/bitrouter/tests/fixtures/workflow_state/pure_model_api_sessions.json`
+- Add: `apps/bitrouter/tests/fixtures/session_compatibility/pure_model_api_sessions.json`
 - Modify: `apps/bitrouter/src/workflow_state/session.rs`
 - Modify if required for a public test seam only: `apps/bitrouter/src/workflow_state/extractors.rs`
 
@@ -117,7 +117,7 @@
 - [x] Add a callback test for permission plus filesystem read; manager capability advertisement enables the harness callback and the response completes through the conductor.
 - [x] Add a `_meta`/unknown-extension preservation test in both directions.
 - [x] Rely on conductor transparent forwarding for implementation; add only ephemeral observation hooks needed for shutdown or diagnostics, never a session catalog.
-- [ ] Retire the single-session `down::serve` manager wire so no public BitRouter ACP endpoint can return `SessionState.record_id`. Keep the single-session engine only for local `prompt`/`chat` execution.
+- [x] Retire the single-session `down::serve` manager wire from the public CLI path so no public BitRouter ACP endpoint can return `SessionState.record_id`. Keep the single-session engine only for local `prompt`/`chat` execution and its internal compatibility tests.
 - [x] Run focused controller conformance tests twice, including under concurrent prompt scheduling.
 - [x] Commit: `feat(acp): forward native multi-session lifecycle`
 
@@ -132,13 +132,13 @@
 - Modify: `skills/bitrouter/references/providers.md`
 - Modify: `docs/ACP_CONTROLLER_SPEC.md` only for implemented-status notes, not design changes
 
-- [ ] Add a failing app integration test that launches `acp serve` against a deterministic stub harness, initializes manager-first, opens two native sessions, and exercises one resumed or loaded session.
-- [ ] Replace `Session::launch_deferred` plus `down::serve_with` in `acp serve` with the connection-level controller, passing the routed endpoint plan and configured child environment.
-- [ ] Keep `acp prompt` and `chat` on the current single-session engine; confirm their existing prompt, permission, timeout, and telemetry tests stay green.
-- [ ] Remove manager-side `providers/*` advertisement from `acp serve`; document that standard providers configure the harness endpoint internally and BitRouter session route control remains P2.
-- [ ] Update the skill runbook with exact pinned adapter commands, manager-first behavior, native IDs, multi-session lifecycle, Codex `CODEX_CONFIG` fallback, and the distinction between controller live state and harness session storage.
-- [ ] Run app ACP tests, harness tests, skill reference checks, and the pure API compatibility matrix.
-- [ ] Commit: `feat(cli): serve the ACP controller`
+- [x] Add a failing app integration test that launches `acp serve` against a deterministic stub harness, initializes manager-first, opens two native sessions, and exercises one loaded session.
+- [x] Replace `Session::launch_deferred` plus `down::serve_with` in `acp serve` with the connection-level controller, passing the routed endpoint plan and configured child environment.
+- [x] Keep `acp prompt` and `chat` on the current single-session engine; confirm their existing prompt, permission, timeout, telemetry, and redirected-output tests stay green.
+- [x] Remove manager-side `providers/*` advertisement from `acp serve`; document that standard providers configure the harness endpoint internally and BitRouter session route control remains P2.
+- [x] Update the skill runbook with exact pinned adapter commands, manager-first behavior, native IDs, multi-session lifecycle, Codex `CODEX_CONFIG` fallback, and the distinction between controller live state and harness session storage.
+- [x] Run the complete app package (1,395 tests), app clippy, skill reference consistency search, and the pure API compatibility matrix.
+- [x] Commit: `feat(cli): serve the ACP controller`
 
 ### Task 7: Review, verify, and publish
 

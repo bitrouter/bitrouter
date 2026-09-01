@@ -430,6 +430,29 @@ pub fn match_invocation(command: &str, args: &[String]) -> Option<&'static Harne
 }
 
 impl Harness {
+    /// Exact maintained ACP adapter identity for controller diagnostics.
+    ///
+    /// `None` means the catalog entry has no pinned, provider-configurable ACP
+    /// adapter contract yet. Callers must identify such invocations as
+    /// configured/custom rather than attributing them to a maintained pin.
+    pub fn maintained_adapter_identity(&self) -> Option<(&'static str, &'static str)> {
+        match self.id {
+            "claude-acp" => Some(("@agentclientprotocol/claude-agent-acp", "0.70.0")),
+            "codex-acp" => Some(("@agentclientprotocol/codex-acp", "1.7.0")),
+            _ => None,
+        }
+    }
+
+    /// Whether a configured invocation uses this catalog entry's exact
+    /// maintained adapter pin.
+    pub fn uses_maintained_adapter(&self, command: &str, args: &[String]) -> bool {
+        let Some((package, version)) = self.maintained_adapter_identity() else {
+            return false;
+        };
+        let exact = format!("{package}@{version}");
+        command.contains(&exact) || args.iter().any(|arg| arg.contains(&exact))
+    }
+
     /// Build the controller's process-scoped endpoint plan for a maintained
     /// ACP adapter. Other catalog entries keep their existing launch routing
     /// until their provider contracts are pinned and tested.
@@ -452,26 +475,22 @@ impl Harness {
         // reviewed part of the router/controller contract.
         headers.retain(|name, value| !name.is_empty() && !value.is_empty());
 
-        let (adapter_package, adapter_version, provider_id, protocol, base_url, fallback) =
-            match self.id {
-                "claude-acp" => (
-                    "@agentclientprotocol/claude-agent-acp",
-                    "0.70.0",
-                    "main",
-                    HarnessProtocol::Anthropic,
-                    base_url.trim_end_matches('/').to_string(),
-                    EndpointFallback::Claude,
-                ),
-                "codex-acp" => (
-                    "@agentclientprotocol/codex-acp",
-                    "1.7.0",
-                    "openai",
-                    HarnessProtocol::OpenAi,
-                    v1_base_url(base_url),
-                    EndpointFallback::Codex,
-                ),
-                _ => return None,
-            };
+        let (adapter_package, adapter_version) = self.maintained_adapter_identity()?;
+        let (provider_id, protocol, base_url, fallback) = match self.id {
+            "claude-acp" => (
+                "main",
+                HarnessProtocol::Anthropic,
+                base_url.trim_end_matches('/').to_string(),
+                EndpointFallback::Claude,
+            ),
+            "codex-acp" => (
+                "openai",
+                HarnessProtocol::OpenAi,
+                v1_base_url(base_url),
+                EndpointFallback::Codex,
+            ),
+            _ => return None,
+        };
 
         Some(HarnessEndpointPlan {
             harness_id: self.id,
@@ -1173,6 +1192,25 @@ mod tests {
             codex.acp_args,
             &["-y", "@agentclientprotocol/codex-acp@1.7.0"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn maintained_provider_contract_requires_the_exact_invocation_pin() -> anyhow::Result<()> {
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp missing from catalog"))?;
+        assert!(claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.70.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.69.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@zed-industries/claude-code-acp@latest".to_string()]
+        ));
         Ok(())
     }
 

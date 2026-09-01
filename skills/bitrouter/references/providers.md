@@ -391,13 +391,27 @@ it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with t
 
 `bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
 
-Agents declared here are referenced by `--agent <id>` when launching a per-session substrate. Managers (GUI, AI agents, editors) spawn one process per session:
+Agents declared here are referenced by `--agent <id>` when launching an ACP
+controller. A manager (GUI, AI agent, or editor) spawns one process per harness
+connection; that connection may carry multiple harness-native sessions:
 
 ```bash
 bitrouter acp serve --agent claude [--config PATH]
 ```
 
-Each spawned process is one session, exposes vanilla ACP over stdio, and exits when the manager disconnects. For headless one-shot use, `bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See `references/sessions.md` for the full substrate model.
+The manager initializes first. BitRouter relays its capabilities to the harness,
+configures a routed endpoint internally when the harness advertises custom
+providers, and masks that internal provider capability manager-side. Claude's
+fallback uses `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, optional
+`ANTHROPIC_MODEL`, and newline-separated `ANTHROPIC_CUSTOM_HEADERS`. Codex's
+fallback uses `CODEX_CONFIG` plus `MODEL_PROVIDER`; ACP mode does not append
+Codex `-c` arguments.
+
+Every session ID and lifecycle operation remains harness-native. The controller
+stores neither transcripts nor a second session catalog, and it exits when the
+manager disconnects. For one-shot local-engine use,
+`bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See
+`references/sessions.md` for the complete ownership boundary.
 
 ## Apply changes
 
