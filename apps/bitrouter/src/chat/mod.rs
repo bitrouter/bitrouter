@@ -35,7 +35,6 @@
 //! `lifecycle`'s `the_panic_hook_restores_and_still_reports`, which pins that
 //! `restore` runs *and* that the panic is still reported afterwards.
 
-pub mod cost;
 pub mod input;
 pub mod session;
 pub mod signals;
@@ -57,12 +56,12 @@ mod tests {
     #[test]
     fn the_chat_module_reaches_nothing_daemon_wide() {
         let sources = [
-            ("cost.rs", include_str!("cost.rs")),
             ("input.rs", include_str!("input.rs")),
+            ("session.rs", include_str!("session.rs")),
         ];
         // Spelled as paths and type names, so a mention in prose — "the
-        // daemon's total", which `cost.rs` explains at length — is not a
-        // false positive.
+        // daemon's total" — is not a false positive. `session.rs` states in
+        // prose what it does not reach, for exactly that reason.
         let forbidden = [
             "crate::daemon",
             "crate::metering",

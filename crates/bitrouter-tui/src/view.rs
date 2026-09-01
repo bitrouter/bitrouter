@@ -4,18 +4,17 @@
 //! cannot know about — the footer composed around it, and the terminal the
 //! writer paints into.
 //!
-//! # The one thing the caller must supply
+//! # Cost is read, never inferred
 //!
 //! ACP carries `UsageUpdate.cost` but nothing saying *whose* spend it is, and
 //! a currency figure with no scope is the most misleading thing a session view
-//! can draw. So [`View::open`] takes a [`CostReader`]: the caller's answer to
-//! "given this usage, whose number is it?", because only the caller knows how
-//! its agent conveys that — for BitRouter, a namespaced `_meta` key that has
-//! no business being named in here.
+//! can draw. [`crate::cost::from_usage`] reads the scope off the `_meta` key
+//! BitRouter writes, and returns `None` when it is absent.
 //!
-//! A reader returning `None` is not an error and not a zero: it renders as
-//! *unreported*, which is what a client that cannot see a price has actually
-//! observed.
+//! `None` is not an error and not a zero: it renders as *unreported*, which is
+//! what a client that cannot see a price has actually observed. That an agent
+//! other than BitRouter would always land there is correct — it has told us a
+//! number and not whose it is.
 //!
 //! # Ordering is part of the honesty
 //!
@@ -28,28 +27,17 @@
 use std::io;
 use std::sync::{Mutex, MutexGuard};
 
-use agent_client_protocol_schema::v1::UsageUpdate;
 use ratatui::text::{Line, Span};
 
-use crate::cost::Cost;
 use crate::journal::Journal;
 use crate::render::Registry;
 use crate::writer::{Cache, Writer};
-
-/// How the caller reads whose spend a `UsageUpdate` describes.
-///
-/// `None` means *not reported* — either the agent sent no cost, or it sent one
-/// with no scope. Both must read as "unreported" rather than as the session's,
-/// because a generic agent may well send `cost` with no notion of the
-/// distinction.
-pub type CostReader = fn(&UsageUpdate) -> Option<Cost>;
 
 /// The live view of one chat session.
 pub struct View {
     writer: Writer<ratatui::backend::CrosstermBackend<io::Stdout>>,
     cache: Cache,
     registry: Registry,
-    cost: CostReader,
     /// How this session is routed. Fixed for its life unless the caller
     /// changes it, and absent when the session is direct.
     route: Option<String>,
@@ -71,13 +59,12 @@ impl View {
     /// Call this **before** the caller's stdin owner exists: the writer reads
     /// the cursor once at construction, which on a real terminal is a DSR
     /// query, and a reader already sitting on stdin would take the answer.
-    pub fn open(route: Option<String>, cost: CostReader) -> io::Result<Self> {
+    pub fn open(route: Option<String>) -> io::Result<Self> {
         let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
         Ok(Self {
             writer: Writer::new(backend)?,
             cache: Cache::default(),
             registry: Registry::default(),
-            cost,
             route,
             notice: Vec::new(),
             modal: None,
@@ -131,7 +118,7 @@ impl View {
     fn footer(&self, journal: &Journal) -> Vec<Line<'static>> {
         let cost = journal
             .usage()
-            .and_then(self.cost)
+            .and_then(crate::cost::from_usage)
             .map_or_else(crate::cost::unreported, |cost| cost.render());
         let mut status: Vec<Span<'static>> = cost.spans;
         if let Some(route) = &self.route {
@@ -203,48 +190,48 @@ pub fn lock(shared: &Mutex<Journal>) -> MutexGuard<'_, Journal> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use agent_client_protocol_schema::v1::UsageUpdate;
+
     use crate::cost::Scope;
 
-    fn usage(cost: bool) -> UsageUpdate {
+    fn usage(cost: bool, scope: Option<&str>) -> UsageUpdate {
         let mut usage = UsageUpdate::new(1_500, 200_000);
         if cost {
             usage.cost = Some(agent_client_protocol_schema::v1::Cost::new(0.42, "USD"));
         }
+        if let Some(scope) = scope {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                crate::cost::COST_SCOPE_META_KEY.to_string(),
+                serde_json::Value::String(scope.to_string()),
+            );
+            usage.meta = Some(meta);
+        }
         usage
     }
 
-    /// A reader that declines to scope the figure must produce *unreported*,
-    /// never a zero and never an unlabelled number.
-    #[test]
-    fn a_declining_cost_reader_renders_unreported() {
-        let declined: CostReader = |_| None;
-        let usage = usage(true);
-        let rendered = crate::plain::text(
-            &Some(&usage)
-                .and_then(declined)
-                .map_or_else(crate::cost::unreported, |c| c.render()),
-        );
-        assert!(rendered.contains("unreported"), "{rendered:?}");
-        assert!(!rendered.contains('0'), "{rendered:?}");
+    fn rendered(usage: &UsageUpdate) -> String {
+        crate::plain::text(
+            &crate::cost::from_usage(usage).map_or_else(crate::cost::unreported, |c| c.render()),
+        )
     }
 
-    /// The reader's answer is what reaches the line — the view never decides
-    /// scope for itself.
+    /// A figure that arrives without a scope must produce *unreported*, never
+    /// a zero and never an unlabelled number. This is the case every agent but
+    /// BitRouter lands in.
     #[test]
-    fn the_readers_scope_is_the_one_rendered() {
-        let wider: CostReader = |u| {
-            u.cost
-                .as_ref()
-                .map(|c| Cost::new(c.amount, "USD", Scope::Wider))
-        };
-        let usage = usage(true);
-        let rendered = crate::plain::text(
-            &Some(&usage)
-                .and_then(wider)
-                .map_or_else(crate::cost::unreported, |c| c.render()),
-        );
-        assert!(rendered.contains("all callers"), "{rendered:?}");
-        assert!(rendered.contains("0.42"), "{rendered:?}");
+    fn an_unscoped_cost_renders_unreported() {
+        let text = rendered(&usage(true, None));
+        assert!(text.contains("unreported"), "{text:?}");
+        assert!(!text.contains('0'), "{text:?}");
+    }
+
+    /// The scope on the wire is the one that reaches the line — the view never
+    /// decides it.
+    #[test]
+    fn the_wire_scope_is_the_one_rendered() {
+        let text = rendered(&usage(true, Some(crate::cost::to_wire(Scope::Wider))));
+        assert!(text.contains("all callers"), "{text:?}");
+        assert!(text.contains("0.42"), "{text:?}");
     }
 }

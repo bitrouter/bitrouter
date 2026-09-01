@@ -762,6 +762,12 @@ Proposed for v1, **contingent on §19.1**:
    `Ctrl-L` forces a redraw; the scheduler coalesces N chunk updates into one
    frame and renders a permission immediately; the non-TTY gate refuses.
 5. **Boundary checks, all satisfiable in the final boundary.**
+
+   > **SUPERSEDED — the naming check is retired.** The ACP-generic charter it
+   > enforced was dropped when the cost-scope `_meta` key moved into the crate;
+   > see `docs/DEVELOPMENT.md`. The boundary that remains is the Cargo one —
+   > the renderer cannot depend on the app — and the honesty rules the charter
+   > stood for are pinned by named tests instead.
    ```bash
    cargo tree -p bitrouter-tui          # must not include the bitrouter crate
    cargo tree -p bitrouter | rg ratatui # ratatui reaches the app only through bitrouter-tui

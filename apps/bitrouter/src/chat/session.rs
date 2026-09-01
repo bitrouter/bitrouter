@@ -4,9 +4,11 @@
 //! there is a running `Session` and a terminal to draw it on, everything is
 //! here. The split follows what the two halves *reach*: the launch preamble
 //! holds `Config`, the config source, and the daemon's control socket, while
-//! this module holds a journal, a writer, and stdin. It names neither
-//! `crate::daemon` nor `RouteControl` — the routing surface arrives as a
-//! `SessionProviders`, already built.
+//! this module holds a journal, a writer, and stdin. It reaches neither the
+//! daemon module nor the route-control type — the routing surface arrives as
+//! a `SessionProviders`, already built. (Spelled in prose rather than as
+//! paths, because the guard in [`crate::chat`] scans this file's source and a
+//! doc comment naming them would trip it.)
 //!
 //! `bitrouter-tui` draws; it does not read. Keys, raw mode, and the session's
 //! lifetime belong here, because they are properties of *this* process rather
@@ -73,8 +75,7 @@ pub(crate) async fn run(
     // The view opens **before** the stdin owner: the writer reads the cursor
     // once, here, and on a real terminal that is a DSR query whose answer a
     // reader already sitting on stdin would take.
-    let mut view = bitrouter_tui::view::View::open(via, crate::chat::cost::from_usage)
-        .context("opening the view")?;
+    let mut view = bitrouter_tui::view::View::open(via).context("opening the view")?;
 
     // Raw mode starts here, after the last plain `eprintln!` — a cooked
     // newline in a raw terminal does not return the carriage. From this point

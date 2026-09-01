@@ -1745,8 +1745,8 @@ async fn measured_usage_update(
     // this.
     let mut meta = serde_json::Map::new();
     meta.insert(
-        crate::chat::cost::COST_SCOPE_META_KEY.to_string(),
-        serde_json::Value::String(crate::chat::cost::to_wire(scope).to_string()),
+        bitrouter_tui::cost::COST_SCOPE_META_KEY.to_string(),
+        serde_json::Value::String(bitrouter_tui::cost::to_wire(scope).to_string()),
     );
     Some(SessionUpdate::UsageUpdate(
         UsageUpdate::new(
@@ -1958,7 +1958,7 @@ mod cost_tests {
         let scope = usage
             .meta
             .as_ref()
-            .and_then(|m| m.get(crate::chat::cost::COST_SCOPE_META_KEY))
+            .and_then(|m| m.get(bitrouter_tui::cost::COST_SCOPE_META_KEY))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("a cost must carry its scope"))?
             .to_string();

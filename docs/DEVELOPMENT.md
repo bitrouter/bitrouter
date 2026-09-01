@@ -30,25 +30,33 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
-is the boundary, and it is enforced by the build rather than by review: the
-renderer draws only what arrives over the ACP wire, so daemon-wide data — the
-metering store, the control socket, request history — is unreachable from it
-rather than merely unused. Anything it cannot learn from the protocol (the
-session log's path, for one) is passed in by the caller. The previous terminal
-UI lived inside the application, could reach any function in it, and accreted
-verbs with no command-line equivalent until it was deleted; a module boundary
-was a promise, this one is a compiler error. It also depends on neither
-`bitrouter-sdk` — only the ACP schema types, `ratatui`, and `crossterm`.
+is the boundary, and Cargo enforces it: the app depends on the crate by path,
+so the reverse edge is a cyclic-package error, not a review question. What it
+prevents is **reachability** — daemon-wide data (the metering store, the
+control socket, request history) is unreachable from the renderer rather than
+merely unused. The previous terminal UI lived inside the application, could
+reach any function in it, and accreted verbs with no command-line equivalent
+until it was deleted; a module boundary was a promise, this one is a compiler
+error.
 
-The line is drawn on **knowledge, not medium**. Rendering something is never by
-itself a reason to keep it in the app, and a method BitRouter is currently
-alone in *serving* is still ACP: `providers/list` renders in the crate because
-`ProviderInfo` is an `agent-client-protocol-schema` type. What stays in the app
-is what the protocol does not carry — the `_meta` key naming a cost figure's
-scope (`apps/bitrouter/src/chat/cost.rs`), this process's stdin and signals,
-and anything needing `Config` or the control socket. The check is mechanical:
-`rg -n "bitrouter/costScope|COST_SCOPE_META_KEY" crates/bitrouter-tui/src`
-must return nothing.
+**The ACP-generic charter is retired.** The crate was once forbidden from
+naming any BitRouter concept. The check for it began life unanchored — as
+`grep -rn "bitrouter/"`, which matched the doc comment that stated it — and was
+later tightened to
+`rg -n "bitrouter/costScope|COST_SCOPE_META_KEY" crates/bitrouter-tui/src`.
+That tightened form worked, and this change deliberately breaks it: the
+cost-scope wire spelling now lives in `crates/bitrouter-tui/src/cost.rs`,
+because splitting one `_meta` key across a crate boundary bought nothing but
+two places to look. This is BitRouter's TUI and may name BitRouter's concepts.
+Conforming to ACP is still how the renderer works, and a non-BitRouter agent
+still renders — it lands in the honest-default branch of every control.
+
+What has *not* changed is why any of it was chosen. The honesty rules are now
+pinned by named tests rather than by an absent dependency: an unscoped cost
+renders `unreported` and never `$0.00`; an agent with no `providers/*` gets no
+picker rather than a dead one; a cancelled permission never resolves to
+consent. Those tests are the guard — deleting one is the change to refuse in
+review.
 
 Where a control's honesty depends on something ACP does not carry, the crate
 takes it as a **parameter** rather than inferring it — `Picker::open` takes
