@@ -149,6 +149,7 @@ fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
 pub struct PipelineContext {
     // ===== original request (Stage 0, read-only) =====
     request_id: String,
+    original_model: String,
     model: String,
     caller: CallerContext,
     headers: http::HeaderMap,
@@ -216,6 +217,7 @@ impl PipelineContext {
     pub fn new(req: PipelineRequest) -> Self {
         Self {
             request_id: req.request_id,
+            original_model: req.original_model,
             model: req.model,
             caller: req.caller,
             headers: req.headers,
@@ -250,6 +252,7 @@ impl PipelineContext {
     pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
         Self {
             request_id: self.request_id.clone(),
+            original_model: self.original_model.clone(),
             model: self.model.clone(),
             caller: self.caller.clone(),
             headers: self.headers.clone(),
@@ -419,6 +422,11 @@ impl PipelineContext {
     /// The request id.
     pub fn request_id(&self) -> &str {
         &self.request_id
+    }
+
+    /// Caller-supplied model selector before any ingress transform rewrote it.
+    pub fn original_model(&self) -> &str {
+        &self.original_model
     }
 
     /// The requested model string (may still carry `@preset` / `:variant`).
@@ -1032,6 +1040,7 @@ mod tests {
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
         let req = PipelineRequest {
             request_id: "test".to_string(),
+            original_model: prompt.model.clone(),
             model: prompt.model.clone(),
             caller: CallerContext::local(),
             headers: http::HeaderMap::new(),
@@ -1056,6 +1065,18 @@ mod tests {
             tool_choice: None,
             stream: false,
         }
+    }
+
+    #[test]
+    fn original_model_survives_effective_model_changes() {
+        let prompt = empty_prompt();
+        let request = PipelineRequest::new("@careful", CallerContext::local(), prompt);
+        let mut context = PipelineContext::new(request);
+
+        context.set_model("openai:gpt-5.5");
+
+        assert_eq!(context.original_model(), "@careful");
+        assert_eq!(context.model(), "openai:gpt-5.5");
     }
 
     #[test]
