@@ -26,6 +26,12 @@ use crate::language_model::types::{
 pub trait UpstreamTurn: Send + Sync {
     /// Run one upstream turn for `prompt`.
     async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult>;
+
+    /// Whether router-owned continuation work may begin. Implementations that
+    /// do not have request-lifetime control remain continuable by default.
+    fn should_continue(&self) -> bool {
+        true
+    }
 }
 
 /// Drives the server-side tool loop over a [`ToolsetRegistry`].
@@ -146,8 +152,18 @@ impl ServerToolLoop {
         let mut consecutive_errors = 0u32;
         let mut rounds = 0u32;
         let mut server_calls: Vec<ServerToolCall> = Vec::new();
+        let mut previous_result: Option<ExecutionResult> = None;
 
         loop {
+            if !upstream.should_continue()
+                && let Some(mut result) = previous_result.take()
+            {
+                result.server_tool_calls = std::mem::take(&mut server_calls);
+                return Ok(ServerToolLoopOutcome {
+                    result: truncate(result, total, had_usage, "client_disconnected"),
+                    provider_terminal_exposed: false,
+                });
+            }
             let mut result = upstream.run(&working).await?;
             if let Some(usage) = &result.result.usage {
                 add_usage(&mut total, usage);
@@ -167,6 +183,13 @@ impl ServerToolLoop {
                     });
                 }
                 TurnDisposition::Execute(calls) => {
+                    if !upstream.should_continue() {
+                        result.server_tool_calls = std::mem::take(&mut server_calls);
+                        return Ok(ServerToolLoopOutcome {
+                            result: truncate(result, total, had_usage, "client_disconnected"),
+                            provider_terminal_exposed: false,
+                        });
+                    }
                     if rounds >= self.config.max_iterations
                         || start.elapsed() >= self.config.total_budget
                     {
@@ -205,6 +228,7 @@ impl ServerToolLoop {
                             provider_terminal_exposed: false,
                         });
                     }
+                    previous_result = Some(result);
                 }
             }
         }
@@ -402,7 +426,9 @@ mod tests {
     use crate::language_model::server_tools::toolset::RouterToolset;
     use crate::language_model::types::{GenerateResult, Tool};
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard};
+    use tokio::sync::{Notify, Semaphore};
 
     #[test]
     fn aggregated_usage_retains_provenance_and_every_raw_fragment() {
@@ -540,6 +566,146 @@ mod tests {
         }
     }
 
+    /// Replays canned turns while exposing an independently controlled
+    /// continuation signal. A turn may simulate the client disconnecting as
+    /// soon as its provider response has been received.
+    struct DisconnectUpstream {
+        responses: Mutex<VecDeque<ExecutionResult>>,
+        calls: AtomicUsize,
+        continue_: AtomicBool,
+        disconnect_after_run: bool,
+    }
+
+    impl DisconnectUpstream {
+        fn new(responses: Vec<ExecutionResult>, disconnect_after_run: bool) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                calls: AtomicUsize::new(0),
+                continue_: AtomicBool::new(true),
+                disconnect_after_run,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+
+        fn disconnect(&self) {
+            self.continue_.store(false, Ordering::SeqCst);
+        }
+
+        fn should_continue(&self) -> bool {
+            self.continue_.load(Ordering::SeqCst)
+        }
+
+        fn responses(&self) -> MutexGuard<'_, VecDeque<ExecutionResult>> {
+            match self.responses.lock() {
+                Ok(responses) => responses,
+                Err(poisoned) => poisoned.into_inner(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl UpstreamTurn for DisconnectUpstream {
+        async fn run(&self, _prompt: &Prompt) -> Result<ExecutionResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let result = self.responses().pop_front().ok_or_else(|| {
+                BitrouterError::Internal("disconnect test exhausted upstream turns".to_string())
+            })?;
+            if self.disconnect_after_run {
+                self.disconnect();
+            }
+            Ok(result)
+        }
+
+        fn should_continue(&self) -> bool {
+            DisconnectUpstream::should_continue(self)
+        }
+    }
+
+    struct CountingToolset {
+        calls: AtomicUsize,
+        finished: AtomicUsize,
+        started: Option<Arc<Notify>>,
+        release: Option<Arc<Semaphore>>,
+    }
+
+    impl CountingToolset {
+        fn immediate() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                finished: AtomicUsize::new(0),
+                started: None,
+                release: None,
+            }
+        }
+
+        fn gated(started: Arc<Notify>, release: Arc<Semaphore>) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                finished: AtomicUsize::new(0),
+                started: Some(started),
+                release: Some(release),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+
+        fn finished(&self) -> usize {
+            self.finished.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl RouterToolset for CountingToolset {
+        async fn list_tools(&self, _ctx: &ToolContext) -> Result<Vec<Tool>> {
+            Ok(vec![Tool::Function {
+                name: "search".to_string(),
+                description: None,
+                parameters: serde_json::json!({ "type": "object" }),
+                strict: None,
+                provider_metadata: ProviderMetadata::new(),
+            }])
+        }
+
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _arguments: &str,
+            _ctx: &ToolContext,
+        ) -> Result<ToolResultOutput> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(started) = &self.started {
+                started.notify_one();
+            }
+            if let Some(release) = &self.release {
+                let permit = release.acquire().await.map_err(|_| {
+                    BitrouterError::Internal("disconnect test tool gate closed".to_string())
+                })?;
+                permit.forget();
+            }
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolResultOutput::Text {
+                value: "ran search".to_string(),
+            })
+        }
+
+        fn owns(&self, name: &str) -> bool {
+            name == "search"
+        }
+    }
+
+    fn disconnect_loop_with(toolset: Arc<CountingToolset>) -> ServerToolLoop {
+        ServerToolLoop::new(
+            ToolsetRegistry::new(vec![toolset]),
+            ServerToolLoopConfig::default(),
+            Arc::new(AllowAll),
+        )
+    }
+
     fn loop_with(names: &[&str], fail: bool, config: ServerToolLoopConfig) -> ServerToolLoop {
         let toolset = Arc::new(MockToolset {
             names: names.iter().map(|s| s.to_string()).collect(),
@@ -613,6 +779,91 @@ mod tests {
             text: s.to_string(),
             provider_metadata: ProviderMetadata::new(),
         }
+    }
+
+    fn truncation_reason(result: &ExecutionResult) -> Option<&str> {
+        match result.result.finish_reason.as_ref() {
+            Some(FinishReason::Other(reason)) => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn server_tool_disconnect_after_provider_result_preserves_usage_without_running_tool() {
+        let expected_usage = Usage {
+            prompt_tokens: 13,
+            completion_tokens: 5,
+            cache_read_tokens: 3,
+            origin: UsageOrigin::ProviderReported,
+            raw: Some(Box::new(serde_json::json!({
+                "input_tokens": 13,
+                "output_tokens": 5
+            }))),
+            ..Default::default()
+        };
+        let mut provider_result = exec(vec![tool_call("search")]);
+        provider_result.result.usage = Some(expected_usage.clone());
+        let upstream = DisconnectUpstream::new(
+            vec![provider_result, exec(vec![text("unexpected later turn")])],
+            true,
+        );
+        let toolset = Arc::new(CountingToolset::immediate());
+        let loop_ = disconnect_loop_with(Arc::clone(&toolset));
+
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await
+            .unwrap();
+
+        assert!(!upstream.should_continue());
+        assert_eq!(upstream.calls(), 1);
+        assert_eq!(toolset.calls(), 0);
+        assert_eq!(outcome.result.result.usage, Some(expected_usage));
+        assert!(!outcome.provider_terminal_exposed);
+        assert_eq!(
+            truncation_reason(&outcome.result),
+            Some("client_disconnected")
+        );
+    }
+
+    #[tokio::test]
+    async fn server_tool_disconnect_during_running_tool_finishes_tool_without_next_upstream_turn() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Semaphore::new(0));
+        let toolset = Arc::new(CountingToolset::gated(
+            Arc::clone(&started),
+            Arc::clone(&release),
+        ));
+        let loop_ = disconnect_loop_with(Arc::clone(&toolset));
+        let upstream = Arc::new(DisconnectUpstream::new(
+            vec![
+                exec(vec![tool_call("search")]),
+                exec(vec![text("unexpected later turn")]),
+            ],
+            false,
+        ));
+        let task_upstream = Arc::clone(&upstream);
+
+        let task = tokio::spawn(async move {
+            loop_
+                .run_with_provenance(&base_prompt(), &tool_ctx(), task_upstream.as_ref())
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .unwrap();
+        upstream.disconnect();
+        release.add_permits(1);
+        let outcome = task.await.unwrap().unwrap();
+
+        assert_eq!(toolset.calls(), 1);
+        assert_eq!(toolset.finished(), 1);
+        assert_eq!(upstream.calls(), 1);
+        assert!(!outcome.provider_terminal_exposed);
+        assert_eq!(
+            truncation_reason(&outcome.result),
+            Some("client_disconnected")
+        );
     }
 
     #[tokio::test]

@@ -303,6 +303,10 @@ impl UpstreamTurn for PipelineUpstream<'_> {
             .execute_with_fallback(self.chain, prompt, self.ctx)
             .await
     }
+
+    fn should_continue(&self) -> bool {
+        !self.ctx.client_disconnected()
+    }
 }
 
 /// Drives one upstream **streaming** turn for the server-side tool loop. Each
