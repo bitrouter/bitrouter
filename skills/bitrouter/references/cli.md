@@ -151,7 +151,15 @@ Two ACP execution modes share launch routing but not session ownership. `acp ser
 
 **Endpoint setup**: Claude uses pinned `@agentclientprotocol/claude-agent-acp@0.70.0`; Codex uses pinned `@agentclientprotocol/codex-acp@1.7.0`. Controller-to-harness `providers/*` configures the model endpoint and is removed from manager-facing capabilities. Claude's fallback is `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex's is `CODEX_CONFIG` plus `MODEL_PROVIDER`, with no ACP-mode `-c` arguments.
 
-**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Routed model calls still enter daemon observability with BitRouter's static controller/harness headers and the harness's native Claude/Codex identity headers. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
+**Session route control**: a locally bound controller advertises stable-v1
+`_bitrouter/route/list|set|reset` methods under initialize response
+`_meta["bitrouter.dev/controller"].routeControl`. They operate on opaque native
+`sessionId` values and create daemon-confirmed ephemeral leases; manager-side
+`providers/*` remains unavailable. `--direct` and explicit remote `--base-url`
+connections do not advertise route control because they have no trusted local
+daemon binding.
+
+**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. Authorization, cookies, and controller credentials remain excluded. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
 
 **NDJSON format** (for `acp prompt` / `spawn -p`): the **first** line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — for joining the session to daemon cost/metering. Each update line is then a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` follows the session line. A fail-fast routing failure emits a single `{"type":"error","code":"daemon_unreachable"|"auth_required","via":…,"hint":…}` line instead, before any session is created.
 
