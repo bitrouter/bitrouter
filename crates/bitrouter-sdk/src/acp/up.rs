@@ -1032,6 +1032,16 @@ mod tests {
     use futures::StreamExt;
 
     #[test]
+    fn stable_v1_initialize_keeps_numeric_wire_version() -> anyhow::Result<()> {
+        let request = InitializeRequest::new(ProtocolVersion::V1);
+        let wire = serde_json::to_value(request)?;
+
+        assert_eq!(wire["protocolVersion"], serde_json::json!(1));
+        assert!(wire.get("clientCapabilities").is_some());
+        Ok(())
+    }
+
+    #[test]
     fn agent_child_never_inherits_nested_session_markers() {
         let cmd = agent_command("echo", &[], &HashMap::new(), &[]);
         let removed: Vec<_> = cmd

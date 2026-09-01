@@ -393,10 +393,9 @@ fn serve_on(
                         // Any other unhandled request (fs/*, terminal/*, unknown):
                         // answer with a proper "method not found" rather than
                         // dropping. Claims the message.
-                        Dispatch::Request(..) => {
-                            message.respond_with_error(
+                        Dispatch::Request(_, responder) => {
+                            responder.respond_with_error(
                                 agent_client_protocol::schema::v1::Error::method_not_found(),
-                                cx,
                             )?;
                             Ok(Handled::Yes)
                         }

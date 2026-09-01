@@ -6,7 +6,7 @@
 
 **Architecture:** Use the official Rust SDK 2.0 conductor and proxy roles as the connection kernel. A BitRouter proxy intercepts only initialization so it can relay manager client capabilities, configure a harness-advertised LLM provider, verify the effective non-secret endpoint, mask that internal provider capability from the manager, and identify the wrapper honestly. Every session method, callback, notification, response, unknown extension field, and native session ID otherwise passes through the conductor unchanged. The existing single-session engine remains available for `acp prompt` and `chat`; `acp serve` moves to the controller.
 
-**Tech Stack:** Rust 2024, Tokio, `agent-client-protocol` 2.0, `agent-client-protocol-schema` 1.7, `agent-client-protocol-conductor` 2.0, serde/JSON, Cargo nextest/clippy/rustdoc.
+**Tech Stack:** Rust 2024, Tokio, `agent-client-protocol` 2.0, its release-pinned `agent-client-protocol-schema` 1.5, `agent-client-protocol-conductor` 2.0, serde/JSON, Cargo nextest/clippy/rustdoc.
 
 **Spec:** [`docs/ACP_CONTROLLER_SPEC.md`](../../ACP_CONTROLLER_SPEC.md), especially §§5–9, 16–18, and Delivery Phases 0–1.
 
@@ -39,12 +39,12 @@
 - Modify as required by compile errors: `crates/bitrouter-sdk/src/acp/down.rs`
 - Modify as required by compile errors: ACP tests under `crates/bitrouter-sdk/src/acp/`
 
-- [ ] Add a compile-time characterization test that exercises the stable v1 initialize/new/prompt types through the current live runtime boundary; name the breaking change it catches: accidentally selecting or requiring v2 wire semantics.
-- [ ] Run the focused test on the old dependency graph and record the green compatibility baseline before the dependency-only migration.
-- [ ] Pin `agent-client-protocol = "=2.0.0"`, `agent-client-protocol-schema = "=1.7.0"` with `unstable_llm_providers` and `unstable_session_fork`, and `agent-client-protocol-conductor = "=2.0.0"` behind the SDK `acp` feature.
-- [ ] Run `cargo check -p bitrouter-sdk --features acp` and use compiler diagnostics to migrate SDK 1.2 API calls to 2.0 without changing behavior.
-- [ ] Run the focused ACP runtime tests, then `cargo nextest run -p bitrouter-sdk --features acp`.
-- [ ] Commit: `build(acp): upgrade controller runtime`
+- [x] Add a compile-time characterization test that exercises the stable v1 initialize/new/prompt types through the current live runtime boundary; name the breaking change it catches: accidentally selecting or requiring v2 wire semantics.
+- [x] Run the focused test on the old dependency graph and record the green compatibility baseline before the dependency-only migration.
+- [x] Pin `agent-client-protocol = "=2.0.0"`, its exact compatible `agent-client-protocol-schema = "=1.5.0"` with `unstable_llm_providers` and `unstable_session_fork`, and `agent-client-protocol-conductor = "=2.0.0"` behind the SDK `acp` feature.
+- [x] Run `cargo check -p bitrouter-sdk --features acp` and use compiler diagnostics to migrate SDK 1.2 API calls to 2.0 without changing behavior.
+- [x] Run the focused ACP runtime tests, then `cargo nextest run -p bitrouter-sdk --all-features` (the crate's test target requires `config_file` in addition to `acp`).
+- [x] Commit: `build(acp): upgrade controller runtime`
 
 ### Task 2: Define one harness endpoint plan and pin adapters
 
