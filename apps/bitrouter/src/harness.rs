@@ -450,7 +450,7 @@ impl Harness {
             return false;
         };
         let exact = format!("{package}@{version}");
-        command.contains(&exact) || args.iter().any(|arg| arg.contains(&exact))
+        command == exact || args.iter().any(|arg| arg == &exact)
     }
 
     /// Build the controller's process-scoped endpoint plan for a maintained
@@ -1206,6 +1206,10 @@ mod tests {
         assert!(!claude.uses_maintained_adapter(
             "npx",
             &["@agentclientprotocol/claude-agent-acp@0.69.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.70.0-tampered".to_string()]
         ));
         assert!(!claude.uses_maintained_adapter(
             "npx",

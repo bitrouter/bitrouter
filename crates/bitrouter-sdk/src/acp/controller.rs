@@ -1,6 +1,7 @@
 //! Connection-level ACP controller.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use agent_client_protocol::schema::InitializeProxyRequest;
 use agent_client_protocol::schema::v1::{
@@ -162,12 +163,19 @@ struct ControllerProxy {
     config: ControllerConfig,
 }
 
+const INITIALIZE_NOT_STARTED: u8 = 0;
+const INITIALIZE_RUNNING: u8 = 1;
+const INITIALIZE_READY: u8 = 2;
+const INITIALIZE_FAILED: u8 = 3;
+
 impl ConnectTo<Conductor> for ControllerProxy {
     async fn connect_to(
         self,
         client: impl ConnectTo<Proxy>,
     ) -> Result<(), agent_client_protocol::Error> {
         let config = std::sync::Arc::new(self.config);
+        let initialize_state = std::sync::Arc::new(AtomicU8::new(INITIALIZE_NOT_STARTED));
+        let forwarding_state = std::sync::Arc::clone(&initialize_state);
         Proxy
             .builder()
             .name("bitrouter-controller-gate")
@@ -177,7 +185,22 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<InitializeResponse>,
                       connection: ConnectionTo<Conductor>| {
                     let config = std::sync::Arc::clone(&config);
+                    let initialize_state = std::sync::Arc::clone(&initialize_state);
                     async move {
+                        if initialize_state
+                            .compare_exchange(
+                                INITIALIZE_NOT_STARTED,
+                                INITIALIZE_RUNNING,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_err()
+                        {
+                            return responder.respond_with_error(
+                                agent_client_protocol::Error::invalid_request()
+                                    .data("controller initialize may be called only once"),
+                            );
+                        }
                         let gate_connection = connection.clone();
                         connection.spawn(async move {
                             let mut response = match gate_connection
@@ -186,16 +209,21 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                 .await
                             {
                                 Ok(response) => response,
-                                Err(error) => return responder.respond_with_error(error),
+                                Err(error) => {
+                                    initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
+                                    return responder.respond_with_error(error);
+                                }
                             };
                             if response.agent_capabilities.providers.is_some()
                                 && let Some(endpoint) = &config.endpoint
                                 && let Err(error) =
                                     configure_provider(&gate_connection, endpoint).await
                             {
+                                initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
                                 return responder.respond_with_error(error);
                             }
                             decorate_initialize_response(&mut response, &config);
+                            initialize_state.store(INITIALIZE_READY, Ordering::SeqCst);
                             responder.respond(response)
                         })?;
                         Ok(())
@@ -203,7 +231,9 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 },
                 agent_client_protocol::on_receive_request!(),
             )
-            .with_handler(ForwardMessages)
+            .with_handler(ForwardMessages {
+                initialize_state: forwarding_state,
+            })
             .connect_to(client)
             .await
     }
@@ -286,7 +316,22 @@ fn decorate_initialize_response(response: &mut InitializeResponse, config: &Cont
         .insert("bitrouter.dev/controller".to_string(), controller_meta);
 }
 
-struct ForwardMessages;
+struct ForwardMessages {
+    initialize_state: std::sync::Arc<AtomicU8>,
+}
+
+fn reject_manager_dispatch(
+    message: Dispatch,
+    error: agent_client_protocol::Error,
+) -> Result<(), agent_client_protocol::Error> {
+    match message {
+        Dispatch::Request(_request, responder) => responder.respond_with_error(error),
+        Dispatch::Notification(_notification) => Ok(()),
+        Dispatch::Response(_response, _router) => Err(agent_client_protocol::util::internal_error(
+            "unexpected manager response reached the controller proxy",
+        )),
+    }
+}
 
 impl HandleDispatchFrom<Conductor> for ForwardMessages {
     async fn handle_dispatch_from(
@@ -296,6 +341,23 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
     ) -> Result<Handled<Dispatch>, agent_client_protocol::Error> {
         MatchDispatchFrom::new(message, &connection)
             .if_dispatch_from(Client, async |message: Dispatch| {
+                if matches!(message.method(), "providers/set" | "providers/list") {
+                    reject_manager_dispatch(
+                        message,
+                        agent_client_protocol::Error::method_not_found().data(
+                            "provider methods configure the internal harness endpoint and are not manager-facing",
+                        ),
+                    )?;
+                    return Ok(Handled::Yes);
+                }
+                if self.initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                    reject_manager_dispatch(
+                        message,
+                        agent_client_protocol::Error::invalid_request()
+                            .data("controller initialization is not complete"),
+                    )?;
+                    return Ok(Handled::Yes);
+                }
                 connection.send_proxied_message_to(Agent, message)?;
                 Ok(Handled::Yes)
             })
@@ -436,6 +498,48 @@ mod tests {
 
     struct CallbackAgent {
         state: Arc<CallbackState>,
+    }
+
+    #[derive(Default)]
+    struct InitializeGateState {
+        initialize_count: AtomicUsize,
+        new_count: AtomicUsize,
+    }
+
+    struct SlowInitializeAgent {
+        state: Arc<InitializeGateState>,
+    }
+
+    impl ConnectTo<Client> for SlowInitializeAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            let initialize_state = Arc::clone(&self.state);
+            let new_state = Arc::clone(&self.state);
+            Agent
+                .builder()
+                .name("slow-initialize-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        initialize_state
+                            .initialize_count
+                            .fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: NewSessionRequest, responder, _connection| {
+                        new_state.new_count.fetch_add(1, Ordering::SeqCst);
+                        responder.respond(NewSessionResponse::new("native-after-init"))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
     }
 
     impl ConnectTo<Client> for CallbackAgent {
@@ -1082,6 +1186,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initialize_gate_rejects_early_sessions_and_duplicate_initialize() -> anyhow::Result<()>
+    {
+        let state = Arc::new(InitializeGateState::default());
+        let controller = Controller::new(
+            SlowInitializeAgent {
+                state: Arc::clone(&state),
+            },
+            ControllerConfig::new(ControllerIdentity::new(
+                "test-harness",
+                "test-adapter",
+                "1.0.0",
+            )),
+        );
+        let (manager_out, controller_in) = duplex(4096);
+        let (controller_out, manager_in) = duplex(4096);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("initialize-gate-manager")
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    let initialize = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    );
+                    let early_session =
+                        receive(connection.send_request(NewSessionRequest::new("/workspace")));
+                    let (initialize, early_session) = tokio::join!(initialize, early_session);
+                    initialize?;
+                    let early_error = early_session
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("early session bypassed initialize gate"))?;
+                    assert_eq!(i32::from(early_error.code), -32600);
+
+                    let duplicate_error = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("duplicate initialize was accepted"))?;
+                    assert_eq!(i32::from(duplicate_error.code), -32600);
+
+                    let session =
+                        receive(connection.send_request(NewSessionRequest::new("/workspace")))
+                            .await?;
+                    assert_eq!(session.session_id.0.as_ref(), "native-after-init");
+                    Ok(())
+                },
+            )
+            .await?;
+        assert_eq!(state.initialize_count.load(Ordering::SeqCst), 1);
+        assert_eq!(state.new_count.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn initialize_applies_and_verifies_advertised_provider() -> anyhow::Result<()> {
         let state = Arc::new(ProviderState::default());
         let endpoint = provider_endpoint();
@@ -1136,6 +1305,59 @@ mod tests {
             requests[0].headers.get("authorization").map(String::as_str),
             Some("Bearer secret")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manager_cannot_reconfigure_the_internal_harness_provider() -> anyhow::Result<()> {
+        let state = Arc::new(ProviderState::default());
+        let controller = Controller::new(
+            ProviderAgent {
+                state: Arc::clone(&state),
+            },
+            controller_config(provider_endpoint()),
+        );
+        let (manager_out, controller_in) = duplex(4096);
+        let (controller_out, manager_in) = duplex(4096);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("provider-hijack-manager")
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                        .await?;
+                    let manager_set = SetProviderRequest::new(
+                        "main",
+                        LlmProtocol::Anthropic,
+                        "https://manager.invalid",
+                    );
+                    let error = receive(connection.send_request(SetProviderRpc(manager_set)))
+                        .await
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("manager provider rewrite was accepted"))?;
+                    assert_eq!(i32::from(error.code), -32601);
+                    Ok(())
+                },
+            )
+            .await?;
+
+        let requests = match state.requests.lock() {
+            Ok(requests) => requests,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        assert_eq!(requests.len(), 1, "only the controller may configure it");
+        assert_eq!(requests[0].base_url, provider_endpoint().base_url);
         Ok(())
     }
 

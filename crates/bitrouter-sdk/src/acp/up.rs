@@ -253,12 +253,25 @@ type AgentTransport =
 /// It shares the established child policy with [`UpstreamConnection`]:
 /// stripped inherited markers, config-authored env precedence, stderr
 /// draining, process-group teardown, and prompt failure when the child dies.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentProcess {
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
     strip_inherited_env: Vec<String>,
+}
+
+impl std::fmt::Debug for AgentProcess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentProcess")
+            .field("command", &"[CONFIGURED]")
+            .field("arg_count", &self.args.len())
+            .field("env_names", &self.env.keys().collect::<Vec<_>>())
+            .field("env_values", &"[REDACTED]")
+            .field("strip_inherited_env", &self.strip_inherited_env)
+            .finish()
+    }
 }
 
 impl AgentProcess {
@@ -1112,6 +1125,23 @@ mod tests {
         assert_eq!(wire["protocolVersion"], serde_json::json!(1));
         assert!(wire.get("clientCapabilities").is_some());
         Ok(())
+    }
+
+    #[test]
+    fn agent_process_debug_redacts_arguments_and_environment_values() {
+        let process = AgentProcess::new(
+            "/private/bin/agent-secret-path",
+            vec!["--token=argument-secret".to_string()],
+            HashMap::from([(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "environment-secret".to_string(),
+            )]),
+        );
+        let rendered = format!("{process:?}");
+        assert!(!rendered.contains("argument-secret"), "{rendered}");
+        assert!(!rendered.contains("environment-secret"), "{rendered}");
+        assert!(!rendered.contains("agent-secret-path"), "{rendered}");
+        assert!(rendered.contains("ANTHROPIC_AUTH_TOKEN"), "{rendered}");
     }
 
     #[test]

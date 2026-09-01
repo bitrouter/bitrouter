@@ -147,8 +147,8 @@
 - Review all changed files
 - Add fixes and regression tests beside the affected code
 
-- [ ] Use `superpowers:requesting-code-review` to review the complete P0/P1 diff against the spec and this plan. Because no delegated subagents are authorized, perform the prescribed evidence-based review locally and record findings in the turn.
-- [ ] For each finding, use `superpowers:receiving-code-review`: verify it against code/spec, add a reproducing test when behavioral, fix it, and rerun focused tests.
+- [x] Use `superpowers:requesting-code-review` to review the complete P0/P1 diff against the spec and this plan. Because no delegated subagents are authorized, perform the prescribed evidence-based review locally and record findings in the turn.
+- [x] For each finding, use `superpowers:receiving-code-review`: verify it against code/spec, add a reproducing test when behavioral, fix it, and rerun focused tests.
 - [ ] Run `cargo fmt -- --check`.
 - [ ] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo nextest run --all-features`.
 - [ ] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo clippy --workspace --all-features --tests -- -D warnings`.
