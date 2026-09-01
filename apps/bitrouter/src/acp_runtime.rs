@@ -214,7 +214,7 @@ impl AcpRuntime {
             return Err("controller credential is not active".to_string());
         }
         let lease = RouteLease {
-            lease_id: format!("brl_{}", uuid::Uuid::new_v4().simple()),
+            lease_id: format!("brlease_{}", uuid::Uuid::new_v4().simple()),
             controller_instance_id: controller_instance_id.to_string(),
             session_id: session_id.to_string(),
             route: route.to_string(),

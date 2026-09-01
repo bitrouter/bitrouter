@@ -211,4 +211,17 @@ mod tests {
         assert_eq!(tagged.launch_id(), Some("brl_abc"));
         assert_eq!(plain.launch_id(), None);
     }
+
+    #[test]
+    fn scoped_callers_keep_public_identity_separate_from_private_ownership() {
+        let caller = CallerContext::new_scoped("acp-controller", "acp-controller", "brc_one");
+
+        assert_eq!(caller.api_key_id(), "acp-controller");
+        assert_eq!(caller.user_id(), "acp-controller");
+        assert_eq!(caller.security_scope_id(), "brc_one");
+        assert_eq!(
+            CallerContext::new("key", "user").security_scope_id(),
+            "user"
+        );
+    }
 }

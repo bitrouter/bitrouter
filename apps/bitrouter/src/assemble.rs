@@ -64,6 +64,7 @@ use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
+use crate::session_identity::SessionContextHook;
 use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
@@ -612,6 +613,7 @@ pub async fn build_app_with_path(
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
     let acp_runtime_for_hooks = Arc::clone(&acp_runtime);
+    let acp_runtime_for_session = Arc::clone(&acp_runtime);
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
@@ -637,14 +639,17 @@ pub async fn build_app_with_path(
             if server_tools_enabled {
                 lm.pre_request_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → continuation → policy. The continuation
-            // hook resolves owner-scoped history before Stage 2 model selection.
+            // Stage 1, in order: auth → request-session normalization →
+            // continuation → policy. Session normalization may apply a
+            // credential-bound route lease before Stage 2 model selection;
+            // explicit routes and provider continuations retain precedence.
             // The guardrail plugin appends its hooks after this closure (see
             // `.plugin(...)` below), preserving the policy → guardrail order.
             lm.pre_request_hook(AuthHook::with_acp_runtime(
                 db_for_hooks.clone(),
                 acp_runtime_for_hooks,
             ));
+            lm.pre_request_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_request_hook(continuation_for_pre_request);
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
