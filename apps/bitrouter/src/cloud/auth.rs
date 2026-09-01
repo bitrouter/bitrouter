@@ -4,7 +4,6 @@
 //! into [`LoginInputs`] and hands off to the functions here.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use std::sync::Arc;
 
 use bitrouter_providers::hosted::account::credentials::{
@@ -273,64 +272,11 @@ async fn best_effort_revoke(
     }
 }
 
-/// Print local identity. Does NOT call the AS — answers from the
-/// on-disk file only, so it's fast and works offline.
-pub async fn whoami(manager: Arc<CredentialManager>) -> Result<()> {
-    match manager
-        .current()
-        .await
-        .context("opening credentials store")?
-    {
-        Some(credential) => {
-            let Some(creds) = credential.oauth() else {
-                println!("authentication:       api_key");
-                println!("authorization server: {}", credential.base_url());
-                println!("credentials file:     {}", manager.path().display());
-                return Ok(());
-            };
-            println!("authentication:       oauth");
-            let now = Utc::now();
-            let status = if now < creds.expires_at {
-                let remaining = (creds.expires_at - now).num_seconds().max(0);
-                format!("valid ({remaining}s remaining)")
-            } else {
-                let elapsed = (now - creds.expires_at).num_seconds().max(0);
-                format!("EXPIRED ({elapsed}s ago)")
-            };
-            println!("authorization server: {}", creds.authorization_server);
-            println!("client id:            {}", creds.client_id);
-            println!("scope:                {}", creds.scope);
-            println!(
-                "namespace:            {}",
-                creds.namespace_id.as_deref().unwrap_or("(none)")
-            );
-            println!(
-                "subject:              {}",
-                creds.subject.as_deref().unwrap_or("(unknown)")
-            );
-            println!("access token:         {status}");
-            println!("expires at (UTC):     {}", creds.expires_at.to_rfc3339());
-            if let Some(rt_exp) = creds.refresh_token_expires_at {
-                println!("refresh expires (UTC):{}", rt_exp.to_rfc3339());
-            }
-            println!("credentials file:     {}", manager.path().display());
-            Ok(())
-        }
-        None => {
-            println!(
-                "not signed in (no credentials at {})",
-                manager.path().display()
-            );
-            println!("  run `bitrouter cloud login` to sign in");
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use chrono::Utc;
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
