@@ -22,12 +22,13 @@ use bitrouter_sdk::language_model::{
 };
 use serde::Serialize;
 
-use crate::metering::db::{ReconciliationStatus, RequestMetric};
+use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
 use crate::metering::pricing::{
     ChargeEvidence, PricingSource, PricingTable, calculate_charge_evidence,
     unavailable_charge_evidence,
 };
 use crate::metering::store::MeteringStore;
+use crate::session_identity::SessionIdentityObserved;
 
 /// Always-run settlement recorder writing through [`MeteringStore`].
 pub struct MeteringRecorder {
@@ -183,11 +184,46 @@ impl SettlementRecorder for MeteringRecorder {
             );
         }
         let estimated_charge_micro_usd = charge_evidence.charge_micro_usd.unwrap_or(0);
+        let session_event = ctx.get_event::<SessionIdentityObserved>().cloned();
+        let session_identity = session_event
+            .as_ref()
+            .filter(|event| {
+                event.attributed
+                    || event.authenticated_controller_instance_id.is_some()
+                    || event.harness.is_some()
+            })
+            .map(|event| {
+                let serialized = serde_json::to_string(event).map_err(|error| {
+                    bitrouter_sdk::BitrouterError::internal(format!(
+                        "serialize normalized session identity: {error}"
+                    ))
+                })?;
+                Ok::<MeteringSessionIdentity, bitrouter_sdk::BitrouterError>(
+                    MeteringSessionIdentity {
+                        agent_harness: event.harness.clone(),
+                        controller_instance_id: event.authenticated_controller_instance_id.clone(),
+                        acp_session_id: event.acp_session_id.clone(),
+                        native_root_session_id: event.native_root_session_id.clone(),
+                        native_agent_thread_id: event.native_agent_thread_id.clone(),
+                        native_parent_agent_thread_id: event.native_parent_agent_thread_id.clone(),
+                        native_turn_id: event.native_turn_id.clone(),
+                        route_lease_id: event.route_lease_id.clone(),
+                        serialized,
+                    },
+                )
+            })
+            .transpose()?;
+        if let Some(event) = &session_event {
+            ctx.emit(bitrouter_observe::otel::SpanAttributes(
+                session_span_attributes(event),
+            ));
+        }
         let metric = RequestMetric {
             request_id: ctx.request_id.clone(),
             user_id: ctx.caller.user_id().to_string(),
             api_key_id: ctx.caller.api_key_id().to_string(),
             launch_id: ctx.caller.launch_id().map(str::to_string),
+            session_identity,
             model_id: ctx.model_id.clone(),
             provider_id: ctx.provider_id.clone(),
             prompt_tokens: ctx.prompt_tokens,
@@ -241,6 +277,55 @@ impl SettlementRecorder for MeteringRecorder {
         );
         Ok(())
     }
+}
+
+fn session_span_attributes(
+    event: &SessionIdentityObserved,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut attributes = serde_json::Map::from_iter([
+        (
+            "bitrouter.agent.session.attributed".to_string(),
+            serde_json::Value::Bool(event.attributed),
+        ),
+        (
+            "bitrouter.agent.session.route_scope".to_string(),
+            serde_json::Value::String(event.route_scope.clone()),
+        ),
+        (
+            "bitrouter.agent.session.origin".to_string(),
+            serde_json::json!(event.origin),
+        ),
+    ]);
+    for (name, value) in [
+        ("bitrouter.agent.harness", event.harness.as_ref()),
+        (
+            "bitrouter.acp.controller_instance_id",
+            event.authenticated_controller_instance_id.as_ref(),
+        ),
+        ("bitrouter.acp.session_id", event.acp_session_id.as_ref()),
+        (
+            "bitrouter.agent.root_session_id",
+            event.native_root_session_id.as_ref(),
+        ),
+        (
+            "bitrouter.agent.thread_id",
+            event.native_agent_thread_id.as_ref(),
+        ),
+        (
+            "bitrouter.agent.parent_thread_id",
+            event.native_parent_agent_thread_id.as_ref(),
+        ),
+        ("bitrouter.agent.turn_id", event.native_turn_id.as_ref()),
+        (
+            "bitrouter.acp.route_lease_id",
+            event.route_lease_id.as_ref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            attributes.insert(name.to_string(), serde_json::Value::String(value.clone()));
+        }
+    }
+    attributes
 }
 
 fn finish_reason_kind(reason: &FinishReason) -> String {

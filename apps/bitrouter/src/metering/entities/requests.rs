@@ -16,6 +16,24 @@ pub struct Model {
     /// The `bitrouter launch` session this request belongs to, when one minted
     /// the credential it arrived with. `None` for every other caller.
     pub launch_id: Option<String>,
+    /// Recognized agent harness for this request.
+    pub agent_harness: Option<String>,
+    /// Credential-bound ACP controller identity.
+    pub controller_instance_id: Option<String>,
+    /// Trusted ACP session binding.
+    pub acp_session_id: Option<String>,
+    /// Native harness root-session identity.
+    pub native_root_session_id: Option<String>,
+    /// Native exact agent/thread identity.
+    pub native_agent_thread_id: Option<String>,
+    /// Native parent agent/thread identity.
+    pub native_parent_agent_thread_id: Option<String>,
+    /// Native harness turn identity.
+    pub native_turn_id: Option<String>,
+    /// Applied or matched ephemeral route lease identity.
+    pub route_lease_id: Option<String>,
+    /// Redaction-reviewed normalized identity evidence and conflicts.
+    pub session_identity_json: Option<String>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.
