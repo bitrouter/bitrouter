@@ -76,11 +76,11 @@
 - Modify: `apps/bitrouter/src/workflow_state/session.rs`
 - Modify if required for a public test seam only: `apps/bitrouter/src/workflow_state/extractors.rs`
 
-- [ ] Add a table-driven compatibility fixture covering explicit `x-bitrouter-workflow-session`, adapter body hints, first-user-message fallback, generic Responses continuation, Claude-like Messages traffic, Codex-like Responses traffic, and conflicting generic headers.
-- [ ] Assert literal legacy `SessionSignal` key/source/confidence plus the route-relevant workflow identity projection for every case; do not derive expectations through extractor helpers.
-- [ ] Run the new test before any workflow-state or route-policy production change and confirm it passes, proving the P0/P1 work has a fixed compatibility state independent of the adapter catalog migration.
+- [x] Add a table-driven compatibility fixture covering explicit `x-bitrouter-workflow-session`, adapter body hints, first-user-message fallback, generic Responses continuation, Claude-like Messages traffic, Codex-like Responses traffic, and conflicting generic headers.
+- [x] Assert literal legacy `SessionSignal` key/source/confidence plus the route-relevant workflow identity projection for every case; do not derive expectations through extractor helpers.
+- [x] Run the new test before any workflow-state or route-policy production change and confirm it passes, proving the P0/P1 work has a fixed compatibility state independent of the adapter catalog migration.
 - [ ] Rerun it after each controller integration task; any difference is a regression and must be fixed without changing the fixture.
-- [ ] Commit: `test(router): lock pure API sessions`
+- [x] Commit: `test(router): lock pure API sessions`
 
 ### Task 4: Build the manager-first controller initialize gate
 
