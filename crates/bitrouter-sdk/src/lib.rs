@@ -32,6 +32,11 @@
 //!   - [`metrics`] — the [`MetricsRenderer`] trait (the `GET /metrics`
 //!     endpoint contract; spend / token / rate aggregation are
 //!     deployment-specific concerns).
+//!   - [`observe`] — the observability *contract*: the span schema
+//!     ([`observe::schema`], rendered to the committed `span-schema.json`) and
+//!     the [`SpanAttributes`](observe::SpanAttributes) extension hatch.
+//!     Ungated and dependency-free; rendering it onto a wire is
+//!     `bitrouter-telemetry`'s job.
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
 //!
 //! - **Optional features** (off by default):
@@ -40,10 +45,6 @@
 //!     `GET /metrics`, `POST /mcp/{server}`, and graceful shutdown.
 //!   - `config_file` — YAML config loading ([`config::load`],
 //!     [`config::ConfigRoutingTable`]).
-//!   - `otel` — OTLP export of the pipeline's spans and metrics
-//!     ([`otel::OtelExporter`], [`otel::OtelObserveHook`]), over OTLP/HTTP by
-//!     default or OTLP/gRPC under `otel-grpc`. No `opentelemetry*` type
-//!     appears in this crate's public API.
 //!
 //! [axum]: https://docs.rs/axum
 //!
@@ -104,34 +105,31 @@
 //!
 //! ## What ships here, and what ships elsewhere
 //!
-//! The dividing line is **interop surfaces ship in the SDK behind default-off
-//! features; deployment business logic does not.**
+//! The dividing line is **contracts and the seams they plug into ship here;
+//! renderers of them, and deployment business logic, do not.**
 //!
-//! What puts [`otel`] on the SDK side of that line is the **span schema**, not
-//! the exporter: the span names (`chat`, `route`, `settle`, the per-hop
-//! `chat`), the `bitrouter.*` attribute vocabulary, and the invariants that
-//! fail silently and expensively when a deployment gets them wrong — a hop is
-//! not a `gen_ai` generation, and stamping it as one makes every
-//! gen_ai-aware backend double-count the reported cost. That schema has to be
-//! identical across every deployment or "interop surface" means nothing.
+//! [`observe`] is the case in point, and it is the one that used to be
+//! misdrawn. What the SDK owns is the **span schema** — the span names
+//! (`chat`, `route`, `settle`, the per-hop `chat`), the `bitrouter.*`
+//! attribute vocabulary, and the invariants that fail silently and expensively
+//! when a deployment gets them wrong: a hop is not a `gen_ai` generation, and
+//! stamping it as one makes every gen_ai-aware backend double-count the
+//! reported cost. That schema has to be identical across every deployment or
+//! "interop surface" means nothing, and it is declared here as data, under no
+//! feature gate, so a deployment can implement it without taking a renderer.
 //!
-//! The OTLP renderer ships *with* the schema because there is exactly one
-//! renderer and it is default-off — not because transport, credentials,
-//! batch processing and endpoint configuration are themselves SDK concerns.
-//! They are here as the schema's implementation, and they are most of the
-//! module by volume. Do not read this paragraph as licence to move further
-//! deployment logic in; read it as the narrowest justification that covers
-//! what is already here.
+//! What the SDK does *not* own is any rendering of it. OTLP transport,
+//! credentials, batch processing, endpoint configuration and cardinality
+//! limiting are one egress path's implementation, not contract, and they ship
+//! in `bitrouter-telemetry`. [`ObserveHook`](language_model::ObserveHook) is
+//! the seam they plug into — a seam with more than one production
+//! implementation, since the OSS binary registers its own observers alongside
+//! the OTLP one.
 //!
-//! An out-of-tree consumer that skips the feature pays nothing: it is off by
-//! default and the whole OpenTelemetry stack drops out of the dependency tree
-//! with it (124 crates without, 154 with). That is a claim about *this
-//! crate*, not about the workspace — `apps/bitrouter` enables `otel-http`
-//! unconditionally, so a workspace build resolves one `bitrouter-sdk` node
-//! with the stack on and every in-repo consumer links it.
+//! Two shared library plugins live in their own crates:
 //!
-//! One shared library plugin still lives in its own crate:
-//!
+//! - `bitrouter-telemetry` — optional telemetry egress: the OTLP exporter, the
+//!   inbound ingress span, and the `tracing` ↔ OpenTelemetry bridge.
 //! - `bitrouter-guardrails` — request / response content scanning (block +
 //!   redact). Content policy is a deployment's own call, not a wire standard.
 //!
@@ -146,26 +144,17 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-// The observability stack is transport-agnostic but cannot function without a
-// wire transport. `__otel-core` carries the stack; `otel-http` / `otel-grpc`
-// add a transport. Guard against `__otel-core` being enabled on its own (e.g.
-// a downstream typo or a stray `dep:` activation) with a clear message instead
-// of a wall of "cannot find function `span_exporter`" errors.
-#[cfg(all(
-    feature = "__otel-core",
-    not(any(feature = "otel-http", feature = "otel-grpc"))
-))]
-compile_error!(
-    "the OpenTelemetry stack needs a transport: enable `otel-http` for \
-     OTLP/HTTP, or `otel-grpc` for OTLP/gRPC"
-);
-
 // ===== shared library code (crate root) =====
 pub mod app;
 pub mod caller;
 pub mod error;
 pub mod event;
 pub mod metrics;
+// The observability contract — the span schema and the attribute extension
+// hatch. Ungated and dependency-free on purpose: a deployment implementing the
+// contract must not have to enable a renderer it is not using. Rendering it
+// onto a wire is `bitrouter-telemetry`'s job, not this crate's.
+pub mod observe;
 pub mod plugin;
 pub mod url_validator;
 
@@ -176,13 +165,6 @@ pub mod config;
 #[cfg(feature = "server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod server;
-
-#[cfg(feature = "__otel-core")]
-#[cfg_attr(docsrs, doc(cfg(feature = "otel")))]
-pub mod otel;
-
-/// Whether the OpenTelemetry exporter is compiled in (under any transport).
-pub const OTEL_ENABLED: bool = cfg!(feature = "__otel-core");
 
 // ===== per-protocol modules =====
 pub mod acp;

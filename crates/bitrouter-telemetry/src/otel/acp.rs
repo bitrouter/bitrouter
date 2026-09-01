@@ -1,6 +1,6 @@
 //! GenAI **agent** spans for the ACP substrate path (`bitrouter acp …`).
 //!
-//! Not to be confused with [`crate::acp`], which is the ACP pipeline itself.
+//! Not to be confused with [`bitrouter_sdk::acp`], which is the ACP pipeline itself.
 //! This module only *observes* that path: it lives here, rather than beside
 //! the pipeline, because `AcpSpanRecorder` stores a tracer obtained from
 //! `OtelExporter::tracer_clone()`, which stays `pub(crate)` (see
@@ -297,7 +297,7 @@ mod tests {
         // Same contract the exporter's conformance tests enforce for the HTTP
         // plane: nothing reaches the wire that
         // `crates/bitrouter-sdk/span-schema.json` does not describe.
-        use crate::otel::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+        use bitrouter_sdk::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
 
         let (tracer, captured) = capturing_tracer();
         let recorder = AcpSpanRecorder::with_tracer(tracer, "claude-acp", "rec-1");

@@ -26,7 +26,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bitrouter_sdk::otel::{OtelConfig, OtelExporter};
+use bitrouter_telemetry::otel::{OtelConfig, OtelExporter};
 use tower::ServiceExt as _;
 
 /// Records every `tracing` event's target and level. A bare `Subscriber`
@@ -79,7 +79,7 @@ async fn ingress_emits_the_pinned_log_target_at_debug() {
     )
     .expect("exporter builds");
 
-    let router = bitrouter_sdk::otel::http_layer::router_wrapper(&exporter)(
+    let router = bitrouter_telemetry::otel::http_layer::router_wrapper(&exporter)(
         axum::Router::new().route("/probe", axum::routing::get(|| async { "ok" })),
     );
     let response = router

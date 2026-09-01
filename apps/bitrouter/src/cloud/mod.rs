@@ -31,7 +31,7 @@ use bitrouter_providers::hosted::account::manager::CredentialManager;
 use bitrouter_providers::hosted::applier::{BitrouterAuthApplier, PROVIDER_ID};
 use bitrouter_sdk::config::{Config, ProviderConfig};
 use bitrouter_sdk::language_model::auth::AuthAppliers;
-use bitrouter_sdk::otel::TelemetryBearer;
+use bitrouter_telemetry::otel::TelemetryBearer;
 
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";

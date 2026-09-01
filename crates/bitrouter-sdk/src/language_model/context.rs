@@ -1024,7 +1024,10 @@ impl StreamContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PromptOverrides;
+    // The canonical path, not `crate::config`'s re-export of it: that module is
+    // `config_file`-gated, and importing through it made the whole lib-test
+    // target fail to build under the crate's default features.
+    use crate::language_model::routing::PromptOverrides;
     use crate::language_model::stream::{StreamOutcome, StreamProcessor};
     use crate::language_model::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
     use crate::language_model::{Message, PipelineRequest, Role};

@@ -64,7 +64,7 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 
 /// Build a router wrapper that opens an OTel SERVER span per inbound request,
 /// parented on any inbound W3C trace context. Pass the returned closure to
-/// [`crate::server::RouterOptions::with_router_wrapper`].
+/// [`bitrouter_sdk::server::RouterOptions::with_router_wrapper`].
 ///
 /// Takes the exporter because the span is created from **its** tracer. The SDK
 /// deliberately does not install a global `TracerProvider` — doing so would
@@ -480,7 +480,7 @@ mod tests {
         // exporter emits, and this one is emitted here. An OTel-native ingress
         // span closes that gap — the SERVER row of the artifact is now
         // enforced by the same rule as every other row.
-        use crate::otel::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+        use bitrouter_sdk::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
 
         let (tracer, provider, captured) = capturing_tracer();
         let router = probe_router(tracer, Arc::new(Mutex::new(None)));

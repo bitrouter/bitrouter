@@ -4,10 +4,15 @@
 #
 # A diff here is a semver-relevant event: the SDK gained or lost a *public*
 # dependency, so an upstream breaking release in that crate becomes a
-# BitRouter breaking release. That is the whole reason the `otel` feature
-# keeps `opentelemetry*` out of public signatures — `tracing_subscriber` and
-# `tracing_core` are on this list precisely because the tracing bridge's
-# return type and bound put them there, deliberately.
+# BitRouter breaking release.
+#
+# `tracing_core` and `tracing_subscriber` used to be on this list, put there by
+# one function — the `tracing` ↔ OpenTelemetry bridge's return type and bound.
+# Both are 0.x, where every minor is breaking, so a `tracing-subscriber` 0.4
+# would have forced a breaking release on every consumer, including the five
+# that never enabled `otel`. They left when the renderer did; that removal is
+# the measurable half of `docs/TELEMETRY_CRATE_SPEC.md`. Do not let them back
+# without deciding to accept that liability again.
 #
 # This tracks the public *dependency surface*, not every public item. Adding a
 # method to an existing type does not belong in review as a 6-line diff of
@@ -27,5 +32,3 @@ schemars
 serde_core
 serde_json
 tokio
-tracing_core
-tracing_subscriber

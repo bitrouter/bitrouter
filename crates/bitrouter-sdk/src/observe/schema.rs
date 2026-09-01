@@ -1,38 +1,36 @@
-//! Tier 1 — the span schema, as a declaration rather than as call sites.
+//! The span schema, as a declaration rather than as call sites.
 //!
 //! What BitRouter owns as an interop surface is the *schema*: the span names,
 //! the `bitrouter.*` attribute vocabulary, and the invariants that fail
 //! silently and expensively when a deployment re-derives them differently.
-//! Until now that schema existed only as ~90 `KeyValue::new` call sites spread
-//! across `exporter.rs`, `acp.rs` and `metrics.rs`, so the only way to answer
-//! "what does BitRouter emit?" was to read the exporter and re-derive it. This
-//! module is the answer in declarative form.
+//! That schema used to exist only as ~90 `KeyValue::new` call sites inside the
+//! OTLP exporter, so the only way to answer "what does BitRouter emit?" was to
+//! read the exporter and re-derive it. This module is the answer in
+//! declarative form.
 //!
 //! Three consumers, all of them checked rather than advisory:
 //!
 //! 1. `crates/bitrouter-sdk/span-schema.json` is rendered from
 //!    [`render_json`] and committed, and an ordinary test fails when it goes
-//!    stale — so the declaration cannot drift from the tree without a visible
-//!    diff. It ships with the crate: it is the file a deployment implements.
-//! 2. A conformance test in `exporter.rs` drives a full request lifecycle and
-//!    asserts that every exported span is declared here, that every attribute
-//!    key it carries is declared on that span, and that every attribute marked
-//!    required is present. `acp.rs` does the same for the agent spans.
-//! 3. `is_reserved_attribute_key` is the enforcement point for the extension
+//!    stale — so the declaration cannot drift from the renderers without a
+//!    visible diff. It ships with the crate: it is the file a deployment
+//!    implements.
+//! 2. Conformance tests in `bitrouter-telemetry` drive real request and agent
+//!    lifecycles and assert that every exported span is declared here, that
+//!    every attribute key it carries is declared on that span, and that every
+//!    attribute marked required is present.
+//! 3. [`is_reserved_attribute_key`] is the enforcement point for the extension
 //!    region — the bounded hatch a deployment may add its own attributes
-//!    through, applied at the `SpanAttributes` stamping site in `exporter.rs`.
+//!    through, applied wherever a renderer stamps [`SpanAttributes`].
 //!
-//! **This module names no `opentelemetry` type, deliberately.** It is plain
-//! data plus `serde`. That is what makes it the *schema* tier rather than the
-//! *emission* tier: it is readable by a deployment that renders BitRouter's
-//! telemetry through something that is not this crate's OTLP exporter, and it
-//! could move out from behind the `otel` feature gate without taking a
-//! dependency with it. It sits inside `otel` because that is where a reader
-//! looks for it, and it stays there: the wider module split that would have
-//! relocated it was evaluated and withdrawn — the schema artifact was the part
-//! worth having. See [`docs/OTEL_TIERING_SPEC.md`].
+//! **This module names no `opentelemetry` type, and carries no dependency
+//! beyond `serde`.** That is what makes it the contract rather than one
+//! renderer's internals, and it is why it is behind no feature gate: a
+//! deployment reading the declaration must not have to opt into a renderer it
+//! is not using. Every item here is public for the same reason — a second
+//! renderer needs the declaration at compile time, not just as JSON.
 //!
-//! [`docs/OTEL_TIERING_SPEC.md`]: https://github.com/bitrouter/bitrouter/blob/main/docs/OTEL_TIERING_SPEC.md
+//! [`SpanAttributes`]: crate::observe::SpanAttributes
 
 use serde::Serialize;
 
@@ -57,7 +55,7 @@ const RESERVED_PREFIXES: &[&str] = &["bitrouter.", "gen_ai."];
 /// attribute is one, so there is no variant for it.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AttrType {
+pub enum AttrType {
     /// UTF-8 string.
     String,
     /// 64-bit signed integer.
@@ -72,7 +70,7 @@ pub(crate) enum AttrType {
 /// lifecycle, or only under a stated condition.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Requirement {
+pub enum Requirement {
     /// Present on every exported instance of this span.
     ///
     /// "Every" means every span closed through the normal lifecycle. A span
@@ -86,7 +84,7 @@ pub(crate) enum Requirement {
 /// Span kind, in OTel's taxonomy but not OTel's type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SpanKind {
+pub enum SpanKind {
     /// Inbound request handler.
     Server,
     /// Outbound call to an upstream.
@@ -97,45 +95,56 @@ pub(crate) enum SpanKind {
 
 /// One attribute on a span, a span event, or a metric point.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct AttrDef {
+pub struct AttrDef {
     /// Wire key, verbatim.
-    pub(crate) key: &'static str,
+    pub key: &'static str,
+    /// Wire value type. An emitted value of a different type is a
+    /// conformance failure, not a widening.
     #[serde(rename = "type")]
-    pub(crate) ty: AttrType,
-    pub(crate) requirement: Requirement,
+    pub ty: AttrType,
+    /// Whether the attribute is always present or only under [`Self::note`].
+    pub requirement: Requirement,
     /// What the attribute carries, and — for a conditional — when it appears.
-    pub(crate) note: &'static str,
+    pub note: &'static str,
 }
 
 /// A span event, in OTel's sense: a timestamped annotation on a span.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct EventDef {
+pub struct EventDef {
     /// Event name, verbatim.
-    pub(crate) name: &'static str,
-    pub(crate) note: &'static str,
-    pub(crate) attributes: &'static [AttrDef],
+    pub name: &'static str,
+    /// What the event records, and when it is emitted.
+    pub note: &'static str,
+    /// Attributes carried on the event itself, not on its span.
+    pub attributes: &'static [AttrDef],
 }
 
 /// One span in the tree.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct SpanDef {
+pub struct SpanDef {
     /// Span name. `{...}` marks an interpolated attribute value, so
     /// `chat {gen_ai.request.model}` names a span whose literal prefix is
     /// `chat ` — matching follows the GenAI semconv's
     /// `{gen_ai.operation.name} {model}` convention.
-    pub(crate) name: &'static str,
-    pub(crate) kind: SpanKind,
+    pub name: &'static str,
+    /// Span kind. Load-bearing for matching: the root generation and every
+    /// upstream hop share a name and differ only here.
+    pub kind: SpanKind,
     /// What this span parents on.
-    pub(crate) parent: &'static str,
-    pub(crate) note: &'static str,
-    pub(crate) attributes: &'static [AttrDef],
-    pub(crate) events: &'static [EventDef],
+    pub parent: &'static str,
+    /// What the span covers, and where its boundaries fall.
+    pub note: &'static str,
+    /// Every attribute this span may carry. A renderer emitting a key that is
+    /// not here fails conformance.
+    pub attributes: &'static [AttrDef],
+    /// Span events this span may carry.
+    pub events: &'static [EventDef],
 }
 
 /// Metric instrument kind.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Instrument {
+pub enum Instrument {
     /// Monotonic counter.
     Counter,
     /// Value distribution.
@@ -144,15 +153,21 @@ pub(crate) enum Instrument {
 
 /// One metric instrument and the dimensions it is recorded with.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct MetricDef {
+pub struct MetricDef {
     /// Instrument name, verbatim.
-    pub(crate) name: &'static str,
-    pub(crate) instrument: Instrument,
-    pub(crate) value_type: AttrType,
+    pub name: &'static str,
+    /// Counter or histogram — changing this changes what a backend can ask of
+    /// the series, so it is part of the contract.
+    pub instrument: Instrument,
+    /// Recorded value type.
+    pub value_type: AttrType,
     /// UCUM unit, as passed to the instrument builder.
-    pub(crate) unit: &'static str,
-    pub(crate) note: &'static str,
-    pub(crate) dimensions: &'static [AttrDef],
+    pub unit: &'static str,
+    /// What the instrument measures.
+    pub note: &'static str,
+    /// The attribute set every point is recorded with. These are the series'
+    /// dimensions, so adding one is a cardinality decision.
+    pub dimensions: &'static [AttrDef],
 }
 
 /// The open region of the attribute namespace: what a deployment may add, and
@@ -173,56 +188,68 @@ pub(crate) struct MetricDef {
 /// every deployment-specific attribute, which is exactly the coupling
 /// `SpanAttributes` exists to avoid.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct ExtensionRegion {
+pub struct ExtensionRegion {
     /// The pipeline event that carries extension attributes.
-    pub(crate) carrier: &'static str,
+    pub carrier: &'static str,
     /// The span extension attributes are stamped onto.
-    pub(crate) target_span: &'static str,
+    pub target_span: &'static str,
     /// Key prefixes owned by this schema.
-    pub(crate) reserved_prefixes: &'static [&'static str],
-    pub(crate) rule: &'static str,
-    pub(crate) value_types: &'static str,
+    pub reserved_prefixes: &'static [&'static str],
+    /// What a deployment may add, stated as the rule a renderer enforces.
+    pub rule: &'static str,
+    /// The JSON value shapes that survive the stamping site; everything else
+    /// is skipped, since OTel attribute values are scalar.
+    pub value_types: &'static str,
     /// What is emitted when a deployment writes into the reserved region.
-    pub(crate) diagnostic: &'static str,
+    pub diagnostic: &'static str,
 }
 
 /// A rule that a re-implementation can break without any error surfacing —
 /// the class this whole declaration exists for.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct Invariant {
+pub struct Invariant {
     /// Stable slug, so a review comment can name one.
-    pub(crate) id: &'static str,
-    pub(crate) rule: &'static str,
+    pub id: &'static str,
+    /// The rule, stated so it can be checked.
+    pub rule: &'static str,
     /// What goes wrong, and why nothing reports it.
-    pub(crate) failure: &'static str,
+    pub failure: &'static str,
 }
 
 /// The whole declaration.
 #[derive(Debug, Clone, Copy, Serialize)]
-pub(crate) struct SpanSchema {
-    pub(crate) schema_version: &'static str,
+pub struct SpanSchema {
+    /// Version of the declaration, bumped when a consumer would have to react.
+    pub schema_version: &'static str,
     /// Instrumentation scope name stamped on every exported span. Wire
     /// contract: dashboards and collector routing rules select on it.
-    pub(crate) scope_name: &'static str,
+    pub scope_name: &'static str,
     /// Instrumentation scope version. A placeholder rather than a literal so
     /// this artifact does not churn on every release; the emitted value is
-    /// `bitrouter-sdk`'s own crate version.
-    pub(crate) scope_version: &'static str,
-    pub(crate) resource_attributes: &'static [AttrDef],
-    pub(crate) spans: &'static [SpanDef],
+    /// the rendering crate's own version — `bitrouter-telemetry`'s for the
+    /// OTLP exporter. The workspace releases in lockstep, so this reads the
+    /// same as `bitrouter-sdk`'s; do not depend on that.
+    pub scope_version: &'static str,
+    /// OTel resource attributes stamped once per exporter, not per span.
+    pub resource_attributes: &'static [AttrDef],
+    /// Every span in the tree.
+    pub spans: &'static [SpanDef],
     /// Meter name for every instrument below. Wire contract, same as
     /// `scope_name`.
-    pub(crate) meter_name: &'static str,
-    pub(crate) metrics: &'static [MetricDef],
-    pub(crate) extension_region: ExtensionRegion,
-    pub(crate) invariants: &'static [Invariant],
+    pub meter_name: &'static str,
+    /// Every instrument.
+    pub metrics: &'static [MetricDef],
+    /// The bounded hatch for deployment-specific attributes.
+    pub extension_region: ExtensionRegion,
+    /// The rules that fail silently when a renderer gets them wrong.
+    pub invariants: &'static [Invariant],
 }
 
 /// The declaration itself.
-pub(crate) const SCHEMA: SpanSchema = SpanSchema {
+pub const SCHEMA: SpanSchema = SpanSchema {
     schema_version: SCHEMA_VERSION,
     scope_name: "io.bitrouter.observe",
-    scope_version: "{bitrouter-sdk crate version}",
+    scope_version: "{rendering crate version}",
     resource_attributes: RESOURCE_ATTRIBUTES,
     spans: SPANS,
     meter_name: "bitrouter",
@@ -962,7 +989,7 @@ const INVARIANTS: &[Invariant] = &[
 ///
 /// Checked against the declaration rather than a hand-maintained list, so a
 /// key added to any span above is reserved from the moment it is declared.
-pub(crate) fn is_reserved_attribute_key(key: &str) -> bool {
+pub fn is_reserved_attribute_key(key: &str) -> bool {
     RESERVED_PREFIXES
         .iter()
         .any(|prefix| key.starts_with(prefix))
@@ -984,8 +1011,12 @@ pub(crate) fn is_reserved_attribute_key(key: &str) -> bool {
 /// unenforced: an attribute drifting from `Int` to `Double` would have passed
 /// every gate while `span-schema.json` kept promising `int` to anyone
 /// implementing against it.
-#[cfg(test)]
-pub(crate) fn value_type_matches(declared: AttrType, observed: &str) -> bool {
+///
+/// Not `#[cfg(test)]`, and the reason is the point of this module. The only
+/// conformance suite used to live in this crate, so gating it on `test` cost
+/// nothing; renderers now live in other crates, and a check a second renderer
+/// cannot call is not a contract. The same goes for [`span_def_for`].
+pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
     matches!(
         (declared, observed),
         (AttrType::String, "string")
@@ -998,7 +1029,6 @@ pub(crate) fn value_type_matches(declared: AttrType, observed: &str) -> bool {
 /// The literal part of a span name — everything before the first
 /// interpolated `{...}` segment. Empty when the whole name is interpolated,
 /// as it is for the ingress SERVER span.
-#[cfg(test)]
 fn literal_prefix(name: &'static str) -> &'static str {
     match name.find('{') {
         Some(index) => &name[..index],
@@ -1014,10 +1044,9 @@ fn literal_prefix(name: &'static str) -> &'static str {
 /// two spans are deliberately named alike and deliberately kinded apart. A
 /// declaration whose name is entirely interpolated matches on kind alone.
 ///
-/// Lives here rather than in either test module so `exporter.rs` and `acp.rs`
-/// check their exports against the same rule.
-#[cfg(test)]
-pub(crate) fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
+/// Lives here rather than in any renderer's test module so every renderer
+/// checks its exports against the same rule.
+pub fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
     SPANS.iter().find(|span| {
         span.kind == kind && {
             let prefix = literal_prefix(span.name);
@@ -1031,7 +1060,7 @@ pub(crate) fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDe
 /// The output is `crates/bitrouter-sdk/span-schema.json`, kept in step by the
 /// test below. Ordering is declaration order throughout, so the diff is
 /// stable, and a schema change shows up in review as a diff of the wire
-/// surface rather than as a line inside `exporter.rs`.
+/// surface rather than as a line buried in a renderer.
 ///
 /// Returns the serializer's error only if the declaration itself cannot be
 /// serialized, which is unreachable for a tree of `&'static str` — but it is
@@ -1048,8 +1077,7 @@ mod tests {
 
     /// Regeneration command, quoted in the failure message so the fix is in
     /// front of whoever hits it.
-    const REGENERATE: &str =
-        "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-sdk --all-features committed_artifact";
+    const REGENERATE: &str = "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-sdk committed_artifact";
 
     fn artifact_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("span-schema.json")
@@ -1060,14 +1088,19 @@ mod tests {
         // The diff-in-CI half of the guard. It rides the ordinary test job
         // rather than a bespoke one: `cargo nextest run --all-features` is
         // already what CI and CLAUDE.md run, and a schema artifact nobody
-        // regenerates is worse than no artifact at all.
+        // regenerates is worse than no artifact at all. It runs under the
+        // crate's DEFAULT features — this module is behind no gate, and a
+        // staleness guard that only fires under `--all-features` would let the
+        // artifact rot in every other build.
         //
-        // Deliberately not under `dist/`: that tree is `dist-helper`'s, and
-        // rendering this from `dist-helper` would put `bitrouter-sdk/otel` —
-        // and the whole OpenTelemetry stack — into that helper's own
-        // dependency tree, which the `feature-isolation` CI job forbids by
-        // name. So the artifact lives beside `public-api-deps.txt`, the
-        // crate's other generated, review-facing manifest.
+        // Not under `dist/`, and the reason has changed. It used to be that
+        // rendering from `dist-helper` would drag the whole OpenTelemetry
+        // stack into that helper's tree, which `feature-isolation` forbids by
+        // name; with the declaration ungated and dependency-free that
+        // objection is gone. What remains is placement: this artifact IS the
+        // interop surface and ships with the crate, so it belongs beside
+        // `public-api-deps.txt` — the crate's other generated, review-facing
+        // manifest — and not in a tree of build outputs.
         let path = artifact_path();
         let rendered = render_json().expect("a tree of &'static str serializes");
 

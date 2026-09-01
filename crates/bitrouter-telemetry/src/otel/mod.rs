@@ -6,15 +6,22 @@
 //! spans, `settle` INTERNAL). Inbound W3C trace context is honoured;
 //! outbound `traceparent` is injected on every upstream hop.
 //!
+//! Every one of those names, and every attribute stamped on them, is declared
+//! in [`bitrouter_sdk::observe::schema`] rather than here. This module is one
+//! renderer of that declaration, and its conformance tests assert as much: an
+//! attribute this module emits that the schema does not declare is a test
+//! failure, not a new attribute.
+//!
 //! The OTLP wire transport is selected at compile time by the crate's feature
 //! flags — `otel-http` (OTLP/HTTP+protobuf) and/or `otel-grpc` (OTLP/gRPC).
 //! See the `transport` module for the selection rules. Both traces and metrics
 //! ride the same chosen transport.
 //!
-//! No `opentelemetry*` type appears in this module's public API. The whole
-//! OpenTelemetry stack is an implementation detail behind the SDK's own
-//! surface, so the SDK can export OTLP without making the OpenTelemetry
-//! version part of its semver contract.
+//! No `opentelemetry*` type appears in this module's public API. That was
+//! originally a constraint on the SDK's semver contract; it is kept here
+//! because it is the property that lets the OpenTelemetry version move without
+//! moving BitRouter's, and because `otel::subscriber`'s bridge would otherwise
+//! put a `tracing-opentelemetry` type into a published signature.
 
 pub mod acp;
 // The custom OTLP/HTTP client that injects a live bearer per export. HTTP-only
@@ -26,24 +33,15 @@ mod bearer;
 mod cardinality;
 mod config;
 mod exporter;
-// The inbound SERVER span wraps the SDK's own axum `Router`, so it only
-// compiles when the HTTP front-end does. The transport-agnostic half — the
-// `tracing` ↔ OTel bridge — lives in `subscriber` and has no such gate, so a
-// consumer that installs the bridge on its own server does not pay for axum.
+// The inbound SERVER span wraps the SDK's axum `Router`, so it only compiles
+// when that front-end does. The transport-agnostic half — the `tracing` ↔ OTel
+// bridge — lives in `subscriber` and has no such gate, so a consumer that
+// installs the bridge on its own server does not pay for axum.
 #[cfg(feature = "server")]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "otel", feature = "server"))))]
 pub mod http_layer;
 mod metrics;
 mod processor_runtime;
-// The span schema as a declaration rather than as call sites. Public because
-// the committed artifact `crates/bitrouter-sdk/span-schema.json` is rendered
-// from it, and because
-// it is the thing a deployment implements when it renders BitRouter's
-// telemetry through something other than this module's OTLP exporter. It names
-// no `opentelemetry` type — that is what makes it the schema tier rather than
-// the emission tier.
-pub mod schema;
-mod span_attributes;
 pub mod subscriber;
 mod transport;
 
@@ -54,4 +52,3 @@ pub use config::{
     SamplerKind, TraceConfig,
 };
 pub use exporter::{OtelExporter, OtelObserveHook, OtelStatus};
-pub use span_attributes::SpanAttributes;

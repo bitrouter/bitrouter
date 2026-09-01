@@ -43,9 +43,44 @@ Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, …), so `RUST
 
 These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
 
-- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** The `bitrouter-observe` crate no longer exists, so that is a dead selector rather than a narrower one. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
+- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in `bitrouter-telemetry`, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter_telemetry::otel::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
 - **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `crates/bitrouter-sdk/span-schema.json`.
 - **`RUST_LOG` no longer affects tracing.** This used to be the opposite, and the reversal is worth stating because the old advice is still in circulation: the ingress span was a `tracing` span bridged into OpenTelemetry, so a filter that dropped `bitrouter::observe::http` at INFO also dropped the SERVER span, and every `chat` span exported as an orphan root with no error reported anywhere. A blanket `RUST_LOG=warn` was enough to do it. The ingress span is now an OpenTelemetry span in its own right and never passes through the `tracing` subscriber, so **no filter can suppress it**. Set `RUST_LOG` for the logs you want; traces are unaffected either way.
+
+## Ignored configuration
+
+`Config::plugins` is an unvalidated map and the JSON Schema declares it
+`additionalProperties: true`, so a `plugins.<id>` block the binary does not
+read is **silently ignored** — a typo like `plugins.bitrouter-guardrail`
+(singular) drops the operator's declared block / redact patterns and the
+process starts anyway. Two places report it:
+
+- `bitrouter config validate` lists them under `unknown_plugins`. It does not
+  fail validation — an ignored block is a misconfiguration, not a malformed
+  config, and this command is CI-gating.
+- The daemon logs one WARN per unread id on every start. This is the path that
+  matters: validation is opt-in, the daemon always runs.
+
+The ids the binary reads are `bitrouter-guardrails` and `bitrouter-telemetry`.
+
+**Renamed in this release** — the old names are ignored, and the daemon warns
+when it sees one set:
+
+| Old | New |
+| --- | --- |
+| `plugins.bitrouter-observe.*` | `plugins.bitrouter-telemetry.*` |
+| `BITROUTER_OBSERVE_CONTENT_CAPTURE` | `BITROUTER_TELEMETRY_CONTENT_CAPTURE` |
+| `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES` | `BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES` |
+
+`plugins.bitrouter-observe.otlp_endpoint`, the v0 flat shim, is **removed**
+rather than carried over: it existed to keep a v0 config building, and v0 never
+had a `plugins.bitrouter-telemetry` key for it to live under.
+
+The `bitrouter::observe::*` log targets above, the `io.bitrouter.observe`
+instrumentation scope, and the `bitrouter` meter name are **not** renamed and
+will not be. They are wire and `RUST_LOG` contract — a rename there is silently
+wrong for every dashboard and every existing selector, with no safety net
+possible.
 
 ## Config resolution
 

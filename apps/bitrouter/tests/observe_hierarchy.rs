@@ -52,8 +52,8 @@ const POLL_INTERVAL_MS: u64 = 50;
 /// never passes through the `tracing` subscriber, so no filter can suppress
 /// it and the SERVER assertion below would pass whether or not the pin
 /// survived. The direct replacement is
-/// `otel::http_layer::tests::ingress_emits_the_pinned_log_target_at_debug`,
-/// which asserts the target and level against a capturing subscriber.
+/// `bitrouter-telemetry`'s `tests/ingress_log_target.rs`, which asserts the
+/// target and level against a capturing subscriber, in its own test binary.
 ///
 /// The filter stays anyway, tightened to `warn`, to assert the *new* property
 /// this design bought: span export is now completely independent of
@@ -214,7 +214,7 @@ providers:
           input_micro_usd_per_token: 1.0
           output_micro_usd_per_token: 1.0
 plugins:
-  bitrouter-observe:
+  bitrouter-telemetry:
     otel:
       endpoint: {otlp}
       traces:
@@ -257,8 +257,9 @@ plugins:
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
         prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
-    let options = RouterOptions::default()
-        .with_router_wrapper(bitrouter_sdk::otel::http_layer::router_wrapper(exporter));
+    let options = RouterOptions::default().with_router_wrapper(
+        bitrouter_telemetry::otel::http_layer::router_wrapper(exporter),
+    );
     let router = build_router_with_options(state, options);
     let server = TestServer::new(router);
 

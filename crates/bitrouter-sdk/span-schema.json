@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "scope_name": "io.bitrouter.observe",
-  "scope_version": "{bitrouter-sdk crate version}",
+  "scope_version": "{rendering crate version}",
   "resource_attributes": [
     {
       "key": "service.name",

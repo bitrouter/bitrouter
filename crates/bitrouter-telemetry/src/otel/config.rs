@@ -47,7 +47,7 @@ pub struct OtelConfig {
 
     /// Whether to capture prompt / response message content onto spans.
     /// Default [`ContentCaptureMode::Off`] — no message bodies leave the
-    /// process. Override with `BITROUTER_OBSERVE_CONTENT_CAPTURE=full`.
+    /// process. Override with `BITROUTER_TELEMETRY_CONTENT_CAPTURE=full`.
     pub content_capture: ContentCaptureMode,
 
     /// Maximum byte length for a single captured content attribute
@@ -55,7 +55,7 @@ pub struct OtelConfig {
     /// [`ContentCaptureMode::Full`]. A conservative cap so a pathological
     /// prompt or response can't produce an oversized span the collector or
     /// backend would reject. Defaults to [`DEFAULT_CONTENT_ATTR_MAX_BYTES`];
-    /// override with `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES`.
+    /// override with `BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES`.
     pub content_attr_max_bytes: usize,
 
     /// Optional bearer token. When set, an `Authorization: Bearer <token>`
@@ -275,12 +275,12 @@ impl OtelConfig {
         {
             self.sampler_arg = Some(ratio);
         }
-        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_CAPTURE")
+        if let Some(s) = lookup("BITROUTER_TELEMETRY_CONTENT_CAPTURE")
             && let Some(mode) = parse_content_capture(&s)
         {
             self.content_capture = mode;
         }
-        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES")
+        if let Some(s) = lookup("BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES")
             && let Ok(n) = s.parse::<usize>()
             && n > 0
         {
@@ -426,13 +426,13 @@ mod tests {
             DEFAULT_CONTENT_ATTR_MAX_BYTES
         );
         let cfg = OtelConfig::default().with_env_from(env(&[(
-            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES",
             "262144",
         )]));
         assert_eq!(cfg.content_attr_max_bytes, 262_144);
         // Invalid / zero leaves the default untouched.
         let cfg = OtelConfig::default().with_env_from(env(&[(
-            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES",
             "bogus",
         )]));
         assert_eq!(cfg.content_attr_max_bytes, DEFAULT_CONTENT_ATTR_MAX_BYTES);
@@ -445,11 +445,11 @@ mod tests {
             ContentCaptureMode::Off
         );
         let cfg = OtelConfig::default()
-            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "full")]));
+            .with_env_from(env(&[("BITROUTER_TELEMETRY_CONTENT_CAPTURE", "full")]));
         assert_eq!(cfg.content_capture, ContentCaptureMode::Full);
         // Unknown value leaves the default untouched.
         let cfg = OtelConfig::default()
-            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "bogus")]));
+            .with_env_from(env(&[("BITROUTER_TELEMETRY_CONTENT_CAPTURE", "bogus")]));
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
     }
 }

@@ -100,6 +100,44 @@ async fn wait_until_ready(socket: &std::path::Path) {
     }
 }
 
+/// The ignored-config guard must reach the operator on the `serve` path, and
+/// the only way it can is by being *carried out* of assembly rather than
+/// logged inside it: `build_app_with_path` runs before
+/// `init_serve_tracing_subscriber`, so a `tracing::warn!` in there is emitted
+/// into a process with no subscriber installed and is dropped silently.
+///
+/// That is exactly how the first version of this guard shipped-and-did-nothing
+/// in local testing, so the regression is worth pinning. Asserting on
+/// `Assembled::ignored_config` checks the half that can actually be observed
+/// without a capturing subscriber; `main.rs` emitting it is one `for` loop
+/// after the subscriber init it must stay below.
+#[tokio::test]
+async fn ignored_config_is_carried_out_of_assembly_not_logged_inside_it() {
+    let dir = tempdir("ignored-config");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let path = dir.join("bitrouter.yaml");
+    tokio::fs::write(
+        &path,
+        format!(
+            "{}\nplugins:\n  bitrouter-observe:\n    otel:\n      endpoint: http://collector:4318\n",
+            tiny_config_yaml("sqlite::memory:")
+        ),
+    )
+    .await
+    .unwrap();
+    let cfg = config::load(&path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&path)).await.unwrap();
+
+    assert!(
+        assembled
+            .ignored_config
+            .iter()
+            .any(|line| line.contains("plugins.bitrouter-observe")),
+        "the stale plugin id must be reported to the caller, got: {:?}",
+        assembled.ignored_config
+    );
+}
+
 #[tokio::test]
 async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     let dir = tempdir("status");

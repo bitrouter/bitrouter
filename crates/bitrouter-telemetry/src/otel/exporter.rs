@@ -56,8 +56,8 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
-use crate::language_model::protocol::responses::encode_gateway_continuation_id;
-use crate::language_model::{
+use bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_sdk::language_model::{
     ApiProtocol, Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
     RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
 };
@@ -65,7 +65,7 @@ use crate::language_model::{
 use crate::otel::cardinality::CardinalityLimiter;
 use crate::otel::config::{ContentCaptureMode, OtelConfig, SamplerKind};
 use crate::otel::processor_runtime::ProcessorRuntime;
-use crate::otel::span_attributes::SpanAttributes;
+use bitrouter_sdk::observe::SpanAttributes;
 
 /// HTTP header extractor for W3C trace context propagation
 /// (<https://www.w3.org/TR/trace-context/>). Used on inbound headers.
@@ -958,13 +958,13 @@ impl ObserveHook for OtelExporter {
             // Generic by design — the emitter names the keys, we just stamp.
             //
             // Generic, but not unbounded: the schema's own vocabulary is
-            // reserved (`crate::otel::schema::ExtensionRegion`). A deployment
+            // reserved (`bitrouter_sdk::observe::schema::ExtensionRegion`). A deployment
             // that stamped `bitrouter.*` or `gen_ai.*` from here would make the
             // span schema deployment-dependent, which is the one property it
             // exists to have. Reserved keys are dropped rather than stamped.
             if let Some(extra) = ctx.get_event::<SpanAttributes>() {
                 for (key, value) in &extra.0 {
-                    if crate::otel::schema::is_reserved_attribute_key(key) {
+                    if bitrouter_sdk::observe::schema::is_reserved_attribute_key(key) {
                         // DEBUG, not WARN: this is per-request and on the hot
                         // path, and a deployment that trips it trips it on
                         // every request. The pinned target is how an operator
@@ -1233,8 +1233,8 @@ fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &Execu
     }
 }
 
-fn finish_reason_to_str(reason: &crate::language_model::FinishReason) -> String {
-    use crate::language_model::FinishReason::*;
+fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
+    use bitrouter_sdk::language_model::FinishReason::*;
     match reason {
         Stop => "stop".to_string(),
         Length => "length".to_string(),
@@ -1245,7 +1245,7 @@ fn finish_reason_to_str(reason: &crate::language_model::FinishReason) -> String 
     }
 }
 
-fn error_type(err: &crate::error::BitrouterError) -> String {
+fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
     // BitrouterError variants are unit-ish; the Debug name is the class.
     // We strip the payload so the attribute stays low-cardinality.
     let dbg = format!("{err:?}");
@@ -1271,11 +1271,11 @@ mod hop_tests {
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
-    use crate::caller::CallerContext;
-    use crate::error::BitrouterError;
-    use crate::language_model::protocol::responses::ResponsesAdapter;
-    use crate::language_model::protocol::{OutboundAdapter, SseEvent};
-    use crate::language_model::{
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::error::BitrouterError;
+    use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
+    use bitrouter_sdk::language_model::protocol::{OutboundAdapter, SseEvent};
+    use bitrouter_sdk::language_model::{
         ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
         HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
         PreRequestHook, Prompt, Role, SettlementContext, SettlementRecorder, StaticRoutingTable,
@@ -1286,7 +1286,10 @@ mod hop_tests {
 
     #[async_trait]
     impl PreRequestHook for RejectingPreRequestHook {
-        async fn check(&self, _ctx: &mut PipelineContext) -> crate::error::Result<HookDecision> {
+        async fn check(
+            &self,
+            _ctx: &mut PipelineContext,
+        ) -> bitrouter_sdk::error::Result<HookDecision> {
             Ok(HookDecision::Deny(DenyReason::Unauthorized(
                 "rejected".into(),
             )))
@@ -1300,7 +1303,7 @@ mod hop_tests {
 
     #[async_trait]
     impl SettlementRecorder for BlockingSettlementRecorder {
-        async fn record(&self, _ctx: &mut SettlementContext) -> crate::error::Result<()> {
+        async fn record(&self, _ctx: &mut SettlementContext) -> bitrouter_sdk::error::Result<()> {
             self.entered.notify_one();
             self.release.notified().await;
             Ok(())
@@ -2761,7 +2764,7 @@ mod hop_tests {
     }
 
     fn assert_conforms_to_span_schema(spans: &[SpanData]) {
-        use crate::otel::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+        use bitrouter_sdk::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
 
         assert!(
             !spans.is_empty(),
@@ -2799,7 +2802,10 @@ mod hop_tests {
                         )
                     });
                 assert!(
-                    crate::otel::schema::value_type_matches(declared.ty, observed_type(&kv.value)),
+                    bitrouter_sdk::observe::schema::value_type_matches(
+                        declared.ty,
+                        observed_type(&kv.value)
+                    ),
                     "`{}` emits `{}` as {}, but otel::schema declares {:?} — the committed \
                      artifact promises the declared type to anyone implementing against it",
                     def.name,

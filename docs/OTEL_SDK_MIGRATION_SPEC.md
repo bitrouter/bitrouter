@@ -1,7 +1,37 @@
 # OTel SDK migration spec
 
-Status: **PR 1 landed; the public-API guard landed on top of it.** Tracking
-issue #808.
+Status: **D1 is SUPERSEDED. Kept for its constraints, not its conclusion.**
+
+> **Read this first.** This document's central decision — "OTLP export belongs
+> in `bitrouter-sdk`" — was reversed before it reached a release, by
+> [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md). The exporter now lives
+> in `crates/bitrouter-telemetry`, and the SDK keeps only the contract it
+> renders (`bitrouter_sdk::observe`).
+>
+> It was reversed on the axis this document *conceded* rather than answered.
+> D1 below records that SDK placement is "measurably worse on three axes, and
+> the decision is to accept that" — semver, graph position, containment cost —
+> and buys all three with one convenience: cloud already takes `bitrouter-sdk`,
+> so a standalone crate "would be a second published dependency delivering code
+> the first one could carry." That trade was declined once
+> [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) D4 made the semver cost
+> **permanent**, and once its phase 0 turned the span schema into a declared
+> artifact — which is what let the contract stay while the renderer left. See
+> D1's own "Revisit if either fact changes" paragraph: the first fact changed.
+>
+> **What is still true and still worth reading**: the hard constraint (no
+> `opentelemetry*` type in a public signature — now enforced against
+> `bitrouter-sdk` by a stronger `feature-isolation` gate), the `tracer_clone`
+> and eager-tracer-binding analysis, the feature-shape reasoning
+> (`otel = ["otel-http"]`, the private `__otel-core` carrier), and the record
+> of which names, targets and config keys are load-bearing. All of it moved to
+> `bitrouter-telemetry` intact.
+>
+> **What is dead**: every sentence placing the exporter in the SDK, and the
+> `sdk-public-api` job's original framing. Do not cite D1 as precedent.
+
+Original status: PR 1 landed; the public-API guard landed on top of it.
+Tracking issue #808.
 
 Moves the OTLP exporter out of `crates/bitrouter-observe` into
 `crates/bitrouter-sdk` behind an `otel` feature, and deletes the observe

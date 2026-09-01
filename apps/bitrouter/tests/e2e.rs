@@ -275,7 +275,7 @@ async fn e2e_http_server_chat_completions_end_to_end() {
         "/metrics should render the OTLP-migration banner; got:\n{text}"
     );
     assert!(
-        text.contains("bitrouter-observe.otel"),
+        text.contains("bitrouter-telemetry.otel"),
         "/metrics banner should point at the new config key; got:\n{text}"
     );
 }

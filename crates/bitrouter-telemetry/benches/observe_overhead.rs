@@ -8,7 +8,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use bitrouter_sdk::otel::CardinalityLimiter;
+use bitrouter_telemetry::otel::CardinalityLimiter;
 
 fn bench_cardinality_capping(c: &mut Criterion) {
     let mut group = c.benchmark_group("cardinality");

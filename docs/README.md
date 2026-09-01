@@ -10,16 +10,23 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI).
-- [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md) — why the OTLP
-  exporter moved into `bitrouter-sdk` behind the `otel` feature, and which
-  names, gates, and signatures are load-bearing as a result.
+- [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md) — **the live one.** Why
+  the OTLP renderer ships as `crates/bitrouter-telemetry` while `bitrouter-sdk`
+  keeps only the contract it renders (`observe::schema`, `SpanAttributes`).
+  Start here; the two documents below are its history. Read its *The arguments
+  that are dead* section before reopening anything — the crate-count and
+  build-cache cases were measured, withdrawn, and are not what decided this.
+- [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md) — **D1 superseded.**
+  Recorded why the exporter moved *into* `bitrouter-sdk` behind an `otel`
+  feature. That placement was reversed before it reached a release. Still the
+  best record of the hard constraint, the feature shape, and which names,
+  targets and config keys are load-bearing.
 - [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) — proposed splitting that
-  module into schema / emission / export tiers. **Decided: the schema half
-  shipped, the dependency move is withdrawn.** Phases 0 (the committed
-  span-schema artifact) and 1 (the `tracing` bridge stays) have landed; phase 2
-  (an OTel-native ingress span) is the remaining work; the tier relocation was
-  withdrawn on measured benefit, not on feasibility. Read its *cloud question*
-  section before reopening any of it.
+  module into schema / emission / export tiers. **Phases 0–2 landed and stand**
+  (the committed span-schema artifact, the `tracing` bridge kept, the
+  OTel-native ingress span); its D1 was withdrawn on measured benefit and then
+  reopened on the positioning grounds it had itself reserved. Read its *cloud
+  question* section before reopening any of it.
 - `*_PLAN.md` — ordered execution plans derived from a spec, with per-task
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.

@@ -66,8 +66,9 @@ impl App {
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
     /// after the SDK has mounted every route — used by
-    /// `crate::otel::http_layer` (under the `otel` feature) to open an
-    /// OpenTelemetry SERVER span at HTTP ingress.
+    /// `bitrouter_telemetry::otel::http_layer` to open an OpenTelemetry SERVER
+    /// span at HTTP ingress. It is a genuine extension point rather than an
+    /// internal call: the renderer that uses it ships in another crate.
     pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,

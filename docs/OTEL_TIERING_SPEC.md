@@ -1,6 +1,43 @@
 # OTel tiering spec
 
-Status: **complete. Phases 0, 1 and 2 landed; phases 3 and 4 are withdrawn.**
+Status: **phases 0, 1 and 2 landed and stand. D1 was reopened and reversed —
+see [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).**
+
+> **Read this first.** D1 ("tier the dependency") was withdrawn below on
+> measured benefit, and those measurements stand: the crate-count saving has no
+> beneficiary and the build-cache saving is roughly zero. **The reversal did not
+> reuse either argument** — see *The cloud question*'s own closing sentence,
+> which reserves reopening for "a positioning decision needing different
+> evidence than this section gathered." That is what happened. The renderer
+> moved to `crates/bitrouter-telemetry` on naming, semver and timing:
+>
+> - **Semver.** D4's keep branch made `tracing_subscriber` 0.3 and
+>   `tracing_core` 0.1 *permanent* public dependencies of the foundation crate.
+>   That is now measured, not predicted: `public-api-deps.txt` lost exactly
+>   those two lines and nothing else when the renderer left.
+> - **Phase 0 is what made it cheap.** A declared, conformance-checked schema
+>   is a contract a second crate can bind to. Before it, the exporter *was* the
+>   contract, which is precisely why "identical across deployments" read as an
+>   argument for SDK placement.
+> - **The cut is different from phase 3's.** Phase 3 split *within* `otel/` and
+>   hit the eager-tracer-binding hazard this document documents at length. The
+>   reversal moved emission and export together, so that hazard never arises
+>   and the `tracer_clone` question stays retired.
+>
+> **Everything phases 0–2 built is unchanged and now lives across two crates:**
+> the schema declaration and `span-schema.json` in
+> `bitrouter_sdk::observe`, the OTel-native ingress span and its
+> `ingress_log_target` test in `bitrouter-telemetry`. The three-test acceptance
+> gate, the frozen strings, and the `Interest`-cache reasoning for the separate
+> test binary all still apply verbatim.
+>
+> The one finding this document flags as outranking all of it — that
+> `bitrouter-cloud` still depends on the deleted `bitrouter-observe` — is
+> **still open**, and is what made the reversal cheap: cloud performs one
+> migration either way.
+
+Original status: complete. Phases 0, 1 and 2 landed; phases 3 and 4 are
+withdrawn.
 Follows
 [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md), which moved the
 exporter into `bitrouter-sdk`.

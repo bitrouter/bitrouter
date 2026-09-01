@@ -33,6 +33,9 @@ keyring = { version = "3", default-features = false, features = [
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", default-features = false }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
 bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
+# Optional telemetry egress. `default-features = false` keeps a consumer that
+# only wants the observability contract off the OpenTelemetry stack entirely.
+bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.27", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.

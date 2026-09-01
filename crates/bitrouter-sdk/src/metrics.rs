@@ -3,18 +3,16 @@
 //! This is a *pull*-shaped seam: the HTTP server needs to render Prometheus
 //! text without knowing where the counters come from. The accumulator side is
 //! deployment-specific, and the OSS binary no longer has one: it pushes
-//! metrics over OTLP via the SDK's own [`otel`](crate::otel) feature and
-//! mounts a stub renderer that serves a migration banner. A deployment that
-//! still wants a pull-based endpoint registers its own
+//! metrics over OTLP through `bitrouter-telemetry` and mounts a stub renderer
+//! that serves a migration banner. A deployment that still wants a pull-based
+//! endpoint registers its own
 //! [`ObserveHook`](crate::language_model::ObserveHook) and points this trait
 //! at it.
 //!
-//! The SDK's *push* path is a different kind of thing and does not weaken the
-//! rule here. What `otel` owns is the **span schema** — the span names, the
-//! `bitrouter.*` attribute vocabulary, and the invariants a deployment cannot
-//! be trusted to re-derive; the OTLP renderer ships with it because there is
-//! one renderer and it is default-off. `MetricsRenderer` is unchanged by it:
-//! the SDK still owns the trait and never the accumulator.
+//! The trait and the accumulator are the same split the rest of the
+//! observability story is drawn on: the SDK owns the contract — this trait,
+//! `ObserveHook`, and the span schema in [`observe`](crate::observe) — and
+//! never a renderer of it.
 //!
 //! Spend / token / rate aggregations are *not* SDK concerns. Any deployment
 //! that needs them owns its own storage; see the OSS binary's `metering`
