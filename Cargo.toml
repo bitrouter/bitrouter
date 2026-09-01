@@ -42,7 +42,8 @@ bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-al
 rustix = { version = "1", default-features = false }
 
 # ACP SDK crates
-agent-client-protocol = "1.2"
+agent-client-protocol = { version = "=2.0.0", features = ["unstable_session_fork"] }
+agent-client-protocol-conductor = "=2.0.0"
 # Shared by `bitrouter status --watch` (in the app) and `bitrouter-tui` (the
 # ACP session renderer), so the version lives here rather than in either.
 ratatui = { version = "0.29", features = [
@@ -61,11 +62,14 @@ similar = "3.1"
 # the same ones ratatui measures with, which is why this tracks the version
 # ratatui itself depends on. Adds no crate to the build graph.
 unicode-width = "0.2"
-# `unstable_llm_providers` gives the `providers/*` schema types. The runtime
-# crate (1.2) does not forward that feature, so the two methods are dispatched
-# as raw JSON-RPC over these types — see ACP_TUI_SPEC §10. NOT
-# `unstable_protocol_v2`: v2 inverts the turn lifecycle this engine implements.
-agent-client-protocol-schema = { version = "1.4", features = ["unstable_llm_providers"] }
+# `unstable_llm_providers` gives the draft `providers/*` schema types used only
+# for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
+# exercise the advertised lifecycle method. We deliberately do not enable
+# `unstable_protocol_v2`: this controller retains stable ACP v1 wire semantics.
+agent-client-protocol-schema = { version = "=1.5.0", features = [
+    "unstable_llm_providers",
+    "unstable_session_fork",
+] }
 
 # shared third-party
 anyhow = "1"

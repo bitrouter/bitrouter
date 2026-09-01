@@ -55,7 +55,7 @@ use agent_client_protocol::schema::v1::{
     RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
     SessionUpdate, TextContent, ToolCallUpdate,
 };
-use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Responder};
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
 use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
@@ -247,6 +247,92 @@ pub struct UpstreamConnection {
 /// The ACP-over-stdio transport wired to a spawned agent child.
 type AgentTransport =
     ByteStreams<Compat<tokio::process::ChildStdin>, Compat<tokio::process::ChildStdout>>;
+
+/// Reusable ACP agent-process connector for the connection-level controller.
+///
+/// It shares the established child policy with [`UpstreamConnection`]:
+/// stripped inherited markers, config-authored env precedence, stderr
+/// draining, process-group teardown, and prompt failure when the child dies.
+#[derive(Clone)]
+pub struct AgentProcess {
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    strip_inherited_env: Vec<String>,
+}
+
+impl std::fmt::Debug for AgentProcess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentProcess")
+            .field("command", &"[CONFIGURED]")
+            .field("arg_count", &self.args.len())
+            .field("env_names", &self.env.keys().collect::<Vec<_>>())
+            .field("env_values", &"[REDACTED]")
+            .field("strip_inherited_env", &self.strip_inherited_env)
+            .finish()
+    }
+}
+
+impl AgentProcess {
+    /// Construct a child connector from a configured stdio invocation.
+    pub fn new(
+        command: impl Into<String>,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            args,
+            env,
+            strip_inherited_env: Vec::new(),
+        }
+    }
+
+    /// Remove additional ambient variables before applying the configured
+    /// child environment. Explicit values in `env` still win.
+    #[must_use]
+    pub fn strip_inherited_env(mut self, names: Vec<String>) -> Self {
+        self.strip_inherited_env = names;
+        self
+    }
+}
+
+impl ConnectTo<Client> for AgentProcess {
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<Agent>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let (transport, child) = spawn_agent_process(
+            &self.command,
+            &self.args,
+            &self.env,
+            &self.strip_inherited_env,
+        )
+        .map_err(agent_client_protocol::util::internal_error)?;
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+
+        let protocol = ConnectTo::<Client>::connect_to(transport, client);
+        tokio::pin!(protocol);
+        let result = tokio::select! {
+            result = &mut protocol => result,
+            _ = &mut dead_rx => Err(agent_client_protocol::util::internal_error(
+                "agent process exited while the ACP controller was connected",
+            )),
+        };
+        let _ = kill_tx.send(());
+        if tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
+            .await
+            .is_err()
+        {
+            tracing::warn!("agent child reaper did not confirm within 2s");
+        }
+        result
+    }
+}
 
 /// Inherited env vars an agent child must never see. The substrate launches
 /// an **independent** agent session, so a leaked "you are running inside
@@ -1030,6 +1116,33 @@ async fn health_check_inner(
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    #[test]
+    fn stable_v1_initialize_keeps_numeric_wire_version() -> anyhow::Result<()> {
+        let request = InitializeRequest::new(ProtocolVersion::V1);
+        let wire = serde_json::to_value(request)?;
+
+        assert_eq!(wire["protocolVersion"], serde_json::json!(1));
+        assert!(wire.get("clientCapabilities").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn agent_process_debug_redacts_arguments_and_environment_values() {
+        let process = AgentProcess::new(
+            "/private/bin/agent-secret-path",
+            vec!["--token=argument-secret".to_string()],
+            HashMap::from([(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "environment-secret".to_string(),
+            )]),
+        );
+        let rendered = format!("{process:?}");
+        assert!(!rendered.contains("argument-secret"), "{rendered}");
+        assert!(!rendered.contains("environment-secret"), "{rendered}");
+        assert!(!rendered.contains("agent-secret-path"), "{rendered}");
+        assert!(rendered.contains("ANTHROPIC_AUTH_TOKEN"), "{rendered}");
+    }
 
     #[test]
     fn agent_child_never_inherits_nested_session_markers() {

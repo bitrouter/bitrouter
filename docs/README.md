@@ -9,7 +9,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP, the observability TUI, the ACP TUI).
+  skills over MCP, the observability TUI, the ACP TUI, the ACP controller).
+- [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
+  for ACP controller topology, harness-owned sessions, endpoint configuration,
+  native identity, and session-scoped routing.
 - [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md) — **the live one.** Why
   the OTLP renderer ships as `crates/bitrouter-telemetry` while `bitrouter-sdk`
   keeps only the contract it renders (`observe::schema`, `SpanAttributes`).

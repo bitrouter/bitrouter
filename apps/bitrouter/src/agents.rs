@@ -526,7 +526,7 @@ mod tests {
         assert!(out.contains("claude-acp:"));
         assert!(out.contains("type: stdio"));
         assert!(out.contains("command: npx"));
-        assert!(out.contains("@zed-industries/claude-code-acp@latest"));
+        assert!(out.contains("@agentclientprotocol/claude-agent-acp@0.70.0"));
         // The stub should be a single top-level key parseable as a fragment.
         let parsed: serde_json::Value =
             serde_saphyr::from_str(&out).expect("stub must parse as YAML");

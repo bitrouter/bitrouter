@@ -1,0 +1,17 @@
+{
+  "harnessId": "codex-acp",
+  "package": "@agentclientprotocol/codex-acp",
+  "version": "1.7.0",
+  "gitHead": "2b48e9822330fc09f3a94a81563e5c4bb779601a",
+  "providerId": "openai",
+  "protocol": "openai",
+  "fallbackEnv": [
+    "BITROUTER_API_KEY",
+    "CODEX_CONFIG",
+    "MODEL_PROVIDER"
+  ],
+  "nativeIdentityHeaders": [
+    "session-id",
+    "thread-id"
+  ]
+}

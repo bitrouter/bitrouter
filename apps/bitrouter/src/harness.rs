@@ -9,15 +9,14 @@
 //!   by env/args where that suffices, otherwise through a synthesized config
 //!   file ([`Harness::launch_overlay`]); the human drives it directly.
 //! - **ACP** (`bitrouter spawn`) — a headless ACP adapter
-//!   (`@zed-industries/claude-code-acp`, …) driven as a sub-agent by a program.
+//!   (`@agentclientprotocol/claude-agent-acp`, …) driven as a sub-agent by a
+//!   program.
 //!
-//! The crucial fact this module encodes once: **both facets route through the
-//! daemon with the same [`Routing`]**, because the interactive binary and the
-//! ACP adapter of a given harness share a config/env surface (verified against
-//! adapter source — see `docs/SPAWN_SPEC.md` §6). So the routing knowledge that used
-//! to live in `spawn::AgentSpec` *and* would have been duplicated onto the ACP
-//! side lives here exactly once, and `launch`, `spawn`, and `agents install`
-//! all read it.
+//! This module keeps the shared routing knowledge in one catalog. Interactive
+//! launches render [`Routing`] through native CLI/config surfaces. Maintained
+//! ACP adapters render a [`HarnessEndpointPlan`] through their documented
+//! launch fallback and then apply that same plan through ACP provider setup;
+//! other adapters retain the catalog's legacy env/args behavior.
 
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
@@ -137,21 +136,156 @@ pub struct RoutingOverlay {
     pub args: Vec<String>,
 }
 
+/// Wire protocol advertised to an ACP adapter through its provider endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessProtocol {
+    /// Anthropic Messages-compatible endpoint.
+    Anthropic,
+    /// OpenAI Responses-compatible endpoint.
+    OpenAi,
+}
+
+impl HarnessProtocol {
+    /// ACP provider protocol identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointFallback {
+    Claude,
+    Codex,
+}
+
+/// Process-scoped BitRouter endpoint configuration for a maintained ACP
+/// adapter.
+///
+/// The controller applies this plan through ACP provider configuration when
+/// the adapter advertises that capability. [`Self::fallback_overlay`] renders
+/// the same plan through the adapter's documented environment fallback, so a
+/// pinned adapter that loses provider support still routes deterministically.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HarnessEndpointPlan {
+    /// Catalog harness id included in every routed request.
+    pub harness_id: &'static str,
+    /// Exact upstream adapter package.
+    pub adapter_package: &'static str,
+    /// Exact upstream adapter version.
+    pub adapter_version: &'static str,
+    /// Adapter-native provider id selected through ACP.
+    pub provider_id: &'static str,
+    /// Model API protocol exposed by BitRouter for this adapter.
+    pub protocol: HarnessProtocol,
+    /// Adapter-facing endpoint base URL.
+    pub base_url: String,
+    /// Optional logical model pin.
+    pub model: Option<String>,
+    /// HTTP headers passed to the adapter endpoint. Names are canonicalized
+    /// to lower case so observability and routing parse one stable shape.
+    pub headers: std::collections::BTreeMap<String, String>,
+    auth: String,
+    fallback: EndpointFallback,
+}
+
+impl std::fmt::Debug for HarnessEndpointPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HarnessEndpointPlan")
+            .field("harness_id", &self.harness_id)
+            .field("adapter_package", &self.adapter_package)
+            .field("adapter_version", &self.adapter_version)
+            .field("provider_id", &self.provider_id)
+            .field("protocol", &self.protocol)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .field("auth", &"[REDACTED]")
+            .field("fallback", &self.fallback)
+            .finish()
+    }
+}
+
+impl HarnessEndpointPlan {
+    /// Render the documented process-environment fallback for this exact
+    /// adapter version. No routing configuration is added to adapter argv.
+    pub fn fallback_overlay(&self) -> anyhow::Result<RoutingOverlay> {
+        let static_headers = self
+            .headers
+            .iter()
+            .filter(|(name, _)| name.as_str() != "authorization")
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        match self.fallback {
+            EndpointFallback::Claude => {
+                let mut env = vec![
+                    ("ANTHROPIC_BASE_URL".to_string(), self.base_url.clone()),
+                    ("ANTHROPIC_AUTH_TOKEN".to_string(), self.auth.clone()),
+                    (
+                        "ANTHROPIC_CUSTOM_HEADERS".to_string(),
+                        static_headers
+                            .iter()
+                            .map(|(name, value)| format!("{name}: {value}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                ];
+                if let Some(model) = &self.model {
+                    env.push(("ANTHROPIC_MODEL".to_string(), model.clone()));
+                }
+                Ok(RoutingOverlay {
+                    env,
+                    args: Vec::new(),
+                })
+            }
+            EndpointFallback::Codex => {
+                let provider = serde_json::json!({
+                    "name": "BitRouter",
+                    "base_url": self.base_url,
+                    "wire_api": "responses",
+                    "env_key": BITROUTER_API_KEY_ENV,
+                    "http_headers": static_headers,
+                });
+                let mut config = serde_json::json!({
+                    "model_provider": "bitrouter",
+                    "model_providers": { "bitrouter": provider },
+                });
+                if let Some(model) = &self.model {
+                    config["model"] = serde_json::Value::String(model.clone());
+                }
+                let encoded = serde_json::to_string(&config)
+                    .context("serializing the Codex ACP endpoint fallback")?;
+                Ok(RoutingOverlay {
+                    env: vec![
+                        (BITROUTER_API_KEY_ENV.to_string(), self.auth.clone()),
+                        ("CODEX_CONFIG".to_string(), encoded),
+                        ("MODEL_PROVIDER".to_string(), "bitrouter".to_string()),
+                    ],
+                    args: Vec::new(),
+                })
+            }
+        }
+    }
+}
+
 /// The bundled catalog. Limited to publicly-available, actively-maintained
 /// harnesses. Extend by PR to bitrouter.
 pub const CATALOG: &[Harness] = &[
     Harness {
         id: "claude-acp",
-        description: "Anthropic Claude via Zed's `claude-code-acp`",
-        project_url: "https://github.com/zed-industries/claude-code-acp",
+        description: "Anthropic Claude via the maintained Claude Agent ACP adapter",
+        project_url: "https://github.com/agentclientprotocol/claude-agent-acp",
         acp_command: Some("npx"),
-        acp_args: &["-y", "@zed-industries/claude-code-acp@latest"],
-        // A substring of both the npm spec (`@zed-industries/claude-code-acp`)
-        // and the globally-installed binary name (`claude-code-acp`), so a
-        // `command: claude-code-acp` config still catalog-matches.
-        package_marker: "claude-code-acp",
+        acp_args: &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"],
+        // A substring of both the pinned npm spec and the globally-installed
+        // binary name, so either invocation catalog-matches.
+        package_marker: "claude-agent-acp",
         interactive_binary: Some("claude"),
-        // claude-code-acp passes process env through to the SDK-spawned CLI,
+        // claude-agent-acp passes process env through to the SDK-spawned CLI,
         // which honors these exactly as interactive Claude Code does.
         // ANTHROPIC_AUTH_TOKEN → `Authorization: Bearer` (also suppresses the
         // login requirement); ANTHROPIC_API_KEY would be `x-api-key`, not
@@ -169,7 +303,7 @@ pub const CATALOG: &[Harness] = &[
         description: "OpenAI Codex via the Agent Client Protocol adapter",
         project_url: "https://github.com/agentclientprotocol/codex-acp",
         acp_command: Some("npx"),
-        acp_args: &["-y", "@agentclientprotocol/codex-acp@latest"],
+        acp_args: &["-y", "@agentclientprotocol/codex-acp@1.7.0"],
         package_marker: "codex-acp",
         interactive_binary: Some("codex"),
         routing: Routing::CodexArgs,
@@ -281,12 +415,97 @@ pub fn by_interactive_binary(binary: &str) -> Option<&'static Harness> {
 /// *invocation*, not the user-chosen YAML key. Checks the command and every
 /// arg for the marker substring.
 pub fn match_invocation(command: &str, args: &[String]) -> Option<&'static Harness> {
-    CATALOG.iter().find(|h| {
+    let catalog_match = CATALOG.iter().find(|h| {
         command.contains(h.package_marker) || args.iter().any(|a| a.contains(h.package_marker))
+    });
+    catalog_match.or_else(|| {
+        let legacy_claude = command.contains("claude-code-acp")
+            || args.iter().any(|arg| arg.contains("claude-code-acp"));
+        if legacy_claude {
+            by_id("claude-acp")
+        } else {
+            None
+        }
     })
 }
 
 impl Harness {
+    /// Exact maintained ACP adapter identity for controller diagnostics.
+    ///
+    /// `None` means the catalog entry has no pinned, provider-configurable ACP
+    /// adapter contract yet. Callers must identify such invocations as
+    /// configured/custom rather than attributing them to a maintained pin.
+    pub fn maintained_adapter_identity(&self) -> Option<(&'static str, &'static str)> {
+        match self.id {
+            "claude-acp" => Some(("@agentclientprotocol/claude-agent-acp", "0.70.0")),
+            "codex-acp" => Some(("@agentclientprotocol/codex-acp", "1.7.0")),
+            _ => None,
+        }
+    }
+
+    /// Whether a configured invocation uses this catalog entry's exact
+    /// maintained adapter pin.
+    pub fn uses_maintained_adapter(&self, command: &str, args: &[String]) -> bool {
+        let Some((package, version)) = self.maintained_adapter_identity() else {
+            return false;
+        };
+        let exact = format!("{package}@{version}");
+        command == exact || args.iter().any(|arg| arg == &exact)
+    }
+
+    /// Build the controller's process-scoped endpoint plan for a maintained
+    /// ACP adapter. Other catalog entries keep their existing launch routing
+    /// until their provider contracts are pinned and tested.
+    pub fn endpoint_plan(
+        &self,
+        base_url: &str,
+        auth: &str,
+        model: Option<&str>,
+        controller_id: &str,
+    ) -> Option<HarnessEndpointPlan> {
+        let mut headers = std::collections::BTreeMap::from([
+            ("authorization".to_string(), format!("Bearer {auth}")),
+            (
+                "x-bitrouter-controller-id".to_string(),
+                controller_id.to_string(),
+            ),
+            ("x-bitrouter-harness".to_string(), self.id.to_string()),
+        ]);
+        // Keep construction explicit: any future header added here becomes a
+        // reviewed part of the router/controller contract.
+        headers.retain(|name, value| !name.is_empty() && !value.is_empty());
+
+        let (adapter_package, adapter_version) = self.maintained_adapter_identity()?;
+        let (provider_id, protocol, base_url, fallback) = match self.id {
+            "claude-acp" => (
+                "main",
+                HarnessProtocol::Anthropic,
+                base_url.trim_end_matches('/').to_string(),
+                EndpointFallback::Claude,
+            ),
+            "codex-acp" => (
+                "openai",
+                HarnessProtocol::OpenAi,
+                v1_base_url(base_url),
+                EndpointFallback::Codex,
+            ),
+            _ => return None,
+        };
+
+        Some(HarnessEndpointPlan {
+            harness_id: self.id,
+            adapter_package,
+            adapter_version,
+            provider_id,
+            protocol,
+            base_url,
+            model: model.map(str::to_string),
+            headers,
+            auth: auth.to_string(),
+            fallback,
+        })
+    }
+
     /// Compute the child-process overlay that routes this harness's LLM
     /// traffic through `base_url`, authenticating with `auth` (already
     /// resolved by precedence — see [`resolve_gateway_auth`]). `model` pins
@@ -920,6 +1139,30 @@ fn toml_string(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AdapterContract {
+        harness_id: String,
+        package: String,
+        version: String,
+        git_head: String,
+        provider_id: String,
+        protocol: String,
+        fallback_env: Vec<String>,
+        native_identity_headers: Vec<String>,
+    }
+
+    fn adapter_contracts() -> anyhow::Result<Vec<AdapterContract>> {
+        Ok(vec![
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/acp_adapters/claude-agent-acp-0.70.0.json"
+            ))?,
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/acp_adapters/codex-acp-1.7.0.json"
+            ))?,
+        ])
+    }
+
     #[test]
     fn catalog_ids_are_unique() {
         let mut ids: Vec<_> = CATALOG.iter().map(|h| h.id).collect();
@@ -927,6 +1170,160 @@ mod tests {
         let before = ids.len();
         ids.dedup();
         assert_eq!(before, ids.len(), "catalog ids must be unique");
+    }
+
+    #[test]
+    fn maintained_acp_adapters_are_exactly_pinned() -> anyhow::Result<()> {
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp missing from catalog"))?;
+        assert_eq!(
+            claude.acp_args,
+            &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
+        );
+        assert_eq!(
+            claude.project_url,
+            "https://github.com/agentclientprotocol/claude-agent-acp"
+        );
+        assert_eq!(claude.package_marker, "claude-agent-acp");
+
+        let codex =
+            by_id("codex-acp").ok_or_else(|| anyhow::anyhow!("codex-acp missing from catalog"))?;
+        assert_eq!(
+            codex.acp_args,
+            &["-y", "@agentclientprotocol/codex-acp@1.7.0"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn maintained_provider_contract_requires_the_exact_invocation_pin() -> anyhow::Result<()> {
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp missing from catalog"))?;
+        assert!(claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.70.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.69.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.70.0-tampered".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@zed-industries/claude-code-acp@latest".to_string()]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_matches_the_pinned_adapter_contracts() -> anyhow::Result<()> {
+        for contract in adapter_contracts()? {
+            let harness = by_id(&contract.harness_id)
+                .ok_or_else(|| anyhow::anyhow!("missing harness {}", contract.harness_id))?;
+            let plan = harness
+                .endpoint_plan(
+                    "http://127.0.0.1:4356/",
+                    "brk_test",
+                    Some("logical/model"),
+                    "controller-test",
+                )
+                .ok_or_else(|| anyhow::anyhow!("missing endpoint plan"))?;
+
+            assert_eq!(plan.provider_id, contract.provider_id);
+            assert_eq!(plan.protocol.as_str(), contract.protocol);
+            assert_eq!(plan.model.as_deref(), Some("logical/model"));
+            assert_eq!(
+                plan.headers.get("authorization").map(String::as_str),
+                Some("Bearer brk_test")
+            );
+            assert_eq!(
+                plan.headers
+                    .get("x-bitrouter-controller-id")
+                    .map(String::as_str),
+                Some("controller-test")
+            );
+            assert_eq!(
+                plan.headers.get("x-bitrouter-harness").map(String::as_str),
+                Some(contract.harness_id.as_str())
+            );
+
+            let package_spec = format!("{}@{}", contract.package, contract.version);
+            assert!(harness.acp_args.contains(&package_spec.as_str()));
+            assert_eq!(contract.git_head.len(), 40);
+            assert!(!contract.native_identity_headers.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_renders_documented_adapter_fallbacks() -> anyhow::Result<()> {
+        for contract in adapter_contracts()? {
+            let harness = by_id(&contract.harness_id)
+                .ok_or_else(|| anyhow::anyhow!("missing harness {}", contract.harness_id))?;
+            let plan = harness
+                .endpoint_plan(
+                    "http://127.0.0.1:4356",
+                    "brk_test",
+                    Some("logical/model"),
+                    "controller-test",
+                )
+                .ok_or_else(|| anyhow::anyhow!("missing endpoint plan"))?;
+            let overlay = plan.fallback_overlay()?;
+            let env: std::collections::HashMap<_, _> = overlay.env.into_iter().collect();
+
+            for key in contract.fallback_env {
+                assert!(
+                    env.contains_key(&key),
+                    "{} missing {key}",
+                    contract.harness_id
+                );
+            }
+            assert!(
+                overlay.args.is_empty(),
+                "{} used ACP CLI args",
+                contract.harness_id
+            );
+
+            match contract.harness_id.as_str() {
+                "claude-acp" => {
+                    assert_eq!(
+                        env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+                        Some("http://127.0.0.1:4356")
+                    );
+                    let custom = env
+                        .get("ANTHROPIC_CUSTOM_HEADERS")
+                        .ok_or_else(|| anyhow::anyhow!("missing Claude custom headers"))?;
+                    assert!(custom.contains("x-bitrouter-controller-id: controller-test"));
+                    assert!(custom.contains("x-bitrouter-harness: claude-acp"));
+                    assert!(!custom.to_ascii_lowercase().contains("authorization"));
+                }
+                "codex-acp" => {
+                    assert_eq!(
+                        env.get("MODEL_PROVIDER").map(String::as_str),
+                        Some("bitrouter")
+                    );
+                    let config: serde_json::Value = serde_json::from_str(
+                        env.get("CODEX_CONFIG")
+                            .ok_or_else(|| anyhow::anyhow!("missing Codex config"))?,
+                    )?;
+                    assert_eq!(config["model_provider"], "bitrouter");
+                    assert_eq!(
+                        config["model_providers"]["bitrouter"]["base_url"],
+                        "http://127.0.0.1:4356/v1"
+                    );
+                    assert_eq!(
+                        config["model_providers"]["bitrouter"]["wire_api"],
+                        "responses"
+                    );
+                    assert_eq!(config["model"], "logical/model");
+                }
+                other => return Err(anyhow::anyhow!("unexpected contract {other}")),
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -981,11 +1378,38 @@ mod tests {
             "npx",
             &[
                 "-y".to_string(),
-                "@zed-industries/claude-code-acp@latest".to_string(),
+                "@agentclientprotocol/claude-agent-acp@0.70.0".to_string(),
             ],
         )
         .expect("matches claude-acp");
         assert_eq!(h.id, "claude-acp");
+    }
+
+    #[test]
+    fn match_invocation_keeps_legacy_claude_adapter_configs_routable() -> anyhow::Result<()> {
+        let harness = match_invocation(
+            "npx",
+            &[
+                "-y".to_string(),
+                "@zed-industries/claude-code-acp@latest".to_string(),
+            ],
+        )
+        .ok_or_else(|| anyhow::anyhow!("legacy Claude adapter no longer catalog-matches"))?;
+        assert_eq!(harness.id, "claude-acp");
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_debug_redacts_credentials() -> anyhow::Result<()> {
+        let harness =
+            by_id("codex-acp").ok_or_else(|| anyhow::anyhow!("codex-acp missing from catalog"))?;
+        let plan = harness
+            .endpoint_plan("http://127.0.0.1:4356", "brk_secret", None, "brc_test")
+            .ok_or_else(|| anyhow::anyhow!("Codex endpoint plan missing"))?;
+        let debug = format!("{plan:?}");
+        assert!(!debug.contains("brk_secret"), "credential leaked: {debug}");
+        assert!(debug.contains("[REDACTED]"));
+        Ok(())
     }
 
     #[test]
@@ -995,10 +1419,10 @@ mod tests {
 
     #[test]
     fn match_invocation_matches_globally_installed_binary_command() {
-        // A `command: claude-code-acp` (npm -g binary) must catalog-match the
-        // same as the `npx @zed-industries/claude-code-acp` package form.
+        // A `command: claude-agent-acp` (npm -g binary) must catalog-match the
+        // same as the pinned npx package form.
         assert_eq!(
-            match_invocation("claude-code-acp", &[]).unwrap().id,
+            match_invocation("claude-agent-acp", &[]).unwrap().id,
             "claude-acp"
         );
         assert_eq!(
