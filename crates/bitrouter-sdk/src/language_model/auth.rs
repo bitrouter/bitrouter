@@ -93,6 +93,7 @@ pub(super) fn normalize_auth_extension_error(
             required_scope: None,
         },
         BitrouterError::UpstreamTimeout => BitrouterError::UpstreamTimeout,
+        BitrouterError::ClientDisconnected => BitrouterError::ClientDisconnected,
         BitrouterError::UpstreamUnavailable => BitrouterError::UpstreamUnavailable,
         BitrouterError::Internal(_) => BitrouterError::Internal(diagnostic.into()),
     }
