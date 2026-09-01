@@ -6,8 +6,8 @@
 //! collector key, but an account-attributed export uses a short-lived access
 //! token that must be refreshed over the daemon's lifetime. This trait lets the
 //! transport resolve a *fresh* bearer on every export without `bitrouter-observe`
-//! taking a dependency on the cloud SDK that owns the credential store: the app
-//! layer implements the trait and hands it in.
+//! taking a dependency on the application-owned account credential store: the
+//! app layer implements the trait and hands it in.
 
 /// Resolves the bearer token attached to each authenticated OTLP export.
 ///
