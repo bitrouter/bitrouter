@@ -107,6 +107,8 @@ The controller connects these planes without collapsing their ownership.
 9. Preserve the existing session parsing and model-routing behavior of callers
    that use BitRouter only as an OpenAI-, Anthropic-, or Gemini-compatible
    model API.
+10. Make every BitRouter-added and harness-native session signal observable
+    through one privacy-reviewed, replayable correlation contract.
 
 ### 3.2 Non-goals
 
@@ -640,8 +642,9 @@ ACP session headers are not trusted inputs. A `SessionContextHook` writes:
 
 - a typed request extension containing the full normalized context for route
   resolution and stream hooks; and
-- a redaction-safe typed event containing correlation fields needed by trace,
-  replay, and settlement recorders.
+- one redaction-safe `SessionIdentityObserved` event containing the transport
+  evidence, normalized correlation fields, trust decisions, and conflicts
+  required by trace, replay, route-decision, and settlement recorders.
 
 Request extensions do not flow directly into settlement in the current
 pipeline, while typed events do. Emitting both avoids reparsing headers in
@@ -907,39 +910,133 @@ headers, and full provider configuration payloads are redacted at the source.
 
 ## 15. Observability
 
-Each controller and model request should expose structured, non-secret fields:
+Session identity is required observability, not optional debug decoration.
+Every model request produces one `SessionIdentityObserved` event, including an
+explicit unattributed event when no session signal is present. Model-plane
+trace, route, usage, and settlement artifacts join exactly through
+`router_request_id`. Controller ACP events correlate at session scope through
+the authenticated controller ID and ACP/native identity, and at turn scope
+only when the harness exposes a native turn ID. None of these events is a
+replacement session record.
 
-- controller instance and harness ID;
-- adapter name/version and whether endpoint configuration used ACP provider or
-  fallback mode;
-- ACP method, native session ID presence, and capability decision;
-- normalized root/thread/parent/turn identity presence;
-- router request ID, effective route, route scope, and route-lease outcome;
-- identity conflicts or unattributed reasons; and
-- process exit and cleanup outcomes.
+### 15.1 Required evidence inventory
 
-Session identifiers may be transformed according to the existing telemetry
-privacy policy, but the transformation must remain stable enough to group one
-native session accurately. Message text, transcript history, and harness
-session-file paths are not new controller telemetry.
+The ingress observer and controlled capture path recognize the complete
+inventory below. Header names remain explicit so adapter drift is diagnosable;
+the normalized event records which exact field supplied each semantic value.
+
+| Source | Transport evidence | Normalized purpose |
+|---|---|---|
+| Request correlation | `x-bitrouter-request-id` | Join trace, route decision, usage, and settlement artifacts for one model request |
+| ACP controller | `x-bitrouter-controller-id`, `x-bitrouter-acp-session-id` | Record claimed controller/session identity separately from authenticated controller identity and trusted ACP binding |
+| Existing BitRouter workflow | `x-bitrouter-workflow-session`, `x-bitrouter-parent-session-id`, `x-bitrouter-agent-session-id`, `x-bitrouter-agent-role`, `x-bitrouter-context-epoch`, `x-bitrouter-context-transition`, `x-bitrouter-session-fingerprint` | Preserve the legacy workflow projection, lineage, role, and compaction context |
+| Claude Code | `x-claude-code-session-id`, `x-claude-code-agent-id`, `x-claude-code-parent-agent-id` | Root Claude session and child-agent lineage |
+| Codex | `session-id`, `thread-id`, `x-codex-turn-metadata` | Root Codex session, exact thread, parent/subagent lineage, and turn identity |
+| Adapter-specific compatibility | `x-session-id` when the detected adapter defines it | Preserve existing gated behavior such as Terminus without making it a universal session header |
+| Native body evidence | Claude Messages `metadata.user_id`; Hermes `metadata.job_id`; Codex Responses `client_metadata`; adapter-defined `session_id` | Extract only recognized session, thread, parent, role, epoch, and turn fields |
+| API continuation | Responses `previous_response_id` | Correlate provider-side continuation while keeping it distinct from agent session identity |
+
+Harness recognition fields such as `anthropic-beta`, `user-agent`,
+`x-bitrouter-harness`, and the trusted inbound protocol remain observable as
+adapter-selection evidence, but they do not become session IDs.
+
+### 15.2 Normalized event contract
+
+The typed event is conceptually:
+
+```text
+SessionIdentityObserved
+  router_request_id
+  origin
+  harness
+  authenticated_controller_instance_id?
+  claimed_controller_instance_id?
+  acp_session_id?                 # only after trusted binding
+  native_root_session_id?
+  native_agent_thread_id?
+  native_parent_agent_thread_id?
+  native_turn_id?
+  legacy_workflow_session_id?
+  api_continuation_id?
+  evidence[]:
+    transport: header | body | derived
+    field
+    source
+    confidence
+    trusted_for_route
+    value?
+    value_representation: raw | stable_digest | presence_only
+  conflicts[]
+  attributed
+  route_scope
+  route_lease_outcome?
+```
+
+Every identifier-valued field in a persisted event is logically an
+`IdentityValue { value, representation }`; the abbreviated schema above shows
+semantic names rather than implying that every sink receives a raw value.
+
+The event preserves both the claimed controller header and the authenticated
+controller identity so spoofing or configuration drift is visible without
+granting the claim authority. It preserves all competing session evidence;
+the selected projection does not erase lower-precedence inputs. Structured
+events contain only recognized fields from compound values such as
+`x-codex-turn-metadata` and `client_metadata`, never an unbounded metadata blob.
+
+### 15.3 Required sinks and joins
+
+All model-plane sinks consume the same normalized event rather than reparsing
+transport headers independently. Controller lifecycle events use the same
+field names and representation policy where their scope overlaps.
+
+| Sink | Required behavior |
+|---|---|
+| Structured trace/log spans | Attach request/controller/harness identity, normalized session lineage, evidence source/confidence, attribution status, conflicts, effective route, scope, and lease outcome |
+| Controlled ingress capture and replay | In explicit replay-capable mode, preserve every privacy-reviewed header in §15.1 plus recognized body evidence with the exact values required to rerun extraction; replay must produce the same normalized event and route-attribution result as online ingestion |
+| Policy and route-decision records | Persist the normalized identity reference, matched lease key, precedence outcome, and unattributed/conflict reason |
+| Metering/settlement | Join by `router_request_id` and persist explicit controller/session/thread/turn/legacy/continuation correlation fields plus attribution source when session-scoped accounting is enabled |
+| Aggregate metrics | Count attributed/unattributed requests, evidence source, conflicts, and lease outcomes using low-cardinality enums only |
+| Controller lifecycle logs | Record adapter/version, endpoint configuration mode, ACP method, native ID presence, capability decision, process exit, and lease cleanup outcome |
 
 Current metering rows contain `launch_id` but no workflow, ACP, or native
-session field. If the product exposes session-scoped cost, the metering
-recorder consumes the normalized, redaction-safe event and stores explicit
-correlation columns or event fields. That is request accounting metadata, not
-a resumable session catalog. No session-scoped cost is claimed until those
-fields are present and the route request was attributed.
+session field. No session-scoped cost is claimed until metering consumes the
+normalized event and the request is attributed. Existing `UsageUpdate.cost`
+behavior must carry an honest scope marker and may report unknown rather than
+daemon-wide data as if it were session data.
 
-The current trace sanitizer does not preserve the Claude
-`x-claude-code-session-id`/agent lineage headers or the Codex
-`session-id`/`thread-id`/turn metadata headers. Capture and replay must either
-allowlist their privacy-reviewed forms or persist the normalized event;
-otherwise online extraction and offline analysis would disagree.
+### 15.4 Privacy, retention, and cardinality
 
-The controller exposes no claim of session-level cost when the model request
-cannot be attributed. Existing `UsageUpdate.cost` behavior must carry an honest
-scope marker and may report unknown rather than daemon-wide data as if it were
-session data.
+- `Authorization`, proxy authorization, cookies, provider API keys, controller
+  credentials, and full provider configuration never enter observability.
+- Session identifiers are sensitive correlation data. A controlled trace may
+  retain raw values under the existing explicit capture and retention policy.
+  Replay-capable captures require those exact allowlisted identity values. A
+  digest/presence-only capture is analytics-only and must not claim replay
+  equivalence. Other persisted sinks use a stable digest or presence-only
+  representation as configured; the representation must remain stable enough
+  for valid joins.
+- Raw compound metadata is not copied into logs or metering. Only the known
+  identity fields extracted in §15.1 are eligible.
+- Session, thread, turn, request, and controller IDs must not be Prometheus or
+  equivalent metric labels. Metrics use bounded enums such as harness,
+  evidence source, attribution state, conflict kind, and lease outcome.
+- Message text, transcript history, tool payloads, and harness session-file
+  paths are not new controller telemetry.
+- A conflict event may retain both transformed identity values and their
+  sources, but must not reveal a credential or unrelated metadata field.
+
+### 15.5 Current implementation delta
+
+The current `TraceSanitizer` allowlists the existing BitRouter workflow headers
+and `x-session-id`, preserving their values in controlled capture. It does not
+yet allowlist `x-bitrouter-controller-id`, `x-bitrouter-acp-session-id`, the
+Claude `x-claude-code-*` identity headers, or Codex `session-id`, `thread-id`,
+and `x-codex-turn-metadata`.
+
+Implementation must update that inventory and add the normalized typed event.
+Allowlisting headers alone is insufficient: route decisions, settlement, and
+offline replay must consume the same semantic projection and prove consistent
+attribution.
 
 ## 16. Compatibility and migration
 
@@ -1037,7 +1134,7 @@ the implementation plan.
 | Request session normalization | `apps/bitrouter/src/workflow_state`, pipeline hook assembly | Preserve the legacy pure API projection; add authenticated ACP/native projections, typed request extension, and settlement event |
 | Claude identity | `apps/bitrouter/src/workflow_state/extractors/claude_code.rs` | Native Claude header precedence and lineage |
 | Codex identity | `apps/bitrouter/src/workflow_state/extractors/codex.rs` | Native session/thread/turn metadata precedence |
-| Trace and metering correlation | `apps/bitrouter/src/workflow_state/real_trace.rs`, `apps/bitrouter/src/metering` | Preserve privacy-reviewed native evidence for replay and consume normalized correlation without storing session content |
+| Session observability | `apps/bitrouter/src/workflow_state/real_trace.rs`, pipeline events, policy-decision recording, `apps/bitrouter/src/metering` | Implement the §15.1 inventory and `SessionIdentityObserved`; preserve privacy-reviewed evidence for replay and cross-sink correlation without storing session content or high-cardinality metric labels |
 | TUI migration | `crates/bitrouter-tui`, `apps/bitrouter/src/chat` | Consume session methods and namespaced route control only |
 
 The implementation must not create an app dependency from the SDK or a TUI
@@ -1056,6 +1153,12 @@ dependency from the controller.
 - generic Responses continuation is not classified as Codex solely because it
   carries `previous_response_id`, while its legacy compatibility projection
   remains unchanged;
+- the §15.1 evidence inventory accepts every BitRouter, Claude, and Codex
+  identity header, emits its exact source name, and excludes authorization,
+  cookies, credentials, and unknown compound metadata;
+- `SessionIdentityObserved` distinguishes claimed headers from authenticated
+  controller/session bindings and retains conflicts without changing route
+  authority;
 - route keys derived from authenticated controller plus native root session;
 - raw ACP/controller headers without controller authentication cannot produce
   a route-lease key;
@@ -1095,8 +1198,15 @@ Drive raw JSON-RPC over stdio and prove:
 - Prove session close/delete/disconnect removes only the intended lease.
 - Capture and replay Claude/Codex native identity and prove the normalized
   online and replayed contexts agree.
+- Prove every header in §15.1 survives the configured controlled-capture
+  representation and joins the trace, route-decision, and settlement artifacts
+  through the same `router_request_id`.
+- Prove authorization and credential headers never enter capture, normalized
+  events, route-decision records, metering rows, or error logs.
 - When session-scoped metering is enabled, prove request rows receive only the
   normalized correlation fields and contain no transcript/session content.
+- Prove aggregate metric descriptors expose no session, thread, turn, request,
+  or controller ID label.
 
 ### 18.4 Live adapter conformance
 
@@ -1106,6 +1216,8 @@ credentials to prove without touching the user's harness home:
 - the configured request reaches the BitRouter URL;
 - the controller credential and static headers arrive;
 - native session/root/thread/agent/turn fields arrive as documented;
+- every observed BitRouter/Claude/Codex identity field produces the expected
+  normalized observability evidence and source/confidence annotation;
 - `session/new`, list, load, and resume work when advertised;
 - two sessions work in one adapter process;
 - provider configuration or its documented fallback is the path actually used;
@@ -1149,7 +1261,14 @@ The controller kernel is complete when all of the following are true:
     routing for the pure model API compatibility fixture matrix.
 13. A Responses continuation remains bound to its original provider state even
     when an ACP route lease requests a different route.
-14. Full workspace verification passes on the final tree.
+14. Every header and recognized body field in §15.1 is represented in
+    controlled capture/replay and the normalized observability event, while
+    credential material is absent.
+15. Trace, route-decision, and metering artifacts for an attributed model
+    request join through one `router_request_id` and agree on session identity.
+16. No aggregate metric uses a session, thread, turn, request, or controller ID
+    as a label.
+17. Full workspace verification passes on the final tree.
 
 ## 20. Delivery phases
 
@@ -1179,8 +1298,9 @@ These phases define scope boundaries, not an executable task plan.
 - add the authenticated request-session hook and parse Claude/Codex native
   request identity without replacing the legacy pure API projection;
 - introduce session route leases and `_bitrouter/route/*`;
-- preserve native identity through trace/replay and expose honest metering
-  correlation where configured;
+- emit `SessionIdentityObserved`, preserve the full §15.1 evidence inventory
+  through controlled trace/replay, and expose honest metering correlation where
+  configured;
 - migrate the TUI off manager-side `providers/*`; and
 - remove the compatibility alias after its stated window.
 
@@ -1202,6 +1322,8 @@ ownership or the controller contract.
 | ACP provider configuration changes while Draft | Adapter upgrades break automatic endpoint setup | Feature detection, exact adapter pins, one canonical endpoint plan, tested fallbacks |
 | Adapter capabilities differ or drift | UI exposes controls that fail | Honest runtime composition plus adapter conformance fixtures |
 | Native request metadata changes | Session route or analysis loses attribution | Source-specific extractors, multiple evidence levels, conflict diagnostics, default-route fallback |
+| Each observability sink reparses identity independently | Trace, route, replay, and metering disagree about one request | One `SessionIdentityObserved` contract, `router_request_id` joins, and online/replay equivalence tests |
+| Raw session IDs become metric labels | Unbounded cardinality and sensitive identifier exposure | Stable transformed IDs only in approved trace/event stores; metrics use bounded attribution enums |
 | Route state is keyed only by process/launch | One session changes another | Authenticated `(controller, root session)` lease key and two-session tests |
 | Controller becomes another session database | Native resume diverges from BitRouter state | Hard no-storage invariant and restart/load acceptance test |
 | TUI requirements leak into protocol core | Controller becomes hard to embed/test | SDK/TUI dependency boundary and headless acceptance gate |
