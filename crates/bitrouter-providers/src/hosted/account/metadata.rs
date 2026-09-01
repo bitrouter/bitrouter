@@ -4,7 +4,7 @@
 //!
 //! Given an AS base URL `<issuer>`, the metadata document is fetched
 //! from `<issuer>/.well-known/oauth-authorization-server` and JSON-decoded
-//! into [`AsMetadata`]. Only the fields the device-flow client actually
+//! into [`crate::hosted::account::metadata::AsMetadata`]. Only the fields the device-flow client actually
 //! needs (`device_authorization_endpoint`, `token_endpoint`,
 //! `revocation_endpoint`) are extracted; everything else is silently
 //! ignored so an AS adding new fields doesn't break this client.

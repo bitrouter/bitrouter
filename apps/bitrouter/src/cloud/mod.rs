@@ -310,7 +310,7 @@ mod tests {
             .await
             .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?
             .into_iter()
-            .filter(|request| request.method.to_string() == "POST")
+            .filter(|request| request.method == "POST")
             .count();
         assert_eq!(refreshes, 1);
         Ok(())
