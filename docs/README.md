@@ -9,7 +9,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP, the observability TUI, the ACP TUI).
+  skills over MCP, the observability TUI, the ACP TUI, the ACP controller).
+- [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
+  for ACP controller topology, harness-owned sessions, endpoint configuration,
+  native identity, and session-scoped routing.
 - `*_PLAN.md` — ordered execution plans derived from a spec, with per-task
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.

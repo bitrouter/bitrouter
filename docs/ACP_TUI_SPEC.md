@@ -5,6 +5,13 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 > **Historical note (2026-08-16):** `status --watch` was later removed in favor
 > of `bitrouter status --requests`; references below to it being untouched or
 > authoritative describe the codebase state when this spec was written.
+>
+> **Controller boundary update (2026-09-01):**
+> [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) supersedes this spec's
+> single-session product boundary, manager-facing use of `providers/*` for
+> BitRouter route selection, and one-`Session` relay architecture. The shipped
+> renderer, inline terminal behavior, permission UI, cost presentation, and
+> `chat` command remain valid as clients of the new controller.
 
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
