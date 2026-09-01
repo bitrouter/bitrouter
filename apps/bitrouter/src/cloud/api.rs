@@ -2,13 +2,16 @@
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use bitrouter_cloud_sdk::api::{ApiRequest, CloudApiClient};
+use bitrouter_providers::hosted::account::manager::CredentialManager;
 use futures::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Version};
 use serde_json::{Map, Number, Value};
+
+use super::api_client::{ApiRequest, CloudApiClient};
 
 /// Arguments accepted by `bitrouter cloud api`.
 #[derive(clap::Args)]
@@ -376,8 +379,8 @@ struct PreparedRequest {
 }
 
 /// Execute `bitrouter cloud api` using the process standard streams.
-pub async fn run(args: ApiArgs) -> Result<()> {
-    let client = CloudApiClient::from_default_credentials()?;
+pub async fn run(args: ApiArgs, manager: Arc<CredentialManager>) -> Result<()> {
+    let client = CloudApiClient::from_manager(manager).await?;
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
@@ -772,8 +775,7 @@ mod tests {
     use axum::Router;
     use axum::body::{Body, Bytes};
     use axum::routing::get;
-    use bitrouter_cloud_sdk::api::CloudApiClient;
-    use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, StoredCredential};
+    use bitrouter_providers::hosted::account::credentials::StoredCredential;
     use clap::Parser;
     use serde_json::json;
     use wiremock::matchers::{body_json, body_string, header, method, path, query_param};
@@ -814,16 +816,16 @@ mod tests {
         }
     }
 
-    fn api_client(base_url: &str, label: &str) -> CloudApiClient {
+    async fn api_client(base_url: &str, label: &str) -> anyhow::Result<CloudApiClient> {
         let path = tmp_path(label, "account-credentials.json");
-        let mut store = CredentialsStore::load(&path).unwrap();
-        store
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
+        manager
             .save(StoredCredential::api_key(
                 "brk_AAAAAAAAAAAAAAAA.stored-secret".to_owned(),
                 base_url.to_owned(),
             ))
-            .unwrap();
-        CloudApiClient::from_credentials_path(path).unwrap()
+            .await?;
+        CloudApiClient::from_manager(manager).await
     }
 
     async fn execute_for_test(
@@ -1027,8 +1029,8 @@ mod tests {
         assert_eq!(value, json!({"stop": []}));
     }
 
-    #[test]
-    fn parsed_raw_and_typed_fields_keep_command_line_order() {
+    #[tokio::test]
+    async fn parsed_raw_and_typed_fields_keep_command_line_order() -> anyhow::Result<()> {
         let parsed = ApiHarness::try_parse_from([
             "test",
             "/v1/messages",
@@ -1042,7 +1044,7 @@ mod tests {
             "messages[][content]=second",
         ])
         .unwrap();
-        let client = api_client("https://api.bitrouter.ai", "field-order");
+        let client = api_client("https://api.bitrouter.ai", "field-order").await?;
 
         let request = prepare_request(&parsed.args, &client, &mut std::io::empty()).unwrap();
         let body = serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap();
@@ -1056,6 +1058,7 @@ mod tests {
                 ]
             })
         );
+        Ok(())
     }
 
     #[test]
@@ -1084,7 +1087,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fields_build_an_implicit_post_json_body() {
+    async fn fields_build_an_implicit_post_json_body() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -1101,16 +1104,17 @@ mod tests {
         args.raw_fields = vec!["model=openai/gpt-5".to_owned()];
         args.fields = vec!["stream=true".to_owned()];
 
-        let (result, stdout, stderr) =
-            execute_for_test(args, api_client(&server.uri(), "post"), b"", false).await;
+        let client = api_client(&server.uri(), "post").await?;
+        let (result, stdout, stderr) = execute_for_test(args, client, b"", false).await;
 
-        result.unwrap();
+        result?;
         assert_eq!(stdout, b"ok");
         assert!(stderr.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn explicit_get_sends_fields_as_query_parameters() {
+    async fn explicit_get_sends_fields_as_query_parameters() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
@@ -1125,14 +1129,15 @@ mod tests {
         args.method = Some("GET".to_owned());
         args.fields = vec!["owned=true".to_owned(), "limit=25".to_owned()];
 
-        let (result, _, _) =
-            execute_for_test(args, api_client(&server.uri(), "get-query"), b"", false).await;
+        let client = api_client(&server.uri(), "get-query").await?;
+        let (result, _, _) = execute_for_test(args, client, b"", false).await;
 
-        result.unwrap();
+        result?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn input_preserves_exact_body_and_moves_fields_to_query() {
+    async fn input_preserves_exact_body_and_moves_fields_to_query() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         let input = tmp_path("input", "request.json");
         std::fs::write(&input, b"{\n  \"exact\": true\n}\n").unwrap();
@@ -1148,28 +1153,28 @@ mod tests {
         args.input = Some(input);
         args.fields = vec!["trace=true".to_owned()];
 
-        let (result, _, _) =
-            execute_for_test(args, api_client(&server.uri(), "input-body"), b"", false).await;
+        let client = api_client(&server.uri(), "input-body").await?;
+        let (result, _, _) = execute_for_test(args, client, b"", false).await;
 
-        result.unwrap();
+        result?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn stdin_cannot_be_both_input_and_a_typed_field() {
+    async fn stdin_cannot_be_both_input_and_a_typed_field() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         let mut args = api_args("/v1/responses");
         args.input = Some(PathBuf::from("-"));
         args.fields = vec!["extra=@-".to_owned()];
 
-        let (result, _, _) = execute_for_test(
-            args,
-            api_client(&server.uri(), "stdin-conflict"),
-            b"body",
-            false,
-        )
-        .await;
+        let client = api_client(&server.uri(), "stdin-conflict").await?;
+        let (result, _, _) = execute_for_test(args, client, b"body", false).await;
 
-        assert!(result.unwrap_err().to_string().contains("stdin"));
+        let error = match result {
+            Ok(()) => anyhow::bail!("stdin conflict unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("stdin"));
         assert!(
             server
                 .received_requests()
@@ -1177,10 +1182,11 @@ mod tests {
                 .unwrap_or_default()
                 .is_empty()
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn non_tty_sse_bytes_are_preserved() {
+    async fn non_tty_sse_bytes_are_preserved() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         let body = "event: message\ndata: {\"delta\":\"hi\"}\n\ndata: [DONE]\n\n";
         Mock::given(method("GET"))
@@ -1189,24 +1195,21 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (result, stdout, _) = execute_for_test(
-            api_args("/v1/stream"),
-            api_client(&server.uri(), "sse"),
-            b"",
-            false,
-        )
-        .await;
+        let client = api_client(&server.uri(), "sse").await?;
+        let (result, stdout, _) =
+            execute_for_test(api_args("/v1/stream"), client, b"", false).await;
 
-        result.unwrap();
+        result?;
         assert_eq!(stdout, body.as_bytes());
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn non_tty_sse_is_written_before_the_stream_completes() {
+    async fn non_tty_sse_is_written_before_the_stream_completes() -> anyhow::Result<()> {
         let (base_url, release, server) = delayed_sse_server().await;
         let output = Arc::new(StdMutex::new(Vec::new()));
         let shared_output = output.clone();
-        let client = api_client(&base_url, "delayed-sse");
+        let client = api_client(&base_url, "delayed-sse").await?;
         let local = tokio::task::LocalSet::new();
 
         local
@@ -1241,20 +1244,22 @@ mod tests {
                 .await
                 .is_ok();
                 release.notify_one();
-                request.await.unwrap().unwrap();
+                request.await.map_err(anyhow::Error::from)??;
                 assert!(first_chunk_arrived, "first SSE chunk was buffered");
+                Ok::<(), anyhow::Error>(())
             })
-            .await;
+            .await?;
 
-        assert_eq!(
-            output.lock().unwrap().as_slice(),
-            b"data: first\n\ndata: second\n\n"
-        );
+        let output = output
+            .lock()
+            .map_err(|_| anyhow::anyhow!("shared SSE output lock poisoned"))?;
+        assert_eq!(output.as_slice(), b"data: first\n\ndata: second\n\n");
         server.abort();
+        Ok(())
     }
 
     #[tokio::test]
-    async fn tty_json_is_pretty_printed() {
+    async fn tty_json_is_pretty_printed() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
@@ -1265,23 +1270,19 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (result, stdout, _) = execute_for_test(
-            api_args("/v1/models"),
-            api_client(&server.uri(), "tty-json"),
-            b"",
-            true,
-        )
-        .await;
+        let client = api_client(&server.uri(), "tty-json").await?;
+        let (result, stdout, _) = execute_for_test(api_args("/v1/models"), client, b"", true).await;
 
-        result.unwrap();
+        result?;
         assert_eq!(
-            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stdout)?,
             "{\n  \"data\": [\n    {\n      \"id\": \"m\"\n    }\n  ]\n}\n"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn include_silent_and_verbose_obey_output_contracts() {
+    async fn include_silent_and_verbose_obey_output_contracts() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
@@ -1298,16 +1299,11 @@ mod tests {
         args.include = true;
         args.silent = true;
 
-        let (result, stdout, stderr) = execute_for_test(
-            args,
-            api_client(&server.uri(), "include-silent"),
-            b"",
-            false,
-        )
-        .await;
+        let client = api_client(&server.uri(), "include-silent").await?;
+        let (result, stdout, stderr) = execute_for_test(args, client, b"", false).await;
 
-        result.unwrap();
-        let output = String::from_utf8(stdout).unwrap();
+        result?;
+        let output = String::from_utf8(stdout)?;
         assert!(output.starts_with("HTTP/1.1 200 OK\r\n"), "{output:?}");
         assert!(!output.contains("hidden"));
         assert!(stderr.is_empty());
@@ -1315,15 +1311,10 @@ mod tests {
         let mut verbose_args = api_args("/v1/models?api_key=query-secret&visible=yes");
         verbose_args.headers = vec!["Authorization: Bearer override-secret".to_owned()];
         verbose_args.verbose = true;
-        let (result, _, stderr) = execute_for_test(
-            verbose_args,
-            api_client(&server.uri(), "verbose"),
-            b"",
-            false,
-        )
-        .await;
-        result.unwrap();
-        let verbose = String::from_utf8(stderr).unwrap();
+        let client = api_client(&server.uri(), "verbose").await?;
+        let (result, _, stderr) = execute_for_test(verbose_args, client, b"", false).await;
+        result?;
+        let verbose = String::from_utf8(stderr)?;
         assert!(verbose.contains("GET"));
         assert!(verbose.contains("<redacted>"));
         assert!(!verbose.contains("override-secret"));
@@ -1331,10 +1322,11 @@ mod tests {
         assert!(!verbose.contains("stored-secret"));
         assert!(!verbose.contains("query-secret"));
         assert!(verbose.contains("visible=yes"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn error_body_is_written_before_status_error() {
+    async fn error_body_is_written_before_status_error() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
@@ -1345,15 +1337,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let (result, stdout, _) = execute_for_test(
-            api_args("/v1/models"),
-            api_client(&server.uri(), "http-error"),
-            b"",
-            false,
-        )
-        .await;
+        let client = api_client(&server.uri(), "http-error").await?;
+        let (result, stdout, _) =
+            execute_for_test(api_args("/v1/models"), client, b"", false).await;
 
         assert_eq!(stdout, b"{\"error\":\"rate_limited\"}");
-        assert!(result.unwrap_err().to_string().contains("429"));
+        let error = match result {
+            Ok(()) => anyhow::bail!("HTTP error unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("429"));
+        Ok(())
     }
 }

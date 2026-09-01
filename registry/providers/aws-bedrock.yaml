@@ -178,6 +178,14 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
+  - id: x-ai/grok-4.6
+    provider_model_id: xai.grok-4.6
+    pricing:
+      input_tokens:
+        no_cache: 2.2
+        cache_read: 0.55
+      output_tokens:
+        text: 6.6
 auto_sync:
   feed: models_dev
   key: amazon-bedrock

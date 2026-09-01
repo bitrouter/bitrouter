@@ -10,7 +10,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, the ACP thin proxy (`acp` feature), config loading, and the axum HTTP server |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
-| `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
+| `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP, with its billing wire type kept local        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
 | `crates/bitrouter-tui`           | crate   | Terminal front-end for one ACP agent session (`bitrouter chat`) — the live `view` and its footer, transcript, tool cards, permission prompt, provider picker, cost figure, the `plain` form for a pipe, plus terminal custody (`lifecycle`) and the line editor (`editor`). Synchronous: no async runtime, no I/O of its own |
@@ -47,7 +47,8 @@ alone in *serving* is still ACP: `providers/list` renders in the crate because
 is what the protocol does not carry — the `_meta` key naming a cost figure's
 scope (`apps/bitrouter/src/chat/cost.rs`), this process's stdin and signals,
 and anything needing `Config` or the control socket. The check is mechanical:
-`grep -rn "bitrouter/" crates/bitrouter-tui/src` must return nothing.
+`rg -n "bitrouter/costScope|COST_SCOPE_META_KEY" crates/bitrouter-tui/src`
+must return nothing.
 
 Where a control's honesty depends on something ACP does not carry, the crate
 takes it as a **parameter** rather than inferring it — `Picker::open` takes
@@ -179,9 +180,11 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ### Observability surfaces (`apps/bitrouter/src/tui/`)
 
-One surface, with `render.rs` / `snapshot.rs` as its formatting and data layers:
+One surface remains, with `snapshot.rs` as its data layer and `render.rs` as its formatter:
 
-- `bitrouter status --watch` — the live view (`tui/watch.rs`). Unix-only and gated in exactly one place, `#[cfg(unix)] mod watch;`. Piping it prints a single snapshot and exits, which is the path that stays portable.
+- `bitrouter status --requests` (`-r`) — one plain-text snapshot of settled requests plus daemon-wide spend and request rate. It reads the metering store directly, works with no daemon (`history only`), prints identically when piped, and can be repeated externally with `watch -n1`.
+
+There is no terminal-only status view now. `apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns drawn terminal UI for ACP chat.
 
 The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 

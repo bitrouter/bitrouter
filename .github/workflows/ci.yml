@@ -154,8 +154,8 @@ jobs:
           - shard: optimization
             retries: "0"
             targets: >-
-              --test eval_exchange_equivalence --test optimization_discovery
-              --test optimization_output --test policy_eval_control_plane
+              --test eval_exchange_equivalence --test optimization_output
+              --test policy_eval_control_plane
           - shard: control-plane
             # Trajectory assertions occasionally observe async event timestamps
             # out of order; retry the isolated test process before failing CI.

@@ -183,7 +183,7 @@ ids resolve through the fallback chain — alias one in `bitrouter.yaml` if not.
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md` | `bitrouter/auto`, trace projections, policy locks |
-| `references/workflow-optimization.md`, `references/metering.md` | Quality/cost optimization loop; cache-aware pricing, charge evidence, usage export |
+| `references/workflow-optimization.md`, `references/metering.md` | History-driven quality/cost optimization from traces + external evals; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP substrate (`acp serve\|prompt`, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
 
 ## Gotchas

@@ -93,6 +93,8 @@ pub mod claude_code;
 pub mod codex;
 pub mod copilot;
 mod entry;
+#[cfg(feature = "hosted")]
+pub mod hosted;
 #[cfg(feature = "pkce")]
 pub mod import;
 pub mod oauth;

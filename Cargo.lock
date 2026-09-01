@@ -616,7 +616,6 @@ dependencies = [
  "axum",
  "axum-test",
  "base64 0.22.1",
- "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-mcp",
  "bitrouter-observe",
@@ -654,27 +653,8 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "bitrouter-cloud-sdk"
-version = "1.0.0-alpha.27"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bitrouter-sdk",
- "chrono",
- "rand 0.10.2",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
  "url",
+ "uuid",
  "wiremock",
 ]
 
@@ -699,7 +679,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "bitrouter-cloud-sdk",
  "bitrouter-sdk",
  "http",
  "reqwest",
@@ -746,15 +725,18 @@ dependencies = [
 name = "bitrouter-providers"
 version = "1.0.0-alpha.27"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bitrouter-sdk",
+ "chrono",
  "keyring",
  "rand 0.10.2",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",

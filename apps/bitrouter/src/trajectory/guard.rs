@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
+use crate::eval::types::EvalExperimentRef;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +61,7 @@ pub struct RouteIntent {
     /// cycle through the selected tier.
     pub trajectory_snapshot_digest: String,
     pub policy_digest: String,
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +230,7 @@ pub fn evaluate(
             clauses,
             trajectory_snapshot_digest: input.pre_intent_snapshot.evidence_digest.clone(),
             policy_digest: input.policy_digest.to_owned(),
+            experiment: None,
         },
         causal_completeness,
         activated,
