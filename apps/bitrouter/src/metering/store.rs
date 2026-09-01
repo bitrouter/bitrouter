@@ -18,8 +18,8 @@ use std::path::Path;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -282,10 +282,20 @@ pub struct RateMetrics {
 /// scoped to one `api_key_id`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SpendSummary {
-    /// Total estimated spend in micro-USD.
+    /// Total estimated spend in micro-USD, counting **only** requests that
+    /// carry charge evidence ([`ChargeStatus::Computed`] or
+    /// [`ChargeStatus::NotCharged`]).
+    ///
+    /// Summing the unpriced rows too would report a floor as a price: a row
+    /// whose evidence was incomplete stores `0`, which is indistinguishable
+    /// from a genuinely free request once added. [`Self::unpriced`] is how a
+    /// caller learns the figure is partial.
     pub spend_micro_usd: u64,
     /// Requests observed (success and failure alike).
     pub requests: u64,
+    /// How many of `requests` have no charge evidence, and are therefore
+    /// absent from `spend_micro_usd`.
+    pub unpriced: u64,
 }
 
 /// One settled request as the live view renders it.
@@ -320,6 +330,22 @@ pub struct RequestRow {
     pub latency_ms: i64,
     /// Error string when the request failed, else `None`.
     pub error: Option<String>,
+    /// How the charge figure was arrived at.
+    ///
+    /// [`ChargeStatus::Computed`] and [`ChargeStatus::NotCharged`] are
+    /// evidence; the two unknowns are not. A renderer must never turn an
+    /// unknown into `$0.00` — the charge column stores `0` in that case, and
+    /// a zero it did not measure is not a free request.
+    pub charge_status: ChargeStatus,
+    /// The trajectory episode this request belongs to, when trajectory
+    /// capture recorded one.
+    ///
+    /// `None` when capture is off (it defaults to off and is restart-only),
+    /// when the request predates it, or when the ledger is unreadable. This
+    /// is the thread from a settled request to `bitrouter trajectory
+    /// inspect`, which is otherwise reachable only by an episode id nothing
+    /// hands out.
+    pub episode_id: Option<String>,
 }
 
 impl From<requests::Model> for RequestRow {
@@ -336,8 +362,33 @@ impl From<requests::Model> for RequestRow {
             estimated_charge_micro_usd: m.estimated_charge_micro_usd,
             latency_ms: m.latency_ms,
             error: m.error,
+            charge_status: ChargeStatus::from_persisted(&m.charge_status),
+            // Filled by `attach_episodes`; the row itself has no join.
+            episode_id: None,
         }
     }
+}
+
+/// Fold `(charge, persisted charge_status)` pairs into a summary.
+///
+/// Shared by both spend queries so they cannot drift on what counts as
+/// evidence. A row without evidence contributes to `requests` and `unpriced`
+/// but **not** to the total: its stored charge is `0`, and adding that would
+/// silently turn "we do not know" into "it was free".
+fn summarize(charges: Vec<(i64, String)>) -> SpendSummary {
+    let mut summary = SpendSummary {
+        requests: charges.len() as u64,
+        ..Default::default()
+    };
+    for (charge, status) in charges {
+        match ChargeStatus::from_persisted(&status) {
+            ChargeStatus::Computed | ChargeStatus::NotCharged => {
+                summary.spend_micro_usd += charge.max(0) as u64;
+            }
+            ChargeStatus::Unknown | ChargeStatus::LegacyUnknown => summary.unpriced += 1,
+        }
+    }
+    summary
 }
 
 /// sea-orm-backed metering store.
@@ -527,7 +578,64 @@ impl MeteringStore {
             .all(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("recent_requests: {e}")))?;
-        Ok(rows.into_iter().map(RequestRow::from).collect())
+        let mut rows: Vec<RequestRow> = rows.into_iter().map(RequestRow::from).collect();
+        self.attach_episodes(&mut rows).await;
+        Ok(rows)
+    }
+
+    /// Fill in each row's trajectory episode id, where one exists.
+    ///
+    /// A second statement rather than a join: `trajectory_requests` belongs to
+    /// the trajectory ledger and has no entity here, and this store must not
+    /// grow a dependency on that module merely to answer "is there more to
+    /// read about this request". The two tables share one database, and
+    /// `request_id` is the documented join key.
+    ///
+    /// **Best effort, by design.** Trajectory capture defaults to off, so the
+    /// common case is a table that exists and is empty. A database old enough
+    /// to lack the table entirely, or any other read failure, leaves every row
+    /// `None` — the same answer as "capture was off", which is the honest
+    /// reading either way. It must never fail the request table over a
+    /// ledger that is optional.
+    async fn attach_episodes(&self, rows: &mut [RequestRow]) {
+        if rows.is_empty() {
+            return;
+        }
+        let backend = self.db.get_database_backend();
+        let placeholders: Vec<String> = (1..=rows.len())
+            .map(|i| match backend {
+                DbBackend::Postgres => format!("${i}"),
+                _ => "?".to_string(),
+            })
+            .collect();
+        let sql = format!(
+            "SELECT request_id, episode_id FROM trajectory_requests WHERE request_id IN ({})",
+            placeholders.join(", ")
+        );
+        let values: Vec<sea_orm::Value> = rows
+            .iter()
+            .map(|r| sea_orm::Value::from(r.request_id.clone()))
+            .collect();
+        let Ok(found) = self
+            .db
+            .query_all(Statement::from_sql_and_values(backend, &sql, values))
+            .await
+        else {
+            return;
+        };
+        let mut episodes: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for row in found {
+            if let (Ok(request_id), Ok(episode_id)) = (
+                row.try_get::<String>("", "request_id"),
+                row.try_get::<String>("", "episode_id"),
+            ) {
+                episodes.insert(request_id, episode_id);
+            }
+        }
+        for row in rows.iter_mut() {
+            row.episode_id = episodes.get(&row.request_id).cloned();
+        }
     }
 
     /// Request / token rate over the trailing minute across **every** caller.
@@ -592,6 +700,7 @@ impl MeteringStore {
         let mut query = requests::Entity::find()
             .select_only()
             .column(requests::Column::EstimatedChargeMicroUsd)
+            .column(requests::Column::ChargeStatus)
             .filter(requests::Column::LaunchId.eq(launch_id))
             .filter(requests::Column::CreatedAt.gte(start));
         // Every other windowed query honours `Custom`'s end; omitting it here
@@ -599,32 +708,27 @@ impl MeteringStore {
         if let TimeWindow::Custom { end, .. } = window {
             query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
         }
-        let charges: Vec<i64> = query
+        let charges: Vec<(i64, String)> = query
             .into_tuple()
             .all(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("spend_summary_for_launch: {e}")))?;
-        Ok(SpendSummary {
-            requests: charges.len() as u64,
-            spend_micro_usd: charges.into_iter().map(|c| c.max(0) as u64).sum(),
-        })
+        Ok(summarize(charges))
     }
 
     /// Total spend + request count within `window`, across every caller.
     pub async fn spend_summary(&self, window: TimeWindow) -> Result<SpendSummary> {
         let start = window_start(window).to_rfc3339();
-        let charges: Vec<i64> = requests::Entity::find()
+        let charges: Vec<(i64, String)> = requests::Entity::find()
             .select_only()
             .column(requests::Column::EstimatedChargeMicroUsd)
+            .column(requests::Column::ChargeStatus)
             .filter(requests::Column::CreatedAt.gte(start))
             .into_tuple()
             .all(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("spend_summary: {e}")))?;
-        Ok(SpendSummary {
-            requests: charges.len() as u64,
-            spend_micro_usd: charges.into_iter().map(|c| c.max(0) as u64).sum(),
-        })
+        Ok(summarize(charges))
     }
 
     /// Load reconciliation state for exactly the supplied request ids.

@@ -44,6 +44,7 @@
 use serde::Serialize;
 
 use crate::metering::fmt_usd;
+use crate::metering::pricing::ChargeStatus;
 use crate::metering::store::{RateMetrics, RequestRow, SpendSummary, TimeWindow};
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
@@ -104,13 +105,23 @@ pub struct RequestView {
     pub cache_read_tokens: i64,
     /// Cache-write prompt tokens.
     pub cache_write_tokens: i64,
-    /// Estimated charge in micro-USD. Zero means the request was not charged,
-    /// which the human view renders as `—` rather than as a computed zero.
+    /// Estimated charge in micro-USD. Meaningless without `charge_status`:
+    /// a request whose pricing evidence was incomplete also stores `0`.
     pub charge_micro_usd: i64,
+    /// How `charge_micro_usd` was arrived at — `computed`, `not_charged`,
+    /// `unknown`, or `legacy_unknown`. Only the first two are evidence.
+    pub charge_status: &'static str,
     /// End-to-end latency in milliseconds.
     pub latency_ms: i64,
     /// Error string when the request failed, else `None`.
     pub error: Option<String>,
+    /// The trajectory episode this request belongs to, or `null`.
+    ///
+    /// This is the thread onward: `bitrouter trajectory inspect <episode_id>`
+    /// reads the structural record. `null` is the common case — capture
+    /// defaults to off — and it means "there is nothing further to read",
+    /// which is exactly what a caller needs to know before trying.
+    pub episode_id: Option<String>,
 }
 
 impl From<RequestRow> for RequestView {
@@ -125,8 +136,10 @@ impl From<RequestRow> for RequestView {
             cache_read_tokens: row.cache_read_tokens,
             cache_write_tokens: row.cache_write_tokens,
             charge_micro_usd: row.estimated_charge_micro_usd,
+            charge_status: row.charge_status.as_str(),
             latency_ms: row.latency_ms,
             error: row.error,
+            episode_id: row.episode_id,
         }
     }
 }
@@ -140,7 +153,7 @@ impl RequestView {
             self.provider.clone(),
             tokens(self.prompt_tokens),
             tokens(self.completion_tokens),
-            charge(self.charge_micro_usd),
+            charge(self.charge_micro_usd, self.charge_status),
             latency(self.latency_ms),
             status(self.error.as_deref()),
         ]
@@ -163,10 +176,19 @@ pub struct RequestsReport {
     /// Whose spend the rollup describes. Always every caller — stated rather
     /// than left to be guessed, which is the rule `chat`'s cost line keeps.
     pub scope: &'static str,
-    /// Total estimated spend over the window, in micro-USD.
-    pub spend_micro_usd: u64,
+    /// Total estimated spend over the window, in micro-USD, counting only
+    /// requests that carry charge evidence.
+    ///
+    /// `null` when **no** request in the window has any — a zero there would
+    /// claim a free window that was merely unmeasured, and an agent reading
+    /// `spend_micro_usd` without checking `unpriced_requests` would believe
+    /// it. `null` forces the question.
+    pub spend_micro_usd: Option<u64>,
     /// Requests observed over the window, success and failure alike.
     pub requests: u64,
+    /// How many of `requests` have no charge evidence and are therefore
+    /// absent from `spend_micro_usd`.
+    pub unpriced_requests: u64,
     /// Requests observed in the trailing minute.
     pub requests_per_minute: f64,
     /// Tokens observed in the trailing minute.
@@ -200,8 +222,11 @@ impl RequestsReport {
             daemon,
             window: window_label(window).to_string(),
             scope: SCOPE,
-            spend_micro_usd: summary.spend_micro_usd,
+            // Nothing priced is not the same as nothing spent.
+            spend_micro_usd: (summary.unpriced < summary.requests || summary.requests == 0)
+                .then_some(summary.spend_micro_usd),
             requests: summary.requests,
+            unpriced_requests: summary.unpriced,
             requests_per_minute: rate.requests_per_minute,
             tokens_per_minute: rate.tokens_per_minute,
             rows: rows.into_iter().map(RequestView::from).collect(),
@@ -227,8 +252,16 @@ impl RequestsReport {
     }
 
     /// The rollup, scope included.
+    ///
+    /// `unreported` rather than `$0.00` when nothing in the window carries
+    /// charge evidence. This is the rule `bitrouter chat`'s cost line already
+    /// keeps — *a client that cannot see a price has not observed a free
+    /// turn* — and the two surfaces contradicted each other until it did.
     fn rollup(&self) -> String {
-        let spend = fmt_usd(self.spend_micro_usd);
+        let spend = match self.spend_micro_usd {
+            Some(micro_usd) => fmt_usd(micro_usd),
+            None => "unreported".to_string(),
+        };
         let mut line = format!(
             "{} {spend} · {} req · {:.1} req/min · {} tok/min · {}",
             self.window,
@@ -242,12 +275,34 @@ impl RequestsReport {
         }
         line
     }
+
+    /// What the rollup cannot say, said rather than left to be inferred.
+    ///
+    /// A partial total is worse than a labelled one: the reader has no way to
+    /// tell a cheap window from an unmeasured one unless the gap is named.
+    fn caveat(&self) -> Option<String> {
+        match (self.unpriced_requests, self.spend_micro_usd) {
+            (0, _) => None,
+            (n, None) => Some(format!(
+                "no charge evidence for any of these {n} requests — the daemon \
+                 recorded them but could not price them"
+            )),
+            (n, Some(_)) => Some(format!(
+                "{n} of {} requests have no charge evidence; the total above is \
+                 a floor, not a price",
+                self.requests
+            )),
+        }
+    }
 }
 
 impl CliReport for RequestsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.status_block(self.health(), &self.headline())?;
         h.line(&self.rollup())?;
+        if let Some(caveat) = self.caveat() {
+            h.note(&caveat)?;
+        }
         if self.rows.is_empty() {
             // An empty table header is noise, not information.
             return Ok(());
@@ -295,13 +350,21 @@ fn tokens(n: i64) -> String {
     }
 }
 
-/// A charge, or `—` when the request was not charged. An em dash reads as
-/// "nothing to bill"; `$0.00` would read as a computed zero.
-fn charge(micro_usd: i64) -> String {
-    if micro_usd <= 0 {
-        "—".to_string()
-    } else {
-        fmt_usd(micro_usd as u64)
+/// The charge, and only when it is evidence.
+///
+/// Three outcomes, because there are three facts to tell apart:
+///
+/// - a priced request shows its price;
+/// - a request an authoritative receipt says was **not** charged shows `—`,
+///   which reads as "nothing to bill";
+/// - a request whose pricing evidence was incomplete shows `?`, because its
+///   stored charge is a placeholder `0`. Rendering that as `—` would claim a
+///   free request, and as `$0.00` a measured one. Neither was observed.
+fn charge(micro_usd: i64, status: &str) -> String {
+    match ChargeStatus::from_persisted(status) {
+        ChargeStatus::Computed if micro_usd > 0 => fmt_usd(micro_usd as u64),
+        ChargeStatus::Computed | ChargeStatus::NotCharged => "—".to_string(),
+        ChargeStatus::Unknown | ChargeStatus::LegacyUnknown => "?".to_string(),
     }
 }
 
@@ -352,6 +415,18 @@ mod tests {
             estimated_charge_micro_usd: 42_000,
             latency_ms: 1_800,
             error: None,
+            charge_status: ChargeStatus::Computed,
+            episode_id: None,
+        }
+    }
+
+    /// A row the daemon recorded but could not price — the overwhelmingly
+    /// common shape in a real BYOK store.
+    fn unpriced() -> RequestRow {
+        RequestRow {
+            estimated_charge_micro_usd: 0,
+            charge_status: ChargeStatus::LegacyUnknown,
+            ..row()
         }
     }
 
@@ -370,6 +445,22 @@ mod tests {
             SpendSummary::default(),
             RateMetrics::default(),
             rows,
+        )
+    }
+
+    /// A report over `priced` evidenced requests and `unpriced` unevidenced
+    /// ones, as the store's `summarize` would produce.
+    fn spend(priced: u64, unpriced: u64, micro_usd: u64) -> RequestsReport {
+        RequestsReport::new(
+            None,
+            TimeWindow::Today,
+            SpendSummary {
+                spend_micro_usd: micro_usd,
+                requests: priced + unpriced,
+                unpriced,
+            },
+            RateMetrics::default(),
+            Vec::new(),
         )
     }
 
@@ -402,9 +493,81 @@ mod tests {
         let mut r = row();
         r.estimated_charge_micro_usd = 0;
         r.latency_ms = 0;
+        let mut r = r;
+        r.charge_status = ChargeStatus::NotCharged;
         let cells = RequestView::from(r).cells();
         assert_eq!(cells[5], "—");
         assert_eq!(cells[6], "—");
+    }
+
+    /// The bug this pair exists to prevent: an unpriced request is neither a
+    /// free one nor a measured zero. `—` would claim the first and `$0.00`
+    /// the second; only `?` claims neither.
+    #[test]
+    fn an_unpriced_request_is_not_rendered_as_free() {
+        let cells = RequestView::from(unpriced()).cells();
+        assert_eq!(cells[5], "?", "unknown evidence must not read as a price");
+        assert_ne!(cells[5], "—");
+        assert_ne!(cells[5], "$0.00");
+    }
+
+    /// `bitrouter chat` renders an unscoped cost as `unreported`. This surface
+    /// showed `$0.00` for the same condition until the two were reconciled.
+    #[test]
+    fn a_window_with_no_charge_evidence_reports_unreported() {
+        let r = spend(0, 264, 0);
+        assert!(r.rollup().contains("unreported"), "{}", r.rollup());
+        assert!(!r.rollup().contains("$0.00"), "{}", r.rollup());
+        assert_eq!(
+            json(&r)["spend_micro_usd"],
+            serde_json::Value::Null,
+            "a zero here would be believed by an agent that did not check"
+        );
+        assert_eq!(json(&r)["unpriced_requests"], 264);
+    }
+
+    /// A partial total must say it is partial, or a cheap window and an
+    /// unmeasured one look identical.
+    #[test]
+    fn a_partial_total_says_it_is_a_floor() {
+        let r = spend(3, 2, 110_450);
+        assert!(r.rollup().contains("$0.11"), "{}", r.rollup());
+        let caveat = r.caveat().unwrap_or_default();
+        assert!(caveat.contains("2 of 5"), "{caveat}");
+        assert!(caveat.contains("floor"), "{caveat}");
+        assert!(
+            human(&r).contains("floor"),
+            "the caveat must reach the page"
+        );
+    }
+
+    /// A fully evidenced window carries no caveat — the note is information,
+    /// not decoration.
+    #[test]
+    fn a_fully_priced_window_has_no_caveat() {
+        assert!(spend(5, 0, 110_450).caveat().is_none());
+    }
+
+    /// The thread onward. `null` is the common case and must stay legible as
+    /// "nothing further to read" rather than being omitted.
+    #[test]
+    fn a_row_carries_its_episode_id_when_one_exists() {
+        let mut r = row();
+        r.episode_id = Some("ep_7f3a".into());
+        let value = json(&report(None, vec![r]));
+        assert_eq!(value["rows"][0]["episode_id"], "ep_7f3a");
+
+        let without = json(&report(None, vec![row()]));
+        assert_eq!(without["rows"][0]["episode_id"], serde_json::Value::Null);
+    }
+
+    /// An agent must be able to tell measured from unmeasured per row, not
+    /// only in aggregate.
+    #[test]
+    fn each_row_carries_its_charge_evidence() {
+        let value = json(&report(None, vec![row(), unpriced()]));
+        assert_eq!(value["rows"][0]["charge_status"], "computed");
+        assert_eq!(value["rows"][1]["charge_status"], "legacy_unknown");
     }
 
     #[test]
@@ -447,6 +610,8 @@ mod tests {
     fn an_empty_window_says_so_rather_than_showing_a_bare_zero() {
         let empty = report(None, Vec::new());
         assert!(empty.rollup().contains("no requests"), "{}", empty.rollup());
+        // Genuinely empty, not unmeasured: no rows means nothing to price.
+        assert!(empty.caveat().is_none());
     }
 
     /// The honesty rule `chat`'s cost line keeps: a currency figure states
