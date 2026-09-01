@@ -59,6 +59,9 @@ pub enum SettlementError {
     /// The configured API root was not a valid URL.
     #[error("invalid settlement API root: {0}")]
     InvalidBaseUrl(#[from] url::ParseError),
+    /// The API root embedded credentials that reqwest could send as Basic auth.
+    #[error("settlement API root must not contain userinfo")]
+    UserInfoNotAllowed,
     /// The API root cannot accept hierarchical path segments.
     #[error("settlement API root cannot be used as a hierarchical URL")]
     CannotBeBase,
@@ -121,6 +124,9 @@ impl SettlementClient {
     /// Construct a client from an API root ending in `/v1` and an inference key.
     pub fn new(base_url: impl AsRef<str>, api_key: impl AsRef<str>) -> Result<Self> {
         let mut base_url = url::Url::parse(base_url.as_ref())?;
+        if !base_url.username().is_empty() || base_url.password().is_some() {
+            return Err(SettlementError::UserInfoNotAllowed);
+        }
         if !base_url.path().ends_with('/') {
             let path = format!("{}/", base_url.path());
             base_url.set_path(&path);
@@ -292,6 +298,21 @@ mod tests {
         let client = SettlementClient::new("https://example.com/v1", "brk_secret")?;
         let rendered = format!("{client:?}");
         assert!(!rendered.contains("brk_secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn client_rejects_base_url_userinfo() -> anyhow::Result<()> {
+        for base_url in [
+            "https://settlement-user@example.com/v1",
+            "https://:settlement-password@example.com/v1",
+        ] {
+            let error = match SettlementClient::new(base_url, "brk_test") {
+                Ok(_) => anyhow::bail!("settlement client unexpectedly accepted URL userinfo"),
+                Err(error) => error,
+            };
+            assert!(matches!(error, super::SettlementError::UserInfoNotAllowed));
+        }
         Ok(())
     }
 }

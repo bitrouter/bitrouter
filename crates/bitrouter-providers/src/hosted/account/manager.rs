@@ -224,14 +224,16 @@ impl CredentialManager {
             .current()
             .cloned()
             .ok_or(CredentialError::NotSignedIn)?;
-        self.verify_origin(&credential, expected_origin)?;
         match credential {
-            StoredCredential::ApiKey { api_key, .. } => Ok(ResolvedCredential {
-                secret: api_key,
-                source: CredentialSource::StoredApiKey,
-                oauth_identity: None,
-            }),
             StoredCredential::Oauth { .. } => Err(CredentialError::WrongCredentialKind),
+            StoredCredential::ApiKey { api_key, base_url } => {
+                self.verify_base_url_origin(&base_url, expected_origin)?;
+                Ok(ResolvedCredential {
+                    secret: api_key,
+                    source: CredentialSource::StoredApiKey,
+                    oauth_identity: None,
+                })
+            }
         }
     }
 
@@ -244,10 +246,17 @@ impl CredentialManager {
         credential: &StoredCredential,
         expected_origin: Option<&str>,
     ) -> Result<(), CredentialError> {
+        self.verify_base_url_origin(credential.base_url(), expected_origin)
+    }
+
+    fn verify_base_url_origin(
+        &self,
+        actual: &str,
+        expected_origin: Option<&str>,
+    ) -> Result<(), CredentialError> {
         let Some(expected) = expected_origin else {
             return Ok(());
         };
-        let actual = credential.base_url();
         if origins_match(actual, expected) {
             return Ok(());
         }
@@ -357,6 +366,40 @@ mod tests {
             Ok(_) => anyhow::bail!("OAuth unexpectedly resolved as an API key"),
             Err(error) => error,
         };
+        assert!(matches!(error, CredentialError::WrongCredentialKind));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_key_only_rejects_wrong_origin_oauth_as_wrong_kind() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let manager = CredentialManager::with_client(
+            directory.path().join("account-credentials.json"),
+            reqwest::Client::new(),
+        );
+        manager
+            .save(StoredCredential::from(Credentials {
+                access_token: "access-token".to_owned(),
+                refresh_token: Some("refresh-token".to_owned()),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: "https://other.example".to_owned(),
+                namespace_id: Some("ns-test".to_owned()),
+                subject: None,
+            }))
+            .await?;
+
+        let error = match manager
+            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
+            .await
+        {
+            Ok(_) => anyhow::bail!("OAuth unexpectedly resolved as an API key"),
+            Err(error) => error,
+        };
+
         assert!(matches!(error, CredentialError::WrongCredentialKind));
         Ok(())
     }
