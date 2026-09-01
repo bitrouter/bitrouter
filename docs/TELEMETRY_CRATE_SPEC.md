@@ -680,14 +680,60 @@ decision; all six are things the next reader would otherwise rediscover.
   correspondingly demoted from live guard to forward guard, and its comment says
   so.
 
+### What the first CI run found
+
+Both guard jobs failed on the first push, and neither failure was a defect in
+the move. Recorded because both are instructive about the guards themselves.
+
+- **`feature-isolation`'s OTel-absence list was over-broad.** It named
+  `tracing-subscriber`, `tonic` and `dashmap` alongside the `opentelemetry*`
+  crates. Those three are general-purpose, and `tracing-subscriber` promptly
+  proved it: `main`'s `agent-client-protocol-conductor` pulls it, so the step
+  failed on a dependency that has nothing to do with telemetry. **The error was
+  conceptual, not clerical** — the semver argument this whole document rests on
+  is about *public* dependencies, which `public-api-deps.txt` guards. Tree
+  membership costs nothing. The step is now scoped to the five crates that can
+  only be there because of the renderer, with the distinction written into the
+  comment so it is not re-widened.
+
+- **`public-api-deps.txt` was regenerated before the merge with `main`, and
+  went stale without saying so.** The file is rewritten wholesale, so git
+  resolved it without a conflict and simply kept this branch's copy. That is a
+  general hazard for any generated file, and its header now says: regenerate
+  *after* merging, never before.
+
+  Re-running it post-merge is what makes the headline claim trustworthy rather
+  than lucky: **`tracing_core` and `tracing_subscriber` are still gone.** The
+  only addition is `agent_client_protocol`, and it is not this change's —
+  `main`'s `acp::controller::Controller` names it in a generic bound and in an
+  `impl ConnectTo for acp::up::AgentProcess`.
+
+  **That is the guard catching exactly what it was built for, on its first
+  run.** `public-api-deps.txt` does not exist on `main`; the job arrived with
+  #809 and lives only on this branch. So #849 added a public dependency to the
+  foundation crate with nothing in place to notice, and the first thing this
+  job ever did was notice. The manifest records where the line came from.
+
+- **A pre-existing violation surfaced, and is carved out rather than papered
+  over.** `dist-helper` reaches `axum`: it enables `bitrouter-sdk/acp`, which
+  pulls `agent-client-protocol-conductor`, which pulls
+  `agent-client-protocol-trace-viewer`, which depends on `axum`
+  non-optionally. `main`'s version of `feature-isolation` had no such loop —
+  it still ran `cargo check -p bitrouter-observe` and asserted one thing — so
+  this was never checked there. Trimming `dist-helper`'s features is **not**
+  the fix: dropping `mcp`/`acp` guts `dist/schema/bitrouter.config.schema.json`,
+  verified by regenerating and reverting. `dist-helper` is therefore checked
+  for `opentelemetry` only, with the reason and the re-add condition in the
+  job's comment, and the real fix filed separately.
+
 ### Measured
 
 | | |
 | --- | --- |
-| `public-api-deps.txt` delta | **−`tracing_core`, −`tracing_subscriber`; nothing else** |
+| `public-api-deps.txt` delta | **−`tracing_core`, −`tracing_subscriber`** — confirmed again after merging `main`. `+agent_client_protocol` is `main`'s, not this change's; see above. |
 | `cargo tree -p bitrouter-sdk --all-features -i opentelemetry` | fails — absent, as do the other six OTel names |
 | Lines moved / stayed | 5,594 / 1,275 (raw, ~42% `#[cfg(test)]`) |
-| Tests | 2,872 passed, 0 failed, 11 skipped (2,866 at the crate move, +6 for D6's guard and rename) |
+| Tests | 2,892 passed, 0 failed, 11 skipped after merging `main` (2,866 at the crate move; +6 for D6's guard and rename; the rest arrived with `main`) |
 | `cargo clippy --workspace --all-features --tests --benches` | clean |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features` | clean |
 | `cargo fmt --all -- --check` | clean |

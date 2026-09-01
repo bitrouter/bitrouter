@@ -269,9 +269,29 @@ jobs:
         # `--all-features` is the whole point — a feature that quietly pulled
         # the stack back into the foundation crate would pass a default-tree
         # check and fail this one.
+        #
+        # Scope, because the first draft got this wrong and failed on its first
+        # CI run. Only crates that can be in the SDK's tree *solely* because of
+        # the OTLP renderer belong here. `tracing-subscriber`, `tonic` and
+        # `dashmap` were on the list and do not qualify: they are
+        # general-purpose, and something unrelated may legitimately want them.
+        # `tracing-subscriber` promptly proved it — `agent-client-protocol-conductor`
+        # pulls it, so the over-broad list failed on a dependency that has
+        # nothing to do with telemetry.
+        #
+        # The semver argument this job serves was never about tree membership
+        # anyway. It is about *public* dependencies, and
+        # `public-api-deps.txt` below is what guards those. A crate can sit in
+        # the tree transitively forever without costing a semver commitment;
+        # only appearing in a public signature does that. Do not conflate them
+        # again by re-widening this list.
+        #
+        # `tonic` and `dashmap` keep their guard in "telemetry default tree
+        # stays lean" and "transports stay isolated", where the question asked
+        # is one they can actually answer.
         run: |
           for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
-                     tracing-opentelemetry tracing-subscriber tonic dashmap; do
+                     opentelemetry-semantic-conventions tracing-opentelemetry; do
             if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
               echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
             fi
@@ -341,7 +361,20 @@ jobs:
           if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i opentelemetry >/dev/null 2>&1; then
             echo "::error::opentelemetry resolves in no tree at all — misspelled?"; exit 1
           fi
-          for crate in bitrouter-sdk bitrouter-guardrails bitrouter-providers dist-helper; do
+          #
+          # `dist-helper` is checked for `opentelemetry` only, and the omission
+          # is a recorded debt rather than an oversight. It reaches `axum`
+          # today: it enables `bitrouter-sdk/acp` (which it needs — dropping
+          # the feature guts `dist/schema/bitrouter.config.schema.json`,
+          # verified by regenerating), `acp` pulls
+          # `agent-client-protocol-conductor`, that pulls
+          # `agent-client-protocol-trace-viewer`, and that depends on `axum`
+          # non-optionally. None of that is telemetry's doing and none of it is
+          # this job's to fix; it arrived with the ACP controller and was never
+          # caught because the previous version of this job had no such loop.
+          # Re-add `axum` here once the SDK's `acp` feature stops dragging an
+          # HTTP server behind it.
+          for crate in bitrouter-sdk bitrouter-guardrails bitrouter-providers; do
             # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
             # comment), so prove membership before trusting anything below.
             if ! cargo metadata --no-deps --format-version 1 \
@@ -354,6 +387,13 @@ jobs:
               fi
             done
           done
+          if ! cargo metadata --no-deps --format-version 1 \
+               | jq -e '.packages[] | select(.name == "dist-helper")' >/dev/null; then
+            echo "::error::unknown workspace crate: dist-helper"; exit 1
+          fi
+          if cargo tree -p dist-helper -e normal -i opentelemetry >/dev/null 2>&1; then
+            echo "::error::dist-helper must not depend on opentelemetry when resolved on its own"; exit 1
+          fi
       - name: "the OTel core without a transport is a compile error"
         run: |
           if out=$(cargo check -p bitrouter-telemetry --features __otel-core --message-format=short 2>&1); then

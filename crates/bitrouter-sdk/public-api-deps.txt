@@ -18,7 +18,18 @@
 # method to an existing type does not belong in review as a 6-line diff of
 # auto-derived marker impls; adding a new public dependency does.
 #
+# Regenerate AFTER merging, never before. This file is rewritten wholesale, so
+# a merge resolves it without conflict and silently keeps one side — a stale
+# copy generated pre-merge will not announce itself.
+#
+# `agent_client_protocol` is here because `acp::controller::Controller`'s
+# generic bound and an `impl ConnectTo for acp::up::AgentProcess` name it
+# (added by #849). It is not this crate's doing; it is the first thing this
+# guard caught, on the first CI run after the job existed, which is the case
+# the guard was built for — a public dependency arriving unnoticed.
+#
 # Lines beginning with `#` are stripped before comparison.
+agent_client_protocol
 agent_client_protocol_schema
 anyhow
 axum
