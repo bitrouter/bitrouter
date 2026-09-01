@@ -789,7 +789,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_tool_disconnect_after_provider_result_preserves_usage_without_running_tool() {
+    async fn server_tool_disconnect_after_provider_result_preserves_usage_without_running_tool()
+    -> Result<()> {
         let expected_usage = Usage {
             prompt_tokens: 13,
             completion_tokens: 5,
@@ -812,8 +813,7 @@ mod tests {
 
         let outcome = loop_
             .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+            .await?;
 
         assert!(!upstream.should_continue());
         assert_eq!(upstream.calls(), 1);
@@ -824,10 +824,12 @@ mod tests {
             truncation_reason(&outcome.result),
             Some("client_disconnected")
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn server_tool_disconnect_during_running_tool_finishes_tool_without_next_upstream_turn() {
+    async fn server_tool_disconnect_during_running_tool_finishes_tool_without_next_upstream_turn()
+    -> Result<()> {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let toolset = Arc::new(CountingToolset::gated(
@@ -851,10 +853,16 @@ mod tests {
         });
         tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
             .await
-            .unwrap();
+            .map_err(|_| {
+                BitrouterError::Internal(
+                    "timed out waiting for disconnect test tool to start".to_string(),
+                )
+            })?;
         upstream.disconnect();
         release.add_permits(1);
-        let outcome = task.await.unwrap().unwrap();
+        let outcome = task.await.map_err(|error| {
+            BitrouterError::Internal(format!("disconnect test task failed: {error}"))
+        })??;
 
         assert_eq!(toolset.calls(), 1);
         assert_eq!(toolset.finished(), 1);
@@ -864,6 +872,7 @@ mod tests {
             truncation_reason(&outcome.result),
             Some("client_disconnected")
         );
+        Ok(())
     }
 
     #[tokio::test]

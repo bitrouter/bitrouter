@@ -46,7 +46,6 @@ struct Extensions {
 }
 
 /// Request-scoped controls shared by server-tool prompt forks.
-#[allow(dead_code)] // Installed at non-stream entry points in the next integration step.
 #[derive(Clone, Default)]
 struct ExecutionControl {
     client_disconnect: Option<CancellationToken>,
@@ -465,13 +464,11 @@ impl PipelineContext {
 
     /// Install the request-scoped client-disconnect signal for non-stream
     /// continuation checks. Prompt forks retain a clone of this token.
-    #[allow(dead_code)] // Consumed by the non-stream detached execution path.
     pub(crate) fn install_client_disconnect_token(&mut self, token: CancellationToken) {
         self.execution_control.client_disconnect = Some(token);
     }
 
     /// Whether the downstream client has disconnected from this request.
-    #[allow(dead_code)] // Consumed by fallback and server-tool continuation checks.
     pub(crate) fn client_disconnected(&self) -> bool {
         self.execution_control
             .client_disconnect
@@ -482,7 +479,6 @@ impl PipelineContext {
     /// A future that resolves when the downstream client disconnects.
     ///
     /// Contexts without an installed signal remain continuable indefinitely.
-    #[allow(dead_code)] // Consumed by cancellable fallback-backoff waits.
     pub(crate) async fn client_disconnected_signal(&self) {
         match &self.execution_control.client_disconnect {
             Some(token) => token.cancelled().await,
