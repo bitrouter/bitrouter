@@ -1,0 +1,19 @@
+{
+  "harnessId": "claude-acp",
+  "package": "@agentclientprotocol/claude-agent-acp",
+  "version": "0.70.0",
+  "gitHead": "d0aafb1ca26427285ffaeac8d8a4452fff28e9c3",
+  "providerId": "main",
+  "protocol": "anthropic",
+  "fallbackEnv": [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_CUSTOM_HEADERS"
+  ],
+  "nativeIdentityHeaders": [
+    "x-claude-code-session-id",
+    "x-claude-code-agent-id",
+    "x-claude-code-parent-agent-id"
+  ]
+}

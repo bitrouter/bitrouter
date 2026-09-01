@@ -59,14 +59,14 @@
 - Add: `apps/bitrouter/tests/fixtures/acp_adapters/codex-acp-1.7.0.json`
 - Test: unit tests in `apps/bitrouter/src/harness.rs`
 
-- [ ] Add failing catalog tests requiring `@agentclientprotocol/claude-agent-acp@0.70.0`, its maintained repository/marker, and `@agentclientprotocol/codex-acp@1.7.0`; verify the failure is the old package or `@latest`.
-- [ ] Add failing tests for `HarnessEndpointPlan` requiring a protocol, exact adapter provider ID (`main` for Claude, `openai` for Codex), normalized `/v1` base URL, logical model, secret headers, and non-secret controller/harness headers.
-- [ ] Add failing fallback-rendering tests: Claude emits `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model, and newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex emits `CODEX_CONFIG` JSON plus `MODEL_PROVIDER` and emits no `-c` arguments in ACP mode.
-- [ ] Implement `HarnessEndpointPlan` and separate `Harness::acp_routing_overlay` from the existing interactive `routing_overlay`, keeping interactive Codex CLI `-c` behavior intact.
-- [ ] Make ACP routing build and apply one plan, returning it with the routing result for controller-side provider configuration. Preserve `--direct` as no endpoint plan.
-- [ ] Version adapter contract fixtures with package, provider ID, protocol, fallback keys, native session headers, and source revision; consume them in endpoint-plan tests rather than duplicating expectations.
-- [ ] Run `cargo nextest run -p bitrouter harness` and the affected agents/onboarding tests.
-- [ ] Commit: `feat(acp): pin harness endpoint plans`
+- [x] Add failing catalog tests requiring `@agentclientprotocol/claude-agent-acp@0.70.0`, its maintained repository/marker, and `@agentclientprotocol/codex-acp@1.7.0`; verify the failure is the old package or `@latest`.
+- [x] Add failing tests for `HarnessEndpointPlan` requiring a protocol, exact adapter provider ID (`main` for Claude, `openai` for Codex), normalized `/v1` base URL, logical model, secret headers, and non-secret controller/harness headers.
+- [x] Add failing fallback-rendering tests: Claude emits `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, model, and newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex emits `CODEX_CONFIG` JSON plus `MODEL_PROVIDER` and emits no `-c` arguments in ACP mode.
+- [x] Implement `HarnessEndpointPlan` and separate its ACP fallback renderer from the existing interactive `routing_overlay`, keeping interactive Codex CLI `-c` behavior intact.
+- [x] Make ACP routing build and apply one plan, returning it with the routing result for controller-side provider configuration. Preserve `--direct` as no endpoint plan.
+- [x] Version adapter contract fixtures with package, provider ID, protocol, fallback keys, native session headers, and source revision; consume them in endpoint-plan tests rather than duplicating expectations.
+- [x] Run `cargo nextest run -p bitrouter harness` and the affected agents/onboarding tests.
+- [x] Commit: `feat(acp): pin harness endpoint plans`
 
 ### Task 3: Lock pure model API compatibility
 

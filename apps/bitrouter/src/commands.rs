@@ -99,13 +99,13 @@ providers:
 #     transport:
 #       type: stdio
 #       command: npx
-#       args: ["-y", "@zed-industries/claude-code-acp@latest"]
+#       args: ["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
 #   codex:
 #     name: codex
 #     transport:
 #       type: stdio
 #       command: npx
-#       args: ["-y", "@agentclientprotocol/codex-acp@latest"]
+#       args: ["-y", "@agentclientprotocol/codex-acp@1.7.0"]
 
 inherit_defaults: true
 "#;

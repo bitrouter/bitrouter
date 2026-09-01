@@ -107,6 +107,13 @@ pub enum RoutingError {
         /// The gateway base URL that would have been used.
         via: String,
     },
+    /// The pinned adapter fallback could not be rendered before launch.
+    EndpointConfiguration {
+        /// The gateway base URL that would have been used.
+        via: String,
+        /// Sanitized configuration failure. Credentials are never included.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for RoutingError {
@@ -127,13 +134,16 @@ impl RoutingError {
         match self {
             RoutingError::DaemonUnreachable { .. } => "daemon_unreachable",
             RoutingError::AuthRequired { .. } => "auth_required",
+            RoutingError::EndpointConfiguration { .. } => "endpoint_configuration",
         }
     }
 
     /// The gateway base URL this failure concerns.
     fn via(&self) -> &str {
         match self {
-            RoutingError::DaemonUnreachable { via } | RoutingError::AuthRequired { via } => via,
+            RoutingError::DaemonUnreachable { via }
+            | RoutingError::AuthRequired { via }
+            | RoutingError::EndpointConfiguration { via, .. } => via,
         }
     }
 
@@ -143,6 +153,9 @@ impl RoutingError {
             RoutingError::DaemonUnreachable { .. } => "run `bitrouter start`, or pass --direct",
             RoutingError::AuthRequired { .. } => {
                 "export BITROUTER_API_KEY (or create a key), or pass --direct"
+            }
+            RoutingError::EndpointConfiguration { .. } => {
+                "check the pinned ACP adapter configuration, or pass --direct"
             }
         }
     }
@@ -156,6 +169,7 @@ impl RoutingError {
             RoutingError::AuthRequired { via } => {
                 format!("daemon at {via} requires auth but no BITROUTER_API_KEY is set")
             }
+            RoutingError::EndpointConfiguration { message, .. } => message.clone(),
         }
     }
 
@@ -186,6 +200,12 @@ pub struct Routed {
     /// without one must report its spend as daemon-wide rather than implying
     /// a precision it does not have.
     pub launch_id: Option<String>,
+    /// One controller process / harness connection correlation id. This is
+    /// never an ACP session id and is absent for direct or legacy harnesses.
+    pub controller_instance_id: Option<String>,
+    /// The one process-scoped endpoint plan used for both launch fallback and
+    /// post-initialize ACP provider configuration.
+    pub endpoint_plan: Option<crate::harness::HarnessEndpointPlan>,
 }
 
 /// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
@@ -332,9 +352,27 @@ async fn apply_routing_with_cloud_credentials(
         return Err(RoutingError::DaemonUnreachable { via: base_url });
     }
 
-    // Compute + apply the overlay. Injection wins over inherited and
-    // config-authored env; a config `env:` collision is warned, not silent.
-    let overlay = harness.routing_overlay(&base_url, &auth, opts.model.as_deref());
+    // Compute one endpoint plan for maintained ACP adapters and render the
+    // launch fallback from that same plan. The controller later applies the
+    // returned plan through providers/set; no second route description is
+    // constructed. Legacy harnesses retain their existing env/args overlay.
+    let controller_instance_id = format!("brc_{}", uuid::Uuid::new_v4().simple());
+    let endpoint_plan = harness.endpoint_plan(
+        &base_url,
+        &auth,
+        opts.model.as_deref(),
+        &controller_instance_id,
+    );
+    let overlay = match &endpoint_plan {
+        Some(plan) => {
+            plan.fallback_overlay()
+                .map_err(|error| RoutingError::EndpointConfiguration {
+                    via: base_url.clone(),
+                    message: format!("could not configure pinned '{}': {error}", harness.id),
+                })?
+        }
+        None => harness.routing_overlay(&base_url, &auth, opts.model.as_deref()),
+    };
     if let Some(entry) = config.agents.get_mut(agent_id) {
         let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
         for (k, v) in overlay.env {
@@ -353,6 +391,8 @@ async fn apply_routing_with_cloud_credentials(
     Ok(Routed {
         via: Some(base_url),
         launch_id,
+        controller_instance_id: endpoint_plan.as_ref().map(|_| controller_instance_id),
+        endpoint_plan,
     })
 }
 

@@ -347,6 +347,67 @@ async fn routing_direct_skips_daemon_and_reports_no_via() {
     assert!(cfg.agents.contains_key("claude-acp"));
 }
 
+#[tokio::test]
+async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let daemon = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&daemon)
+        .await;
+    let base = tempfile::tempdir()?;
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut config = Config::default();
+    config.server.skip_auth = true;
+    let options = bitrouter::acp_cli::RoutingOptions {
+        direct: false,
+        base_url: Some(daemon.uri()),
+        model: Some("logical/model".to_string()),
+        no_start: true,
+    };
+
+    let routed =
+        bitrouter::acp_cli::apply_routing(&source, &mut config, "claude-acp", &options).await?;
+    let plan = routed
+        .endpoint_plan
+        .ok_or_else(|| anyhow::anyhow!("routing did not return an endpoint plan"))?;
+    let controller_id = routed
+        .controller_instance_id
+        .ok_or_else(|| anyhow::anyhow!("routing did not return a controller id"))?;
+    assert_eq!(
+        plan.headers
+            .get("x-bitrouter-controller-id")
+            .map(String::as_str),
+        Some(controller_id.as_str())
+    );
+    assert_eq!(plan.model.as_deref(), Some("logical/model"));
+
+    let entry = config
+        .agents
+        .get("claude-acp")
+        .ok_or_else(|| anyhow::anyhow!("catalog agent was not synthesized"))?;
+    let AcpTransport::Stdio { args, env, .. } = &entry.transport;
+    assert_eq!(
+        args,
+        &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
+    );
+    assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&daemon.uri()));
+    assert_eq!(
+        env.get("ANTHROPIC_MODEL").map(String::as_str),
+        Some("logical/model")
+    );
+    let custom = env
+        .get("ANTHROPIC_CUSTOM_HEADERS")
+        .ok_or_else(|| anyhow::anyhow!("static headers were not applied"))?;
+    assert!(custom.contains(&controller_id));
+    Ok(())
+}
+
 // ── shared raw JSON-RPC helpers (subprocess / socket e2e) ────────────────────
 
 /// Send a JSON-RPC request line and read back lines until one matches the
