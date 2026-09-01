@@ -149,10 +149,10 @@
 
 - [x] Use `superpowers:requesting-code-review` to review the complete P0/P1 diff against the spec and this plan. Because no delegated subagents are authorized, perform the prescribed evidence-based review locally and record findings in the turn.
 - [x] For each finding, use `superpowers:receiving-code-review`: verify it against code/spec, add a reproducing test when behavioral, fix it, and rerun focused tests.
-- [ ] Run `cargo fmt -- --check`.
-- [ ] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo nextest run --all-features`.
-- [ ] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo clippy --workspace --all-features --tests -- -D warnings`.
-- [ ] Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
-- [ ] Inspect `git diff --check`, `git status --short`, and the complete diff for credentials, generated artifacts, aliases, accidental session persistence, or unrelated user changes.
-- [ ] Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch`.
+- [x] Run `cargo fmt -- --check`.
+- [x] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo nextest run --all-features`.
+- [x] Run `env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY cargo clippy --workspace --all-features --tests -- -D warnings`.
+- [x] Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
+- [x] Inspect `git diff --check`, `git status --short`, and the complete diff for credentials, generated artifacts, aliases, accidental session persistence, or unrelated user changes.
+- [x] Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch`.
 - [ ] Push `codex/acp-runtime-feasibility-20260901` and open one PR against `main` with a conventional title under 60 characters and a body that maps evidence to P0/P1, test gates, known P2 exclusions, and the localhost proxy test note.
