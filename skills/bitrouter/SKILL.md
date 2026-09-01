@@ -158,6 +158,14 @@ claude|cursor`) exposes a `complete` tool that offloads a subtask *inside* the
 running session. If the user needs cheaper tokens now and cannot relaunch, say it
 exists and send them to `bitrouter mcp --help`; teaching it is out of scope here.
 
+For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
+`bitrouter spawn codex-acp --serve`. The controller uses exact adapter pins
+(`@agentclientprotocol/claude-agent-acp@0.70.0` and
+`@agentclientprotocol/codex-acp@1.7.0`), initializes the harness with the
+manager's capabilities, and transparently carries multiple harness-native
+sessions on one connection. BitRouter does not own their IDs, transcripts, or
+storage. Read `references/sessions.md` before reasoning about this surface.
+
 ### 6. Verify
 
 ```bash
@@ -184,7 +192,7 @@ ids resolve through the fallback chain — alias one in `bitrouter.yaml` if not.
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md` | `bitrouter/auto`, trace projections, policy locks |
 | `references/workflow-optimization.md`, `references/metering.md` | History-driven quality/cost optimization from traces + external evals; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP substrate (`acp serve\|prompt`, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller vs one-shot engine (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
 
 ## Gotchas
 

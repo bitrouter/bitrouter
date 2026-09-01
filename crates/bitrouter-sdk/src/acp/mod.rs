@@ -54,6 +54,9 @@ pub mod transport;
 pub mod config_routing;
 
 #[cfg(feature = "acp")]
+pub mod controller;
+
+#[cfg(feature = "acp")]
 pub mod settlement;
 
 #[cfg(feature = "acp")]
