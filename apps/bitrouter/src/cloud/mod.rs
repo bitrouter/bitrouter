@@ -77,6 +77,46 @@ pub fn default_manager() -> Result<Arc<CredentialManager>> {
     Ok(Arc::new(manager))
 }
 
+/// One lazily constructed account manager shared by the Cloud consumers of a
+/// standalone ACP invocation. Construction does not read the credential store;
+/// resolution remains best-effort at each consumer boundary.
+#[derive(Clone)]
+pub(crate) struct StandaloneCloudCredentials {
+    manager: Option<Arc<CredentialManager>>,
+}
+
+impl StandaloneCloudCredentials {
+    /// Construct the invocation-scoped manager once. A path-construction
+    /// failure preserves the existing best-effort fallback behavior.
+    pub(crate) fn new() -> Self {
+        Self {
+            manager: default_manager().ok(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_manager(manager: Arc<CredentialManager>) -> Self {
+        Self {
+            manager: Some(manager),
+        }
+    }
+
+    /// Resolve the stored account bearer for ACP routing, when available.
+    pub(crate) async fn routing_fallback(&self, target_base_url: &str) -> Option<String> {
+        let manager = self.manager.as_ref()?.clone();
+        cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
+    }
+
+    /// Build the account telemetry source from the same invocation manager.
+    pub(crate) async fn telemetry_bearer(
+        &self,
+        endpoint: &str,
+    ) -> Option<Arc<dyn TelemetryBearer>> {
+        let manager = self.manager.as_ref()?.clone();
+        cloud_bearer_source(manager, endpoint).await
+    }
+}
+
 /// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
 /// provider appears in `config.providers`. No-op otherwise.
 pub fn register_if_configured(
@@ -208,11 +248,14 @@ mod tests {
     use wiremock::matchers::{body_string_contains, method, path as wm_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn fresh_tmp_creds_path(label: &str) -> anyhow::Result<std::path::PathBuf> {
+    fn fresh_tmp_creds_path(
+        label: &str,
+    ) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
         let directory = tempfile::Builder::new()
             .prefix(&format!("bitrouter-cloud-glue-{label}-"))
             .tempdir()?;
-        Ok(directory.keep().join("account-credentials.json"))
+        let path = directory.path().join("account-credentials.json");
+        Ok((directory, path))
     }
 
     fn target_for_origin(origin: &str) -> RoutingTarget {
@@ -260,7 +303,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let path = fresh_tmp_creds_path("shared-refresh")?;
+        let (_directory, path) = fresh_tmp_creds_path("shared-refresh")?;
         let manager = Arc::new(CredentialManager::with_client(
             path.clone(),
             reqwest::Client::new(),
@@ -318,7 +361,7 @@ mod tests {
 
     #[test]
     fn enable_in_zero_config_noop_when_no_credentials_file() -> anyhow::Result<()> {
-        let path = fresh_tmp_creds_path("noop")?;
+        let (_directory, path) = fresh_tmp_creds_path("noop")?;
         // path's parent exists; the file itself does not.
         let mut config = Config::default();
         enable_in_zero_config_with_path(&mut config, &path);
@@ -328,7 +371,7 @@ mod tests {
 
     #[test]
     fn enable_in_zero_config_inserts_when_credentials_file_present() -> anyhow::Result<()> {
-        let path = fresh_tmp_creds_path("inserts")?;
+        let (_directory, path) = fresh_tmp_creds_path("inserts")?;
         std::fs::write(&path, "{}")?;
         let mut config = Config::default();
         enable_in_zero_config_with_path(&mut config, &path);
@@ -345,7 +388,7 @@ mod tests {
 
     #[test]
     fn enable_in_zero_config_noop_when_already_configured() -> anyhow::Result<()> {
-        let path = fresh_tmp_creds_path("already")?;
+        let (_directory, path) = fresh_tmp_creds_path("already")?;
         std::fs::write(&path, "{}")?;
         let mut config = Config::default();
         // Pre-populate with a sentinel `api_base` so we can prove we didn't
@@ -368,10 +411,8 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_bearer_source_none_when_not_signed_in() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("absent")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("absent")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         assert!(
             cloud_bearer_source(manager, "https://telemetry.bitrouter.ai")
                 .await
@@ -382,10 +423,8 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_bearer_source_uses_custom_exporter_same_origin_api_key() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("api-key-bearer")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("api-key-bearer")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::api_key(
                 "brk_telemetry.secret".to_owned(),
@@ -406,10 +445,8 @@ mod tests {
 
     #[tokio::test]
     async fn default_first_party_exporter_uses_default_account_credential() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("default-telemetry-origin")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("default-telemetry-origin")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::api_key(
                 "brk_default-account.secret".to_owned(),
@@ -431,10 +468,8 @@ mod tests {
 
     #[tokio::test]
     async fn custom_exporter_cannot_receive_default_account_credential() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("custom-telemetry-origin")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("custom-telemetry-origin")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::api_key(
                 "brk_default-account.secret".to_owned(),
@@ -452,10 +487,8 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("gateway-origin")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("gateway-origin")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::api_key(
                 "brk_gateway.secret".to_owned(),
@@ -483,8 +516,9 @@ mod tests {
     #[tokio::test]
     async fn settlement_resolver_rejects_oauth_but_accepts_same_origin_api_key()
     -> anyhow::Result<()> {
+        let (_oauth_directory, oauth_path) = fresh_tmp_creds_path("settlement-oauth")?;
         let oauth = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("settlement-oauth")?,
+            oauth_path,
             reqwest::Client::new(),
         ));
         oauth
@@ -507,9 +541,9 @@ mod tests {
                 .await
                 .is_err()
         );
-
+        let (_api_key_directory, api_key_path) = fresh_tmp_creds_path("settlement-api-key")?;
         let api_key = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("settlement-api-key")?,
+            api_key_path,
             reqwest::Client::new(),
         ));
         api_key
@@ -527,10 +561,8 @@ mod tests {
 
     #[test]
     fn cloud_bearer_debug_redacts_manager() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            fresh_tmp_creds_path("dbg")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = fresh_tmp_creds_path("dbg")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         let bearer = CloudBearer {
             manager,
             expected_origin: "https://telemetry.bitrouter.ai".to_owned(),
@@ -542,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_credentials_file_is_swallowed_as_anonymous() -> anyhow::Result<()> {
-        let path = fresh_tmp_creds_path("malformed")?;
+        let (_directory, path) = fresh_tmp_creds_path("malformed")?;
         std::fs::write(&path, "{ not valid json")?;
         let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         assert!(

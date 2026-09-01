@@ -1056,9 +1056,9 @@ fn build_auth_appliers(
     let store_path = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
-    // The `bitrouter` provider's applier reads the user-account credentials
-    // store (separate from the upstream-provider store above), so it lives
-    // in its own crate and is registered via the `crate::cloud` glue module.
+    // The `bitrouter` provider's account store and the generic upstream
+    // provider store above are isolated modules within `bitrouter-providers`.
+    // Register the hosted applier through the application Cloud glue.
     crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
         let applier = bitrouter_providers::copilot::CopilotAuthApplier::new(&store_path)
@@ -1248,6 +1248,14 @@ enum BearerPlan {
 /// account-bearer plan. Returns `None` when nothing opts telemetry in;
 /// telemetry failures are surfaced as warnings, never as session failures.
 pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    build_otel_exporter_standalone_with_credentials(config, &cloud_credentials).await
+}
+
+pub(crate) async fn build_otel_exporter_standalone_with_credentials(
+    config: &Config,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+) -> Option<Arc<OtelExporter>> {
     let plan = match build_otel_config(config) {
         Ok(Some(plan)) => plan,
         Ok(None) => return None,
@@ -1258,9 +1266,9 @@ pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelE
     };
     let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
-            let manager = crate::cloud::default_manager().ok()?;
-            let source =
-                crate::cloud::cloud_bearer_source(manager, plan.config.endpoint.clone()).await;
+            let source = cloud_credentials
+                .telemetry_bearer(&plan.config.endpoint)
+                .await;
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
                     "telemetry: attribution=account but no signed-in session is available — \

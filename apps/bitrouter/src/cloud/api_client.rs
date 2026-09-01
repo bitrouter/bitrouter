@@ -380,10 +380,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_authorization_overrides_default_and_repeated_headers_survive()
-    -> anyhow::Result<()> {
+    async fn raw_authorization_bypasses_near_expiry_oauth_resolution() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        let (_directory, client) = api_client(&server.uri()).await?;
+        let directory = tempfile::tempdir()?;
+        let manager = Arc::new(CredentialManager::with_client(
+            directory.path().join("account-credentials.json"),
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::from(
+                bitrouter_providers::hosted::account::credentials::Credentials {
+                    access_token: "near-expiry-access".to_owned(),
+                    refresh_token: Some("refresh-token".to_owned()),
+                    expires_at: chrono::Utc::now() + chrono::Duration::seconds(10),
+                    refresh_token_expires_at: None,
+                    token_type: "Bearer".to_owned(),
+                    scope: "inference:invoke".to_owned(),
+                    client_id: "bitrouter-cli".to_owned(),
+                    authorization_server: server.uri(),
+                    namespace_id: Some("ns-test".to_owned()),
+                    subject: None,
+                },
+            ))
+            .await?;
+        let client = CloudApiClient::from_manager(manager).await?;
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .and(header("authorization", "Bearer user-override"))
@@ -409,6 +429,7 @@ mod tests {
         let request = requests
             .first()
             .context("wiremock did not receive a request")?;
+        assert_eq!(request.headers[AUTHORIZATION], "Bearer user-override");
         let values = request
             .headers
             .get_all("x-test")
@@ -416,6 +437,16 @@ mod tests {
             .map(HeaderValue::to_str)
             .collect::<std::result::Result<Vec<_>, _>>()?;
         assert_eq!(values, ["one", "two"]);
+        let metadata_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/.well-known/oauth-authorization-server")
+            .count();
+        let refresh_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/oauth/token")
+            .count();
+        assert_eq!(metadata_requests, 0);
+        assert_eq!(refresh_requests, 0);
         Ok(())
     }
 }

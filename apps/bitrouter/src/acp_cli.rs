@@ -203,6 +203,17 @@ pub async fn apply_routing(
     agent_id: &str,
     opts: &RoutingOptions,
 ) -> std::result::Result<Routed, RoutingError> {
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    apply_routing_with_cloud_credentials(source, config, agent_id, opts, &cloud_credentials).await
+}
+
+async fn apply_routing_with_cloud_credentials(
+    source: &ConfigSource,
+    config: &mut Config,
+    agent_id: &str,
+    opts: &RoutingOptions,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
@@ -294,12 +305,7 @@ pub async fn apply_routing(
 
     let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
     let stored_cloud_key = if explicit_key.is_none() && require_key && !target_is_local {
-        match crate::cloud::default_manager() {
-            Ok(manager) => {
-                crate::cloud::cloud_bearer_for_base_url_with_manager(manager, &base_url).await
-            }
-            Err(_) => None,
-        }
+        cloud_credentials.routing_fallback(&base_url).await
     } else {
         None
     };
@@ -582,6 +588,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         options,
         routing,
     } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Route the sub-agent's LLM traffic through the daemon (default) unless
     // opted out. Fail fast — before speaking any ACP — so a manager handles
     // "child failed to start" rather than a mid-session provider error.
@@ -589,9 +596,15 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // Returned, not `exit(1)`: a caller that never sees a value cannot render
     // one, and the shutdown path below is skipped either way because nothing
     // has been launched yet. `run_acp` renders it to stderr.
-    let routed = apply_routing(source, &mut config, agent_id, &routing)
-        .await
-        .map_err(anyhow::Error::new)?;
+    let routed = apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
     let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     // Deferred open: the upstream `session/new` runs when the manager sends
@@ -618,6 +631,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
             launch_id: routed.launch_id.clone(),
             updates: cost_tx,
         }),
+        &cloud_credentials,
     )
     .await;
     let providers = Arc::new(SessionProviders::new(
@@ -687,18 +701,26 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         options,
         routing,
     } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Fail fast, before any agent process exists — a person waiting at a
     // prompt should learn the route is dead now, not mid-turn.
-    let routed = apply_routing(source, &mut config, agent_id, &routing)
-        .await
-        .map_err(anyhow::Error::new)?;
+    let routed = apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
 
     let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter = attach_observability(&config, agent_id, &session, None).await;
+    let exporter =
+        attach_observability(&config, agent_id, &session, None, &cloud_credentials).await;
 
     match &routed.via {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
@@ -779,6 +801,7 @@ where
         options,
         routing,
     } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Route by default; fail fast with a single structured NDJSON `error`
     // line BEFORE any session side effect (no agent process spawned).
     //
@@ -787,7 +810,15 @@ where
     // cannot simply propagate. What *is* returned is the same failure as an
     // error value, so the caller controls the exit rather than this function
     // ending the process from inside a library.
-    let routed = match apply_routing(source, &mut config, agent_id, &routing).await {
+    let routed = match apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    {
         Ok(routed) => routed,
         Err(e) => {
             write_ndjson_line(out, &e.ndjson()).await?;
@@ -803,7 +834,8 @@ where
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // No cost sink: `prompt` has no manager on a down-facing wire — its
     // output is the NDJSON stream, which carries its own terminal `result`.
-    let exporter = attach_observability(&config, agent_id, &session, None).await;
+    let exporter =
+        attach_observability(&config, agent_id, &session, None, &cloud_credentials).await;
 
     // First line: correlate this session with the cost/metering the
     // orchestrator later queries. `via` is null when running direct.
@@ -1021,8 +1053,11 @@ async fn attach_observability(
     agent_id: &str,
     session: &bitrouter_sdk::acp::engine::Session,
     cost: Option<CostSink>,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
-    let exporter = crate::assemble::build_otel_exporter_standalone(config).await;
+    let exporter =
+        crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
+            .await;
     let recorder = exporter.as_ref().map(|exporter| {
         Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
             exporter,
@@ -1109,6 +1144,94 @@ async fn attach_observability(
     }
 
     exporter
+}
+
+#[cfg(test)]
+mod standalone_cloud_credentials_tests {
+    use std::sync::Arc;
+
+    use bitrouter_providers::hosted::account::credentials::{Credentials, StoredCredential};
+    use bitrouter_providers::hosted::account::manager::CredentialManager;
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::cloud::StandaloneCloudCredentials;
+
+    #[tokio::test]
+    async fn standalone_wiring_single_flights_routing_and_account_telemetry() -> anyhow::Result<()>
+    {
+        let server = MockServer::start().await;
+        let origin = server.uri();
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "issuer": origin,
+                "device_authorization_endpoint": format!("{origin}/oauth/device_authorization"),
+                "token_endpoint": format!("{origin}/oauth/token"),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "rotated-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rotated-refresh",
+                "scope": "inference:invoke",
+            })))
+            .mount(&server)
+            .await;
+
+        let directory = tempfile::tempdir()?;
+        let manager = Arc::new(CredentialManager::with_client(
+            directory.path().join("account-credentials.json"),
+            reqwest::Client::new(),
+        ));
+        manager
+            .save(StoredCredential::from(Credentials {
+                access_token: "stale-access".to_owned(),
+                refresh_token: Some("original-refresh".to_owned()),
+                expires_at: Utc::now() + Duration::seconds(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: origin.clone(),
+                namespace_id: Some("ns-test".to_owned()),
+                subject: None,
+            }))
+            .await?;
+
+        let credentials = StandaloneCloudCredentials::with_manager(manager);
+        let telemetry = credentials
+            .telemetry_bearer(&origin)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("account telemetry source was not built"))?;
+        let (routing, bearer) =
+            tokio::join!(credentials.routing_fallback(&origin), telemetry.bearer(),);
+        assert_eq!(routing.as_deref(), Some("rotated-access"));
+        assert_eq!(bearer.as_deref(), Some("rotated-access"));
+
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?;
+        let metadata_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/.well-known/oauth-authorization-server")
+            .count();
+        let refresh_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/oauth/token")
+            .count();
+        assert_eq!(metadata_requests, 1);
+        assert_eq!(refresh_requests, 1);
+        Ok(())
+    }
 }
 
 // ── providers/* — BitRouter's routing surface, in ACP's nouns (spec §6) ──────

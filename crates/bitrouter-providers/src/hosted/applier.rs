@@ -185,11 +185,12 @@ mod tests {
     use crate::hosted::account::credentials::{Credentials, StoredCredential};
     use crate::hosted::account::manager::CredentialManager;
 
-    fn tmp_creds_path(label: &str) -> anyhow::Result<std::path::PathBuf> {
+    fn tmp_creds_path(label: &str) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
         let directory = tempfile::Builder::new()
             .prefix(&format!("bitrouter-hosted-applier-{label}-"))
             .tempdir()?;
-        Ok(directory.keep().join("account-credentials.json"))
+        let path = directory.path().join("account-credentials.json");
+        Ok((directory, path))
     }
 
     fn target_with_api_key(key: &str) -> RoutingTarget {
@@ -244,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn preserves_request_authorization_header() -> anyhow::Result<()> {
-        let path = tmp_creds_path("raw-authorization")?;
+        let (_directory, path) = tmp_creds_path("raw-authorization")?;
         std::fs::write(&path, b"malformed")?;
         let manager = CredentialManager::with_client(path, reqwest::Client::new());
         let applier = BitrouterAuthApplier::new(Arc::new(manager));
@@ -262,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_target_key_bypasses_bad_oauth_store() -> anyhow::Result<()> {
-        let path = tmp_creds_path("explicit-bypass")?;
+        let (_directory, path) = tmp_creds_path("explicit-bypass")?;
         std::fs::write(&path, b"malformed")?;
         let manager = CredentialManager::with_client(path, reqwest::Client::new());
         let applier = BitrouterAuthApplier::new(Arc::new(manager));
@@ -275,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn applies_stored_api_key_for_request_origin() -> anyhow::Result<()> {
-        let path = tmp_creds_path("stored-api-key")?;
+        let (_directory, path) = tmp_creds_path("stored-api-key")?;
         let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::api_key(
@@ -295,10 +296,8 @@ mod tests {
     async fn oauth_authority_survives_token_rotation_for_same_issuer_and_namespace()
     -> anyhow::Result<()> {
         let origin = "https://issuer.example";
-        let manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-rotation-authority")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = tmp_creds_path("oauth-rotation-authority")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         let applier = BitrouterAuthApplier::new(Arc::clone(&manager));
         let target = target_for_origin(origin);
         manager
@@ -326,8 +325,9 @@ mod tests {
     #[tokio::test]
     async fn oauth_authority_separates_namespaces_for_same_issuer() -> anyhow::Result<()> {
         let origin = "https://issuer.example";
+        let (_first_directory, first_path) = tmp_creds_path("oauth-first-namespace-authority")?;
         let first_manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-first-namespace-authority")?,
+            first_path,
             reqwest::Client::new(),
         ));
         first_manager
@@ -341,9 +341,9 @@ mod tests {
         let first = BitrouterAuthApplier::new(first_manager)
             .continuation_authority(&target_for_origin(origin))
             .await?;
-
+        let (_second_directory, second_path) = tmp_creds_path("oauth-second-namespace-authority")?;
         let second_manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-second-namespace-authority")?,
+            second_path,
             reqwest::Client::new(),
         ));
         second_manager
@@ -365,8 +365,9 @@ mod tests {
     async fn oauth_authority_separates_issuers_for_same_namespace() -> anyhow::Result<()> {
         let first_origin = "https://issuer-one.example";
         let second_origin = "https://issuer-two.example";
+        let (_first_directory, first_path) = tmp_creds_path("oauth-first-issuer-authority")?;
         let first_manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-first-issuer-authority")?,
+            first_path,
             reqwest::Client::new(),
         ));
         first_manager
@@ -380,9 +381,9 @@ mod tests {
         let first = BitrouterAuthApplier::new(first_manager)
             .continuation_authority(&target_for_origin(first_origin))
             .await?;
-
+        let (_second_directory, second_path) = tmp_creds_path("oauth-second-issuer-authority")?;
         let second_manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-second-issuer-authority")?,
+            second_path,
             reqwest::Client::new(),
         ));
         second_manager
@@ -403,10 +404,8 @@ mod tests {
     #[tokio::test]
     async fn oauth_without_namespace_has_no_continuation_authority() -> anyhow::Result<()> {
         let origin = "https://issuer.example";
-        let manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("oauth-missing-namespace")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = tmp_creds_path("oauth-missing-namespace")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::from(oauth_credential(
                 origin,
@@ -426,8 +425,9 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_authority_tracks_the_effective_api_key() -> anyhow::Result<()> {
+        let (_directory, path) = tmp_creds_path("explicit-authority")?;
         let applier = BitrouterAuthApplier::new(Arc::new(CredentialManager::with_client(
-            tmp_creds_path("explicit-authority")?,
+            path,
             reqwest::Client::new(),
         )));
         let base = applier
@@ -446,10 +446,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_credential_maps_to_onboarding_401() -> anyhow::Result<()> {
-        let manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("missing")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = tmp_creds_path("missing")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         let error = match BitrouterAuthApplier::new(manager)
             .apply(empty_request()?, &target_with_api_key(""))
             .await
@@ -469,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn corrupt_store_maps_to_internal_error() -> anyhow::Result<()> {
-        let path = tmp_creds_path("corrupt")?;
+        let (_directory, path) = tmp_creds_path("corrupt")?;
         std::fs::write(&path, b"not-json")?;
         let error = match BitrouterAuthApplier::new(Arc::new(CredentialManager::with_client(
             path,
@@ -494,10 +492,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("metadata-failure")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = tmp_creds_path("metadata-failure")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::from(Credentials {
                 access_token: "stale-access".to_owned(),
@@ -548,10 +544,8 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let manager = Arc::new(CredentialManager::with_client(
-            tmp_creds_path("refresh-failure")?,
-            reqwest::Client::new(),
-        ));
+        let (_directory, path) = tmp_creds_path("refresh-failure")?;
+        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
         manager
             .save(StoredCredential::from(Credentials {
                 access_token: "stale-access".to_owned(),
