@@ -85,7 +85,7 @@ pub(crate) async fn run(
     // covers the second, and `Shutdown` is the third — a signal runs no Rust
     // the loop controls, so it has to be awaited rather than caught.
     bitrouter_tui::lifecycle::install_panic_restore();
-    let mut shutdown = crate::tui::lifecycle::Shutdown::install();
+    let mut shutdown = crate::chat::signals::Shutdown::install();
 
     // Permission requests block the turn until a person answers. They are the
     // journal's, but they arrive on their own channel rather than as updates.

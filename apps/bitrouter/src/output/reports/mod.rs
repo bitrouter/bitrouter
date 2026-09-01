@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod observe;
 pub mod optimization;
 pub mod policy;
+pub mod requests;
 pub mod routing;
 pub mod skills;
 pub mod tools;

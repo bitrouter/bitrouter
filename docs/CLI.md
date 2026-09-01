@@ -95,17 +95,22 @@ Any provider API keys present in the current environment are forwarded to the da
 ```
 bitrouter status [-c <path>] [--socket <path>]
 bitrouter status --requests          # what the router has actually done
+bitrouter status --requests --human  # the same, as a table
 ```
 
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
 
-`--requests` (`-r`) prints what the router has actually done instead: a newest-first table of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a line stating daemon state and over today's spend and the trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (the state line says `history only` rather than showing an empty list that looks like idleness).
+`--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
 
-The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for a live view. Bare `bitrouter status` is unchanged.
+Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Bare `bitrouter status` is unchanged.
+
+The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter chat`'s cost line is the per-session figure.
 
 Portable — there is no terminal-only path left to gate.
 
-> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed exactly what `--requests` prints now, so scripts that piped it need only the new flag name.
+> **`--requests` emits JSON by default as of 1.0.0-alpha.28.** It previously printed the table unconditionally, ignoring `--json` — the only `status` path that did. Scripts that parsed the table need `--human`; anything that wanted the data now gets one clean JSON object with a stable `rows[]`.
+>
+> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed what `--requests --human` prints now.
 
 ---
 

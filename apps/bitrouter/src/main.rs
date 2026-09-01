@@ -40,6 +40,7 @@ use bitrouter::output::reports::optimization::{
     ArmReport, OptimizationControllerReport, TreatmentReport,
 };
 use bitrouter::output::reports::policy::PolicyReport;
+use bitrouter::output::reports::requests::{DaemonView, RequestsReport};
 use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
@@ -186,12 +187,12 @@ enum Command {
     /// Report a running daemon's status (pid, listen address, model count).
     /// Prints `running: no` when no daemon is reachable.
     ///
-    /// With `--requests`, prints what the router has actually done instead:
-    /// a table of settled requests (time, model, the provider that actually
-    /// served, tokens, cost, latency, status) under a daemon-state line and
-    /// over a spend rollup. Read straight from the metering store, so it works
-    /// with no daemon running. Identical piped or not — repeat it with
-    /// `watch -n1` for a live view.
+    /// With `--requests`, reports what the router has actually done instead:
+    /// settled requests (time, model, the provider that actually served,
+    /// tokens, cost, latency, status) plus daemon state and a spend rollup
+    /// scoped to every caller. Read straight from the metering store, so it
+    /// works with no daemon running. JSON by default like every other command;
+    /// `--human` renders the table.
     Status {
         /// Path to `bitrouter.yaml` (used to locate the control socket).
         #[arg(short, long)]
@@ -199,7 +200,8 @@ enum Command {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Print the settled-request table instead of one status line.
+        /// Report settled requests and the spend rollup instead of one
+        /// status line.
         #[arg(short, long)]
         requests: bool,
     },
@@ -1473,9 +1475,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
             if requests {
-                return request_table(config.as_deref(), &socket).await;
+                output.emit(&request_table(config.as_deref(), &socket).await?)?;
+            } else {
+                output.emit(&status(&socket).await?)?;
             }
-            output.emit(&status(&socket).await?)?;
             Ok(())
         }
         Command::Route {
@@ -3239,19 +3242,74 @@ async fn status(socket: &Path) -> Result<StatusReport> {
     Ok(report)
 }
 
+/// Bound on the control-socket probe.
+///
+/// `send_command` has no timeout of its own. A daemon that accepts the
+/// connection but never answers — busy, half-dead, paused under a debugger —
+/// would otherwise hang the command. This surface is least useful exactly when
+/// the daemon is misbehaving, so it must never wait on one.
+const REQUESTS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
+
 /// `bitrouter status --requests` — the settled-request table.
 ///
-/// One snapshot, printed the same way whether stdout is a terminal or a pipe.
-/// Nothing here takes the screen, so `| less`, `> file`, and an agent reading
-/// the bytes all see exactly what a person does.
-async fn request_table(config: Option<&Path>, socket: &Path) -> Result<()> {
+/// Never fails: every source degrades to absence, because a monitoring view
+/// that errors out is worse than one reporting less. The store opens read-only
+/// and works with no daemon running, which is why "nothing recorded" and
+/// "nothing listening" stay distinguishable in the report.
+async fn request_table(config: Option<&Path>, socket: &Path) -> Result<RequestsReport> {
+    use bitrouter::metering::store::TimeWindow;
+
     let source = bitrouter::paths::resolve_config(config)?;
-    let window = bitrouter::metering::store::TimeWindow::Today;
-    print!(
-        "{}",
-        bitrouter::tui::oneshot_text(&source, socket, window).await
-    );
-    Ok(())
+    let window = TimeWindow::Today;
+    let daemon = request_daemon_view(socket).await;
+
+    let Some(store) = bitrouter::metering::reader::open_readonly(&source).await else {
+        return Ok(RequestsReport::new(
+            daemon,
+            window,
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+        ));
+    };
+    Ok(RequestsReport::new(
+        daemon,
+        window,
+        store.spend_summary(window).await.unwrap_or_default(),
+        store.get_total_rate().await.unwrap_or_default(),
+        store
+            .recent_requests(window, REQUEST_ROWS, None)
+            .await
+            .unwrap_or_default(),
+    ))
+}
+
+/// How many rows the table ever holds: one tall screen plus scrollback margin.
+/// The query is `LIMIT`ed to this so a day-long window costs the same as an
+/// empty one.
+const REQUEST_ROWS: u64 = 500;
+
+/// The daemon as its control socket describes it, or `None` when nothing is
+/// listening or it does not answer in time.
+async fn request_daemon_view(socket: &Path) -> Option<DaemonView> {
+    let probe = daemon::send_command(socket, &DaemonCommand::Status);
+    let Ok(response) = tokio::time::timeout(REQUESTS_PROBE_TIMEOUT, probe).await else {
+        // Unresponsive reads as absent: the state line then says the daemon is
+        // not answering, which is true and more useful than hanging.
+        return None;
+    };
+    match response {
+        Ok(DaemonResponse::Status {
+            pid,
+            listen,
+            models,
+        }) => Some(DaemonView {
+            pid,
+            listen,
+            models,
+        }),
+        _ => None,
+    }
 }
 
 async fn route(

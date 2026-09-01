@@ -49,7 +49,6 @@ pub mod spawn;
 pub mod style;
 pub mod tools;
 pub mod trajectory;
-pub mod tui;
 pub mod update;
 pub mod workflow_state;
 

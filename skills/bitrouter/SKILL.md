@@ -175,12 +175,14 @@ leases when initialize metadata advertises route control; an explicit remote
 ```bash
 bitrouter route claude-sonnet-4-6   # resolve a model through the routing table
 bitrouter models                    # everything routable
-bitrouter status --requests         # settled requests + today's spend
+bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
 ```
 
 `status --requests` reads the metering store directly, so it works with no daemon
-and is safe for an agent to call — a routed call appearing there with a cost is
-the proof activation worked. Canonical ids use slashes (`openai/gpt-4o`); a pin
+and is safe for an agent to call — a routed call appearing there, naming the
+provider that actually served it, is the proof activation worked. Do not use the
+cost as that proof: most rows carry no charge evidence and render `?`, and the
+rollup reads `unreported` rather than `$0.00` when none does. Canonical ids use slashes (`openai/gpt-4o`); a pin
 uses a colon (`openrouter:openai/gpt-4o`, `bitrouter:<model-id>`). Bare Anthropic
 ids resolve through the fallback chain — alias one in `bitrouter.yaml` if not.
 

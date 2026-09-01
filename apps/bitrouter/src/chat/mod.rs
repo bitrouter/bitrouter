@@ -14,7 +14,7 @@
 //! |---|---|
 //! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `Stdin`'s `Drop`, which also covers every `?` out of `chat` |
 //! | panic | `bitrouter_tui::lifecycle::install_panic_restore`, chained in front of the existing hook |
-//! | INT / TERM / HUP | [`crate::tui::lifecycle::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
+//! | INT / TERM / HUP | [`signals::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
 //!
 //! ## Checking it by hand
 //!
@@ -38,6 +38,7 @@
 pub mod cost;
 pub mod input;
 pub mod session;
+pub mod signals;
 
 #[cfg(test)]
 mod tests {

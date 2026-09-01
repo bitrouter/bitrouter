@@ -74,8 +74,9 @@ table over daemon-wide request rows. It could not move to `bitrouter-tui` —
 those rows come from the metering store and cover every caller, most of which
 never speak ACP, so importing them would have put a daemon-wide model inside a
 session-scoped crate. It was removed instead, and `bitrouter status --requests`
-prints the same data as text (`apps/bitrouter/src/tui/`, now a data layer and a
-formatter with no terminal code at all).
+reports the same data through the ordinary CLI report layer
+(`apps/bitrouter/src/output/reports/requests.rs`) — JSON by default, `--human`
+for the table, and no terminal code anywhere in it.
 
 The second line, which keeps the crate synchronous, is **meaning vs
 transport**. What a key *means* is a terminal fact and lives in the crate
@@ -83,7 +84,7 @@ transport**. What a key *means* is a terminal fact and lives in the crate
 delivering events* is a fact about the host process — what else it selects
 over, and which runtime it has — so the pump stays in the app
 (`apps/bitrouter/src/chat/input.rs`). The same cut keeps signal handling out
-(`crate::tui::lifecycle::Shutdown`) while terminal enter/restore stays in.
+(`crate::chat::signals::Shutdown`) while terminal enter/restore stays in.
 `bitrouter-tui` therefore depends on no async runtime at all, and
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
@@ -178,13 +179,21 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 `bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `eval` / `optimize` / `trajectory` / `providers` / `agents` / `launch` / `spawn` / `cloud` / `skills` / `mcp` / `workflow-state` / `update` / `acp`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. `launch` runs a harness as an interactive native TUI; `spawn` (and its `acp serve|prompt` aliases) runs one as a headless ACP sub-agent. See `apps/bitrouter/src/main.rs`.
 
-### Observability surfaces (`apps/bitrouter/src/tui/`)
+### Observability surface (`bitrouter status --requests`)
 
-One surface remains, with `snapshot.rs` as its data layer and `render.rs` as its formatter:
+One surface, and no module of its own. `RequestsReport`
+(`apps/bitrouter/src/output/reports/requests.rs`) is an ordinary `CliReport`:
+the builder in `main.rs` polls the metering store and the control socket, and
+`Human::table` / `Human::status_block` render it. There is no second table
+implementation and no terminal-only path.
 
-- `bitrouter status --requests` (`-r`) — one plain-text snapshot of settled requests plus daemon-wide spend and request rate. It reads the metering store directly, works with no daemon (`history only`), prints identically when piped, and can be repeated externally with `watch -n1`.
+The `apps/bitrouter/src/tui/` module it replaced is **deleted**. It had become a
+618-line private implementation of one public function that bypassed `Output`
+(so `--json` was silently ignored) and reimplemented `output/human.rs`'s table.
+Its signal arm moved to `chat/signals.rs`, next to its only caller.
 
-There is no terminal-only status view now. `apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns drawn terminal UI for ACP chat.
+`apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns
+drawn terminal UI for ACP chat.
 
 The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 
