@@ -717,25 +717,20 @@ impl MeteringStore {
     }
 
     /// Spend + request count for one native ACP session under one **claimed**
-    /// controller — the figure a controller may decorate onto the harness's
-    /// own `UsageUpdate`.
+    /// controller, within one API principal — the figure a controller may
+    /// decorate onto the harness's own `UsageUpdate`.
     ///
-    /// Keyed by `controller_instance_id` **and** the session, never the
-    /// session alone: two harness processes can declare the same-looking id,
-    /// and one controller must not read another's spend.
+    /// The key mirrors the route lease's `(api_principal, controller,
+    /// session)`, and each third of it does different work. The principal is
+    /// the only authorization boundary: it comes from the ordinary API
+    /// credential, and one principal must not read another's spend even when
+    /// both declare the same controller. The controller and session are
+    /// *claims* — nothing verifies them — so they narrow the figure without
+    /// vouching for it.
     ///
-    /// # Known gap: this is not scoped by API principal
-    ///
-    /// Route leases are keyed by `(api_principal, controller, session)`, so
-    /// one principal cannot reach another's. This query is keyed only by the
-    /// controller a request *claimed*, because `requests` carries no principal
-    /// column — the recorder puts `api_principal_id` in a span attribute and
-    /// nowhere else. Two principals that declare the same controller id would
-    /// therefore sum into one figure.
-    ///
-    /// The daemon checks the principal is non-empty and stops there. Closing
-    /// this needs a persisted principal to filter on; until then the asymmetry
-    /// with route control is real and recorded rather than implied.
+    /// Rows written before the principal was recorded carry null and match
+    /// nothing. That is deliberate: their attribution is unknown, and folding
+    /// them into whoever asks would be a guess presented as a measurement.
     ///
     /// Within the controller, the manager's opaque id is matched against
     /// every native carrier the identity hook persists — the trusted
@@ -747,6 +742,7 @@ impl MeteringStore {
     /// no session identity never match — `NULL = ?` is not true on any backend.
     pub async fn spend_summary_for_acp_session(
         &self,
+        api_principal: &str,
         controller_instance_id: &str,
         session_id: &str,
         window: TimeWindow,
@@ -756,6 +752,7 @@ impl MeteringStore {
             .select_only()
             .column(requests::Column::EstimatedChargeMicroUsd)
             .column(requests::Column::ChargeStatus)
+            .filter(requests::Column::RouteScopeId.eq(api_principal))
             .filter(requests::Column::ControllerInstanceId.eq(controller_instance_id))
             .filter(
                 Condition::any()
@@ -1213,6 +1210,7 @@ impl MeteringStore {
             user_id: Set(record.user_id),
             api_key_id: Set(record.api_key_id),
             launch_id: Set(record.launch_id),
+            route_scope_id: Set(session_identity.map(|identity| identity.route_scope_id.clone())),
             agent_harness: Set(session_identity.and_then(|identity| identity.agent_harness.clone())),
             controller_instance_id: Set(
                 session_identity.and_then(|identity| identity.controller_instance_id.clone())

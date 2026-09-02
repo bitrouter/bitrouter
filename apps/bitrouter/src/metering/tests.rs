@@ -1583,10 +1583,9 @@ fn acp_identity(
         } else {
             RequestOrigin::PureModelApi
         },
-        // The principal is the authorization boundary; the controller id it
-        // scopes is a claim. Both rows here share one principal, which is what
-        // makes "two controllers cannot see each other's spend" a real
-        // assertion rather than a principal check in disguise.
+        // The public API-key identity, which reaches spans. It is **not** what
+        // the spend query filters on — that is the route scope, derived from
+        // the caller — so varying it here would separate nothing.
         api_principal_id: "local".to_string(),
         harness: Some(harness.to_string()),
         claimed_controller_instance_id: controller.map(str::to_string),
@@ -1616,7 +1615,20 @@ async fn record_attributed(
     completion: u64,
     identity: SessionIdentityObserved,
 ) -> Result<()> {
-    let mut request = ctx("acp", prompt, completion);
+    record_attributed_as("acp", recorder, request_id, prompt, completion, identity).await
+}
+
+/// The same, under a named caller — whose api-key identity becomes the route
+/// scope the spend query filters on.
+async fn record_attributed_as(
+    api_key: &str,
+    recorder: &MeteringRecorder,
+    request_id: &str,
+    prompt: u64,
+    completion: u64,
+    identity: SessionIdentityObserved,
+) -> Result<()> {
+    let mut request = ctx(api_key, prompt, completion);
     request.request_id = request_id.to_string();
     request.emit(identity);
     recorder.record(&mut request).await
@@ -1648,19 +1660,72 @@ async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
     .await?;
 
     let one = store
-        .spend_summary_for_acp_session("brc_one", "shared", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_one", "shared", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((one.requests, one.spend_micro_usd), (1, 70));
     let two = store
-        .spend_summary_for_acp_session("brc_two", "shared", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_two", "shared", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((two.requests, two.spend_micro_usd), (1, 110));
 
     // An unknown controller is empty, not an error and not everything.
     let none = store
-        .spend_summary_for_acp_session("brc_never", "shared", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_never", "shared", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((none.requests, none.spend_micro_usd), (0, 0));
+    Ok(())
+}
+
+/// Two callers that declare the *same* controller and session — the case a
+/// claim-only key cannot separate.
+///
+/// The controller id is caller-declared and nothing verifies it, so two API
+/// principals can name the same one, deliberately or by collision. Route
+/// leases are namespaced by the route scope precisely so one cannot reach the
+/// other's; the spend behind attributed cost has to match, or a cost line
+/// would quietly sum two callers.
+///
+/// The isolation comes from the **caller**, not from a field on the identity
+/// event: the recorder derives the scope exactly as the session hook does, so
+/// an event that merely claimed a different principal would not separate
+/// anything.
+#[tokio::test]
+async fn one_caller_never_reads_another_callers_spend() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    let same_claim = |request_id: &str| {
+        acp_identity(
+            request_id,
+            Some("brc_same"),
+            "claude_code",
+            Some("same-session"),
+            None,
+        )
+    };
+    record_attributed_as("alice", &recorder, "alice", 10, 5, same_claim("alice")).await?;
+    record_attributed_as("bob", &recorder, "bob", 20, 7, same_claim("bob")).await?;
+
+    let alice = store
+        .spend_summary_for_acp_session("alice", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(
+        (alice.requests, alice.spend_micro_usd),
+        (1, 70),
+        "alice sees her own row and not bob's, despite identical claims"
+    );
+
+    let bob = store
+        .spend_summary_for_acp_session("bob", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((bob.requests, bob.spend_micro_usd), (1, 110));
+
+    // And a third scope making the same claim sees neither.
+    let stranger = store
+        .spend_summary_for_acp_session("carol", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((stranger.requests, stranger.spend_micro_usd), (0, 0));
     Ok(())
 }
 
@@ -1747,18 +1812,18 @@ async fn child_agent_spend_counts_toward_its_root_session() -> Result<()> {
 
     // The root's figure is the tree's: 70 + 110.
     let claude = store
-        .spend_summary_for_acp_session("brc_c", "claude-session", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_c", "claude-session", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((claude.requests, claude.spend_micro_usd), (2, 180));
     // 12 + 24 + 36.
     let codex = store
-        .spend_summary_for_acp_session("brc_c", "thread-root", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_c", "thread-root", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((codex.requests, codex.spend_micro_usd), (3, 72));
     // A fork is a session the manager holds by its own id, and its own
     // traffic is reachable through it.
     let fork = store
-        .spend_summary_for_acp_session("brc_c", "thread-fork", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_c", "thread-fork", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((fork.requests, fork.spend_micro_usd), (1, 36));
     Ok(())
@@ -1797,7 +1862,7 @@ async fn unattributed_rows_never_match_a_session() -> Result<()> {
     assert_eq!(all.requests, 3, "every row is still recorded");
 
     let scoped = store
-        .spend_summary_for_acp_session("brc_u", "session-x", TimeWindow::ThisMonth)
+        .spend_summary_for_acp_session("acp", "brc_u", "session-x", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((scoped.requests, scoped.spend_micro_usd), (0, 0));
     Ok(())
@@ -1829,7 +1894,7 @@ async fn acp_session_spend_honours_the_custom_window_end() -> Result<()> {
         end: now - chrono::Duration::minutes(30),
     };
     let excluded = store
-        .spend_summary_for_acp_session("brc_w", "session-w", closed_before)
+        .spend_summary_for_acp_session("acp", "brc_w", "session-w", closed_before)
         .await?;
     assert_eq!(
         (excluded.requests, excluded.spend_micro_usd),
@@ -1842,7 +1907,7 @@ async fn acp_session_spend_honours_the_custom_window_end() -> Result<()> {
         end: now + chrono::Duration::hours(1),
     };
     let included = store
-        .spend_summary_for_acp_session("brc_w", "session-w", open_now)
+        .spend_summary_for_acp_session("acp", "brc_w", "session-w", open_now)
         .await?;
     assert_eq!((included.requests, included.spend_micro_usd), (1, 70));
     Ok(())

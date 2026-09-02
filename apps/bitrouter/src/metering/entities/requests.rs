@@ -16,6 +16,10 @@ pub struct Model {
     /// The `bitrouter launch` session this request belongs to, when one minted
     /// the credential it arrived with. `None` for every other caller.
     pub launch_id: Option<String>,
+    /// Route namespace this request was attributed under — the value route
+    /// leases are keyed by, not the public API-key ID. Null on rows written
+    /// before it was recorded.
+    pub route_scope_id: Option<String>,
     /// Recognized agent harness for this request.
     pub agent_harness: Option<String>,
     /// Caller-declared ACP controller correlation.

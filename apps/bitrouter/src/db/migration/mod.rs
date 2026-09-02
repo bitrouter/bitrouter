@@ -26,6 +26,7 @@ pub mod m20240101_000013_create_continuation_registry;
 // keeps the sequence unambiguous for anyone reading git history.
 pub mod m20240101_000015_add_metering_launch_id;
 pub mod m20240101_000016_add_acp_metering_identity;
+pub mod m20240101_000017_add_metering_route_scope;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -52,6 +53,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000013_create_continuation_registry::Migration),
             Box::new(m20240101_000015_add_metering_launch_id::Migration),
             Box::new(m20240101_000016_add_acp_metering_identity::Migration),
+            Box::new(m20240101_000017_add_metering_route_scope::Migration),
         ]
     }
 }

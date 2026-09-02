@@ -584,7 +584,12 @@ async fn dispatch(
             };
             match acp
                 .metering
-                .spend_summary_for_acp_session(&controller_instance_id, &session_id, window)
+                .spend_summary_for_acp_session(
+                    &api_principal,
+                    &controller_instance_id,
+                    &session_id,
+                    window,
+                )
                 .await
             {
                 Ok(summary) => DaemonResponse::AcpSessionSpend {
