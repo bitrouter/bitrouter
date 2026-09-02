@@ -4,7 +4,8 @@
 //!
 //! It used to be neither. A ratatui table drew these rows; `#830` deleted the
 //! widget and promoted its string layer to the product, which left one command
-//! that returned a `String` and `print!`ed it — bypassing [`Output`] entirely.
+//! that returned a `String` and `print!`ed it — bypassing
+//! [`crate::output::Output`] entirely.
 //! Two things followed, and both were invisible from the call site:
 //!
 //! - **`--json` was silently ignored.** Every other command answers the global
@@ -493,7 +494,6 @@ mod tests {
         let mut r = row();
         r.estimated_charge_micro_usd = 0;
         r.latency_ms = 0;
-        let mut r = r;
         r.charge_status = ChargeStatus::NotCharged;
         let cells = RequestView::from(r).cells();
         assert_eq!(cells[5], "—");

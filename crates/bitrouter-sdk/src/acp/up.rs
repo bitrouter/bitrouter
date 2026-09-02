@@ -518,7 +518,7 @@ mod tests {
               esac
             done
         "#;
-        let conn = connect_child(&script).await.expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
         let ids = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -562,7 +562,7 @@ mod tests {
               esac
             done
         "#;
-        let conn = connect_child(&script).await.expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
         let usid = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -614,7 +614,7 @@ mod tests {
               esac
             done
         "#;
-        let conn = connect_child(&script).await.expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
 
         conn.shutdown().await.expect("shutdown confirms");
 
@@ -717,7 +717,7 @@ done
             sleep 0.3
             exit 0
         "#;
-        let conn = connect_child(&script).await.expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
 
         // The child dies with this prompt unanswered. It must resolve to an
         // error promptly (bounded), never hang.
