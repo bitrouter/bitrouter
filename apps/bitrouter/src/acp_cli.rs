@@ -1498,11 +1498,11 @@ where
         // killed on shutdown. Callers needing a persistent background session
         // should use `bitrouter acp serve` instead.
         write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await?;
-        session.shutdown().await;
+        let clean = session.shutdown().await;
         if let Some(exporter) = observability.exporter {
             exporter.shutdown();
         }
-        return Ok(());
+        return teardown_result(clean);
     }
 
     let turn = Turn {
@@ -1512,12 +1512,35 @@ where
         recorder: observability.recorder.clone(),
     };
     let outcome = prompt_wait(&turn, text, contract, out).await;
-    session.shutdown().await;
+    let clean = session.shutdown().await;
     if let Some(exporter) = observability.exporter {
         // Flush the span batch before exit; spans are lost otherwise.
         exporter.shutdown();
     }
-    outcome
+    // The turn's own failure is the more specific thing that went wrong, so it
+    // outranks a teardown that did not confirm.
+    outcome?;
+    teardown_result(clean)
+}
+
+/// What a `prompt` exits with when the turn itself was fine.
+///
+/// A teardown that did not confirm **fails the command**. Before `prompt`
+/// moved onto the shared client it did this by `?`-ing on `shutdown()`; the
+/// controlled session logs and returns a flag instead, and the flag went
+/// unread — so an orchestrator scripting `bitrouter acp prompt` saw exit 0
+/// for a run whose harness child may still be alive. That was an undeclared
+/// change, and this is it declared: the NDJSON on stdout is already complete
+/// and correct, and the status code is what says the process did not end
+/// cleanly.
+fn teardown_result(clean: bool) -> Result<()> {
+    if clean {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "shutting down acp session: teardown did not confirm; see the session log"
+        ))
+    }
 }
 
 /// One harness behind an in-process connection-level controller, with the

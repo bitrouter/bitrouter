@@ -222,11 +222,14 @@ Recorded rather than left to be rediscovered:
   `ControlledSession::shutdown` and the launch failure paths call it, and a
   panic exit relies on the daemon-side TTL instead; nothing drives a live
   daemon through `chat`'s teardown and asserts the credential is gone.
-- The interactive picker's behaviour end to end: the route the footer shows
-  after a `set` is the response's `current`, by construction rather than by
-  a test that drives keys.
-- The exit status of `acp prompt` when teardown fails: it now logs rather than
-  failing the command, which was an undeclared change in the migration.
+- The interactive picker's behaviour end to end. The reducer half is pinned
+  (`machine.rs` `the_picker_opens_chooses_and_reports_what_was_confirmed`), so
+  what is left unpinned is narrower than it was: that the driver's
+  `Effect::SetRoute` reports the response's `current` and not the route it
+  asked for.
+- The exit status of `acp prompt` when teardown does not confirm. The
+  behaviour is restored — it fails the command, as it did before the migration
+  — but no test drives a harness that refuses to die and asserts the status.
 
 ## Summary of what must be written
 
