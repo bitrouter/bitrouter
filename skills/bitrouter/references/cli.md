@@ -160,7 +160,18 @@ connections do not advertise route control because they have no trusted local
 daemon binding. `route/list.available` is a logical-model suggestion list;
 presets and permitted explicit routes remain validated free-form `set` inputs.
 
-**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. Authorization, cookies, and controller credentials remain excluded. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
+**Session cost**: the same binding advertises
+`_meta["bitrouter.dev/controller"].usage` (`version: "1"`, `scope: "session"`,
+`fields: ["cost"]`, `provenance: "bitrouter.dev/cost"`). The controller then
+decorates the harness's own `usage_update` notifications: `used` and `size`
+pass through untouched and `cost` becomes the spend BitRouter metered for that
+native session and its child agents, marked
+`update._meta["bitrouter.dev/cost"] = "router"`. No usage update is ever
+synthesized, and unmetered traffic (`--direct`, explicit `--base-url`, own-auth
+harnesses, sessions with no priced requests) is forwarded exactly as sent —
+never `$0.00`, never a daemon-wide figure.
+
+**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. Authorization, cookies, and controller credentials remain excluded. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
 
 **NDJSON format** (for `acp prompt` / `spawn -p`): the **first** line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — for joining the session to daemon cost/metering. Each update line is then a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` follows the session line. A fail-fast routing failure emits a single `{"type":"error","code":"daemon_unreachable"|"auth_required","via":…,"hint":…}` line instead, before any session is created.
 

@@ -18,8 +18,8 @@ use std::path::Path;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -713,6 +713,53 @@ impl MeteringStore {
             .all(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("spend_summary_for_launch: {e}")))?;
+        Ok(summarize(charges))
+    }
+
+    /// Spend + request count for one native ACP session under one
+    /// authenticated controller — the figure a controller may decorate onto
+    /// the harness's own `UsageUpdate`.
+    ///
+    /// Keyed by `controller_instance_id` **and** the session, never the
+    /// session alone: two harness processes can mint the same-looking id, and
+    /// spec §5.5 says two controllers must not read each other's spend.
+    ///
+    /// Within the controller, the manager's opaque id is matched against
+    /// every native carrier the identity hook persists — the trusted
+    /// `acp_session_id` binding, the native root, and the native thread. A
+    /// child agent shares its root's `native_root_session_id` and differs on
+    /// `native_agent_thread_id` (§4.2), so a root's figure is the whole tree's;
+    /// a Codex fork keeps the root `session-id` under a new `thread-id`, so it
+    /// is reachable by its own id as well as counted under the root. Rows with
+    /// no session identity never match — `NULL = ?` is not true on any backend.
+    pub async fn spend_summary_for_acp_session(
+        &self,
+        controller_instance_id: &str,
+        session_id: &str,
+        window: TimeWindow,
+    ) -> Result<SpendSummary> {
+        let start = window_start(window).to_rfc3339();
+        let mut query = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .column(requests::Column::ChargeStatus)
+            .filter(requests::Column::ControllerInstanceId.eq(controller_instance_id))
+            .filter(
+                Condition::any()
+                    .add(requests::Column::AcpSessionId.eq(session_id))
+                    .add(requests::Column::NativeRootSessionId.eq(session_id))
+                    .add(requests::Column::NativeAgentThreadId.eq(session_id)),
+            )
+            .filter(requests::Column::CreatedAt.gte(start));
+        // Same bug class `spend_summary_for_launch` guards against: `Custom`
+        // carries an exclusive end, and dropping it silently over-reports.
+        if let TimeWindow::Custom { end, .. } = window {
+            query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
+        }
+        let charges: Vec<(i64, String)> =
+            query.into_tuple().all(&self.db).await.map_err(|e| {
+                BitrouterError::internal(format!("spend_summary_for_acp_session: {e}"))
+            })?;
         Ok(summarize(charges))
     }
 

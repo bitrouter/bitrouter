@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -23,6 +24,7 @@ use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::RoutingPrefs;
 
 use crate::acp_runtime::AcpRuntime;
+use crate::metering::{MeteringStore, TimeWindow};
 
 const ACP_CONTROLLER_CREDENTIAL_TTL: std::time::Duration =
     std::time::Duration::from_secs(12 * 60 * 60);
@@ -128,6 +130,13 @@ pub enum DaemonCommand {
         /// Harness-native ACP session identity.
         session_id: String,
     },
+    /// Read the spend metered under one controller for one native session.
+    AcpSessionSpend {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
 }
 
 /// Controller bearer transported only over the owner-only local daemon IPC.
@@ -201,6 +210,17 @@ pub enum DaemonResponse {
         current: Option<String>,
         /// `session` for a lease and `default` otherwise.
         scope: String,
+    },
+    /// Spend metered under one controller for one native session and its
+    /// descendants. Raw summary: the controller decides what reaches the
+    /// wire, and unpriced rows are never a computed zero.
+    AcpSessionSpend {
+        /// Micro-USD across the rows that carry charge evidence.
+        spend_micro_usd: u64,
+        /// Rows attributed to the session, priced or not.
+        requests: u64,
+        /// Rows without charge evidence, absent from `spend_micro_usd`.
+        unpriced: u64,
     },
     /// The command failed.
     Error {
@@ -431,6 +451,7 @@ pub async fn run_control_socket(
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
     policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
+    metering: MeteringStore,
 ) -> Result<()> {
     run_control_socket_with_acp_runtime(
         socket_path,
@@ -439,9 +460,21 @@ pub async fn run_control_socket(
         reloader,
         observe,
         policy_router,
-        Arc::new(AcpRuntime::new()),
+        AcpControlPlane {
+            runtime: Arc::new(AcpRuntime::new()),
+            metering,
+        },
     )
     .await
+}
+
+/// Authenticated ACP control state the control socket shares with the model
+/// request pipeline.
+pub struct AcpControlPlane {
+    /// In-memory controller credentials and route leases.
+    pub runtime: Arc<AcpRuntime>,
+    /// Settled-request store behind session-attributed spend.
+    pub metering: MeteringStore,
 }
 
 /// Run the control listener with the same authenticated ACP runtime used by
@@ -453,7 +486,7 @@ pub async fn run_control_socket_with_acp_runtime(
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
     policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: Arc<AcpRuntime>,
+    acp: AcpControlPlane,
 ) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
     let result = accept_loop(
@@ -463,7 +496,7 @@ pub async fn run_control_socket_with_acp_runtime(
         &reloader,
         &observe,
         policy_router.as_ref(),
-        &acp_runtime,
+        &acp,
     )
     .await;
     listener.cleanup().await;
@@ -477,23 +510,13 @@ async fn accept_loop(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(
-            stream,
-            app,
-            listen,
-            reloader,
-            observe,
-            policy_router,
-            acp_runtime,
-        )
-        .await?
-        {
+        if handle_connection(stream, app, listen, reloader, observe, policy_router, acp).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -512,7 +535,7 @@ async fn handle_connection<S>(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -537,16 +560,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(
-        command,
-        app,
-        listen,
-        reloader,
-        observe,
-        policy_router,
-        acp_runtime,
-    )
-    .await;
+    let response = dispatch(command, app, listen, reloader, observe, policy_router, acp).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -558,7 +572,7 @@ async fn dispatch(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -620,7 +634,8 @@ async fn dispatch(
         }
         DaemonCommand::AcpControllerIssue {
             controller_instance_id,
-        } => match acp_runtime
+        } => match acp
+            .runtime
             .issue_controller(&controller_instance_id, ACP_CONTROLLER_CREDENTIAL_TTL)
         {
             Ok(grant) => DaemonResponse::AcpControllerCredential {
@@ -633,14 +648,14 @@ async fn dispatch(
         DaemonCommand::AcpControllerRevoke {
             controller_instance_id,
         } => {
-            acp_runtime.revoke_controller(&controller_instance_id);
+            acp.runtime.revoke_controller(&controller_instance_id);
             DaemonResponse::Ok
         }
         DaemonCommand::AcpRouteList {
             controller_instance_id,
             session_id,
         } => {
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if !acp.runtime.is_controller_active(&controller_instance_id) {
                 DaemonResponse::Error {
                     message: "controller credential is not active".to_string(),
                 }
@@ -649,7 +664,8 @@ async fn dispatch(
                     message: "session id must not be empty".to_string(),
                 }
             } else {
-                let current = acp_runtime
+                let current = acp
+                    .runtime
                     .current_route(&controller_instance_id, &session_id)
                     .map(|lease| lease.route().to_string());
                 DaemonResponse::AcpRouteState {
@@ -674,7 +690,7 @@ async fn dispatch(
                     message: "no language_model pipeline configured".to_string(),
                 };
             };
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if !acp.runtime.is_controller_active(&controller_instance_id) {
                 return DaemonResponse::Error {
                     message: "controller credential is not active".to_string(),
                 };
@@ -693,7 +709,10 @@ async fn dispatch(
                     message: format!("route is not available: {error}"),
                 };
             }
-            match acp_runtime.set_route(&controller_instance_id, &session_id, &route) {
+            match acp
+                .runtime
+                .set_route(&controller_instance_id, &session_id, &route)
+            {
                 Ok(lease) => DaemonResponse::AcpRouteState {
                     available: route_suggestions(app),
                     current: Some(lease.route().to_string()),
@@ -706,7 +725,7 @@ async fn dispatch(
             controller_instance_id,
             session_id,
         } => {
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if !acp.runtime.is_controller_active(&controller_instance_id) {
                 DaemonResponse::Error {
                     message: "controller credential is not active".to_string(),
                 }
@@ -715,12 +734,50 @@ async fn dispatch(
                     message: "session id must not be empty".to_string(),
                 }
             } else {
-                acp_runtime.reset_route(&controller_instance_id, &session_id);
+                acp.runtime
+                    .reset_route(&controller_instance_id, &session_id);
                 DaemonResponse::AcpRouteState {
                     available: route_suggestions(app),
                     current: None,
                     scope: "default".to_string(),
                 }
+            }
+        }
+        DaemonCommand::AcpSessionSpend {
+            controller_instance_id,
+            session_id,
+        } => {
+            if !acp.runtime.is_controller_active(&controller_instance_id) {
+                return DaemonResponse::Error {
+                    message: "controller credential is not active".to_string(),
+                };
+            }
+            if session_id.trim().is_empty() {
+                return DaemonResponse::Error {
+                    message: "session id must not be empty".to_string(),
+                };
+            }
+            // A controller id is minted per process, so "since the epoch" is
+            // "this controller's lifetime": no earlier row can carry it, and
+            // a session's cumulative figure must not reset at a month
+            // boundary the way the rolling windows do.
+            let window = TimeWindow::Custom {
+                start: DateTime::<Utc>::UNIX_EPOCH,
+                end: Utc::now(),
+            };
+            match acp
+                .metering
+                .spend_summary_for_acp_session(&controller_instance_id, &session_id, window)
+                .await
+            {
+                Ok(summary) => DaemonResponse::AcpSessionSpend {
+                    spend_micro_usd: summary.spend_micro_usd,
+                    requests: summary.requests,
+                    unpriced: summary.unpriced,
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("session spend is unavailable: {error}"),
+                },
             }
         }
         DaemonCommand::Route { model } => {

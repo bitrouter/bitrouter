@@ -66,6 +66,20 @@ by current policy. `list.available` contains live logical-model picker
 suggestions, not an exhaustive grammar for presets or explicit routes. Do not
 use manager-side `providers/*` as a compatibility alias.
 
+The same trusted binding advertises `_meta["bitrouter.dev/controller"].usage`
+with `version: "1"`, `scope: "session"`, `fields: ["cost"]`, and
+`provenance: "bitrouter.dev/cost"`. It means the controller decorates the
+harness's own `usage_update` notifications: `used` and `size` are forwarded
+untouched, and `cost` is replaced by the spend BitRouter metered for that
+native session and its child agents, marked by
+`update._meta["bitrouter.dev/cost"] = "router"`. The controller never
+synthesizes a usage update — a harness that emits none shows no cost — and
+traffic BitRouter did not meter (`--direct`, an explicit `--base-url`, a
+harness on its own auth, or a session with no priced requests) leaves the
+harness's figure and `_meta` exactly as sent, with no marker. Probe the
+capability; an absent or null `usage` means `cost` is whatever the harness
+reports.
+
 ## Pinned Claude and Codex adapters
 
 The maintained catalog commands are exact pins:
@@ -133,7 +147,8 @@ up. None of these operations changes harness session storage. The normalized
 identity event joins controlled capture/replay, spans, route decisions, and
 nullable metering columns by `router_request_id`; authorization, cookies, and
 credentials are excluded, and raw identifiers are never aggregate metric
-labels. The controller does not synthesize manager-facing per-session cost.
+labels. The controller decorates, and never synthesizes, manager-facing
+per-session cost; see the `usage` capability above.
 
 ## One-shot NDJSON
 

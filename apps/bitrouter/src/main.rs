@@ -2761,7 +2761,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         reloader.clone(),
         observe_provider,
         policy_router_for_control,
-        acp_runtime_for_control,
+        daemon::AcpControlPlane {
+            runtime: acp_runtime_for_control,
+            metering: bitrouter::metering::MeteringStore::new(assembled.db.clone()),
+        },
     );
 
     // SIGHUP triggers a config reload — reload should be available via either

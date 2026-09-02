@@ -10,7 +10,11 @@ use std::time::Duration;
 
 use bitrouter::build_app_with_path;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, NoopObserveStatus, NoopReloader};
+use bitrouter::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
 use bitrouter_sdk::App;
+use bitrouter_sdk::caller::CallerContext;
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -116,6 +120,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
 
     // Wait for the listener to be ready (bind is fast but not synchronous).
@@ -194,7 +199,10 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
-        runtime.clone(),
+        daemon::AcpControlPlane {
+            runtime: runtime.clone(),
+            metering: MeteringStore::new(assembled.db.clone()),
+        },
     ));
     wait_until_ready(&socket).await;
 
@@ -330,6 +338,7 @@ async fn probe_status_reports_ready_when_daemon_is_up() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -375,6 +384,7 @@ async fn reload_re_reads_the_config_file() {
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -508,6 +518,7 @@ async fn route_for_unknown_model_returns_a_clean_error() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -548,6 +559,7 @@ async fn concurrent_clients_are_all_served() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -589,6 +601,7 @@ async fn malformed_input_does_not_take_the_server_down() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -638,6 +651,7 @@ async fn reload_returns_error_when_the_config_is_broken() {
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -693,6 +707,7 @@ async fn socket_file_has_owner_only_permissions() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -754,6 +769,7 @@ async fn set_route_reroutes_only_the_named_launch() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         Some(router.clone()),
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -820,4 +836,151 @@ async fn set_route_reroutes_only_the_named_launch() {
         .await
         .unwrap();
     let _ = server.await;
+}
+
+/// One routed model request settled the way the pipeline records it: priced
+/// (`10 × 2 + 5 × 10 = 70 µ$`) and carrying the identity the session hook
+/// emits for `controller`'s traffic on native session `root`.
+async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
+    let mut pricing = PricingTable::new();
+    pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
+    let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
+    let request_id = format!("spend-{controller}-{root}");
+    let mut settled = SettlementContext {
+        request_id: request_id.clone(),
+        caller: CallerContext::local(),
+        target: None,
+        model_id: "gpt-5".into(),
+        reasoning_effort: None,
+        provider_id: "openai".into(),
+        account_label: None,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        usage_origin: UsageOrigin::ProviderReported,
+        raw_usage: None,
+        web_search_count: 0,
+        media_input_count: 0,
+        media_output_count: 0,
+        server_tool_calls: Vec::new(),
+        streamed: false,
+        request_duration_ms: 100,
+        upstream_duration_ms: Some(80),
+        ttft_ms: None,
+        generation_duration_ms: None,
+        first_token_kind: None,
+        finish_reason: None,
+        error: None,
+        events: bitrouter_sdk::EventBus::new(),
+    };
+    settled.emit(SessionIdentityObserved {
+        router_request_id: request_id,
+        origin: RequestOrigin::AuthenticatedAcpController,
+        harness: Some("claude_code".to_string()),
+        authenticated_controller_instance_id: Some(controller.to_string()),
+        claimed_controller_instance_id: Some(controller.to_string()),
+        acp_session_id: None,
+        native_root_session_id: Some(root.to_string()),
+        native_agent_thread_id: None,
+        native_parent_agent_thread_id: None,
+        native_turn_id: None,
+        legacy_workflow_session_id: None,
+        api_continuation_id: None,
+        evidence: Vec::new(),
+        conflicts: Vec::new(),
+        attributed: true,
+        route_scope: "default".to_string(),
+        route_lease_id: None,
+        route_lease_outcome: None,
+    });
+    recorder.record(&mut settled).await.unwrap();
+}
+
+#[tokio::test]
+async fn acp_session_spend_roundtrips_over_the_control_socket() {
+    let dir = tempdir("acp-spend");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let runtime = assembled.acp_runtime.clone();
+    let metering = MeteringStore::new(assembled.db.clone());
+    let app = Arc::new(assembled.app);
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+        socket.clone(),
+        app,
+        "127.0.0.1:1234".to_string(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        None,
+        daemon::AcpControlPlane {
+            runtime: runtime.clone(),
+            metering: metering.clone(),
+        },
+    ));
+    wait_until_ready(&socket).await;
+
+    settle_attributed_request(metering, "brc_spend", "native-session").await;
+    let spend_of = |controller: &str, session: &str| DaemonCommand::AcpSessionSpend {
+        controller_instance_id: controller.to_string(),
+        session_id: session.to_string(),
+    };
+
+    // Spend is readable only through a live controller binding — the same
+    // gate as route state — so the row alone buys nothing.
+    let unbound = daemon::send_command(&socket, &spend_of("brc_spend", "native-session"))
+        .await
+        .unwrap();
+    assert!(matches!(unbound, DaemonResponse::Error { .. }));
+
+    let issued = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpControllerIssue {
+            controller_instance_id: "brc_spend".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        issued,
+        DaemonResponse::AcpControllerCredential { .. }
+    ));
+
+    let spend = daemon::send_command(&socket, &spend_of("brc_spend", "native-session"))
+        .await
+        .unwrap();
+    match spend {
+        DaemonResponse::AcpSessionSpend {
+            spend_micro_usd,
+            requests,
+            unpriced,
+        } => {
+            assert_eq!((spend_micro_usd, requests, unpriced), (70, 1, 0));
+        }
+        other => panic!("expected ACP session spend, got {other:?}"),
+    }
+
+    // Another session under the same controller sees nothing of it.
+    let other_session = daemon::send_command(&socket, &spend_of("brc_spend", "other-session"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        other_session,
+        DaemonResponse::AcpSessionSpend {
+            spend_micro_usd: 0,
+            requests: 0,
+            unpriced: 0,
+        }
+    ));
+    // An empty session id is refused rather than matched against nothing.
+    let empty = daemon::send_command(&socket, &spend_of("brc_spend", "  "))
+        .await
+        .unwrap();
+    assert!(matches!(empty, DaemonResponse::Error { .. }));
+
+    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&dir).await;
 }

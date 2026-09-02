@@ -36,6 +36,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
@@ -45,10 +46,11 @@ use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use agent_client_protocol::schema::v1::{
-    LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SetProviderRequest,
+    Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SetProviderRequest,
 };
 use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
+    SessionCost as AcpSessionCost,
 };
 use bitrouter_sdk::acp::engine::LaunchOptions;
 use bitrouter_sdk::acp::telemetry::RequestCompleted;
@@ -820,6 +822,72 @@ impl AcpRouteControl for DaemonRouteControl {
     }
 }
 
+/// Session-attributed spend read back from the daemon's metering store for
+/// this controller's own credential-bound traffic.
+struct DaemonSessionCost {
+    socket_path: PathBuf,
+    controller_instance_id: String,
+}
+
+/// How long one usage update may wait on the daemon before it is forwarded
+/// without a figure. The lookup sits on the controller's forward path, so a
+/// stalled daemon must cost the manager a cost line, never its update stream.
+const SESSION_COST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[async_trait::async_trait]
+impl AcpSessionCost for DaemonSessionCost {
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+        let command = crate::daemon::DaemonCommand::AcpSessionSpend {
+            controller_instance_id: self.controller_instance_id.clone(),
+            session_id: session_id.to_string(),
+        };
+        let response = tokio::time::timeout(
+            SESSION_COST_LOOKUP_TIMEOUT,
+            crate::daemon::send_command(&self.socket_path, &command),
+        )
+        .await;
+        match response {
+            Ok(Ok(crate::daemon::DaemonResponse::AcpSessionSpend {
+                spend_micro_usd,
+                requests,
+                unpriced,
+            })) => attributed_cost(spend_micro_usd, requests, unpriced),
+            Ok(Ok(crate::daemon::DaemonResponse::Error { message })) => {
+                tracing::debug!(session_id, %message, "session cost is unavailable");
+                None
+            }
+            Ok(Ok(other)) => {
+                tracing::debug!(
+                    session_id,
+                    ?other,
+                    "daemon returned an unexpected session-spend response"
+                );
+                None
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(session_id, %error, "session cost lookup failed");
+                None
+            }
+            Err(_) => {
+                tracing::debug!(session_id, "session cost lookup timed out");
+                None
+            }
+        }
+    }
+}
+
+/// The figure a session's spend summary puts on the wire, or nothing.
+///
+/// Absent when no request was attributed to the session, and when none of
+/// the attributed requests carries charge evidence: a session BitRouter routed
+/// but could not price is not a free one, so it is never `$0.00`. When some
+/// rows are priced the figure is their sum — the same floor
+/// `bitrouter status --requests` reports alongside its unpriced count.
+fn attributed_cost(spend_micro_usd: u64, requests: u64, unpriced: u64) -> Option<Cost> {
+    (requests > 0 && unpriced < requests)
+        .then(|| Cost::new(spend_micro_usd as f64 / 1_000_000.0, "USD"))
+}
+
 /// Launch one harness process and expose its connection-level ACP controller
 /// over **stdio** until the manager disconnects.
 ///
@@ -859,6 +927,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
     let mut route_control: Option<Arc<dyn AcpRouteControl>> = None;
+    let mut session_cost: Option<Arc<dyn AcpSessionCost>> = None;
     if let (Some(endpoint), Some(controller_instance_id)) = (
         routed.endpoint_plan.clone(),
         routed.controller_instance_id.clone(),
@@ -910,10 +979,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
                 args.extend(overlay.args);
             }
             routed.endpoint_plan = Some(endpoint);
+            // Both bridges share the trusted local binding: the same gate
+            // that makes route leases safe makes the spend query
+            // attributable, and neither exists without it.
             route_control = Some(Arc::new(DaemonRouteControl::new(
+                socket_path.clone(),
+                controller_instance_id.clone(),
+            )));
+            session_cost = Some(Arc::new(DaemonSessionCost {
                 socket_path,
                 controller_instance_id,
-            )));
+            }));
         } else {
             eprintln!(
                 "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
@@ -944,6 +1020,9 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
     if let Some(route_control) = route_control {
         controller = controller.route_control(route_control);
+    }
+    if let Some(session_cost) = session_cost {
+        controller = controller.session_cost(session_cost);
     }
     controller
         .run(agent_client_protocol::Stdio::new())
@@ -1690,7 +1769,25 @@ pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTab
 
 #[cfg(test)]
 mod controller_tests {
-    use super::{RoutingCredentialMode, controller_identity, user_key_required};
+    use agent_client_protocol::schema::v1::Cost;
+
+    use super::{RoutingCredentialMode, attributed_cost, controller_identity, user_key_required};
+
+    /// C5: a session with no attributed traffic, or none that could be
+    /// priced, renders nothing — never `$0.00`.
+    #[test]
+    fn unattributed_or_unpriced_sessions_carry_no_figure() {
+        assert_eq!(attributed_cost(0, 0, 0), None);
+        assert_eq!(attributed_cost(0, 3, 3), None);
+    }
+
+    /// Priced evidence becomes a USD figure; a partially priced session
+    /// reports its priced floor rather than hiding it.
+    #[test]
+    fn priced_evidence_becomes_a_usd_figure() {
+        assert_eq!(attributed_cost(420_000, 2, 0), Some(Cost::new(0.42, "USD")));
+        assert_eq!(attributed_cost(250_000, 3, 2), Some(Cost::new(0.25, "USD")));
+    }
 
     #[test]
     fn local_maintained_controller_bootstraps_without_a_user_key() {
