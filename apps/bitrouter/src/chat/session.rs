@@ -386,7 +386,19 @@ fn prompt_chunk(line: &str, nth: usize) -> agent_client_protocol::schema::v1::Co
 /// to ask: the terminal that would carry the question is the one that isn't
 /// there. Denying is the same answer this path gives an unanswerable prompt
 /// anywhere else, and it is never mistaken for consent.
-pub(crate) async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> Result<()> {
+///
+/// # Teardown belongs to the caller
+///
+/// The client is borrowed, not owned: it is one half of a controller the
+/// caller launched and must reap. So this returns when stdin ends and leaves
+/// shutdown to `chat`, which is also what makes the harness child's fate the
+/// controller's rather than this loop's.
+pub(crate) async fn chat_plain(
+    client: &bitrouter_sdk::acp::client::AcpClient,
+    session_id: &str,
+    agent_id: &str,
+    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+) -> Result<()> {
     use std::io::Write as _;
 
     use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
@@ -400,14 +412,16 @@ pub(crate) async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> 
     // How many rows of the document have already been written.
     let mut written = 0_usize;
     let mut prompts = 0_usize;
-    let mut updates = session.raw_updates();
-    let mut permissions = session.permissions();
+    let mut updates = client.subscribe_raw_updates();
+    let mut permissions = client.subscribe_permissions();
     // The only reader of stdin on this path, and it takes no raw mode — the
     // one that does (`chat::input::Stdin`) needs a terminal, which is exactly
     // what is missing here.
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
-    let ended = loop {
+    // The loop is the tail: with teardown moved to the caller there is
+    // nothing left to do after it ends.
+    loop {
         let Some(line) = lines.next_line().await.context("reading stdin")? else {
             break Ok(());
         };
@@ -423,7 +437,8 @@ pub(crate) async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> 
             &line, prompts,
         )));
 
-        let turn = session.prompt(&line);
+        let started = std::time::Instant::now();
+        let turn = client.prompt(session_id, &line);
         tokio::pin!(turn);
         let outcome = loop {
             tokio::select! {
@@ -460,6 +475,15 @@ pub(crate) async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> 
         written = document.len();
         match outcome {
             Ok(response) => {
+                // The same record `prompt` reports, from the same round-trip:
+                // the engine's pipeline hook used to produce these for both.
+                crate::acp_cli::report_turn(
+                    client,
+                    agent_id,
+                    recorder.as_ref(),
+                    &response,
+                    started.elapsed(),
+                );
                 writeln!(out, "[{:?}]", response.stop_reason).context("writing the stop reason")?
             }
             Err(e) => {
@@ -467,13 +491,7 @@ pub(crate) async fn chat_plain(session: bitrouter_sdk::acp::engine::Session) -> 
                 write_session_log_tail(&mut out)?;
             }
         }
-    };
-
-    let shutdown = session.shutdown().await;
-    if shutdown.is_err() {
-        write_session_log_tail(&mut out)?;
     }
-    ended.and(shutdown.context("shutting down chat session"))
 }
 
 /// Draw the provider picker and, on a selection, actually change the route.

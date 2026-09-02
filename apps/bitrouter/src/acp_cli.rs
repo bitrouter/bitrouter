@@ -1064,6 +1064,26 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     .await
     .map_err(anyhow::Error::new)?;
 
+    match &routed.via {
+        Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
+        None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
+    }
+
+    // A pipe cannot be drawn on. Everything the terminal branch does — the
+    // live row, the modals, raw mode — assumes a screen with a cursor on it,
+    // and writing those escapes into a file or a `| grep` would corrupt the
+    // very output the redirect exists to capture. So a redirected stdout gets
+    // the session as plain text instead, which is the one thing a pipe *can*
+    // use.
+    //
+    // The branch sits **above the launch** because the two halves no longer
+    // launch the same thing: the pipe drives a controller through the shared
+    // client, and the terminal still drives the local engine until it moves
+    // too. Nothing below is common to both, so nothing above it is either.
+    if !std::io::stdout().is_terminal() {
+        return chat_piped(&config, agent_id, &routed, options, &cloud_credentials).await;
+    }
+
     let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
@@ -1071,17 +1091,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session, &cloud_credentials).await;
 
-    match &routed.via {
-        Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
-        None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
-    }
-
-    // A pipe cannot be drawn on. Everything below this point — the live row,
-    // the modals, raw mode — assumes a screen with a cursor on it, and writing
-    // those escapes into a file or a `| grep` would corrupt the very output
-    // the redirect exists to capture. So a redirected stdout gets the session
-    // as plain text instead, which is the one thing a pipe *can* use.
-    let ended = if std::io::stdout().is_terminal() {
+    let ended = {
         // The picker exists only when this session can actually be rerouted,
         // which needs both a daemon and an attributable launch (task 4.2).
         // Probing that here rather than assuming it is what keeps a dead
@@ -1107,11 +1117,58 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         }
         eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
         crate::chat::session::run(session, providers, routable, routed.via.clone()).await
-    } else {
-        crate::chat::session::chat_plain(session).await
     };
 
     if let Some(exporter) = exporter {
+        exporter.shutdown();
+    }
+    ended
+}
+
+/// `chat` for a stdout that is not a terminal.
+///
+/// The same stack `acp serve` exposes and `acp prompt` drives: an in-process
+/// controller, the shared client, and harness-native session identity. What
+/// differs from `prompt` is only the consumer — a journal rendered per turn
+/// rather than an NDJSON stream — which is why the loop itself lives beside
+/// the renderers in [`crate::chat::session`].
+async fn chat_piped(
+    config: &Config,
+    agent_id: &str,
+    routed: &Routed,
+    options: LaunchOptions,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+) -> Result<()> {
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(config, agent_id, routed, options)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
+        }
+    };
+    let observability =
+        build_observability(config, agent_id, &ids.acp_session_id, cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
+
+    let ended = crate::chat::session::chat_plain(
+        &session.client,
+        &ids.acp_session_id,
+        agent_id,
+        observability.recorder,
+    )
+    .await;
+
+    // Teardown is here rather than in the loop: the loop borrows the client,
+    // and the controller that owns the harness child is this function's.
+    session.shutdown().await;
+    if let Some(exporter) = observability.exporter {
         exporter.shutdown();
     }
     ended
@@ -1478,7 +1535,13 @@ where
             }
         }
     };
-    report_turn(turn, &response, started.elapsed());
+    report_turn(
+        turn.client,
+        turn.agent_id,
+        turn.recorder.as_ref(),
+        &response,
+        started.elapsed(),
+    );
     Ok((response, reply))
 }
 
@@ -1489,23 +1552,24 @@ where
 /// Latency and stop reason are visible right here on the round-trip, and
 /// context occupancy on the client's usage slot, so the record is built from
 /// what the turn itself observed.
-fn report_turn(
-    turn: &Turn<'_>,
+///
+/// Takes its inputs loose rather than a `Turn`, because the piped chat path
+/// ([`crate::chat::session::chat_plain`]) reports the same record and has no
+/// prompt contract, no NDJSON sink, and therefore no `Turn`.
+pub(crate) fn report_turn(
+    client: &AcpClient,
+    agent_id: &str,
+    recorder: Option<&Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
     response: &agent_client_protocol::schema::v1::PromptResponse,
     latency: Duration,
 ) {
     let record = RequestCompleted {
-        agent: turn.agent_id.to_string(),
+        agent: agent_id.to_string(),
         stop_reason: format!("{:?}", response.stop_reason),
         latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
-        context: turn
-            .client
-            .context_usage()
-            .lock()
-            .ok()
-            .and_then(|slot| *slot),
+        context: client.context_usage().lock().ok().and_then(|slot| *slot),
     };
-    if let Some(recorder) = &turn.recorder {
+    if let Some(recorder) = recorder {
         recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
             stop_reason: record.stop_reason.clone(),
             latency,
