@@ -25,10 +25,22 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// The routes on offer, and which one is in force.
+/// At most this many routes are drawn at once.
+///
+/// Not a layout choice — it is the number a single keystroke can address.
+/// [`Picker::choose`] reads one digit, so ten or more numbered entries would
+/// label options the input cannot reach, and this module's whole rule is that a
+/// control which cannot act is worse than an absent one. The list is narrowed
+/// by typing instead; see [`Picker::filter`].
+const SHORTLIST: usize = 9;
+
+/// The routes on offer, which one is in force, and what the reader has typed
+/// to narrow them.
 #[derive(Debug, Clone)]
 pub struct Picker {
     entries: Vec<Entry>,
+    /// Substring the reader is narrowing by. Empty until they type.
+    filter: String,
 }
 
 /// One route, as the picker shows it.
@@ -52,6 +64,7 @@ impl Picker {
             return None;
         }
         Some(Self {
+            filter: String::new(),
             entries: routes
                 .iter()
                 .map(|route| Entry {
@@ -64,7 +77,40 @@ impl Picker {
         })
     }
 
+    /// The routes currently on offer: those matching the filter, capped at
+    /// what a digit can address.
+    fn shortlist(&self) -> impl Iterator<Item = &Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route.contains(&self.filter))
+            .take(SHORTLIST)
+    }
+
+    /// How many matches the shortlist could not show.
+    fn hidden(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.route.contains(&self.filter))
+            .count()
+            .saturating_sub(SHORTLIST)
+    }
+
+    /// Narrow the list by one typed character.
+    pub fn filter(&mut self, key: char) {
+        self.filter.push(key);
+    }
+
+    /// Widen it again by one.
+    pub fn unfilter(&mut self) {
+        self.filter.pop();
+    }
+
     /// The picker as it appears in the live area.
+    ///
+    /// Every numbered entry drawn here is one [`Picker::choose`] accepts, and
+    /// anything the shortlist could not fit is reported as a count rather than
+    /// drawn unreachably. A filter that matches nothing says so instead of
+    /// showing an empty row that looks like a broken control.
     pub fn render(&self) -> Line<'static> {
         let mut spans = vec![Span::styled(
             "route: ",
@@ -72,7 +118,15 @@ impl Picker {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )];
-        for (index, entry) in self.entries.iter().enumerate() {
+        if !self.filter.is_empty() {
+            spans.push(Span::styled(
+                format!("/{} ", self.filter),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        let mut shown = 0;
+        for (index, entry) in self.shortlist().enumerate() {
+            shown += 1;
             spans.push(Span::styled(
                 format!("[{}]", index + 1),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -85,6 +139,19 @@ impl Picker {
                 Style::default()
             };
             spans.push(Span::styled(format!("{} ", entry.route), style));
+        }
+        if shown == 0 {
+            spans.push(Span::styled(
+                "nothing matches ",
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        let hidden = self.hidden();
+        if hidden > 0 {
+            spans.push(Span::styled(
+                format!("+{hidden} more, type to narrow "),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
         }
         spans.push(Span::styled(
             "[esc] keep",
@@ -99,7 +166,9 @@ impl Picker {
     /// module docs. An unoffered key selects nothing.
     pub fn choose(&self, key: char) -> Option<String> {
         let index = key.to_digit(10)?.checked_sub(1)? as usize;
-        self.entries.get(index).map(|entry| entry.route.clone())
+        // Into the shortlist, never the whole list: the reader picks by the
+        // number they can see, and what they can see is what is offered.
+        self.shortlist().nth(index).map(|entry| entry.route.clone())
     }
 }
 
@@ -180,6 +249,83 @@ mod tests {
         let rendered = text(&picker.render());
         assert!(rendered.contains("[1]@balanced"), "{rendered:?}");
         assert!(rendered.contains("[2]openai:gpt-5"), "{rendered:?}");
+    }
+
+    /// Fifty-eight routes, as a live daemon actually returns.
+    fn many() -> Vec<String> {
+        (1..=58).map(|n| format!("vendor/model-{n:02}")).collect()
+    }
+
+    /// The property this module exists for: nothing is drawn that a keystroke
+    /// cannot reach.
+    ///
+    /// A daemon's `available` list is its whole logical model catalogue — it
+    /// was returning 58 — while `choose` reads one digit. Numbering all of them
+    /// labelled 49 options the input could never select, which is precisely the
+    /// dead control this module refuses to draw.
+    #[test]
+    fn every_numbered_route_is_one_a_keystroke_can_reach() {
+        let picker = Picker::open(true, &many(), None).expect("routes");
+        let drawn = text(&picker.render());
+
+        for n in 1..=SHORTLIST {
+            assert!(drawn.contains(&format!("[{n}]")), "{n} is offered: {drawn}");
+            assert!(
+                picker
+                    .choose(char::from_digit(n as u32, 10).expect("digit"))
+                    .is_some(),
+                "and selectable"
+            );
+        }
+        assert!(
+            !drawn.contains(&format!("[{}]", SHORTLIST + 1)),
+            "nothing beyond a single digit is numbered: {drawn}"
+        );
+    }
+
+    /// What the shortlist cannot show is reported as a count, not hidden and
+    /// not drawn unreachably.
+    #[test]
+    fn the_routes_that_did_not_fit_are_counted() {
+        let picker = Picker::open(true, &many(), None).expect("routes");
+        assert!(
+            text(&picker.render()).contains("+49 more"),
+            "58 routes, 9 shown"
+        );
+    }
+
+    /// Typing narrows, and the numbers follow what is on screen rather than
+    /// the position a route held in the daemon's list.
+    #[test]
+    fn filtering_renumbers_what_is_left() {
+        let mut picker = Picker::open(true, &many(), None).expect("routes");
+        for key in "model-4".chars() {
+            picker.filter(key);
+        }
+        let drawn = text(&picker.render());
+        assert!(drawn.contains("/model-4"), "the filter is shown: {drawn}");
+        // `model-40`..`model-49` match — `model-04` does not, the digits are
+        // the wrong way round. Ten match, nine fit.
+        assert_eq!(picker.choose('1').as_deref(), Some("vendor/model-40"));
+        assert!(drawn.contains("+1 more"), "{drawn}");
+
+        // And widening again restores the unfiltered head.
+        for _ in 0.."model-4".len() {
+            picker.unfilter();
+        }
+        assert_eq!(picker.choose('1').as_deref(), Some("vendor/model-01"));
+    }
+
+    /// A filter matching nothing says so, rather than drawing an empty row
+    /// that looks like a control which stopped working.
+    #[test]
+    fn a_filter_matching_nothing_says_so() {
+        let mut picker = Picker::open(true, &many(), None).expect("routes");
+        for key in "zzz".chars() {
+            picker.filter(key);
+        }
+        assert!(text(&picker.render()).contains("nothing matches"));
+        assert!(picker.choose('1').is_none(), "and selects nothing");
     }
 
     /// A key outside the offered range selects nothing rather than wrapping.
