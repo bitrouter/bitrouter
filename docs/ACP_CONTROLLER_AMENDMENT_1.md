@@ -126,6 +126,20 @@ what a synthesized update must do and what the current dead code does.
 `used`/`size` retained in `LiveSessionIndex`. That requires adding a row to
 §5.1's permitted-state list and is out of scope here.
 
+**On the lag, which is inherent rather than a defect.** The implementation
+caches the figure and refreshes off the forward path, so a usage update carries
+what a previous refresh confirmed. That reads like a one-update delay
+introduced by caching, and it was first recorded as something to follow up —
+wrongly. A usage update arrives *mid-turn*, before the model request it belongs
+to has settled in metering, so a synchronous query at that moment would return
+the same previous-turns total the cache holds. The lag is when spend settles
+versus when ACP reports occupancy; removing the cache would buy a stall on the
+forward path and no fresher number.
+
+The visible consequence stands and is correct: a session that ends after one
+turn may show no figure, because BitRouter had not finished metering it. That
+is C5 — absent rather than invented — reached by a different route.
+
 ### C2 — `UsageUpdate.cost` carries session-attributed cost, or nothing
 
 The field is specified as *cumulative session cost*. A third-party ACP client
@@ -217,18 +231,27 @@ client in order to delete it.
 Insert **Phase 2.5 — client consolidation**, between the shipped Phase 2 and
 Phase 3's product surfaces:
 
-1. Pure deletion, zero behaviour change: `down::serve`/`serve_with` and their
-   tests, `CostSink`, `measured_usage_update`, the settlement seam.
-2. `spend_summary_for_acp_session` in metering, with tests. (C4)
-3. Render `used`/`size`. (C6)
-4. The shared client in `bitrouter-sdk::acp`, exercised against the controller
-   over a duplex transport. **Migrate `acp prompt` first** — it is headless, it
-   has byte-level NDJSON assertions, and it exercises invariants I1, I2, I6, I8
-   and I11, five of the seven that need new code.
-5. `chat_plain`.
-6. `chat` + in-process controller + `_bitrouter/route/*`, together.
-7. `refactor(sdk)!` — delete the engine and everything in §2's table.
-8. Cost decoration. (C1–C3, C5)
+1. ~~Pure deletion~~ — landed.
+2. ~~`spend_summary_for_acp_session`~~ — landed, folded into the decoration
+   commit because the query alone would have been dead code.
+3. ~~Render `used`/`size`~~ — landed.
+4. ~~The shared client, with `acp prompt` migrated first~~ — landed. Built by
+   generalizing `up::UpstreamConnection` over a transport rather than written
+   fresh, which shed 749 lines: `AgentProcess` already did the child spawn,
+   reaper and death race the old driver duplicated.
+5. ~~`chat_plain`~~ — landed.
+6. ~~`chat` + in-process controller + `_bitrouter/route/*`~~ — landed as two
+   commits: the client's route-control surface first (additive, no behaviour
+   change), then the migration and the deletion of `SessionProviders`.
+7. ~~Delete the engine and everything in §2's table~~ — landed. Wider than
+   planned: `ConfigAcpRoutingTable` and `AcpTarget` had no consumers outside
+   the dead pipeline either, and two `pub use` re-exports in `acp/mod.rs` that
+   broke the house rule went with them.
+8. ~~Cost decoration (C1–C3, C5)~~ — landed across steps 2 and 6 rather than
+   as its own step: the server half rode with the query that feeds it, and the
+   client half had to land with `chat`'s migration or every attributed figure
+   would have rendered `cost unreported`. C4's capability and C6's occupancy
+   line are in too; all six are pinned.
 9. The chat state machine ([`CHAT_MACHINE_SPEC.md`](CHAT_MACHINE_SPEC.md)),
    once, on the shared client.
 
