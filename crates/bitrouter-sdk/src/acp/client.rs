@@ -56,10 +56,17 @@
 //! 2. The client's permission ledger holds a **weak** handle to every
 //!    outstanding request so the paths that abandon one while the resolver is
 //!    still alive — a turn given up on at `turn_timeout`, a turn that failed,
-//!    client teardown — can deny it **explicitly**. Nothing else converts
-//!    silence into denial: to a transparent controller,
+//!    a consumer that cancelled, client teardown — can deny it **explicitly**.
+//!    Nothing else converts silence into denial: to a transparent controller,
 //!    `session/request_permission` is an open JSON-RPC request that only a
 //!    response closes.
+//!
+//! Every ledger entry records the **session** that asked, and every path except
+//! teardown denies only its own session's requests. This client can carry
+//! several harness-native sessions on one connection, and a turn abandoned in
+//! one of them says nothing about a question the agent asked in another: the
+//! broker for that one is still there. Teardown is the case that genuinely is
+//! connection-wide, because the transport is what goes.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
@@ -202,6 +209,9 @@ impl PendingPermission {
 /// silently disable mechanism 1 (deny-by-drop); the ledger exists to cover the
 /// paths mechanism 1 cannot reach, not to replace it.
 struct OutstandingPermission {
+    /// The native session the agent asked about. A turn abandons the requests
+    /// of **its own** session and no others.
+    session_id: String,
     resolver: Weak<PermissionResolver>,
     reject: RequestPermissionOutcome,
 }
@@ -222,25 +232,49 @@ struct PermissionLedger {
 
 impl PermissionLedger {
     /// Track one freshly emitted request, and forget the ones already answered.
-    fn record(&self, pending: &PendingPermission, reject: RequestPermissionOutcome) {
+    fn record(
+        &self,
+        pending: &PendingPermission,
+        reject: RequestPermissionOutcome,
+        session_id: String,
+    ) {
         if let Ok(mut outstanding) = self.outstanding.lock() {
             outstanding.retain(|entry| entry.resolver.strong_count() > 0);
             outstanding.push(OutstandingPermission {
+                session_id,
                 resolver: Arc::downgrade(&pending.resolver),
                 reject,
             });
         }
     }
 
-    /// Answer every still-outstanding request with **its own** agent's reject
+    /// Answer still-outstanding requests with **each one's own** agent reject
     /// option, and return how many were answered. Idempotent: an entry already
     /// resolved (or already dropped) is a no-op.
-    fn deny_outstanding(&self) -> usize {
-        let entries = match self.outstanding.lock() {
-            Ok(mut outstanding) => std::mem::take(&mut *outstanding),
-            // A poisoned ledger must not become a silent hang: there is
-            // nothing left to read, so report that nothing was denied.
-            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    ///
+    /// `scope` is the session whose requests are being abandoned, or `None` for
+    /// every session on this connection. The distinction is the difference
+    /// between "this turn gave up" and "this connection is going away": a
+    /// client carrying two native sessions must not deny the second session's
+    /// question because the first one's turn timed out.
+    fn deny_outstanding(&self, scope: Option<&str>) -> usize {
+        let entries = {
+            let mut outstanding = match self.outstanding.lock() {
+                Ok(outstanding) => outstanding,
+                // A poisoned ledger must not become a silent hang: take what
+                // is there and answer it rather than refusing to read it.
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            match scope {
+                None => std::mem::take(&mut *outstanding),
+                Some(session_id) => {
+                    let (mine, theirs) = std::mem::take(&mut *outstanding)
+                        .into_iter()
+                        .partition(|entry| entry.session_id == session_id);
+                    *outstanding = theirs;
+                    mine
+                }
+            }
         };
         entries
             .into_iter()
@@ -711,17 +745,19 @@ impl AcpClient {
         }
     }
 
-    /// Answer every permission request this client has emitted and not yet
-    /// seen answered, with the agent's own reject option. Returns how many
-    /// were denied.
+    /// Answer every permission request **this session** has outstanding, with
+    /// the agent's own reject option. Returns how many were denied.
     ///
-    /// Called on each path that abandons a request while its resolver is still
-    /// alive: a turn given up on at [`ClientOptions::turn_timeout`], a turn
-    /// that failed, and teardown. Public so an interactive consumer that
-    /// cancels a turn can deny while the connection is still live, rather than
-    /// relying on teardown ordering.
-    pub fn deny_outstanding_permissions(&self) -> usize {
-        self.permissions.deny_outstanding()
+    /// Public so an interactive consumer that cancels a turn can deny while the
+    /// connection is still live, rather than relying on teardown ordering.
+    ///
+    /// Scoped by session on purpose. This client can carry several
+    /// harness-native sessions on one connection, and a turn given up on in one
+    /// of them says nothing about a question the agent asked in another — the
+    /// broker for *that* one has not walked away. Teardown is the case that is
+    /// genuinely connection-wide, and it does not go through here.
+    pub fn deny_session_permissions(&self, session_id: &str) -> usize {
+        self.permissions.deny_outstanding(Some(session_id))
     }
 
     /// Send a typed `PromptRequest` and return the typed `PromptResponse`.
@@ -742,7 +778,9 @@ impl AcpClient {
                 Err(_) => {
                     // Deny first: a turn we have given up on must not leave the
                     // agent parked on a request whose broker just walked away.
-                    self.deny_outstanding_permissions();
+                    // This session's requests only — another session on this
+                    // connection is still being brokered.
+                    self.deny_session_permissions(&session_id);
                     let _ = self.cancel(&session_id).await;
                     match tokio::time::timeout(TURN_CANCEL_GRACE, &mut run).await {
                         Ok(result) => result,
@@ -756,9 +794,9 @@ impl AcpClient {
         };
         if result.is_err() {
             // A turn that failed (the harness died mid-prompt, the transport
-            // broke) takes its permission requests with it: nobody is left to
-            // answer them.
-            self.deny_outstanding_permissions();
+            // broke) takes its own session's permission requests with it:
+            // nobody is left to answer them.
+            self.deny_session_permissions(&session_id);
         }
         result
     }
@@ -816,8 +854,9 @@ impl AcpClient {
     /// killed rather than left parked on a broker that walked away.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         // Before the transport goes: a request still open here has no broker
-        // left, and must resolve to a rejection rather than to silence.
-        if self.deny_outstanding_permissions() > 0 {
+        // left, whichever session asked it, and must resolve to a rejection
+        // rather than to silence.
+        if self.permissions.deny_outstanding(None) > 0 {
             // Resolving the oneshot only *lets* the parked handler answer. This
             // waits for it to have done so — which is as far as we can get:
             // the response is then on the connection's outgoing queue, and the
@@ -921,6 +960,9 @@ async fn drive(
                 let permissions = Arc::clone(&handler_permissions);
                 async move {
                     let request_id = uuid::Uuid::new_v4().to_string();
+                    // Captured before the payload is moved into the item: the
+                    // ledger scopes abandonment by the session that asked.
+                    let session_id = request.session_id.0.to_string();
 
                     // Exactly one resolver per request: the oneshot sender
                     // carried by the emitted `PendingPermission`. The parked
@@ -940,7 +982,7 @@ async fn drive(
                         request.options,
                         item_tx,
                     );
-                    permissions.record(&pending_item, reject.clone());
+                    permissions.record(&pending_item, reject.clone(), session_id);
                     // If no one is listening on the permissions stream the item
                     // is dropped immediately and `item_rx` resolves to the
                     // reject option.
@@ -1060,7 +1102,7 @@ async fn drive(
             // handle dropping — and the transport is about to go with it.
             // Anything still outstanding is answered here, while a response can
             // still reach the agent.
-            if loop_permissions.deny_outstanding() > 0 {
+            if loop_permissions.deny_outstanding(None) > 0 {
                 loop_permissions.wait_until_settled().await;
             }
 
@@ -1070,7 +1112,7 @@ async fn drive(
 
     // Whatever ended the connection (transport error, agent death, a dropped
     // client), a request that survived the loop's sweep is answered now.
-    plane.permissions.deny_outstanding();
+    plane.permissions.deny_outstanding(None);
 
     // An explicit shutdown was requested and the connection is now fully torn
     // down (transport dropped, agent process killed by its own component):
@@ -1296,6 +1338,7 @@ mod tests {
         ledger.record(
             &pending,
             select_option(PermissionOutcome::Deny, &pending.options),
+            "native-1".to_string(),
         );
 
         assert!(!pending.is_resolved());
@@ -1309,7 +1352,7 @@ mod tests {
         // Later answers, from any holder, cannot overwrite the first.
         clone.deny();
         assert_eq!(
-            ledger.deny_outstanding(),
+            ledger.deny_outstanding(None),
             0,
             "an answered request is not denied a second time"
         );
@@ -1320,6 +1363,68 @@ mod tests {
                 assert_eq!(option_id.0.as_ref(), "allow")
             }
             other => panic!("expected the first answer to win, got {other:?}"),
+        }
+    }
+
+    /// A turn abandoned in one native session must not answer another
+    /// session's question.
+    ///
+    /// One connection can carry several harness-native sessions, and the paths
+    /// that give up on a turn — `turn_timeout`, a turn that errored, a
+    /// consumer that cancelled — are about *that* turn. The broker for the
+    /// other session has not walked away, and denying its question would be
+    /// this client inventing a "no" nobody asked for. Only teardown is
+    /// connection-wide, because the transport is what goes.
+    #[tokio::test]
+    async fn abandoning_a_turn_denies_only_its_own_session() {
+        let ledger = PermissionLedger::default();
+        let mut answers = Vec::new();
+        let mut held = Vec::new();
+        for session in ["native-1", "native-2"] {
+            let (tx, rx) = oneshot::channel();
+            let pending = PendingPermission::new(
+                format!("req-{session}"),
+                ToolCallUpdate::new("tc1", ToolCallUpdateFields::default()),
+                permission_options(),
+                tx,
+            );
+            ledger.record(
+                &pending,
+                select_option(PermissionOutcome::Deny, &pending.options),
+                session.to_string(),
+            );
+            // Held, so the drop arm cannot be what answers either of them.
+            held.push(pending);
+            answers.push(rx);
+        }
+
+        assert_eq!(
+            ledger.deny_outstanding(Some("native-1")),
+            1,
+            "the abandoned session's question is answered"
+        );
+        assert!(held[0].is_resolved());
+        assert!(
+            !held[1].is_resolved(),
+            "another session's question is still being brokered"
+        );
+
+        // And the entry that was left is still tracked, so teardown reaches it.
+        assert_eq!(ledger.deny_outstanding(None), 1);
+        assert!(held[1].is_resolved());
+        for answer in answers {
+            let outcome = answer.await;
+            let chosen = match &outcome {
+                Ok(RequestPermissionOutcome::Selected(selected)) => {
+                    Some(selected.option_id.0.to_string())
+                }
+                _ => None,
+            };
+            assert_eq!(
+                chosen.as_deref(),
+                Some("rej"),
+                "each is answered with the agent's own reject option, got {outcome:?}"
+            );
         }
     }
 
@@ -1338,6 +1443,7 @@ mod tests {
         ledger.record(
             &pending,
             select_option(PermissionOutcome::Deny, &pending.options),
+            "native-1".to_string(),
         );
         drop(pending);
 
@@ -1347,7 +1453,7 @@ mod tests {
             "dropping the last clone drops the resolver"
         );
         assert_eq!(
-            ledger.deny_outstanding(),
+            ledger.deny_outstanding(None),
             0,
             "the ledger holds no strong reference to a dropped request"
         );

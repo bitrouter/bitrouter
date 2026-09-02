@@ -381,7 +381,7 @@ async fn drive(
                     // the client emitted that never reached it — while the
                     // connection is still live, rather than at teardown.
                     outstanding.clear();
-                    client.deny_outstanding_permissions();
+                    client.deny_session_permissions(session_id);
                     if let Err(error) = told {
                         tracing::warn!(%error, "cancelling the turn");
                     }
