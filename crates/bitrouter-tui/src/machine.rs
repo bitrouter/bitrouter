@@ -481,14 +481,41 @@ fn routing_key(state: &mut State, picker: Picker, event: &Event) -> Vec<Effect> 
             Effect::Paint(Trigger::Key),
         ];
     }
-    if let KeyCode::Char(c) = key.code
-        && let Some(route) = picker.choose(c)
-    {
-        // A route to *attempt*. Only what the daemon confirms is in force.
-        return vec![Effect::Modal(None), Effect::SetRoute(route)];
+    // A digit selects; anything else printable narrows the list. Model ids do
+    // contain digits, so filtering by one is lost — but `glm-4.7` is still
+    // reachable by typing `glm` and then picking the number beside it, and the
+    // alternative is a keystroke whose meaning depends on how many routes the
+    // daemon happened to return.
+    let mut picker = picker;
+    match key.code {
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            if let Some(route) = picker.choose(c) {
+                // A route to *attempt*. Only what the daemon confirms is in
+                // force.
+                return vec![Effect::Modal(None), Effect::SetRoute(route)];
+            }
+            // A number nothing is drawn beside chooses nothing, rather than
+            // wrapping around to whatever happens to be at that index.
+            state.phase = Phase::Routing(picker);
+            Vec::new()
+        }
+        KeyCode::Char(c) => {
+            picker.filter(c);
+            let row = picker.render();
+            state.phase = Phase::Routing(picker);
+            vec![Effect::Modal(Some(row)), Effect::Paint(Trigger::Key)]
+        }
+        KeyCode::Backspace => {
+            picker.unfilter();
+            let row = picker.render();
+            state.phase = Phase::Routing(picker);
+            vec![Effect::Modal(Some(row)), Effect::Paint(Trigger::Key)]
+        }
+        _ => {
+            state.phase = Phase::Routing(picker);
+            Vec::new()
+        }
     }
-    state.phase = Phase::Routing(picker);
-    Vec::new()
 }
 
 /// The agent asked for permission.
@@ -802,7 +829,8 @@ mod tests {
             ("turn", press(KeyCode::Enter), &[], "turn"),
             ("answering", press(KeyCode::Enter), &[], "answering"),
             ("routing", press(KeyCode::Enter), &[], "routing"),
-            // Any other printable key: types it / ignored / nothing / nothing.
+            // Any other printable key: types it / ignored / nothing /
+            // narrows the route list.
             (
                 "idle",
                 press(KeyCode::Char('x')),
@@ -811,7 +839,29 @@ mod tests {
             ),
             ("turn", press(KeyCode::Char('x')), &[], "turn"),
             ("answering", press(KeyCode::Char('x')), &[], "answering"),
-            ("routing", press(KeyCode::Char('x')), &[], "routing"),
+            (
+                "routing",
+                press(KeyCode::Char('x')),
+                &["modal", "paint"],
+                "routing",
+            ),
+            // Backspace: the picker is the only phase that reads it as its
+            // own, widening the filter again rather than editing a line that
+            // is not on screen.
+            (
+                "idle",
+                press(KeyCode::Backspace),
+                &["echo", "paint"],
+                "idle",
+            ),
+            ("turn", press(KeyCode::Backspace), &[], "turn"),
+            ("answering", press(KeyCode::Backspace), &[], "answering"),
+            (
+                "routing",
+                press(KeyCode::Backspace),
+                &["modal", "paint"],
+                "routing",
+            ),
         ];
 
         for (phase, event, expected, after) in table {
