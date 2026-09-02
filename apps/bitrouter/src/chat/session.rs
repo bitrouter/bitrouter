@@ -185,8 +185,10 @@ async fn in_flight<F: std::future::Future + Unpin>(slot: &mut Option<F>) -> F::O
 ///
 /// A flat `select!` is only correct if all of them are, so: `shutdown.recv()`
 /// selects over `tokio::signal`'s own receivers, registered once at install;
-/// the three channel receives are `UnboundedReceiver::recv`, which is why
-/// stdin is a task-plus-channel rather than an inline `EventStream`;
+/// the two channel receives are `UnboundedReceiver::recv`, which is why stdin
+/// is a task-plus-channel rather than an inline `EventStream`;
+/// `permissions.next()` is `StreamExt::next` on a stream that is *retained*
+/// across iterations, so dropping the `Next` future consumes no item;
 /// `in_flight` is covered above; and `Interval::tick` is documented
 /// cancel-safe. The select is deliberately **unbiased**: under a saturating
 /// update stream a biased one would starve every arm below the journal's,
@@ -213,16 +215,11 @@ async fn drive(
     let mut shutdown = crate::chat::signals::Shutdown::install();
 
     // Permission requests block the turn until a person answers. They arrive
-    // on their own channel rather than as updates, because they are requests.
-    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut pending = client.subscribe_permissions();
-    let permissions = tokio::spawn(async move {
-        while let Some(request) = pending.next().await {
-            if permission_tx.send(request).is_err() {
-                break;
-            }
-        }
-    });
+    // on their own stream rather than as updates, because they are requests —
+    // and the stream is polled directly: `StreamExt::next` on a retained
+    // stream is already cancel-safe, so the pump task and channel that used to
+    // sit in front of it bought nothing.
+    let mut permissions = client.subscribe_permissions();
 
     // The **raw** ACP stream, not the translated one: the journal is a
     // protocol client, and translating first would lose exactly the fidelity
@@ -291,7 +288,7 @@ async fn drive(
                 // Already in the journal; the machine and the schedule decide
                 // when it is seen.
                 Some(()) = dirty_rx.recv() => Action::Dirty,
-                Some(request) = permission_rx.recv() => {
+                Some(request) = permissions.next() => {
                     let prompt = prompt_of(&request);
                     outstanding.insert(request.request_id.clone(), request);
                     Action::Permission(prompt)
@@ -422,7 +419,6 @@ async fn drive(
     }
 
     pump.abort();
-    permissions.abort();
     Ok(abnormal)
 }
 
