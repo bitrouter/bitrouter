@@ -197,7 +197,7 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 | `Esc` | Deny the open permission prompt, or close the picker; with neither open, cancel the running turn |
 | `Ctrl-C` | Cancel the running turn; end the session when idle |
 | `Ctrl-D` | End the session (idle only) |
-| `Ctrl-L` | Repaint the screen |
+| `Ctrl-L` | Repaint the screen; leaves an open permission prompt or picker open |
 | `Ctrl-W` | Delete the previous word |
 
 Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.

@@ -327,7 +327,7 @@ A tool call is **one entity, repainted in place**: a call going pending → in p
 | `Esc` | Answer the open permission prompt with *no*, or close the picker; with neither open, cancel the running turn |
 | `Ctrl-C` | Cancel the running turn; end the session when idle |
 | `Ctrl-D` | End the session (when idle) |
-| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal |
+| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal. Works with a permission prompt or the picker open, and leaves it open |
 | `Ctrl-W` | Delete the word before the cursor |
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.

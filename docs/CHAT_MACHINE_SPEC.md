@@ -68,18 +68,19 @@ and two hand-written `if key.modifiers.contains(CONTROL)` branches in
 | `Ctrl-C` | **exit the session** | cancel the turn | deny, turn continues | close, route unchanged |
 | `Esc` | *ignored* | cancel the turn | deny, turn continues | close, route unchanged |
 | `Ctrl-D` | **exit the session** | ignored | deny (control chord) | close (control chord) |
-| `Ctrl-L` | redraw | redraw | **deny** (control chord) | **close** (control chord) |
+| `Ctrl-L` | redraw | redraw | ~~**deny** (control chord)~~ → redraw, stays | ~~**close** (control chord)~~ → redraw, stays |
 | `Ctrl-W` | delete word | ignored | deny (control chord) | close (control chord) |
 | digit | types the digit | ignored | selects an option | selects a provider |
 | Enter | submit | ignored | nothing | nothing |
 | other printable | types it | ignored | nothing | nothing |
 
-The two bold cells in the `Ctrl-L` row are almost certainly unintended. Both
-modals reject *any* control chord as a cancel, so asking for a redraw while a
-permission is up **denies the permission**. Nobody decided that; it fell out of
-`if key.modifiers.contains(KeyModifiers::CONTROL) { break deny(); }`. It is
-invisible today because the rule lives in two places and neither is next to the
-other rows.
+The two struck cells in the `Ctrl-L` row were unintended. Both modals rejected
+*any* control chord as a cancel, so asking for a redraw while a permission was
+up **denied the permission**. Nobody decided that; it fell out of
+`if key.modifiers.contains(KeyModifiers::CONTROL) { break deny(); }`. It was
+invisible because the rule lived in two places and neither was next to the
+other rows. §6.1 is the change; it landed after the table was pinned verbatim,
+in its own commit.
 
 This table is the single most valuable thing this refactor produces. §5 makes
 it a test.
@@ -674,12 +675,18 @@ Two options:
 - **(b) Preserve it.** Keep the control-chord-is-cancel rule verbatim, and note
   it in the table as deliberate.
 
-**Approved: (a), and landed as its own final commit.** The refactor implements
-**(b)** first — the table verbatim, both bold cells included — and T1 pins it.
-The fix is then a separate commit that changes two cells and nothing else, so
-it can be reverted without touching the machine. Splitting it this way is the
-point: the flattening is behaviour-preserving and reviewable as such, and the
-one deliberate key change is reviewable as *itself*.
+**Approved: (a), and landed as its own final commit.** The refactor implemented
+**(b)** first — the table verbatim, both defective cells included — and T1
+pinned it. The fix is a separate commit that changes two cells of that table
+and nothing else, so it can be reverted without touching the machine.
+Splitting it this way is the point: the flattening is behaviour-preserving and
+reviewable as such, and the one deliberate key change is reviewable as
+*itself*.
+
+As implemented, `Ctrl-L` is checked **before** the control-chord-is-a-decline
+rule in both modals, and the modal is put back rather than closed. It is the
+only control chord exempted, and the reason is stated where the exemption is:
+a redraw says nothing about the question being asked.
 
 ### 6.2 The transcript no longer freezes during a permission — intentional
 

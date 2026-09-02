@@ -421,9 +421,16 @@ fn answering_key(state: &mut State, prompt: Prompt, event: &Event) -> Vec<Effect
         state.phase = Phase::Answering(prompt);
         return Vec::new();
     };
-    // A control chord is never a choice: Ctrl-C must answer the question the
-    // only way an interrupt can be read — no — rather than selecting whatever
-    // `c` happens to be numbered.
+    // Ctrl-L asks for the screen back, not for a decision. It is the one
+    // control chord that is not a decline, because it does not mean anything
+    // about the question.
+    if crate::editor::is_redraw(event) {
+        state.phase = Phase::Answering(prompt);
+        return vec![Effect::Redraw];
+    }
+    // Every other control chord is never a choice: Ctrl-C must answer the
+    // question the only way an interrupt can be read — no — rather than
+    // selecting whatever `c` happens to be numbered.
     let declined = key.modifiers.contains(KeyModifiers::CONTROL) || key.code == KeyCode::Esc;
     let answer = if declined {
         Some((prompt.unanswered(), DENIED))
@@ -459,8 +466,14 @@ fn routing_key(state: &mut State, picker: Picker, event: &Event) -> Vec<Effect> 
         state.phase = Phase::Routing(picker);
         return Vec::new();
     };
-    // A control chord is never a choice — Ctrl-C closes the picker instead of
-    // selecting whatever `c` happens to be.
+    // Ctrl-L asks for the screen back, and the picker stays up: it says
+    // nothing about which route to take.
+    if crate::editor::is_redraw(event) {
+        state.phase = Phase::Routing(picker);
+        return vec![Effect::Redraw];
+    }
+    // Every other control chord is never a choice — Ctrl-C closes the picker
+    // instead of selecting whatever `c` happens to be.
     if key.modifiers.contains(KeyModifiers::CONTROL) || key.code == KeyCode::Esc {
         return vec![
             Effect::Modal(None),
@@ -690,11 +703,11 @@ mod tests {
     /// `editor::apply`, `editor::is_cancel`, and two hand-written control-chord
     /// branches in the application, and nothing put them next to each other.
     ///
-    /// The `Ctrl-L` cells in `answering` and `routing` say **deny** and
-    /// **close**, which is a defect — both modals read any control chord as a
-    /// cancel, so asking for a redraw answers the agent's question. It is
-    /// pinned here as it is, deliberately: the flattening preserves behaviour,
-    /// and the fix is its own change.
+    /// The `Ctrl-L` row is the one cell that changed rather than being
+    /// preserved. Both modals used to read *any* control chord as a cancel, so
+    /// asking for a redraw answered the agent's question with "no". Nobody
+    /// decided that; it fell out of one `if` in each of two functions, and it
+    /// was invisible until the table put the rows next to each other.
     #[test]
     fn the_key_table_is_one_table() {
         // (phase, key, what it does, the phase it leaves behind)
@@ -744,17 +757,13 @@ mod tests {
                 "turn",
             ),
             ("routing", ctrl('d'), &["modal", "notice", "paint"], "idle"),
-            // Ctrl-L: redraw / redraw / **deny** / **close**. The last two
-            // are the defect this table makes visible.
+            // Ctrl-L: redraw, in every phase, and the modal stays up. It is
+            // the one control chord the two modals do not read as a cancel,
+            // because it says nothing about the question they are asking.
             ("idle", ctrl('l'), &["echo", "redraw"], "idle"),
             ("turn", ctrl('l'), &["redraw"], "turn"),
-            (
-                "answering",
-                ctrl('l'),
-                &["resolve", "show-permission", "notice", "paint"],
-                "turn",
-            ),
-            ("routing", ctrl('l'), &["modal", "notice", "paint"], "idle"),
+            ("answering", ctrl('l'), &["redraw"], "answering"),
+            ("routing", ctrl('l'), &["redraw"], "routing"),
             // Ctrl-W: delete a word / ignored / deny / close.
             ("idle", ctrl('w'), &["echo", "paint"], "idle"),
             ("turn", ctrl('w'), &[], "turn"),
@@ -874,7 +883,7 @@ mod tests {
     /// it. One careless fallthrough turns "deny this" into "abandon the turn".
     #[test]
     fn declining_a_question_leaves_the_turn_running() {
-        for event in [ctrl('c'), press(KeyCode::Esc), ctrl('l')] {
+        for event in [ctrl('c'), press(KeyCode::Esc), ctrl('d')] {
             let mut state = in_phase("answering");
             let effects = step(&mut state, Action::Key(event.clone()));
             assert_eq!(
