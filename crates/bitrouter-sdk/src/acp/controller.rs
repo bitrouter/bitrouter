@@ -79,7 +79,8 @@ impl RouteListRequest {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct RouteListResponse {
-    /// Route selectors accepted by this daemon snapshot.
+    /// Daemon-confirmed logical-model suggestions for a route picker. This is
+    /// not an exhaustive grammar for presets or explicit provider routes.
     pub available: Vec<String>,
     /// Exact installed session route, if one exists.
     pub current: Option<String>,
@@ -169,7 +170,7 @@ pub struct RouteResetResponse {
 /// Daemon-confirmed route state used by the app-supplied controller bridge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteControlState {
-    /// Route selectors accepted by the live daemon.
+    /// Logical-model suggestions returned by the live daemon.
     pub available: Vec<String>,
     /// Exact installed session route, if one exists.
     pub current: Option<String>,
@@ -216,7 +217,7 @@ impl RouteControlError {
 /// them. None of these methods owns or modifies harness conversation data.
 #[async_trait]
 pub trait RouteControl: Send + Sync {
-    /// Query available routes and the exact current lease.
+    /// Query route suggestions and the exact current lease.
     async fn list(&self, session_id: &str) -> Result<RouteControlState, RouteControlError>;
     /// Install or replace one route lease.
     async fn set(
@@ -397,6 +398,9 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let delete_control = route_control.clone();
         let initialize_state = Arc::new(AtomicU8::new(INITIALIZE_NOT_STARTED));
         let forwarding_state = Arc::clone(&initialize_state);
+        let list_initialize_state = Arc::clone(&initialize_state);
+        let set_initialize_state = Arc::clone(&initialize_state);
+        let reset_initialize_state = Arc::clone(&initialize_state);
         Proxy
             .builder()
             .name("bitrouter-controller-gate")
@@ -462,10 +466,14 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<RouteListResponse>,
                       _connection| {
                     let route_control = list_control.clone();
+                    let initialize_state = Arc::clone(&list_initialize_state);
                     async move {
                         let Some(route_control) = route_control else {
                             return responder.respond_with_error(route_control_unavailable());
                         };
+                        if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
                         if request.session_id.trim().is_empty() {
                             return responder.respond_with_error(invalid_route_params(
                                 "sessionId must not be empty",
@@ -489,10 +497,14 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<RouteSetResponse>,
                       _connection| {
                     let route_control = set_control.clone();
+                    let initialize_state = Arc::clone(&set_initialize_state);
                     async move {
                         let Some(route_control) = route_control else {
                             return responder.respond_with_error(route_control_unavailable());
                         };
+                        if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
                         if request.session_id.trim().is_empty() || request.route.trim().is_empty() {
                             return responder.respond_with_error(invalid_route_params(
                                 "sessionId and route must not be empty",
@@ -523,10 +535,14 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<RouteResetResponse>,
                       _connection| {
                     let route_control = reset_control.clone();
+                    let initialize_state = Arc::clone(&reset_initialize_state);
                     async move {
                         let Some(route_control) = route_control else {
                             return responder.respond_with_error(route_control_unavailable());
                         };
+                        if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
                         if request.session_id.trim().is_empty() {
                             return responder.respond_with_error(invalid_route_params(
                                 "sessionId must not be empty",
@@ -632,6 +648,11 @@ impl ConnectTo<Conductor> for ControllerProxy {
 fn route_control_unavailable() -> agent_client_protocol::Error {
     agent_client_protocol::Error::method_not_found()
         .data("BitRouter route control requires a trusted local daemon binding")
+}
+
+fn initialization_incomplete() -> agent_client_protocol::Error {
+    agent_client_protocol::Error::invalid_request()
+        .data("controller initialization is not complete")
 }
 
 fn invalid_route_params(message: &'static str) -> agent_client_protocol::Error {
@@ -766,11 +787,7 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
                     return Ok(Handled::Yes);
                 }
                 if self.initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
-                    reject_manager_dispatch(
-                        message,
-                        agent_client_protocol::Error::invalid_request()
-                            .data("controller initialization is not complete"),
-                    )?;
+                    reject_manager_dispatch(message, initialization_incomplete())?;
                     return Ok(Handled::Yes);
                 }
                 connection.send_proxied_message_to(Agent, message)?;
@@ -1664,6 +1681,7 @@ mod tests {
     async fn initialize_gate_rejects_early_sessions_and_duplicate_initialize() -> anyhow::Result<()>
     {
         let state = Arc::new(InitializeGateState::default());
+        let routes = Arc::new(RecordingRouteControl::default());
         let controller = Controller::new(
             SlowInitializeAgent {
                 state: Arc::clone(&state),
@@ -1673,7 +1691,8 @@ mod tests {
                 "test-adapter",
                 "1.0.0",
             )),
-        );
+        )
+        .route_control(routes.clone());
         let (manager_out, controller_in) = duplex(4096);
         let (controller_out, manager_in) = duplex(4096);
         let controller_transport = agent_client_protocol::ByteStreams::new(
@@ -1697,12 +1716,20 @@ mod tests {
                     );
                     let early_session =
                         receive(connection.send_request(NewSessionRequest::new("/workspace")));
-                    let (initialize, early_session) = tokio::join!(initialize, early_session);
+                    let early_route = receive(
+                        connection.send_request(RouteSetRequest::new("native-early", "@balanced")),
+                    );
+                    let (initialize, early_session, early_route) =
+                        tokio::join!(initialize, early_session, early_route);
                     initialize?;
                     let early_error = early_session
                         .err()
                         .ok_or_else(|| anyhow::anyhow!("early session bypassed initialize gate"))?;
                     assert_eq!(i32::from(early_error.code), -32600);
+                    let early_route_error = early_route
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("early route bypassed initialize gate"))?;
+                    assert_eq!(i32::from(early_route_error.code), -32600);
 
                     let duplicate_error = receive(
                         connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
@@ -1722,6 +1749,14 @@ mod tests {
             .await?;
         assert_eq!(state.initialize_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.new_count.load(Ordering::SeqCst), 1);
+        assert!(
+            routes
+                .routes
+                .lock()
+                .map_err(|_| anyhow::anyhow!("route test state poisoned"))?
+                .is_empty(),
+            "an early route request must not mutate route state"
+        );
         Ok(())
     }
 

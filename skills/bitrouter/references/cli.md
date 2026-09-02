@@ -157,7 +157,8 @@ Two ACP execution modes share launch routing but not session ownership. `acp ser
 `sessionId` values and create daemon-confirmed ephemeral leases; manager-side
 `providers/*` remains unavailable. `--direct` and explicit remote `--base-url`
 connections do not advertise route control because they have no trusted local
-daemon binding.
+daemon binding. `route/list.available` is a logical-model suggestion list;
+presets and permitted explicit routes remain validated free-form `set` inputs.
 
 **Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. Authorization, cookies, and controller credentials remain excluded. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
 

@@ -62,8 +62,9 @@ The manager must capability-probe this metadata. An absent or null
 `routeControl` means the route UI is unavailable, and calling the extension
 returns method-not-found. `list` and `set` are daemon-confirmed; `route` accepts
 BitRouter presets, logical models, or explicit provider/model routes allowed
-by current policy. Do not use manager-side `providers/*` as a compatibility
-alias.
+by current policy. `list.available` contains live logical-model picker
+suggestions, not an exhaustive grammar for presets or explicit routes. Do not
+use manager-side `providers/*` as a compatibility alias.
 
 ## Pinned Claude and Codex adapters
 

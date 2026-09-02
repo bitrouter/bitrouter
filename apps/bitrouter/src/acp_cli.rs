@@ -228,7 +228,35 @@ pub async fn apply_routing(
     opts: &RoutingOptions,
 ) -> std::result::Result<Routed, RoutingError> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    apply_routing_with_cloud_credentials(source, config, agent_id, opts, &cloud_credentials).await
+    apply_routing_with_cloud_credentials(
+        source,
+        config,
+        agent_id,
+        opts,
+        &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutingCredentialMode {
+    UserOrLaunch,
+    ControllerIssuedLocal,
+}
+
+fn user_key_required(
+    target_is_local: bool,
+    daemon_requires_key: bool,
+    uses_maintained_adapter: bool,
+    implicit_local_target: bool,
+    mode: RoutingCredentialMode,
+) -> bool {
+    daemon_requires_key
+        && !(target_is_local
+            && uses_maintained_adapter
+            && implicit_local_target
+            && mode == RoutingCredentialMode::ControllerIssuedLocal)
 }
 
 async fn apply_routing_with_cloud_credentials(
@@ -237,6 +265,7 @@ async fn apply_routing_with_cloud_credentials(
     agent_id: &str,
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    credential_mode: RoutingCredentialMode,
 ) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
@@ -331,6 +360,13 @@ async fn apply_routing_with_cloud_credentials(
     };
     // A remote daemon's `skip_auth` is unknowable here, so require a key.
     let require_key = !target_is_local || !config.server.skip_auth;
+    let require_user_key = user_key_required(
+        target_is_local,
+        require_key,
+        uses_maintained_adapter,
+        opts.base_url.is_none(),
+        credential_mode,
+    );
 
     // A harness whose credential isn't Bearer (gemini's `x-goog-api-key`) is
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
@@ -357,7 +393,7 @@ async fn apply_routing_with_cloud_credentials(
     // metering store has nothing to group by and cost can only be reported
     // daemon-wide.
     let supplied = explicit_key.or(stored_cloud_key);
-    if supplied.is_none() && require_key {
+    if supplied.is_none() && require_user_key {
         return Err(RoutingError::AuthRequired { via: base_url });
     }
     let auth = crate::spawn::resolve_launch_token(supplied, None);
@@ -813,9 +849,16 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
+    config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
+        .validate()
+        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
     let mut route_control: Option<Arc<dyn AcpRouteControl>> = None;
     if let (Some(endpoint), Some(controller_instance_id)) = (
         routed.endpoint_plan.clone(),
@@ -883,9 +926,6 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .agents
         .get(agent_id)
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
-    agent
-        .validate()
-        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
@@ -940,6 +980,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -1046,6 +1087,7 @@ where
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     {
@@ -1747,7 +1789,53 @@ pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTab
 
 #[cfg(test)]
 mod controller_tests {
-    use super::controller_identity;
+    use super::{RoutingCredentialMode, controller_identity, user_key_required};
+
+    #[test]
+    fn local_maintained_controller_bootstraps_without_a_user_key() {
+        assert!(!user_key_required(
+            true,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            false,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            false,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            true,
+            false,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::UserOrLaunch,
+        ));
+        assert!(!user_key_required(
+            true,
+            false,
+            true,
+            true,
+            RoutingCredentialMode::UserOrLaunch,
+        ));
+    }
 
     #[test]
     fn direct_maintained_adapter_keeps_exact_identity() {

@@ -714,6 +714,11 @@ _bitrouter/route/reset
 model, or explicit provider/model where allowed by router policy. Credentials
 never cross this surface.
 
+`available` is the live daemon's logical-model suggestion list for a picker;
+it is intentionally not an exhaustive grammar. Presets and permitted explicit
+provider/model routes remain valid free-form `set` inputs and are confirmed by
+the daemon before success.
+
 The controller acknowledges `set` only after the daemon confirms that the
 route lease is installed. `list` reports the effective route from the daemon,
 not a controller-local optimistic value.

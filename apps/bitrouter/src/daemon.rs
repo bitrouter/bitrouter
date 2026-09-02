@@ -653,7 +653,7 @@ async fn dispatch(
                     .current_route(&controller_instance_id, &session_id)
                     .map(|lease| lease.route().to_string());
                 DaemonResponse::AcpRouteState {
-                    available: available_routes(app),
+                    available: route_suggestions(app),
                     scope: if current.is_some() {
                         "session"
                     } else {
@@ -695,7 +695,7 @@ async fn dispatch(
             }
             match acp_runtime.set_route(&controller_instance_id, &session_id, &route) {
                 Ok(lease) => DaemonResponse::AcpRouteState {
-                    available: available_routes(app),
+                    available: route_suggestions(app),
                     current: Some(lease.route().to_string()),
                     scope: "session".to_string(),
                 },
@@ -717,7 +717,7 @@ async fn dispatch(
             } else {
                 acp_runtime.reset_route(&controller_instance_id, &session_id);
                 DaemonResponse::AcpRouteState {
-                    available: available_routes(app),
+                    available: route_suggestions(app),
                     current: None,
                     scope: "default".to_string(),
                 }
@@ -755,7 +755,7 @@ async fn dispatch(
     }
 }
 
-fn available_routes(app: &Arc<App>) -> Vec<String> {
+fn route_suggestions(app: &Arc<App>) -> Vec<String> {
     app.language_model()
         .map(|pipeline| {
             pipeline
