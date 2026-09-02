@@ -28,6 +28,16 @@
 //!   pushed onto a `futures` mpsc
 //!   ([`subscribe_permissions`](AcpClient::subscribe_permissions)).
 //!
+//! ## Route plane
+//!
+//! A BitRouter controller may advertise `_bitrouter/route/*` in its
+//! `initialize` `_meta`. The client reads that block once into a
+//! [`RouteControlCapability`] and offers [`route_list`](AcpClient::route_list),
+//! [`route_set`](AcpClient::route_set) and
+//! [`route_reset`](AcpClient::route_reset), each refused locally as
+//! [`RouteError::Unavailable`] when the method was not advertised. The plane's
+//! errors are typed by code ([`RouteError`]); no consumer matches on text.
+//!
 //! ## Deadlock avoidance
 //!
 //! The command loop never blocks on a prompt turn: each prompt is driven inside
@@ -63,12 +73,15 @@ use agent_client_protocol::schema::v1::{
     RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
     SessionUpdate, TextContent, ToolCallUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcRequest, Responder};
 use futures::channel::{mpsc, oneshot};
 use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::acp::controller::{
+    RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest,
+};
 use crate::acp::telemetry::{ContextUsage, SharedContextUsage};
 use crate::acp::translate::{
     PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
@@ -287,8 +300,174 @@ pub struct ClientOptions {
     pub turn_timeout: Option<Duration>,
 }
 
+/// The wire key under which a controller advertises itself in the
+/// `initialize` response's `_meta`.
+const CONTROLLER_META_KEY: &str = "bitrouter.dev/controller";
+
+/// The `routeControl` contract version this client speaks.
+const ROUTE_CONTROL_VERSION: &str = "1";
+
+/// The only `routeControl` scope this client understands: leases keyed by
+/// the harness-native session id.
+const ROUTE_CONTROL_SCOPE: &str = "session";
+
+/// The JSON-RPC error code the controller uses for its route plane.
+const ROUTE_CONTROL_ERROR_CODE: i32 = -32052;
+
+/// One of the `_bitrouter/route/*` extension methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteMethod {
+    /// `_bitrouter/route/list`.
+    List,
+    /// `_bitrouter/route/set`.
+    Set,
+    /// `_bitrouter/route/reset`.
+    Reset,
+}
+
+impl RouteMethod {
+    /// The method name as the capability block spells it.
+    pub fn wire(self) -> &'static str {
+        match self {
+            RouteMethod::List => "_bitrouter/route/list",
+            RouteMethod::Set => "_bitrouter/route/set",
+            RouteMethod::Reset => "_bitrouter/route/reset",
+        }
+    }
+}
+
+/// Whether, and for which methods, the controller advertised route control.
+///
+/// Parsed from `_meta["bitrouter.dev/controller"].routeControl` on the
+/// `initialize` response and nothing else — never from the agent's name. A
+/// method is available only when **all three** of the contract's conditions
+/// hold: `version` is `"1"`, `scope` is `"session"`, and the method is listed
+/// in `methods`. A `null` block, a missing block, or a block for a version or
+/// scope this client does not speak advertises nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouteControlCapability {
+    /// The advertised methods, kept only when version and scope both matched.
+    methods: Vec<String>,
+}
+
+impl RouteControlCapability {
+    /// Read the capability off an `initialize` response.
+    pub fn from_init(init: &InitializeResponse) -> Self {
+        let Some(block) = init
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get(CONTROLLER_META_KEY))
+            .and_then(|controller| controller.get("routeControl"))
+            .filter(|block| block.is_object())
+        else {
+            return Self::default();
+        };
+        let field = |name: &str| block.get(name).and_then(|value| value.as_str());
+        if field("version") != Some(ROUTE_CONTROL_VERSION)
+            || field("scope") != Some(ROUTE_CONTROL_SCOPE)
+        {
+            return Self::default();
+        }
+        let methods = block
+            .get("methods")
+            .and_then(|value| value.as_array())
+            .map(|methods| {
+                methods
+                    .iter()
+                    .filter_map(|method| method.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { methods }
+    }
+
+    /// Whether `method` may be called on this connection.
+    pub fn allows(&self, method: RouteMethod) -> bool {
+        self.methods.iter().any(|listed| listed == method.wire())
+    }
+}
+
+/// Why a `_bitrouter/route/*` call did not install or report a route.
+///
+/// Mapped from the controller's JSON-RPC error by **numeric code and
+/// `data.code`**, never by message text, so a caller branches on the variant
+/// and renders the message.
+#[derive(Debug)]
+pub enum RouteError {
+    /// The controller has no trusted local binding for this method: it did not
+    /// advertise the method, answered `method_not_found`, or answered the route
+    /// plane's `route_control_unavailable`.
+    Unavailable(String),
+    /// The daemon rejected the route itself (`invalid_route`); the session's
+    /// route is unchanged.
+    InvalidRoute(String),
+    /// A failure outside the route plane — the transport, a dropped reply, or
+    /// an error the controller did not classify.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for RouteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteError::Unavailable(message) | RouteError::InvalidRoute(message) => {
+                formatter.write_str(message)
+            }
+            RouteError::Other(error) => write!(formatter, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for RouteError {}
+
+impl RouteError {
+    /// Classify a JSON-RPC error from a `_bitrouter/route/*` call.
+    fn from_rpc(error: agent_client_protocol::Error) -> Self {
+        let code = i32::from(error.code);
+        if code == i32::from(agent_client_protocol::ErrorCode::MethodNotFound) {
+            return RouteError::Unavailable(rpc_detail(&error));
+        }
+        if code != ROUTE_CONTROL_ERROR_CODE {
+            return RouteError::Other(anyhow::anyhow!("{}", rpc_detail(&error)));
+        }
+        let plane_code = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("code"))
+            .and_then(|code| code.as_str());
+        match plane_code {
+            Some("invalid_route") => RouteError::InvalidRoute(rpc_detail(&error)),
+            Some("route_control_unavailable") => RouteError::Unavailable(rpc_detail(&error)),
+            _ => RouteError::Other(anyhow::anyhow!("{}", rpc_detail(&error))),
+        }
+    }
+}
+
+/// The most specific human-readable text a route-plane error carries: the
+/// `data.message` the controller sanitized, else `data` as a string, else the
+/// JSON-RPC message.
+fn rpc_detail(error: &agent_client_protocol::Error) -> String {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| {
+            data.get("message")
+                .and_then(|message| message.as_str())
+                .or_else(|| data.as_str())
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| error.message.clone())
+}
+
+/// A request driven inside the command loop that is not one of ACP's core
+/// session methods: it borrows the connection, sends, and delivers its reply
+/// over its own oneshot. Boxed so one command variant serves every extension.
+type ExtensionCall =
+    Box<dyn FnOnce(&ConnectionTo<Agent>) -> Result<(), agent_client_protocol::Error> + Send>;
+
 /// One command driven inside the connection's command loop.
 enum Command {
+    /// Send one extension request (`_bitrouter/route/*`) on the connection.
+    Extension(ExtensionCall),
     /// Create the session (`session/new`) with the given working directory and
     /// MCP servers; reply with the minted wire identity.
     NewSession {
@@ -313,6 +492,8 @@ enum Command {
 pub struct AcpClient {
     /// The agent's `initialize` response, captured at handshake.
     init: Box<InitializeResponse>,
+    /// What the handshake advertised under `routeControl`, parsed once.
+    route_control: RouteControlCapability,
     /// Submits [`Command`]s into the connection's command loop.
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
@@ -388,8 +569,10 @@ impl AcpClient {
             let init = handshake_rx
                 .await
                 .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
+            let route_control = RouteControlCapability::from_init(&init);
             Ok(Self {
                 init,
+                route_control,
                 cmd_tx,
                 updates_tx,
                 raw_updates_tx,
@@ -433,6 +616,84 @@ impl AcpClient {
     /// (`session/update UsageUpdate`); `None` until it reports one.
     pub fn context_usage(&self) -> SharedContextUsage {
         self.usage.clone()
+    }
+
+    /// What the controller advertised for `_bitrouter/route/*` at handshake.
+    ///
+    /// The answer to "should a route control be offered at all": a consumer
+    /// that draws a picker asks [`RouteControlCapability::allows`] for the
+    /// methods it needs and draws nothing when the answer is no.
+    pub fn route_control(&self) -> &RouteControlCapability {
+        &self.route_control
+    }
+
+    /// `_bitrouter/route/list`: the routes the daemon suggests for
+    /// `session_id`, and the lease in force, as the daemon confirms them.
+    pub async fn route_list(&self, session_id: &str) -> Result<RouteControlState, RouteError> {
+        let response = self
+            .route_call(RouteMethod::List, RouteListRequest::new(session_id))
+            .await?;
+        Ok(RouteControlState {
+            available: response.available,
+            current: response.current,
+        })
+    }
+
+    /// `_bitrouter/route/set`: lease `route` for `session_id`. Returns the
+    /// route the daemon confirmed installed — which is what a consumer must
+    /// display, never what it asked for.
+    pub async fn route_set(&self, session_id: &str, route: &str) -> Result<String, RouteError> {
+        let response = self
+            .route_call(RouteMethod::Set, RouteSetRequest::new(session_id, route))
+            .await?;
+        Ok(response.current)
+    }
+
+    /// `_bitrouter/route/reset`: drop the lease for `session_id`, returning
+    /// the session to default routing.
+    pub async fn route_reset(&self, session_id: &str) -> Result<(), RouteError> {
+        self.route_call(RouteMethod::Reset, RouteResetRequest::new(session_id))
+            .await
+            .map(|_| ())
+    }
+
+    /// One `_bitrouter/route/*` round trip, gated on the capability the
+    /// controller advertised: a method it did not list is never sent.
+    async fn route_call<R>(
+        &self,
+        method: RouteMethod,
+        request: R,
+    ) -> Result<R::Response, RouteError>
+    where
+        R: JsonRpcRequest + Send + 'static,
+        R::Response: Send + 'static,
+    {
+        if !self.route_control.allows(method) {
+            return Err(RouteError::Unavailable(format!(
+                "the controller does not advertise {} for this session",
+                method.wire()
+            )));
+        }
+        let (reply, reply_rx) = oneshot::channel();
+        let call: ExtensionCall = Box::new(move |connection: &ConnectionTo<Agent>| {
+            let sent = connection.send_request(request);
+            connection.spawn(async move {
+                let _ = reply.send(sent.block_task().await);
+                Ok(())
+            })
+        });
+        self.cmd_tx
+            .unbounded_send(Command::Extension(call))
+            .map_err(|_| RouteError::Other(anyhow::anyhow!("acp command loop closed")))?;
+        reply_rx
+            .await
+            .map_err(|_| {
+                RouteError::Other(anyhow::anyhow!(
+                    "the agent dropped the {} reply",
+                    method.wire()
+                ))
+            })?
+            .map_err(RouteError::from_rpc)
     }
 
     /// Subscribe to the stream of translated `session/update` notifications.
@@ -760,6 +1021,7 @@ async fn drive(
             // closes or an explicit `Shutdown` arrives.
             while let Some(cmd) = cmd_rx.next().await {
                 match cmd {
+                    Command::Extension(call) => call(&connection)?,
                     Command::NewSession {
                         cwd,
                         mcp_servers,
@@ -1239,6 +1501,290 @@ mod tests {
             }
         }
         assert!(saw, "the translated update stream carries the agent's echo");
+        client.shutdown().await.expect("shutdown");
+    }
+
+    // ── route control ────────────────────────────────────────────────────
+
+    use std::collections::HashMap;
+
+    use agent_client_protocol::schema::v1::Meta;
+
+    use crate::acp::controller::{
+        Controller, ControllerConfig, ControllerIdentity, RouteControl, RouteControlError,
+    };
+
+    /// An in-memory route bridge, the shape the app's daemon bridge takes:
+    /// leases keyed by session, one route the daemon refuses.
+    #[derive(Default)]
+    struct MemoryRoutes {
+        leases: Mutex<HashMap<String, String>>,
+    }
+
+    impl MemoryRoutes {
+        fn state(&self, session_id: &str) -> RouteControlState {
+            let current = match self.leases.lock() {
+                Ok(leases) => leases.get(session_id).cloned(),
+                Err(poisoned) => poisoned.into_inner().get(session_id).cloned(),
+            };
+            RouteControlState {
+                available: vec!["@balanced".to_string(), "openai:gpt-5".to_string()],
+                current,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RouteControl for MemoryRoutes {
+        async fn list(&self, session_id: &str) -> Result<RouteControlState, RouteControlError> {
+            Ok(self.state(session_id))
+        }
+
+        async fn set(
+            &self,
+            session_id: &str,
+            route: &str,
+        ) -> Result<RouteControlState, RouteControlError> {
+            if route == "nope" {
+                return Err(RouteControlError::invalid_route(
+                    "route is not available: nope",
+                ));
+            }
+            if let Ok(mut leases) = self.leases.lock() {
+                leases.insert(session_id.to_string(), route.to_string());
+            }
+            Ok(self.state(session_id))
+        }
+
+        async fn reset(&self, session_id: &str) -> Result<RouteControlState, RouteControlError> {
+            if let Ok(mut leases) = self.leases.lock() {
+                leases.remove(session_id);
+            }
+            Ok(self.state(session_id))
+        }
+
+        async fn session_closed(&self, _session_id: &str) -> Result<(), RouteControlError> {
+            Ok(())
+        }
+
+        async fn disconnected(&self) -> Result<(), RouteControlError> {
+            Ok(())
+        }
+    }
+
+    /// The stack `chat` runs: the real controller in-process over a duplex
+    /// channel, the stub harness behind it, and this client as its manager.
+    async fn connect_to_controller(routes: Option<Arc<MemoryRoutes>>) -> AcpClient {
+        let harness = StubAgent {
+            log: Arc::new(AgentLog::default()),
+            behaviour: PromptBehaviour::AskPermission,
+        };
+        let mut controller = Controller::new(
+            harness,
+            ControllerConfig::new(ControllerIdentity::new(
+                "stub-acp",
+                "configured-acp-adapter",
+                "configured",
+            )),
+        );
+        if let Some(routes) = routes {
+            controller = controller.route_control(routes);
+        }
+        let (manager_side, controller_side) = agent_client_protocol::Channel::duplex();
+        tokio::spawn(async move { controller.run(controller_side).await });
+        AcpClient::connect(manager_side, ClientOptions::default())
+            .await
+            .expect("connect to the controller")
+    }
+
+    fn init_with_route_control(block: serde_json::Value) -> InitializeResponse {
+        let mut init = InitializeResponse::new(ProtocolVersion::V1);
+        init.meta = Some(Meta::from_iter([(
+            CONTROLLER_META_KEY.to_string(),
+            serde_json::json!({ "harnessId": "stub", "routeControl": block }),
+        )]));
+        init
+    }
+
+    /// The gate is all three conditions, not any one of them — and never the
+    /// agent's name.
+    #[test]
+    fn route_control_capability_needs_all_three_conditions() {
+        let full = serde_json::json!({
+            "version": "1",
+            "scope": "session",
+            "methods": ["_bitrouter/route/list", "_bitrouter/route/set", "_bitrouter/route/reset"],
+        });
+        let capability = RouteControlCapability::from_init(&init_with_route_control(full.clone()));
+        assert!(capability.allows(RouteMethod::List));
+        assert!(capability.allows(RouteMethod::Set));
+        assert!(capability.allows(RouteMethod::Reset));
+
+        let mut wrong_version = full.clone();
+        wrong_version["version"] = serde_json::json!("2");
+        assert!(
+            !RouteControlCapability::from_init(&init_with_route_control(wrong_version))
+                .allows(RouteMethod::List),
+            "a version this client does not speak advertises nothing"
+        );
+
+        let mut wrong_scope = full.clone();
+        wrong_scope["scope"] = serde_json::json!("connection");
+        assert!(
+            !RouteControlCapability::from_init(&init_with_route_control(wrong_scope))
+                .allows(RouteMethod::List),
+            "a scope other than session advertises nothing"
+        );
+
+        let mut without_set = full.clone();
+        without_set["methods"] = serde_json::json!(["_bitrouter/route/list"]);
+        let partial = RouteControlCapability::from_init(&init_with_route_control(without_set));
+        assert!(partial.allows(RouteMethod::List));
+        assert!(
+            !partial.allows(RouteMethod::Set),
+            "each method is gated on its own presence"
+        );
+
+        for absent in [serde_json::Value::Null, serde_json::json!("1")] {
+            assert!(
+                !RouteControlCapability::from_init(&init_with_route_control(absent.clone()))
+                    .allows(RouteMethod::List),
+                "{absent} advertises nothing"
+            );
+        }
+        let bare = InitializeResponse::new(ProtocolVersion::V1);
+        assert!(
+            !RouteControlCapability::from_init(&bare).allows(RouteMethod::List),
+            "no controller block at all advertises nothing"
+        );
+    }
+
+    /// The route plane's errors are classified by numeric code and
+    /// `data.code`, never by the message.
+    #[test]
+    fn route_errors_are_classified_by_code_not_text() {
+        let plane = |code: &str| {
+            agent_client_protocol::Error::new(ROUTE_CONTROL_ERROR_CODE, "unrelated text").data(
+                serde_json::json!({
+                    "plane": "bitrouter_route_control",
+                    "code": code,
+                    "message": format!("detail for {code}"),
+                }),
+            )
+        };
+        match RouteError::from_rpc(plane("invalid_route")) {
+            RouteError::InvalidRoute(message) => assert_eq!(message, "detail for invalid_route"),
+            other => panic!("expected InvalidRoute, got {other:?}"),
+        }
+        assert!(matches!(
+            RouteError::from_rpc(plane("route_control_unavailable")),
+            RouteError::Unavailable(_)
+        ));
+        assert!(
+            matches!(
+                RouteError::from_rpc(plane("something-new")),
+                RouteError::Other(_)
+            ),
+            "an unknown plane code is not guessed at"
+        );
+        assert!(
+            matches!(
+                RouteError::from_rpc(agent_client_protocol::Error::method_not_found()),
+                RouteError::Unavailable(_)
+            ),
+            "a controller with no binding answers method_not_found"
+        );
+        assert!(matches!(
+            RouteError::from_rpc(
+                agent_client_protocol::Error::internal_error().data("invalid_route")
+            ),
+            RouteError::Other(_)
+        ));
+    }
+
+    /// Against the real controller: the capability is read off the
+    /// handshake, and list/set/reset round-trip with the daemon-confirmed
+    /// state — a refused route comes back typed, not as text to parse.
+    #[tokio::test]
+    async fn route_calls_round_trip_through_the_controller() {
+        let routes = Arc::new(MemoryRoutes::default());
+        let client = connect_to_controller(Some(Arc::clone(&routes))).await;
+        assert!(client.route_control().allows(RouteMethod::List));
+        assert!(client.route_control().allows(RouteMethod::Set));
+        assert!(client.route_control().allows(RouteMethod::Reset));
+        let session = client
+            .new_session(PathBuf::from("/"), vec![])
+            .await
+            .expect("session/new");
+        let id = session.acp_session_id.as_str();
+
+        let listed = client.route_list(id).await.expect("route/list");
+        assert_eq!(listed.available, vec!["@balanced", "openai:gpt-5"]);
+        assert_eq!(listed.current, None);
+
+        let installed = client
+            .route_set(id, "openai:gpt-5")
+            .await
+            .expect("route/set");
+        assert_eq!(installed, "openai:gpt-5");
+        assert_eq!(
+            client
+                .route_list(id)
+                .await
+                .expect("route/list")
+                .current
+                .as_deref(),
+            Some("openai:gpt-5")
+        );
+
+        match client.route_set(id, "nope").await {
+            Err(RouteError::InvalidRoute(message)) => {
+                assert!(message.contains("nope"), "{message}")
+            }
+            other => panic!("a refused route must be InvalidRoute, got {other:?}"),
+        }
+        assert_eq!(
+            client
+                .route_list(id)
+                .await
+                .expect("route/list")
+                .current
+                .as_deref(),
+            Some("openai:gpt-5"),
+            "a refused set leaves the lease as it was"
+        );
+
+        client.route_reset(id).await.expect("route/reset");
+        assert_eq!(
+            client.route_list(id).await.expect("route/list").current,
+            None
+        );
+        client.shutdown().await.expect("shutdown");
+    }
+
+    /// Without a bridge the controller advertises `routeControl: null`; the
+    /// client then offers nothing and sends nothing.
+    #[tokio::test]
+    async fn route_control_is_absent_without_a_binding() {
+        let client = connect_to_controller(None).await;
+        assert_eq!(
+            client
+                .upstream_init()
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get(CONTROLLER_META_KEY))
+                .and_then(|controller| controller.get("routeControl")),
+            Some(&serde_json::Value::Null)
+        );
+        assert!(!client.route_control().allows(RouteMethod::List));
+        assert!(matches!(
+            client.route_list("native-1").await,
+            Err(RouteError::Unavailable(_))
+        ));
+        assert!(matches!(
+            client.route_set("native-1", "@balanced").await,
+            Err(RouteError::Unavailable(_))
+        ));
         client.shutdown().await.expect("shutdown");
     }
 }
