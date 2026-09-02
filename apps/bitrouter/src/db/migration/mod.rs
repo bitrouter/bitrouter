@@ -25,6 +25,7 @@ pub mod m20240101_000013_create_continuation_registry;
 // withdrawn before release and folded into 000013. Leaving the slot burned
 // keeps the sequence unambiguous for anyone reading git history.
 pub mod m20240101_000015_add_metering_launch_id;
+pub mod m20240101_000016_add_acp_metering_identity;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -50,6 +51,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000012_create_trajectory_ledger::Migration),
             Box::new(m20240101_000013_create_continuation_registry::Migration),
             Box::new(m20240101_000015_add_metering_launch_id::Migration),
+            Box::new(m20240101_000016_add_acp_metering_identity::Migration),
         ]
     }
 }
@@ -69,6 +71,50 @@ mod tests {
     use super::m20240101_000013_create_continuation_registry::{
         Migration as ContinuationMigration, provider_continuations_table,
     };
+
+    #[tokio::test]
+    async fn acp_metering_identity_columns_are_nullable_and_content_free() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let rows = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA table_info('requests')".to_owned(),
+            ))
+            .await?;
+        let columns = rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String>("", "name").ok()?;
+                let not_null = row.try_get::<i64>("", "notnull").ok()?;
+                Some((name, not_null))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for column in [
+            "agent_harness",
+            "controller_instance_id",
+            "acp_session_id",
+            "native_root_session_id",
+            "native_agent_thread_id",
+            "native_parent_agent_thread_id",
+            "native_turn_id",
+            "route_lease_id",
+            "session_identity_json",
+        ] {
+            assert_eq!(columns.get(column), Some(&0), "{column} must be nullable");
+        }
+        for forbidden in [
+            "prompt",
+            "messages",
+            "transcript",
+            "authorization",
+            "cookie",
+        ] {
+            assert!(!columns.contains_key(forbidden));
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn continuation_registry_migration_is_bounded_and_private() -> anyhow::Result<()> {

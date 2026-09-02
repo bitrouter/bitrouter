@@ -45,8 +45,26 @@ adapter identity are under `_meta["bitrouter.dev/controller"]`.
 The controller passes through harness lifecycle capabilities, but removes the
 internal custom-provider capability. Standard `providers/*` configures the
 harness endpoint from controller to harness; it is not a manager-side
-BitRouter route picker. Session-scoped BitRouter route controls are a later,
-namespaced controller feature.
+BitRouter route picker. The connection uses stable ACP v1 wire semantics; the
+Rust runtime crate's major version is not an ACP wire-version selector.
+
+When the controller has a trusted local daemon binding, initialize metadata
+advertises `_meta["bitrouter.dev/controller"].routeControl` with
+`version: "1"`, `scope: "session"`, and these methods:
+
+```text
+_bitrouter/route/list   { sessionId }
+_bitrouter/route/set    { sessionId, route }
+_bitrouter/route/reset  { sessionId }
+```
+
+The manager must capability-probe this metadata. An absent or null
+`routeControl` means the route UI is unavailable, and calling the extension
+returns method-not-found. `list` and `set` are daemon-confirmed; `route` accepts
+BitRouter presets, logical models, or explicit provider/model routes allowed
+by current policy. `list.available` contains live logical-model picker
+suggestions, not an exhaustive grammar for presets or explicit routes. Do not
+use manager-side `providers/*` as a compatibility alias.
 
 ## Pinned Claude and Codex adapters
 
@@ -95,12 +113,27 @@ to opt out, `--model` to pin the logical model, `--base-url` to select a daemon,
 and `--no-start` to disable local daemon auto-start. Routing/auth failures occur
 before the ACP handshake.
 
-The model-router ingress continues to observe ordinary model API requests.
-Routed adapter requests carry the controller and harness headers above, while
-Claude and Codex emit their own native session/thread headers. The P1
-controller does not synthesize manager-facing per-session cost updates or
-store session telemetry; normalized authenticated native-session correlation
-and session route leases belong to the subsequent identity/routing phase.
+Local routing obtains a short-lived `brac_*` controller credential through the
+owner-only daemon control socket. That credential binds model requests and
+route leases to one controller instance. An explicit `--base-url` can still
+configure the harness's model endpoint, but does not advertise route controls
+because it has no reviewed trusted control binding. User API keys are never
+promoted into controller credentials.
+
+The model-router ingress continues to preserve ordinary model API session
+parsing. Authenticated routed adapter requests normalize the static BitRouter
+controller/harness headers together with Claude or Codex native
+session/thread/agent/turn evidence. Session routes are ephemeral leases keyed
+by authenticated controller plus native session. An explicit caller route or
+preset and a Responses continuation pin remain stronger than a lease.
+
+Close/delete removes a lease only after the harness operation succeeds;
+disconnect, credential expiry, reset, and controller revocation also clean it
+up. None of these operations changes harness session storage. The normalized
+identity event joins controlled capture/replay, spans, route decisions, and
+nullable metering columns by `router_request_id`; authorization, cookies, and
+credentials are excluded, and raw identifiers are never aggregate metric
+labels. The controller does not synthesize manager-facing per-session cost.
 
 ## One-shot NDJSON
 

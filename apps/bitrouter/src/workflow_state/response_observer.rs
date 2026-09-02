@@ -2166,6 +2166,7 @@ mod tests {
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
             request_id: request_id.into(),
+            original_model: "model".into(),
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),

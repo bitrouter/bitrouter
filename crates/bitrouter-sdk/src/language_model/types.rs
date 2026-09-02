@@ -2282,6 +2282,9 @@ impl RoutingTarget {
 pub struct PipelineRequest {
     /// Unique request id (generated if the inbound adapter has none).
     pub request_id: String,
+    /// Caller-supplied model selector before ingress transforms. This retains
+    /// explicit route/preset intent when later transforms rewrite `model`.
+    pub original_model: String,
     /// The raw requested model string (may carry `@preset` / `:variant`).
     pub model: String,
     /// The authenticated (or synthesised) caller.
@@ -2304,6 +2307,7 @@ impl PipelineRequest {
         let model = model.into();
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
+            original_model: model.clone(),
             model,
             caller,
             headers: http::HeaderMap::new(),

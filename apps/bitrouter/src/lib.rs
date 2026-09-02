@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acp_cli;
+pub mod acp_runtime;
 pub mod adequacy;
 pub mod agent_registry;
 pub mod agents;
@@ -40,6 +41,7 @@ pub mod policy_table_router;
 pub mod reload;
 pub mod result_contract;
 pub mod routing_preview;
+pub mod session_identity;
 pub mod skills;
 pub mod skills_catalog;
 pub mod skills_query;

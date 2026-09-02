@@ -22,6 +22,11 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::RoutingPrefs;
 
+use crate::acp_runtime::AcpRuntime;
+
+const ACP_CONTROLLER_CREDENTIAL_TTL: std::time::Duration =
+    std::time::Duration::from_secs(12 * 60 * 60);
+
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
 /// policy store, … — atomically per subsystem. A failure in one is reported
@@ -90,6 +95,57 @@ pub enum DaemonCommand {
         #[serde(default)]
         provider_id: Option<String>,
     },
+    /// Mint a short-lived controller credential over the owner-only socket.
+    AcpControllerIssue {
+        /// Controller process identity that owns the credential and leases.
+        controller_instance_id: String,
+    },
+    /// Revoke one controller credential and every lease it owns.
+    AcpControllerRevoke {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+    },
+    /// Query routes and exact lease state for one native session.
+    AcpRouteList {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
+    /// Install or replace one native-session route lease.
+    AcpRouteSet {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+        /// BitRouter route selector.
+        route: String,
+    },
+    /// Remove one native-session route lease.
+    AcpRouteReset {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
+}
+
+/// Controller bearer transported only over the owner-only local daemon IPC.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ControllerCredential(String);
+
+impl ControllerCredential {
+    /// Borrow the credential for harness endpoint configuration.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ControllerCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
 }
 
 /// One resolved hop of a route chain.
@@ -127,6 +183,24 @@ pub enum DaemonResponse {
     ObserveStatus {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
+    },
+    /// Newly-issued controller credential and binding metadata.
+    AcpControllerCredential {
+        /// Credential-bound controller process identity.
+        controller_instance_id: String,
+        /// Redacted-on-debug bearer for the harness model endpoint.
+        credential: ControllerCredential,
+        /// RFC 3339 expiry timestamp.
+        expires_at: String,
+    },
+    /// Daemon-confirmed route state for one native ACP session.
+    AcpRouteState {
+        /// Live model selectors accepted as logical routes.
+        available: Vec<String>,
+        /// Exact installed session route, if any.
+        current: Option<String>,
+        /// `session` for a lease and `default` otherwise.
+        scope: String,
     },
     /// The command failed.
     Error {
@@ -359,6 +433,29 @@ pub async fn run_control_socket(
     observe: Arc<dyn ObserveStatusProvider>,
     policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
 ) -> Result<()> {
+    run_control_socket_with_acp_runtime(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        policy_router,
+        Arc::new(AcpRuntime::new()),
+    )
+    .await
+}
+
+/// Run the control listener with the same authenticated ACP runtime used by
+/// the model request pipeline.
+pub async fn run_control_socket_with_acp_runtime(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp_runtime: Arc<AcpRuntime>,
+) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
     let result = accept_loop(
         &mut listener,
@@ -367,6 +464,7 @@ pub async fn run_control_socket(
         &reloader,
         &observe,
         policy_router.as_ref(),
+        &acp_runtime,
     )
     .await;
     listener.cleanup().await;
@@ -380,12 +478,23 @@ async fn accept_loop(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp_runtime: &Arc<AcpRuntime>,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, policy_router).await? {
+        if handle_connection(
+            stream,
+            app,
+            listen,
+            reloader,
+            observe,
+            policy_router,
+            acp_runtime,
+        )
+        .await?
+        {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -404,6 +513,7 @@ async fn handle_connection<S>(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp_runtime: &Arc<AcpRuntime>,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -428,7 +538,16 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe, policy_router).await;
+    let response = dispatch(
+        command,
+        app,
+        listen,
+        reloader,
+        observe,
+        policy_router,
+        acp_runtime,
+    )
+    .await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -440,6 +559,7 @@ async fn dispatch(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp_runtime: &Arc<AcpRuntime>,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -499,6 +619,111 @@ async fn dispatch(
                 }
             }
         }
+        DaemonCommand::AcpControllerIssue {
+            controller_instance_id,
+        } => match acp_runtime
+            .issue_controller(&controller_instance_id, ACP_CONTROLLER_CREDENTIAL_TTL)
+        {
+            Ok(grant) => DaemonResponse::AcpControllerCredential {
+                controller_instance_id: grant.controller_instance_id().to_string(),
+                credential: ControllerCredential(grant.token().to_string()),
+                expires_at: grant.expires_at().to_rfc3339(),
+            },
+            Err(message) => DaemonResponse::Error { message },
+        },
+        DaemonCommand::AcpControllerRevoke {
+            controller_instance_id,
+        } => {
+            acp_runtime.revoke_controller(&controller_instance_id);
+            DaemonResponse::Ok
+        }
+        DaemonCommand::AcpRouteList {
+            controller_instance_id,
+            session_id,
+        } => {
+            if !acp_runtime.is_controller_active(&controller_instance_id) {
+                DaemonResponse::Error {
+                    message: "controller credential is not active".to_string(),
+                }
+            } else if session_id.trim().is_empty() {
+                DaemonResponse::Error {
+                    message: "session id must not be empty".to_string(),
+                }
+            } else {
+                let current = acp_runtime
+                    .current_route(&controller_instance_id, &session_id)
+                    .map(|lease| lease.route().to_string());
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    scope: if current.is_some() {
+                        "session"
+                    } else {
+                        "default"
+                    }
+                    .to_string(),
+                    current,
+                }
+            }
+        }
+        DaemonCommand::AcpRouteSet {
+            controller_instance_id,
+            session_id,
+            route,
+        } => {
+            let Some(pipeline) = app.language_model() else {
+                return DaemonResponse::Error {
+                    message: "no language_model pipeline configured".to_string(),
+                };
+            };
+            if !acp_runtime.is_controller_active(&controller_instance_id) {
+                return DaemonResponse::Error {
+                    message: "controller credential is not active".to_string(),
+                };
+            }
+            if session_id.trim().is_empty() || route.trim().is_empty() {
+                return DaemonResponse::Error {
+                    message: "session id and route must not be empty".to_string(),
+                };
+            }
+            if let Err(error) = pipeline
+                .routing_table()
+                .route_chain(&route, &RoutingPrefs::default(), &CallerContext::local())
+                .await
+            {
+                return DaemonResponse::Error {
+                    message: format!("route is not available: {error}"),
+                };
+            }
+            match acp_runtime.set_route(&controller_instance_id, &session_id, &route) {
+                Ok(lease) => DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: Some(lease.route().to_string()),
+                    scope: "session".to_string(),
+                },
+                Err(message) => DaemonResponse::Error { message },
+            }
+        }
+        DaemonCommand::AcpRouteReset {
+            controller_instance_id,
+            session_id,
+        } => {
+            if !acp_runtime.is_controller_active(&controller_instance_id) {
+                DaemonResponse::Error {
+                    message: "controller credential is not active".to_string(),
+                }
+            } else if session_id.trim().is_empty() {
+                DaemonResponse::Error {
+                    message: "session id must not be empty".to_string(),
+                }
+            } else {
+                acp_runtime.reset_route(&controller_instance_id, &session_id);
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: None,
+                    scope: "default".to_string(),
+                }
+            }
+        }
         DaemonCommand::Route { model } => {
             let Some(pipeline) = app.language_model() else {
                 return DaemonResponse::Error {
@@ -529,6 +754,19 @@ async fn dispatch(
             payload: observe.status(),
         },
     }
+}
+
+fn route_suggestions(app: &Arc<App>) -> Vec<String> {
+    app.language_model()
+        .map(|pipeline| {
+            pipeline
+                .routing_table()
+                .list_models()
+                .into_iter()
+                .map(|model| model.id)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn write_response<S>(stream: &mut S, response: &DaemonResponse) -> Result<()>

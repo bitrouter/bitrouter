@@ -958,11 +958,13 @@ impl ObserveHook for OtelExporter {
             // Generic by design — the emitter names the keys, we just stamp.
             //
             // Generic, but not unbounded: the schema's own vocabulary is
-            // reserved (`bitrouter_sdk::observe::schema::ExtensionRegion`). A deployment
-            // that stamped `bitrouter.*` or `gen_ai.*` from here would make the
-            // span schema deployment-dependent, which is the one property it
-            // exists to have. Reserved keys are dropped rather than stamped.
-            if let Some(extra) = ctx.get_event::<SpanAttributes>() {
+            // reserved (`bitrouter_sdk::observe::schema::ExtensionRegion`). A
+            // deployment that stamped `bitrouter.*` or `gen_ai.*` from here
+            // would make the span schema deployment-dependent, which is the one
+            // property it exists to have. Reserved keys are dropped rather than
+            // stamped — and that filter now runs for *every* emitter, not just
+            // the first, since the loop below iterates all of them.
+            for extra in ctx.get_events::<SpanAttributes>() {
                 for (key, value) in &extra.0 {
                     if bitrouter_sdk::observe::schema::is_reserved_attribute_key(key) {
                         // DEBUG, not WARN: this is per-request and on the hot
@@ -1972,6 +1974,21 @@ mod hop_tests {
         // Null / nested values are skipped (not representable as a scalar attr).
         attrs.insert("skipped_null".into(), serde_json::Value::Null);
         ctx.emit(SpanAttributes(attrs));
+        // A *second* emitter, because `on_request_end` absorbs every
+        // `SpanAttributes` event rather than only the first (#852). It carries
+        // one open key and one reserved key, so this proves two things at once:
+        // the second emitter is absorbed at all, and the reserved-region filter
+        // applies to it as well as to the first.
+        ctx.emit(SpanAttributes(serde_json::Map::from_iter([
+            (
+                "agent_session_id".to_string(),
+                serde_json::json!("native-session"),
+            ),
+            (
+                "bitrouter.agent.session_id".to_string(),
+                serde_json::json!("native-session"),
+            ),
+        ])));
 
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
@@ -1987,6 +2004,11 @@ mod hop_tests {
         assert_eq!(str_attr(root_chat, "namespace"), Some("acme"));
         assert_eq!(f64_attr(root_chat, "$ai_total_cost_usd"), Some(0.00123456));
         assert_eq!(bool_attr(root_chat, "fallback"), Some(true));
+        assert_eq!(
+            str_attr(root_chat, "agent_session_id"),
+            Some("native-session"),
+            "every SpanAttributes emitter is absorbed, not just the first"
+        );
         assert!(
             root_chat
                 .attributes
@@ -2002,6 +2024,11 @@ mod hop_tests {
             i64_attr(root_chat, "bitrouter.retry_count"),
             None,
             "a forwarded key inside the reserved region must not reach the wire"
+        );
+        assert_eq!(
+            str_attr(root_chat, "bitrouter.agent.session_id"),
+            None,
+            "the reserved region is enforced on every emitter, not just the first"
         );
     }
 

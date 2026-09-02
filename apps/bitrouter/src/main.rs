@@ -2707,6 +2707,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // handle to install `providers/set` route overrides into the live
     // transform.
     let policy_router_for_control = assembled.policy_table_router.clone();
+    let acp_runtime_for_control = assembled.acp_runtime.clone();
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(
         bitrouter::reload::AppReloader::new(
             policy_store.clone(),
@@ -2773,13 +2774,14 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
         .map_err(anyhow::Error::from)
     };
-    let control = daemon::run_control_socket(
+    let control = daemon::run_control_socket_with_acp_runtime(
         socket_path,
         app.clone(),
         listen,
         reloader.clone(),
         observe_provider,
         policy_router_for_control,
+        acp_runtime_for_control,
     );
 
     // SIGHUP triggers a config reload — reload should be available via either

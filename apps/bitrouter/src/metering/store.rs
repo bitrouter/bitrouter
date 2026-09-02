@@ -1032,6 +1032,7 @@ impl MeteringStore {
 
     /// Record one settled request. The single writer.
     pub async fn record_request(&self, record: RequestMetric) -> Result<()> {
+        let session_identity = record.session_identity.as_ref();
         let raw_usage_json = record
             .raw_usage
             .as_ref()
@@ -1048,6 +1049,28 @@ impl MeteringStore {
             user_id: Set(record.user_id),
             api_key_id: Set(record.api_key_id),
             launch_id: Set(record.launch_id),
+            agent_harness: Set(session_identity.and_then(|identity| identity.agent_harness.clone())),
+            controller_instance_id: Set(
+                session_identity.and_then(|identity| identity.controller_instance_id.clone())
+            ),
+            acp_session_id: Set(
+                session_identity.and_then(|identity| identity.acp_session_id.clone())
+            ),
+            native_root_session_id: Set(
+                session_identity.and_then(|identity| identity.native_root_session_id.clone())
+            ),
+            native_agent_thread_id: Set(
+                session_identity.and_then(|identity| identity.native_agent_thread_id.clone())
+            ),
+            native_parent_agent_thread_id: Set(session_identity
+                .and_then(|identity| identity.native_parent_agent_thread_id.clone())),
+            native_turn_id: Set(
+                session_identity.and_then(|identity| identity.native_turn_id.clone())
+            ),
+            route_lease_id: Set(
+                session_identity.and_then(|identity| identity.route_lease_id.clone())
+            ),
+            session_identity_json: Set(session_identity.map(|identity| identity.serialized.clone())),
             model_id: Set(record.model_id),
             provider_id: Set(record.provider_id),
             prompt_tokens: Set(record.prompt_tokens as i64),
@@ -1083,6 +1106,16 @@ impl MeteringStore {
                     .update_columns([
                         requests::Column::UserId,
                         requests::Column::ApiKeyId,
+                        requests::Column::LaunchId,
+                        requests::Column::AgentHarness,
+                        requests::Column::ControllerInstanceId,
+                        requests::Column::AcpSessionId,
+                        requests::Column::NativeRootSessionId,
+                        requests::Column::NativeAgentThreadId,
+                        requests::Column::NativeParentAgentThreadId,
+                        requests::Column::NativeTurnId,
+                        requests::Column::RouteLeaseId,
+                        requests::Column::SessionIdentityJson,
                         requests::Column::ModelId,
                         requests::Column::ProviderId,
                         requests::Column::PromptTokens,

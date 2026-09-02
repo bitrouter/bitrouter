@@ -769,19 +769,20 @@ async fn handle(
             .into_response();
         }
     };
-    let prompt = match adapter.parse_request(body) {
+    let (prompt, original_model) = match adapter.parse_request(body) {
         Ok(mut p) => {
             if let Some(model) = model_override {
                 p.model = model;
             }
             p.model = sanitize_model_name(&p.model);
+            let original_model = p.model.clone();
             // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
             // alias): the prompt body is freely mutable here, before it enters
             // the pipeline that exposes it read-only downstream.
             for transform in &state.prompt_transforms {
                 transform.apply_with_headers(&mut p, &headers);
             }
-            p
+            (p, original_model)
         }
         Err(e) => return e.into_response(),
     };
@@ -808,6 +809,7 @@ async fn handle(
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
     req.request_id = request_id;
+    req.original_model = original_model;
     req.headers = headers;
     // Carry the inbound wire protocol so route resolution can prefer a native,
     // same-protocol upstream — a faithful round-trip instead of a lossy
@@ -1165,13 +1167,16 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PromptTransform;
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
     use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
     use crate::language_model::types::{
         ApiProtocol, AuthScheme, ExecutionResult, Prompt, RoutingTarget,
     };
-    use crate::language_model::{PipelineBuilder, PipelineContext, StreamPartStream};
+    use crate::language_model::{
+        HookDecision, PipelineBuilder, PipelineContext, PreRequestHook, StreamPartStream,
+    };
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
@@ -1186,6 +1191,28 @@ mod tests {
     struct RecoveringDrainFinalizer {
         attempts: Arc<AtomicUsize>,
         recovered: Arc<AtomicBool>,
+    }
+
+    struct RewriteModel(&'static str);
+
+    impl PromptTransform for RewriteModel {
+        fn apply(&self, prompt: &mut Prompt) {
+            prompt.model = self.0.to_string();
+        }
+    }
+
+    struct RecordModelIntent(Arc<std::sync::Mutex<Option<(String, String)>>>);
+
+    #[async_trait]
+    impl PreRequestHook for RecordModelIntent {
+        async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+            let observed = (ctx.original_model().to_string(), ctx.model().to_string());
+            match self.0.lock() {
+                Ok(mut slot) => *slot = Some(observed),
+                Err(poisoned) => *poisoned.into_inner() = Some(observed),
+            }
+            Ok(HookDecision::Allow)
+        }
     }
 
     #[async_trait]
@@ -1279,6 +1306,65 @@ mod tests {
             metrics_renderer: None,
             prompt_transforms: vec![],
         }
+    }
+
+    #[tokio::test]
+    async fn http_ingress_preserves_model_before_prompt_transforms() {
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "openai-codex".to_string(),
+                service_id: "gpt-5.5".to_string(),
+                api_base: "https://example.invalid".to_string(),
+                api_key: "test-key".to_string(),
+                api_protocol: ApiProtocol::Responses,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                reasoning_effort: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::XApiKey,
+            }],
+        );
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(MockExecutor::always_text("ok")))
+            .pre_request_hook(RecordModelIntent(Arc::clone(&observed)));
+        let state = AppState {
+            language_model: Arc::new(builder.build().unwrap()),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "model":"caller-model",
+                    "messages":[{"role":"user","content":"hello"}]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let _response = build_router(state).oneshot(request).await.unwrap();
+
+        let captured = match observed.lock() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(
+            captured,
+            Some(("caller-model".to_string(), "gpt-5.5".to_string()))
+        );
     }
 
     async fn models_json(user_agent: Option<&str>) -> serde_json::Value {

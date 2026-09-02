@@ -1811,6 +1811,7 @@ mod beta_forward_tests {
         };
         PipelineContext::new(PipelineRequest {
             request_id: "t".into(),
+            original_model: "claude".into(),
             model: "claude".into(),
             caller: CallerContext::local(),
             headers,
