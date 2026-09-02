@@ -135,15 +135,32 @@ async fn ignored_config_is_carried_out_of_assembly_not_logged_inside_it() {
     .await
     .unwrap();
     let cfg = config::load(&path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&path)).await.unwrap();
 
+    // What the guard produces for this config, computed independently of
+    // assembly. Asserting against this rather than against a substring makes
+    // the second assertion exact: assembly must carry these out *verbatim*,
+    // not merely emit something that happens to mention the stale id.
+    let expected = bitrouter::assemble::ignored_config_warnings(&cfg);
     assert!(
-        assembled
-            .ignored_config
+        expected
             .iter()
             .any(|line| line.contains("plugins.bitrouter-observe")),
-        "the stale plugin id must be reported to the caller, got: {:?}",
-        assembled.ignored_config
+        "the guard must flag the stale plugin id, got: {expected:?}"
+    );
+
+    let assembled = build_app_with_path(&cfg, Some(&path)).await.unwrap();
+    // Deliberately not `assert_eq!`, and deliberately printing only `expected`.
+    // `Assembled` also carries `continuation_registry`, which lazily derives
+    // from installation key material, and CodeQL's taint tracking is
+    // field-insensitive across the struct — so formatting *any* field off
+    // `assembled` reads as logging a secret (rule `rust/cleartext-logging`,
+    // alert 43). It is a false positive: `ignored_config` is the first thing
+    // `build_app_with_path` computes, purely from `config`, before a key is
+    // touched. Printing the untracked side costs nothing and keeps the alert
+    // honest for the day it catches something real.
+    assert!(
+        assembled.ignored_config == expected,
+        "assembly must carry the guard's warnings out rather than logging them; expected {expected:?}"
     );
 }
 
