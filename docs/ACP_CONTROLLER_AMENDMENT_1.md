@@ -252,8 +252,15 @@ Phase 3's product surfaces:
    client half had to land with `chat`'s migration or every attributed figure
    would have rendered `cost unreported`. C4's capability and C6's occupancy
    line are in too; all six are pinned.
-9. The chat state machine ([`CHAT_MACHINE_SPEC.md`](CHAT_MACHINE_SPEC.md)),
-   once, on the shared client.
+9. ~~The chat state machine ([`CHAT_MACHINE_SPEC.md`](CHAT_MACHINE_SPEC.md)),
+   once, on the shared client~~ — landed. 2A and 2B went together rather than
+   as two steps: a `Phase` without `Turn` has no reader for the turn, so
+   landing 2A alone would have left the driver consulting the machine for two
+   of five loops and bypassing it for the other three, which is the defect the
+   spec exists to remove. The spec's §2.3 and §4.2 were re-derived against the
+   shared client first (§7's last row); both conclusions survived, and its
+   deletion of `Phase::Routing` was corrected — §5 keeps the picker, and step 6
+   rebuilt it.
 
 `prompt` leads because **`chat` has no integration test** — `tests/acp.rs`
 covers `prompt`, `serve`, and the *pipe* branch of chat, never the interactive
@@ -279,7 +286,7 @@ Per `CLAUDE.md`, skills move in lockstep. Each is falsified by this amendment:
 | `docs/CLI.md:304` | `.bitrouter/sessions/` — **already stale**, no such path exists |
 | `docs/DEVELOPMENT.md:29-30`, `:46-63` | ACP as "down / engine / up"; the `costScope` key |
 | `docs/ACP_TUI_SPEC.md:300-330`, `:489-497` | Decision 4 and the wider-scope requirement — superseded by C2/C5 |
-| `docs/CHAT_MACHINE_SPEC.md` §2.3, §4.2 | written against `PendingPermission` and `Session::prompt` |
+| `docs/CHAT_MACHINE_SPEC.md` §2.3, §4.2 | written against `PendingPermission` and `Session::prompt` — **rewritten**, both conclusions intact |
 
 ---
 

@@ -127,13 +127,18 @@ pub(crate) async fn run(
     // must land in a terminal that is the shell's again.
     let finished = view.finish().context("closing the view");
     drop(stdin);
-    if !clean || matches!(outcome, Ok(true) | Err(_)) {
-        write_session_log_tail(&mut std::io::stdout())?;
-    }
-    // The drive's own failure is the most specific thing that went wrong, so
-    // it outranks both of the others.
+    let tailed = if !clean || matches!(outcome, Ok(true) | Err(_)) {
+        write_session_log_tail(&mut std::io::stdout())
+    } else {
+        Ok(())
+    };
+    // Most specific first: what the session was doing when it failed outranks
+    // the terminal not closing, which outranks the log tail not printing,
+    // which outranks a teardown that did not confirm. Every one of them is
+    // reported by *something* — the ones below a failure are in the log.
     outcome?;
     finished?;
+    tailed?;
     if clean {
         Ok(())
     } else {
