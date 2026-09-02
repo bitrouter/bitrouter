@@ -26,7 +26,7 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
-| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the manager-facing server, `client` the one ACP client (transport-generic, driven on the caller's runtime), `up` the agent-process transport; `engine` is the retiring single-session path that only `chat` still uses. Subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
+| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the manager-facing server, `client` the one ACP client (transport-generic, driven on the caller's runtime, and the only speaker of `_bitrouter/route/*`), `up` the agent-process transport; `engine` is the retired single-session path, kept only until its deletion lands. Subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
 | **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
@@ -43,25 +43,27 @@ error.
 naming any BitRouter concept. The check for it began life unanchored — as
 `grep -rn "bitrouter/"`, which matched the doc comment that stated it — and was
 later tightened to
-`rg -n "bitrouter/costScope|COST_SCOPE_META_KEY" crates/bitrouter-tui/src`.
+`rg -n "bitrouter.dev/cost|COST_PROVENANCE_META_KEY" crates/bitrouter-tui/src`.
 That tightened form worked, and this change deliberately breaks it: the
-cost-scope wire spelling now lives in `crates/bitrouter-tui/src/cost.rs`,
-because splitting one `_meta` key across a crate boundary bought nothing but
-two places to look. This is BitRouter's TUI and may name BitRouter's concepts.
+cost-provenance wire spelling now lives in `crates/bitrouter-tui/src/cost.rs`
+(and is pinned equal to the controller's by a test in `acp_cli.rs`), because
+splitting one `_meta` key across a crate boundary bought nothing but two
+places to look. This is BitRouter's TUI and may name BitRouter's concepts.
 Conforming to ACP is still how the renderer works, and a non-BitRouter agent
 still renders — it lands in the honest-default branch of every control.
 
 What has *not* changed is why any of it was chosen. The honesty rules are now
-pinned by named tests rather than by an absent dependency: an unscoped cost
-renders `unreported` and never `$0.00`; an agent with no `providers/*` gets no
-picker rather than a dead one; a cancelled permission never resolves to
-consent. Those tests are the guard — deleting one is the change to refuse in
+pinned by named tests rather than by an absent dependency: a cost nobody can
+vouch for is never drawn as ours (the harness's own figure is labelled the
+agent's, an unknown marker is not drawn, and no figure renders `unreported`,
+never `$0.00`); a controller that advertises no route control gets no picker
+rather than a dead one; a cancelled permission never resolves to consent. Those tests are the guard — deleting one is the change to refuse in
 review.
 
 Where a control's honesty depends on something ACP does not carry, the crate
 takes it as a **parameter** rather than inferring it — `Picker::open` takes
-whether the agent serves `providers/*`, `Cost::new` takes whose spend the
-figure is — so there is no constructor that skips the question.
+whether the controller advertised route control, `Cost::new` takes who wrote
+the figure — so there is no constructor that skips the question.
 
 The rule these add up to, and it is enforced rather than agreed:
 

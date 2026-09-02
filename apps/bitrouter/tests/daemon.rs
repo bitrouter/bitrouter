@@ -119,7 +119,6 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
 
@@ -198,7 +197,6 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: MeteringStore::new(assembled.db.clone()),
@@ -337,7 +335,6 @@ async fn probe_status_reports_ready_when_daemon_is_up() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -383,7 +380,6 @@ async fn reload_re_reads_the_config_file() {
         "127.0.0.1:0".to_string(),
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -517,7 +513,6 @@ async fn route_for_unknown_model_returns_a_clean_error() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -558,7 +553,6 @@ async fn concurrent_clients_are_all_served() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -600,7 +594,6 @@ async fn malformed_input_does_not_take_the_server_down() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -650,7 +643,6 @@ async fn reload_returns_error_when_the_config_is_broken() {
         "127.0.0.1:0".to_string(),
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -706,7 +698,6 @@ async fn socket_file_has_owner_only_permissions() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
@@ -738,104 +729,6 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
         msg.contains("daemon running") || msg.contains("connecting to"),
         "expected a helpful error, got: {msg}"
     );
-}
-
-/// `providers/set`'s substrate: a `SetRoute` command over the control socket
-/// must move the traffic of the launch that asked, and only that launch.
-///
-/// This is the half the ACP surface could not do on its own — the substrate is
-/// a separate process and the agent child talks to the daemon directly, so
-/// without this the picker would be a control that does not do what it looks
-/// like it does.
-#[tokio::test]
-async fn set_route_reroutes_only_the_named_launch() {
-    use bitrouter::policy_table_router::{PolicyTable, PolicyTableRouter};
-    use bitrouter_sdk::{HeaderMap, PromptTransform};
-
-    let dir = tempdir("setroute");
-    let cfg_path = write_config(&dir, "sqlite::memory:").await;
-    let cfg = config::load(&cfg_path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
-    let app = Arc::new(assembled.app);
-
-    // The same handle the daemon holds and the live transform reads.
-    let router = Arc::new(PolicyTableRouter::new(PolicyTable::inert()));
-
-    let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
-        socket.clone(),
-        app.clone(),
-        "127.0.0.1:1234".to_string(),
-        Arc::new(NoopReloader),
-        Arc::new(NoopObserveStatus { compiled_in: false }),
-        Some(router.clone()),
-        MeteringStore::new(assembled.db.clone()),
-    ));
-    wait_until_ready(&socket).await;
-
-    let routed_model = |auth: &str| {
-        let mut headers = HeaderMap::new();
-        if let Ok(value) = auth.parse() {
-            headers.insert("authorization", value);
-        }
-        let mut prompt = bitrouter_sdk::language_model::types::Prompt {
-            model: "gpt-5".to_string(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![bitrouter_sdk::language_model::types::Message::text(
-                bitrouter_sdk::language_model::types::Role::User,
-                "hi",
-            )],
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        router.apply_with_headers(&mut prompt, &headers);
-        prompt.model
-    };
-
-    // Before: the daemon serves the configured route.
-    assert_eq!(routed_model("Bearer brl_mine"), "gpt-5");
-
-    let resp = daemon::send_command(
-        &socket,
-        &DaemonCommand::SetRoute {
-            launch_id: "brl_mine".to_string(),
-            provider_id: Some("shared".to_string()),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(
-        matches!(resp, DaemonResponse::Ok),
-        "SetRoute should succeed, got {resp:?}"
-    );
-
-    // After: that launch reaches the new provider, keeping its model…
-    assert_eq!(routed_model("Bearer brl_mine"), "shared:gpt-5");
-    // …and nobody else moves.
-    assert_eq!(routed_model("Bearer brl_theirs"), "gpt-5");
-    assert_eq!(routed_model("Bearer sk-a-real-key"), "gpt-5");
-
-    // Clearing it restores the configured route.
-    let resp = daemon::send_command(
-        &socket,
-        &DaemonCommand::SetRoute {
-            launch_id: "brl_mine".to_string(),
-            provider_id: None,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(resp, DaemonResponse::Ok), "{resp:?}");
-    assert_eq!(routed_model("Bearer brl_mine"), "gpt-5");
-
-    daemon::send_command(&socket, &DaemonCommand::Stop)
-        .await
-        .unwrap();
-    let _ = server.await;
 }
 
 /// One routed model request settled the way the pipeline records it: priced
@@ -914,7 +807,6 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: metering.clone(),

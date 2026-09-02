@@ -6,15 +6,16 @@
 //!
 //! # Cost is read, never inferred
 //!
-//! ACP carries `UsageUpdate.cost` but nothing saying *whose* spend it is, and
-//! a currency figure with no scope is the most misleading thing a session view
-//! can draw. [`crate::cost::from_usage`] reads the scope off the `_meta` key
-//! BitRouter writes, and returns `None` when it is absent.
+//! ACP carries `UsageUpdate.cost` but nothing saying *who wrote it*, and a
+//! currency figure nobody can vouch for is the most misleading thing a
+//! session view can draw. [`crate::cost::from_usage`] reads the provenance
+//! marker off the `_meta` key the controller writes: marked `router`, the
+//! figure is BitRouter's meter and is drawn plainly; unmarked, it is the
+//! harness's own and is drawn labelled as the agent's; marked with something
+//! this renderer does not know, it is not drawn at all.
 //!
 //! `None` is not an error and not a zero: it renders as *unreported*, which is
-//! what a client that cannot see a price has actually observed. That an agent
-//! other than BitRouter would always land there is correct — it has told us a
-//! number and not whose it is.
+//! what a client that cannot see a price has actually observed.
 //!
 //! # Context occupancy is the half that needs no attribution
 //!
@@ -204,18 +205,16 @@ pub fn lock(shared: &Mutex<Journal>) -> MutexGuard<'_, Journal> {
 mod tests {
     use agent_client_protocol_schema::v1::UsageUpdate;
 
-    use crate::cost::Scope;
-
-    fn usage(cost: bool, scope: Option<&str>) -> UsageUpdate {
+    fn usage(cost: bool, marker: Option<&str>) -> UsageUpdate {
         let mut usage = UsageUpdate::new(1_500, 200_000);
         if cost {
             usage.cost = Some(agent_client_protocol_schema::v1::Cost::new(0.42, "USD"));
         }
-        if let Some(scope) = scope {
+        if let Some(marker) = marker {
             let mut meta = serde_json::Map::new();
             meta.insert(
-                crate::cost::COST_SCOPE_META_KEY.to_string(),
-                serde_json::Value::String(scope.to_string()),
+                crate::cost::COST_PROVENANCE_META_KEY.to_string(),
+                serde_json::Value::String(marker.to_string()),
             );
             usage.meta = Some(meta);
         }
@@ -228,22 +227,29 @@ mod tests {
         )
     }
 
-    /// A figure that arrives without a scope must produce *unreported*, never
-    /// a zero and never an unlabelled number. This is the case every agent but
-    /// BitRouter lands in.
+    /// No figure at all renders *unreported*, never a zero. This is the case
+    /// every harness that does not report cost lands in — and every
+    /// unmetered BitRouter session, which is forwarded with no figure.
     #[test]
-    fn an_unscoped_cost_renders_unreported() {
-        let text = rendered(&usage(true, None));
+    fn an_absent_cost_renders_unreported() {
+        let text = rendered(&usage(false, None));
         assert!(text.contains("unreported"), "{text:?}");
         assert!(!text.contains('0'), "{text:?}");
     }
 
-    /// The scope on the wire is the one that reaches the line — the view never
-    /// decides it.
+    /// The marker on the wire is what reaches the line — the view never
+    /// decides whose number it is.
     #[test]
-    fn the_wire_scope_is_the_one_rendered() {
-        let text = rendered(&usage(true, Some(crate::cost::to_wire(Scope::Wider))));
-        assert!(text.contains("all callers"), "{text:?}");
-        assert!(text.contains("0.42"), "{text:?}");
+    fn the_wire_provenance_is_the_one_rendered() {
+        let ours = rendered(&usage(true, Some(crate::cost::COST_PROVENANCE_ROUTER)));
+        assert!(ours.contains("0.42"), "{ours:?}");
+        assert!(!ours.contains("agent"), "{ours:?}");
+
+        let theirs = rendered(&usage(true, None));
+        assert!(theirs.contains("agent"), "{theirs:?}");
+        assert!(theirs.contains("0.42"), "{theirs:?}");
+
+        let unknown = rendered(&usage(true, Some("something-new")));
+        assert!(unknown.contains("unreported"), "{unknown:?}");
     }
 }

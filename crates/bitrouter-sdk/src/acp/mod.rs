@@ -24,13 +24,13 @@
 //! [`controller`] (the manager-facing, connection-level server),
 //! [`client`] (the **one** BitRouter ACP client — transport-generic, so it
 //! drives either a harness child or an in-process [`controller::Controller`]
-//! over a duplex channel, on the caller's runtime), and [`up`] (the
-//! agent-process transport). [`engine`] is the retiring single-session path
-//! that only `bitrouter chat` still uses, together with the [`Pipeline`], the
-//! hook traits, the typed request/response payloads, and
-//! [`config_routing::ConfigAcpRoutingTable`]; [`down`] keeps only the
-//! [`down::ProviderSurface`] trait until the picker migrates. Typed
-//! health-checking (initialize-only) is [`up::health_check`].
+//! over a duplex channel, on the caller's runtime, and the only speaker of
+//! `_bitrouter/route/*`), and [`up`] (the agent-process transport).
+//! [`engine`] is the retired single-session path, kept until its deletion
+//! lands together with the [`Pipeline`], the hook traits, the typed
+//! request/response payloads, and [`config_routing::ConfigAcpRoutingTable`];
+//! nothing in `apps/bitrouter` drives it any more. Typed health-checking
+//! (initialize-only) is [`up::health_check`].
 
 #[cfg(feature = "acp")]
 use std::sync::Arc;
@@ -61,13 +61,10 @@ pub mod controller;
 #[cfg(feature = "acp")]
 pub mod translate;
 
-// ── the live thin proxy (feature = "acp") ───────────────────────────────────
+// ── the retired single-session engine (feature = "acp") ─────────────────────
 // One session, one agent: `up` speaks the ACP client role to the agent child
-// and `engine` wires it to this module's `Pipeline`; `down` keeps only the
-// `ProviderSurface` trait until the picker migrates. The direct analogue of
-// [`crate::mcp::rmcp_executor`] for the ACP protocol.
-#[cfg(feature = "acp")]
-pub mod down;
+// and `engine` wires it to this module's `Pipeline`. The direct analogue of
+// [`crate::mcp::rmcp_executor`] for the ACP protocol; no command drives it.
 #[cfg(feature = "acp")]
 pub mod engine;
 #[cfg(feature = "acp")]

@@ -301,7 +301,7 @@ bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [-c <path>] <text>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session identity, history, and storage are the harness's own; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter chat`
 
@@ -338,12 +338,12 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 
 | Input | Effect |
 |---|---|
-| `/route` | List routable providers and switch this session's route mid-session. Only offered when the session can honour it — see below. |
+| `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
 | `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
 
-**The cost line always states whose spend it is.** When the session's traffic is attributable, the figure is the session's. When it is not — you supplied your own credential, which BitRouter never rewrites to tag — the line reads `all callers` before the number, because it is then the daemon's total for the window and not yours alone. If the agent reports no cost, the line reads `cost unreported`, never `$0.00`.
+**The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
 
-**`/route` is absent when it cannot work.** Changing a live route needs a daemon to install the override in and an attributable launch id to scope it to. A `--direct` session has neither, and a session using your own credential has no launch id; in both cases `chat` says so rather than offering a command that would fail. When the switch is applied, `chat` re-reads `providers/list` and reports the route the daemon is actually serving — a refused change reports the old route and the reason.
+**`/route` is absent when it cannot work.** The picker is offered only when the controller advertised route control at initialize — `_meta["bitrouter.dev/controller"].routeControl` with `version: "1"`, `scope: "session"`, and both `_bitrouter/route/list` and `_bitrouter/route/set` listed — which it does only under a trusted local daemon binding. A `--direct` session or an explicit `--base-url` advertises nothing, and `chat` says so rather than offering a command that would fail. When a route is chosen, the footer shows the route the daemon **confirmed** in the set response, not the one asked for; a refused route reports the old route and the reason.
 
 On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
 

@@ -17,9 +17,9 @@
 //! It was once ACP-generic: no BitRouter name appeared here, so it would
 //! render any conforming agent. That charter is **retired**. This is
 //! BitRouter's TUI, and it may name BitRouter's concepts — the
-//! [`cost::COST_SCOPE_META_KEY`] wire spelling is the first, and it lives here
-//! because splitting one key across a crate boundary bought nothing but two
-//! places to look.
+//! [`cost::COST_PROVENANCE_META_KEY`] wire spelling is the first, and it
+//! lives here because splitting one key across a crate boundary bought
+//! nothing but two places to look.
 //!
 //! What is *not* retired is the reason genericity was chosen in the first
 //! place. Conforming to ACP is still how this renderer works at all, and a
@@ -33,16 +33,18 @@
 //! rules that survived the charter, and they are pinned by tests rather than
 //! by an absent dependency:
 //!
-//! - A cost with no scope renders as *unreported*, never as `$0.00`
-//!   ([`cost::from_usage`] returns `None`, and it is the only way in).
-//! - An agent that does not serve `providers/*` gets no picker at all, not a
-//!   dead one ([`picker::Picker::open`] returns `None`).
+//! - A cost nobody can vouch for is never drawn as ours: the harness's own
+//!   figure is labelled the agent's, an unknown marker is not drawn, and no
+//!   figure at all renders as *unreported*, never as `$0.00`
+//!   ([`cost::from_usage`] is the only way in).
+//! - A controller that advertises no route control gets no picker at all,
+//!   not a dead one ([`picker::Picker::open`] returns `None`).
 //! - Cancelling a permission prompt can never resolve to consent.
 //!
 //! Where honesty depends on something the protocol does not carry, that
 //! something is still a **parameter** and not an inference: there is no
-//! constructor that skips the question. [`cost::Cost::new`] takes the scope;
-//! [`picker::Picker::open`] takes whether the surface exists.
+//! constructor that skips the question. [`cost::Cost::new`] takes the
+//! provenance; [`picker::Picker::open`] takes whether the surface exists.
 //!
 //! # What is still out of scope
 //!

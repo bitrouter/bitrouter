@@ -5,8 +5,8 @@
 //! An earlier draft had a second registry for "router surfaces" — the cost
 //! line and the provider picker. Neither could be expressed through it: the
 //! cost line needs typed fields off `UsageUpdate`, and the picker is not a
-//! session update at all but an out-of-band `providers/list` plus keyboard
-//! input, which no render trait describes. A registry with no expressible
+//! session update at all but an out-of-band `_bitrouter/route/list` plus
+//! keyboard input, which no render trait describes. A registry with no expressible
 //! entries is dead weight, so there is exactly one, over tool calls, and the
 //! footer is composed by the caller instead.
 //!

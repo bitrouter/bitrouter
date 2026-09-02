@@ -46,10 +46,14 @@ mod tests {
     ///
     /// `picker.rs` and the rendering half of `cost.rs` went back to
     /// `bitrouter-tui`, where the compiler keeps them honest. What is left
-    /// here is the part that genuinely is not ACP — the `_meta` key, the wire
-    /// spelling, this process's stdin — and it gets this instead: the chat
+    /// here is the part that genuinely is not ACP — this process's stdin,
+    /// its signals, its session log — and it gets this instead: the chat
     /// module may read the ACP wire and the terminal, and nothing else. No
-    /// `Config`, no metering store, no control socket.
+    /// `Config`, no metering store, no control socket, and none of the
+    /// daemon bridges the launch half builds — the route surface it drives
+    /// is `_bitrouter/route/*` on the shared client, which *is* the wire.
+    /// The one handle it holds on the launch half is the session's own
+    /// teardown, because the session's lifetime is this module's charter.
     ///
     /// Checked against the sources themselves rather than by review, so it
     /// fails the build that breaks it instead of the review that misses it.
@@ -69,7 +73,9 @@ mod tests {
             "MeteringStore",
             "bitrouter_sdk::config",
             "control_socket",
-            "RouteControl",
+            "DaemonRouteControl",
+            "DaemonSessionCost",
+            "LocalControllerBinding",
         ];
         for (name, source) in sources {
             for reach in forbidden {

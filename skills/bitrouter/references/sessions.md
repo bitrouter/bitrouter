@@ -1,10 +1,10 @@
-# ACP controller and one-shot sessions
+# ACP controller and native sessions
 
 How BitRouter's ACP surfaces divide ownership. For CLI flags see
 `references/cli.md` §ACP sessions; for adapter config see
 `references/providers.md` §ACP agents.
 
-## Controller vs one-shot engine
+## One controller, three drivers
 
 `bitrouter acp serve` is a connection-level ACP controller:
 
@@ -28,10 +28,13 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bitrouter chat` is the one surface still on the local single-session engine,
-which owns a local `record_id`, a FIFO turn queue, and the interactive route
-surface. Do not project those local-engine semantics onto `acp serve` or
-`acp prompt`.
+`bitrouter chat` drives the same in-process controller through the same
+client, with two additions: it issues a controller credential over the local
+daemon socket (so its traffic meters by controller instance, and the
+controller decorates `usage_update` with attributed cost), and its `/route`
+picker is built on `_bitrouter/route/list|set` — available only when the
+initialize metadata advertises them. There is no local engine, `record_id`,
+or FIFO turn queue on any path.
 
 ## Controller launch and initialization
 

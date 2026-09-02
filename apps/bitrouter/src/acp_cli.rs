@@ -31,23 +31,20 @@
 //! ```
 //!
 //! Both functions load their `Config` via the standard resolution chain (see
-//! `bitrouter::paths`) and build a [`ConfigAcpRoutingTable`] from
-//! `config.agents` — the same table the GUI renderer uses.
+//! `bitrouter::paths`) and launch the agent named under `config.agents`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use agent_client_protocol::schema::v1::{
-    Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SetProviderRequest,
-};
+use agent_client_protocol::schema::v1::{Cost, LlmProtocol};
 use bitrouter_sdk::acp::client::{AcpClient, ClientOptions};
 use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
@@ -203,8 +200,8 @@ pub struct Routed {
     /// `None` when the caller supplied their own credential: that is real
     /// authentication, and rewriting it to attach attribution would break
     /// `skip_auth: false` — the same rule `spawn.rs` follows. A session
-    /// without one must report its spend as daemon-wide rather than implying
-    /// a precision it does not have.
+    /// without one has no per-launch attribution; on the controlled paths a
+    /// controller credential attributes by controller instance instead.
     pub launch_id: Option<String>,
     /// One controller process / harness connection correlation id. This is
     /// never an ACP session id and is absent for direct or legacy harnesses.
@@ -889,6 +886,241 @@ fn attributed_cost(spend_micro_usd: u64, requests: u64, unpriced: u64) -> Option
         .then(|| Cost::new(spend_micro_usd as f64 / 1_000_000.0, "USD"))
 }
 
+/// Session-attributed spend, read **off** the controller's forward path.
+///
+/// The controller consults its cost bridge inside its dispatch handler, which
+/// the SDK runs one message at a time — so a bridge that awaited the daemon
+/// there would stop every `session/update` behind it for as long as the
+/// lookup took. Under `acp prompt` nobody notices; under interactive `chat` a
+/// person watches the transcript stop. This bridge therefore answers from a
+/// cache at once and refreshes it in the background, single-flight per
+/// session.
+///
+/// The honesty rule the cache keeps: a figure is stored only when the daemon
+/// measured one, so a session that was never metered stays absent rather
+/// than becoming `$0.00`; and a stale cumulative figure — the spend as of the
+/// previous refresh — is still a figure BitRouter measured, which understates
+/// rather than invents. A refresh that yields nothing never erases a figure
+/// already held.
+struct CachedSessionCost {
+    inner: Arc<dyn AcpSessionCost>,
+    /// Shared with each in-flight refresh task, which outlives the `&self`
+    /// borrow it was spawned from.
+    cache: Arc<CostCache>,
+}
+
+/// What the cache holds: the last figure the daemon confirmed per session,
+/// and which sessions have a refresh in flight — so a burst of usage updates
+/// costs one daemon round trip rather than one each.
+#[derive(Default)]
+struct CostCache {
+    figures: std::sync::Mutex<std::collections::HashMap<String, Cost>>,
+    refreshing: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl CostCache {
+    /// The figure held for `session_id`, if the daemon has ever confirmed one.
+    fn held(&self, session_id: &str) -> Option<Cost> {
+        match self.figures.lock() {
+            Ok(figures) => figures.get(session_id).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(session_id).cloned(),
+        }
+    }
+
+    /// Claim the refresh for `session_id`; `false` when one is already running.
+    fn claim_refresh(&self, session_id: &str) -> bool {
+        match self.refreshing.lock() {
+            Ok(mut refreshing) => refreshing.insert(session_id.to_string()),
+            Err(poisoned) => poisoned.into_inner().insert(session_id.to_string()),
+        }
+    }
+
+    /// Record the daemon's answer and release the refresh claim. `None` keeps
+    /// whatever was held: a lookup that yielded nothing is not evidence that
+    /// an earlier figure was wrong.
+    fn settle_refresh(&self, session_id: &str, figure: Option<Cost>) {
+        if let Some(figure) = figure {
+            match self.figures.lock() {
+                Ok(mut figures) => {
+                    figures.insert(session_id.to_string(), figure);
+                }
+                Err(poisoned) => {
+                    poisoned.into_inner().insert(session_id.to_string(), figure);
+                }
+            }
+        }
+        match self.refreshing.lock() {
+            Ok(mut refreshing) => {
+                refreshing.remove(session_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(session_id);
+            }
+        }
+    }
+}
+
+impl CachedSessionCost {
+    fn new(inner: Arc<dyn AcpSessionCost>) -> Self {
+        Self {
+            inner,
+            cache: Arc::new(CostCache::default()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AcpSessionCost for CachedSessionCost {
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+        // Runs on the forward path: nothing here awaits the daemon. The
+        // refresh this update triggers lands in time for the *next* one.
+        if self.cache.claim_refresh(session_id) {
+            let inner = Arc::clone(&self.inner);
+            let cache = Arc::clone(&self.cache);
+            let session_id = session_id.to_string();
+            tokio::spawn(async move {
+                let figure = inner.attributed_cost(&session_id).await;
+                cache.settle_refresh(&session_id, figure);
+            });
+        }
+        self.cache.held(session_id)
+    }
+}
+
+/// A controller credential minted over the daemon's owner-only control
+/// socket, and the identity it binds.
+///
+/// This is what makes the two controller bridges trustworthy: route leases
+/// are keyed by the authenticated controller instance, and so is the spend
+/// query behind attributed cost. Neither exists without it, which is why a
+/// `--direct` session, an unroutable harness, or an explicit `--base-url`
+/// (no reviewed trusted binding) yields no binding at all.
+///
+/// The credential is revoked on every exit through [`Self::revoke`]. It
+/// also carries a daemon-side TTL, which is what bounds a panic exit — the
+/// one path that runs no teardown.
+struct LocalControllerBinding {
+    socket_path: PathBuf,
+    controller_instance_id: String,
+}
+
+impl LocalControllerBinding {
+    /// Issue a controller credential for `routed`'s controller instance and
+    /// re-render the harness overlay so the child carries that credential
+    /// instead of the launch token.
+    ///
+    /// `None` when the session has no controller instance to bind (direct,
+    /// or a harness without a maintained adapter) or when `explicit_base_url`
+    /// names a daemon this process cannot vouch for. A credential issued and
+    /// then not installable is revoked before the error is returned.
+    async fn issue(
+        source: &ConfigSource,
+        config: &mut Config,
+        agent_id: &str,
+        routed: &mut Routed,
+        explicit_base_url: bool,
+    ) -> Result<Option<Self>> {
+        let (Some(endpoint), Some(controller_instance_id)) = (
+            routed.endpoint_plan.clone(),
+            routed.controller_instance_id.clone(),
+        ) else {
+            return Ok(None);
+        };
+        if explicit_base_url {
+            eprintln!(
+                "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
+                 the remote model endpoint remains usable without trusted session leases"
+            );
+            return Ok(None);
+        }
+        let socket_path = crate::daemon::socket_path_for(source, config);
+        let issued = crate::daemon::send_command(
+            &socket_path,
+            &crate::daemon::DaemonCommand::AcpControllerIssue {
+                controller_instance_id: controller_instance_id.clone(),
+            },
+        )
+        .await
+        .context("requesting a local ACP controller credential")?;
+        let credential = match issued {
+            crate::daemon::DaemonResponse::AcpControllerCredential {
+                controller_instance_id: confirmed,
+                credential,
+                ..
+            } if confirmed == controller_instance_id => credential,
+            crate::daemon::DaemonResponse::Error { message } => {
+                return Err(anyhow::anyhow!("ACP controller binding failed: {message}"));
+            }
+            other => {
+                return Err(anyhow::anyhow!(
+                    "daemon returned an unexpected ACP credential response: {other:?}"
+                ));
+            }
+        };
+        let binding = Self {
+            socket_path,
+            controller_instance_id,
+        };
+        let endpoint = endpoint.controller_credential(credential.as_str());
+        let overlay = match endpoint.fallback_overlay() {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                binding.revoke().await;
+                return Err(error.context("rendering controller-authenticated fallback"));
+            }
+        };
+        if let Some(entry) = config.agents.get_mut(agent_id) {
+            let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
+            for (name, value) in overlay.env {
+                env.insert(name, value);
+            }
+            args.extend(overlay.args);
+        }
+        routed.endpoint_plan = Some(endpoint);
+        Ok(Some(binding))
+    }
+
+    /// The route bridge this binding makes trustworthy.
+    fn route_control(&self) -> Arc<dyn AcpRouteControl> {
+        Arc::new(DaemonRouteControl::new(
+            self.socket_path.clone(),
+            self.controller_instance_id.clone(),
+        ))
+    }
+
+    /// The cost bridge this binding makes attributable — cached, so the
+    /// controller's forward path never waits on the daemon.
+    fn session_cost(&self) -> Arc<dyn AcpSessionCost> {
+        Arc::new(CachedSessionCost::new(Arc::new(DaemonSessionCost {
+            socket_path: self.socket_path.clone(),
+            controller_instance_id: self.controller_instance_id.clone(),
+        })))
+    }
+
+    /// Revoke the credential and every lease it owns. Idempotent on the
+    /// daemon side, so calling it after the controller's own disconnect
+    /// revoke costs one round trip and nothing else; a failure is logged,
+    /// because the caller is already on its way out.
+    async fn revoke(&self) {
+        let revoked = crate::daemon::send_command(
+            &self.socket_path,
+            &crate::daemon::DaemonCommand::AcpControllerRevoke {
+                controller_instance_id: self.controller_instance_id.clone(),
+            },
+        )
+        .await;
+        match revoked {
+            Ok(crate::daemon::DaemonResponse::Ok) => {}
+            Ok(other) => {
+                tracing::debug!(?other, "controller credential revoke was not acknowledged")
+            }
+            Err(error) => {
+                tracing::debug!(%error, "controller credential revoke did not reach the daemon")
+            }
+        }
+    }
+}
+
 /// Launch one harness process and expose its connection-level ACP controller
 /// over **stdio** until the manager disconnects.
 ///
@@ -927,77 +1159,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    let mut route_control: Option<Arc<dyn AcpRouteControl>> = None;
-    let mut session_cost: Option<Arc<dyn AcpSessionCost>> = None;
-    if let (Some(endpoint), Some(controller_instance_id)) = (
-        routed.endpoint_plan.clone(),
-        routed.controller_instance_id.clone(),
-    ) {
-        if routing.base_url.is_none() {
-            let socket_path = crate::daemon::socket_path_for(source, &config);
-            let issued = crate::daemon::send_command(
-                &socket_path,
-                &crate::daemon::DaemonCommand::AcpControllerIssue {
-                    controller_instance_id: controller_instance_id.clone(),
-                },
-            )
-            .await
-            .context("requesting a local ACP controller credential")?;
-            let credential = match issued {
-                crate::daemon::DaemonResponse::AcpControllerCredential {
-                    controller_instance_id: confirmed,
-                    credential,
-                    ..
-                } if confirmed == controller_instance_id => credential,
-                crate::daemon::DaemonResponse::Error { message } => {
-                    return Err(anyhow::anyhow!("ACP controller binding failed: {message}"));
-                }
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "daemon returned an unexpected ACP credential response: {other:?}"
-                    ));
-                }
-            };
-            let endpoint = endpoint.controller_credential(credential.as_str());
-            let overlay = match endpoint.fallback_overlay() {
-                Ok(overlay) => overlay,
-                Err(error) => {
-                    let _ = crate::daemon::send_command(
-                        &socket_path,
-                        &crate::daemon::DaemonCommand::AcpControllerRevoke {
-                            controller_instance_id: controller_instance_id.clone(),
-                        },
-                    )
-                    .await;
-                    return Err(error.context("rendering controller-authenticated fallback"));
-                }
-            };
-            if let Some(entry) = config.agents.get_mut(agent_id) {
-                let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
-                for (name, value) in overlay.env {
-                    env.insert(name, value);
-                }
-                args.extend(overlay.args);
-            }
-            routed.endpoint_plan = Some(endpoint);
-            // Both bridges share the trusted local binding: the same gate
-            // that makes route leases safe makes the spend query
-            // attributable, and neither exists without it.
-            route_control = Some(Arc::new(DaemonRouteControl::new(
-                socket_path.clone(),
-                controller_instance_id.clone(),
-            )));
-            session_cost = Some(Arc::new(DaemonSessionCost {
-                socket_path,
-                controller_instance_id,
-            }));
-        } else {
-            eprintln!(
-                "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
-                 the remote model endpoint remains usable without trusted session leases"
-            );
-        }
-    }
+    // The trusted local binding both bridges share: the same gate that makes
+    // route leases safe makes the spend query attributable, and neither
+    // exists without it.
+    let binding = LocalControllerBinding::issue(
+        source,
+        &mut config,
+        agent_id,
+        &mut routed,
+        routing.base_url.is_some(),
+    )
+    .await?;
     let agent = config
         .agents
         .get(agent_id)
@@ -1019,11 +1191,10 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
             .strip_inherited_env(options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
-    if let Some(route_control) = route_control {
-        controller = controller.route_control(route_control);
-    }
-    if let Some(session_cost) = session_cost {
-        controller = controller.session_cost(session_cost);
+    if let Some(binding) = &binding {
+        controller = controller
+            .route_control(binding.route_control())
+            .session_cost(binding.session_cost());
     }
     controller
         .run(agent_client_protocol::Stdio::new())
@@ -1035,10 +1206,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 /// Launch a session for `agent_id` and hand it to the interactive renderer.
 ///
-/// This half is the composition root: it resolves routing, launches the agent,
-/// attaches observability, and builds the routing surface — all of which need
-/// `Config`, the config source, and the daemon's control socket. What it hands
-/// over needs none of them, which is why the loop itself lives in
+/// This half is the composition root: it resolves routing, binds the
+/// controller credential, launches the harness behind an in-process
+/// controller, and attaches observability — all of which need `Config`, the
+/// config source, and the daemon's control socket. What it hands over needs
+/// none of them, which is why the loop itself lives in
 /// [`crate::chat::session`].
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     use std::io::IsTerminal as _;
@@ -1053,13 +1225,17 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Fail fast, before any agent process exists — a person waiting at a
     // prompt should learn the route is dead now, not mid-turn.
-    let routed = apply_routing_with_cloud_credentials(
+    //
+    // Controller-issued: the session's traffic meters under the controller
+    // instance rather than a launch token, which is what makes both a route
+    // lease and an attributable cost figure possible.
+    let mut routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
+        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -1068,6 +1244,14 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
         None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
     }
+    let binding = LocalControllerBinding::issue(
+        source,
+        &mut config,
+        agent_id,
+        &mut routed,
+        routing.base_url.is_some(),
+    )
+    .await?;
 
     // A pipe cannot be drawn on. Everything the terminal branch does — the
     // live row, the modals, raw mode — assumes a screen with a cursor on it,
@@ -1075,51 +1259,54 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // very output the redirect exists to capture. So a redirected stdout gets
     // the session as plain text instead, which is the one thing a pipe *can*
     // use.
-    //
-    // The branch sits **above the launch** because the two halves no longer
-    // launch the same thing: the pipe drives a controller through the shared
-    // client, and the terminal still drives the local engine until it moves
-    // too. Nothing below is common to both, so nothing above it is either.
     if !std::io::stdout().is_terminal() {
-        return chat_piped(&config, agent_id, &routed, options, &cloud_credentials).await;
+        return chat_piped(
+            &config,
+            agent_id,
+            &routed,
+            options,
+            &cloud_credentials,
+            binding,
+        )
+        .await;
     }
 
-    let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
-    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter = attach_observability(&config, agent_id, &session, &cloud_credentials).await;
-
-    let ended = {
-        // The picker exists only when this session can actually be rerouted,
-        // which needs both a daemon and an attributable launch (task 4.2).
-        // Probing that here rather than assuming it is what keeps a dead
-        // control off the screen — and it is probed here rather than in the
-        // renderer because the daemon socket is this half's to know.
-        let providers = SessionProviders::new(
-            &config,
-            routed
-                .via
-                .as_ref()
-                .and(routed.launch_id.as_ref())
-                .map(|id| RouteControl {
-                    socket: crate::daemon::resolve_socket_path(
-                        source.home().join("bitrouter.yaml").as_path(),
-                        &config.server.control_socket,
-                    ),
-                    launch_id: id.clone(),
-                }),
-        );
-        let routable = providers.can_reroute();
-        if routable {
-            eprintln!("chat: type /route to change provider mid-session.");
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
         }
-        eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
-        crate::chat::session::run(session, providers, routable, routed.via.clone()).await
     };
+    let observability =
+        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
 
-    if let Some(exporter) = exporter {
+    // The picker exists only when the controller advertised route control —
+    // which it does only under a trusted local binding. Said here, before raw
+    // mode, because a cooked newline in a raw terminal does not return the
+    // carriage.
+    if crate::chat::session::can_reroute(&session.client) {
+        eprintln!("chat: type /route to change the route mid-session.");
+    }
+    eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
+    let ended = crate::chat::session::run(
+        &mut session,
+        &ids.acp_session_id,
+        agent_id,
+        observability.recorder,
+        routed.via.clone(),
+    )
+    .await;
+
+    if let Some(exporter) = observability.exporter {
         exporter.shutdown();
     }
     ended
@@ -1138,10 +1325,11 @@ async fn chat_piped(
     routed: &Routed,
     options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    binding: Option<LocalControllerBinding>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(config, agent_id, routed, options)
+    let mut session = launch_controlled(config, agent_id, routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
@@ -1236,7 +1424,7 @@ where
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options)
+    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
@@ -1265,9 +1453,9 @@ where
     // The controller id is deliberately absent rather than reported: the value
     // this process mints reaches the daemon only as a *claimed* header, which
     // §5.5 of the controller spec treats as correlation evidence and not as
-    // authorization. Emitting it would name a column that is null. When the
-    // controlled path issues a controller credential — as `acp serve` already
-    // does — it can come back and be true.
+    // authorization. Emitting it would name a column that is null. When this
+    // path issues a controller credential — as `acp serve` and `chat` do — it
+    // can come back and be true.
     //
     // `via` is null when running direct.
     write_ndjson_line(
@@ -1342,8 +1530,11 @@ where
 /// process. Session identity, lifecycle, and history therefore stay
 /// harness-native, and there is no second scheduler: the controller, the
 /// harness child's I/O, and the client all run on this runtime.
-struct ControlledSession {
-    client: AcpClient,
+pub(crate) struct ControlledSession {
+    pub(crate) client: AcpClient,
+    /// The controller credential this session's traffic meters under, when
+    /// it has one. Revoked by [`ControlledSession::shutdown`] on every exit.
+    binding: Option<LocalControllerBinding>,
     /// Resolves once the harness child and its process group are reaped.
     /// Awaited in [`ControlledSession::shutdown`], because tearing the
     /// connection down is not the same as the child being gone — the SDK drops
@@ -1360,12 +1551,17 @@ const CONTROLLER_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl ControlledSession {
     /// Tear the client down (which closes the duplex and so ends the
-    /// controller), then wait for the controller to confirm. Failures are
-    /// reported rather than propagated: the caller has already asked to stop
-    /// and there is nothing left to retry.
-    async fn shutdown(&mut self) {
+    /// controller), wait for the controller to confirm, then revoke the
+    /// controller credential. Returns whether every step confirmed; failures
+    /// are logged rather than propagated, because the caller has already
+    /// asked to stop and there is nothing left to retry — but an interactive
+    /// caller wants to know the session ended abnormally, so it can say where
+    /// the reason is.
+    pub(crate) async fn shutdown(&mut self) -> bool {
+        let mut clean = true;
         if let Err(error) = self.client.shutdown().await {
             tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
+            clean = false;
         }
         // The connection is down; the child may not be. `kill_on_drop` reaches
         // the wrapper (`npx`) and not the `node` it spawned, so the group kill
@@ -1375,28 +1571,41 @@ impl ControlledSession {
             .is_err()
         {
             tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
+            clean = false;
         }
         match tokio::time::timeout(CONTROLLER_EXIT_TIMEOUT, &mut self.controller).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(error))) => tracing::debug!(%error, "acp controller ended with an error"),
-            Ok(Err(error)) => tracing::warn!(%error, "acp controller task failed"),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "acp controller task failed");
+                clean = false;
+            }
             Err(_) => {
                 tracing::warn!("acp controller did not exit within {CONTROLLER_EXIT_TIMEOUT:?}");
                 self.controller.abort();
+                clean = false;
             }
         }
+        // The controller revokes on its own disconnect; this is the backstop
+        // for the paths where it never got that far.
+        if let Some(binding) = &self.binding {
+            binding.revoke().await;
+        }
+        clean
     }
 }
 
 /// Launch `agent_id` behind an in-process controller and connect the shared
 /// client to it. The controller carries the same identity and endpoint plan
-/// `acp serve` gives it, so a routed `prompt` configures the harness's
-/// provider through `providers/set` exactly as a served one does.
+/// `acp serve` gives it, so a routed session configures the harness's
+/// provider through `providers/set` exactly as a served one does — and, with
+/// a `binding`, the same route and cost bridges.
 async fn launch_controlled(
     config: &Config,
     agent_id: &str,
     routed: &Routed,
     options: LaunchOptions,
+    binding: Option<LocalControllerBinding>,
 ) -> Result<ControlledSession> {
     let agent = config
         .agents
@@ -1416,7 +1625,13 @@ async fn launch_controlled(
         bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
             .strip_inherited_env(options.strip_inherited_env);
     let reaped = process.reaped();
-    let controller = bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    let mut controller =
+        bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(binding) = &binding {
+        controller = controller
+            .route_control(binding.route_control())
+            .session_cost(binding.session_cost());
+    }
 
     // In-process duplex: no bytes, no pipe, no second process between the
     // manager and the controller it drives.
@@ -1437,12 +1652,18 @@ async fn launch_controlled(
     {
         Ok(client) => client,
         Err(error) => {
+            // Aborted, not awaited: the controller's own disconnect revoke may
+            // never run, so the credential is revoked here.
             controller.abort();
+            if let Some(binding) = &binding {
+                binding.revoke().await;
+            }
             return Err(error);
         }
     };
     Ok(ControlledSession {
         client,
+        binding,
         reaped,
         controller,
     })
@@ -1631,59 +1852,6 @@ where
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Attach observability to an engine session when the observe config opts
-/// telemetry in: every turn is drained to stderr (always) and, with an
-/// exporter, emitted as an OTel GenAI `invoke_agent` span; tool calls become
-/// `execute_tool` spans from the translated update stream. Returns the
-/// exporter so the caller can flush it (`shutdown`) before exit.
-///
-/// The `prompt` path builds the same pieces directly — see
-/// [`build_observability`] and [`report_turn`] — because it has no pipeline
-/// hook to drain and reads latency and stop reason off the prompt round-trip
-/// instead.
-async fn attach_observability(
-    config: &Config,
-    agent_id: &str,
-    session: &bitrouter_sdk::acp::engine::Session,
-    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
-    let observability = build_observability(
-        config,
-        agent_id,
-        &session.state().record_id,
-        cloud_credentials,
-    )
-    .await;
-
-    // Telemetry drain: stderr log per turn (always) and the invoke_agent span.
-    //
-    // One drain, two consumers, because `Session::telemetry()` hands out the
-    // receiver exactly once — a second caller gets `None` and silently does
-    // nothing. Everything that needs per-turn records has to hang off this
-    // loop.
-    if let Some(mut rx) = session.telemetry() {
-        let recorder = observability.recorder.clone();
-        tokio::spawn(async move {
-            while let Some(record) = rx.recv().await {
-                if let Some(recorder) = &recorder {
-                    recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
-                        stop_reason: record.stop_reason.clone(),
-                        latency: std::time::Duration::from_millis(record.latency_ms),
-                        context_used: record.context.map(|c| c.used),
-                        context_size: record.context.map(|c| c.size),
-                    });
-                }
-                drain_telemetry_record(record);
-            }
-        });
-    }
-
-    if let Some(recorder) = observability.recorder {
-        spawn_tool_spans(recorder, session.updates());
-    }
-    observability.exporter
-}
-
 /// The OTel exporter for this process and, when one exists, the span recorder
 /// bound to one session.
 struct Observability {
@@ -1838,185 +2006,6 @@ mod standalone_cloud_credentials_tests {
     }
 }
 
-// ── providers/* — BitRouter's routing surface, in ACP's nouns (spec §6) ──────
-
-/// Backs `providers/list` and `providers/set` for one live session.
-///
-/// **No credential ever crosses this wire.** `ProviderCurrentConfig` is
-/// specified as *non-secret* routing config, and this type is constructed from
-/// `api_base` / `api_protocol` only — `ProviderConfig::api_key` is never read
-/// here. Credential management stays on `bitrouter providers login`.
-///
-/// # Scope of `providers/set` today
-///
-/// The selection is **session-scoped and held in this process**: it is what
-/// `providers/list` reports as the effective route, and it is what a manager
-/// renders. It does not yet rewrite the model on traffic already in flight
-/// from the agent child to the daemon.
-///
-/// That last step is deliberately not faked here. The substrate is a separate
-/// process from the daemon and the agent child talks to the daemon directly,
-/// so the rewrite has to happen daemon-side, in the policy table (spec §6.1,
-/// probe 4). The table is now hot-swappable — that was the point of rebuilding
-/// it on reload — but reaching it from here needs a route-mutation command on
-/// the daemon control socket, which does not exist yet. Reporting a route this
-/// process cannot yet enforce is the honest half; claiming the traffic moved
-/// would not be.
-pub(crate) struct SessionProviders {
-    /// Non-secret catalog snapshot, taken once at session launch.
-    catalog: Vec<CatalogEntry>,
-    /// The provider this session's route currently points at. `None` until a
-    /// `providers/set` names one, at which point `providers/list` reports it.
-    selected: std::sync::RwLock<Option<String>>,
-    /// Where to install the override so it moves real traffic. `None` for a
-    /// `--direct` session or one whose credential cannot be attributed — and
-    /// in that case `set` **refuses** rather than reporting a switch it did
-    /// not perform.
-    control: Option<RouteControl>,
-}
-
-/// The daemon endpoint a route override is installed through, and the launch
-/// id that scopes it to this session.
-pub(crate) struct RouteControl {
-    socket: std::path::PathBuf,
-    launch_id: String,
-}
-
-/// One routable provider, reduced to what a UI may see.
-struct CatalogEntry {
-    id: String,
-    api_base: String,
-    protocol: String,
-}
-
-impl SessionProviders {
-    /// Snapshot the active providers from `config`, dropping every secret.
-    ///
-    /// `control` is `Some` only when this session's traffic can actually be
-    /// moved: that needs both a daemon to install the override in and a launch
-    /// id to scope it by.
-    pub(crate) fn new(config: &Config, control: Option<RouteControl>) -> Self {
-        let mut catalog: Vec<CatalogEntry> = config
-            .providers
-            .iter()
-            .filter(|(_, provider)| provider.active)
-            .map(|(id, provider)| CatalogEntry {
-                id: id.clone(),
-                api_base: provider.api_base.clone(),
-                protocol: provider
-                    .api_protocol
-                    .resolve("*")
-                    .and_then(|list| list.preferred().map(|p| p.as_str().to_string()))
-                    .unwrap_or_else(|| "openai".to_string()),
-            })
-            .collect();
-        // Stable order so a rendered list does not reshuffle between calls.
-        catalog.sort_by(|a, b| a.id.cmp(&b.id));
-        Self {
-            catalog,
-            selected: std::sync::RwLock::new(None),
-            control,
-        }
-    }
-
-    /// Whether this session's traffic can actually be moved.
-    ///
-    /// Gates the picker: a chooser that cannot change anything is worse than
-    /// no chooser, because absence is legible and a dead control is a lie.
-    pub(crate) fn can_reroute(&self) -> bool {
-        self.control.is_some()
-    }
-
-    /// The route in force, or `None` while the session is on its configured
-    /// default. A poisoned lock reads as "no override" rather than panicking.
-    fn effective(&self) -> Option<String> {
-        match self.selected.read() {
-            Ok(selected) => selected.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
-    }
-}
-
-/// Map a BitRouter protocol name onto ACP's `LlmProtocol`. Anything outside
-/// ACP's closed set is reported as `Other` rather than forced onto a protocol
-/// that means something different.
-fn llm_protocol(name: &str) -> LlmProtocol {
-    match name {
-        "anthropic" | "messages" => LlmProtocol::Anthropic,
-        "chat_completions" | "responses" | "openai" => LlmProtocol::OpenAi,
-        other => LlmProtocol::Other(other.to_string()),
-    }
-}
-
-#[async_trait::async_trait]
-impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
-    async fn list(&self) -> Vec<ProviderInfo> {
-        let effective = self.effective();
-        self.catalog
-            .iter()
-            .map(|entry| {
-                let protocol = llm_protocol(&entry.protocol);
-                // `current` marks the route in force. Before any
-                // `providers/set` no provider is singled out: the effective
-                // route is the config's cascade, and naming one would claim a
-                // decision the router has not made.
-                //
-                // It carries `api_type` and `base_url` and nothing else — the
-                // provider's `api_key` is never read on this path.
-                let current = (effective.as_deref() == Some(entry.id.as_str()))
-                    .then(|| ProviderCurrentConfig::new(protocol.clone(), entry.api_base.clone()));
-                ProviderInfo::new(
-                    ProviderId::new(entry.id.clone()),
-                    vec![protocol],
-                    // Nothing in a BitRouter catalog is undisablable — the
-                    // point of the router is that any provider can be routed
-                    // around.
-                    false,
-                    current,
-                )
-            })
-            .collect()
-    }
-
-    async fn set(&self, request: SetProviderRequest) -> std::result::Result<(), String> {
-        let requested = request.provider_id.0.to_string();
-        if !self.catalog.iter().any(|entry| entry.id == requested) {
-            return Err(format!(
-                "unknown provider '{requested}' — `providers/list` reports what is routable"
-            ));
-        }
-        // Move the traffic FIRST, and record the selection only if it moved.
-        // A `providers/list` reporting a route the daemon is not serving would
-        // be a lie the manager renders as a fact.
-        let Some(control) = &self.control else {
-            return Err(
-                "this session's traffic cannot be rerouted: it runs direct, or its credential \
-                 is the caller's own and so cannot be attributed to a launch"
-                    .to_string(),
-            );
-        };
-        let response = crate::daemon::send_command(
-            &control.socket,
-            &crate::daemon::DaemonCommand::SetRoute {
-                launch_id: control.launch_id.clone(),
-                provider_id: Some(requested.clone()),
-            },
-        )
-        .await
-        .map_err(|e| format!("reaching the daemon to install the route: {e}"))?;
-        if let crate::daemon::DaemonResponse::Error { message } = response {
-            return Err(format!("daemon refused the route change: {message}"));
-        }
-        match self.selected.write() {
-            Ok(mut selected) => {
-                *selected = Some(requested);
-                Ok(())
-            }
-            Err(_) => Err("provider selection lock was poisoned".to_string()),
-        }
-    }
-}
-
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
 /// `tracing::info!` which the acp CLI routes to stderr.
@@ -2040,17 +2029,127 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     }
 }
 
-/// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.
-pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
-    ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
-        .context("building acp routing table from config")
-}
-
 #[cfg(test)]
 mod controller_tests {
-    use agent_client_protocol::schema::v1::Cost;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
-    use super::{RoutingCredentialMode, attributed_cost, controller_identity, user_key_required};
+    use agent_client_protocol::schema::v1::Cost;
+    use bitrouter_sdk::acp::controller::SessionCost;
+
+    use super::{
+        CachedSessionCost, RoutingCredentialMode, attributed_cost, controller_identity,
+        user_key_required,
+    };
+
+    /// A daemon bridge that does not answer until released, and counts how
+    /// often it was asked.
+    struct StallingCost {
+        release: tokio::sync::Notify,
+        asked: AtomicUsize,
+        figure: Option<Cost>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionCost for StallingCost {
+        async fn attributed_cost(&self, _session_id: &str) -> Option<Cost> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            self.release.notified().await;
+            self.figure.clone()
+        }
+    }
+
+    async fn settled(cache: &CachedSessionCost, session_id: &str) -> Option<Cost> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let held = cache.cache.held(session_id);
+            if held.is_some() || std::time::Instant::now() >= deadline {
+                return held;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// The forward path never waits on the daemon: the first call returns at
+    /// once with no figure, the refresh it started lands in the background,
+    /// and the next call reads it. A burst of updates costs one lookup.
+    #[tokio::test]
+    async fn the_cached_cost_answers_without_awaiting_the_daemon() {
+        let daemon = Arc::new(StallingCost {
+            release: tokio::sync::Notify::new(),
+            asked: AtomicUsize::new(0),
+            figure: Some(Cost::new(0.42, "USD")),
+        });
+        let cache = CachedSessionCost::new(daemon.clone());
+
+        let first = tokio::time::timeout(Duration::from_millis(200), cache.attributed_cost("s1"))
+            .await
+            .expect("the forward path must not block on the daemon");
+        assert_eq!(first, None, "nothing measured yet is nothing, not zero");
+        let second = tokio::time::timeout(Duration::from_millis(200), cache.attributed_cost("s1"))
+            .await
+            .expect("still not blocked while the refresh is in flight");
+        assert_eq!(second, None);
+        tokio::task::yield_now().await;
+        assert_eq!(
+            daemon.asked.load(Ordering::SeqCst),
+            1,
+            "one refresh in flight per session, however many updates arrive"
+        );
+
+        daemon.release.notify_one();
+        assert_eq!(settled(&cache, "s1").await, Some(Cost::new(0.42, "USD")));
+        assert_eq!(
+            cache.attributed_cost("s1").await,
+            Some(Cost::new(0.42, "USD")),
+            "the figure the daemon confirmed is what the next update carries"
+        );
+    }
+
+    /// A session the daemon never measured stays absent, and a refresh that
+    /// yields nothing never erases a figure already held.
+    #[tokio::test]
+    async fn an_unmeasured_session_stays_absent_and_a_held_figure_survives() {
+        let daemon = Arc::new(StallingCost {
+            release: tokio::sync::Notify::new(),
+            asked: AtomicUsize::new(0),
+            figure: None,
+        });
+        let cache = CachedSessionCost::new(daemon.clone());
+        assert_eq!(cache.attributed_cost("never").await, None);
+        daemon.release.notify_one();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            cache.attributed_cost("never").await,
+            None,
+            "no priced evidence is no figure — not $0.00"
+        );
+
+        cache
+            .cache
+            .settle_refresh("held", Some(Cost::new(0.25, "USD")));
+        cache.cache.settle_refresh("held", None);
+        assert_eq!(
+            cache.cache.held("held"),
+            Some(Cost::new(0.25, "USD")),
+            "a stale measured figure understates; it is never dropped for nothing"
+        );
+    }
+
+    /// The provenance marker is one spelling in two crates: what the
+    /// controller writes is what the renderer reads.
+    #[test]
+    fn the_cost_marker_is_spelled_the_same_on_both_sides() {
+        assert_eq!(
+            bitrouter_tui::cost::COST_PROVENANCE_META_KEY,
+            bitrouter_sdk::acp::controller::COST_PROVENANCE_META_KEY
+        );
+        assert_eq!(
+            bitrouter_tui::cost::COST_PROVENANCE_ROUTER,
+            bitrouter_sdk::acp::controller::COST_PROVENANCE_ROUTER
+        );
+    }
 
     /// C5: a session with no attributed traffic, or none that could be
     /// priced, renders nothing — never `$0.00`.
@@ -2157,127 +2256,5 @@ mod controller_tests {
         assert_eq!(identity.harness_id, "codex-acp");
         assert_eq!(identity.adapter_package, "configured-acp-adapter");
         assert_eq!(identity.adapter_version, "configured");
-    }
-}
-
-#[cfg(test)]
-mod provider_tests {
-    use super::*;
-    use bitrouter_sdk::acp::down::ProviderSurface;
-
-    /// A config whose providers carry unmistakable secrets, so a leak in any
-    /// serialized field is impossible to miss.
-    fn config_with_secrets() -> anyhow::Result<Config> {
-        Ok(bitrouter_sdk::config::parse(
-            r#"inherit_defaults: false
-providers:
-  alpha:
-    api_base: https://alpha.example.com/v1
-    api_key: sk-SECRET-ALPHA-DO-NOT-LEAK
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - { id: m1 }
-  beta:
-    api_base: https://beta.example.com/v1
-    api_key: sk-SECRET-BETA-DO-NOT-LEAK
-    api_protocol:
-      - "*": anthropic
-    models:
-      - { id: m1 }
-  dormant:
-    active: false
-    api_base: https://dormant.example.com/v1
-    api_key: sk-SECRET-DORMANT-DO-NOT-LEAK
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - { id: m1 }
-"#,
-        )?)
-    }
-
-    #[tokio::test]
-    async fn providers_list_reports_the_routable_catalog() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let listed = providers.list().await;
-
-        let ids: Vec<String> = listed.iter().map(|p| p.provider_id.0.to_string()).collect();
-        // Active providers only, in a stable order — an inactive provider is
-        // not routable, so offering it would be offering a dead route.
-        assert_eq!(ids, vec!["alpha".to_string(), "beta".to_string()]);
-
-        // Protocols are mapped into ACP's vocabulary, not passed through raw.
-        assert_eq!(listed[0].supported, vec![LlmProtocol::OpenAi]);
-        assert_eq!(listed[1].supported, vec![LlmProtocol::Anthropic]);
-        // Nothing in a router's catalog is undisablable.
-        assert!(listed.iter().all(|p| !p.required));
-        // No `providers/set` yet: no provider claims to be the effective route.
-        assert!(listed.iter().all(|p| p.current.is_none()));
-        Ok(())
-    }
-
-    /// A session with no way to move its traffic must **refuse** rather than
-    /// report a switch it cannot perform. The reroute itself is a daemon-side
-    /// fact, proven by `set_route_reroutes_only_the_named_launch`.
-    #[tokio::test]
-    async fn providers_set_refuses_when_it_cannot_reroute() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let refused = providers
-            .set(SetProviderRequest::new(
-                ProviderId::new("beta"),
-                LlmProtocol::Anthropic,
-                "https://beta.example.com/v1",
-            ))
-            .await;
-        assert!(
-            refused.is_err(),
-            "a session that cannot reroute must not claim it did"
-        );
-        // And it must not then report a route it never installed.
-        assert!(
-            providers.list().await.iter().all(|p| p.current.is_none()),
-            "a refused set leaves no route in force"
-        );
-
-        // An unroutable target is refused before the daemon is ever asked —
-        // reporting success for a route that does not exist would be worse
-        // than the error.
-        let rejected = providers
-            .set(SetProviderRequest::new(
-                ProviderId::new("nonexistent"),
-                LlmProtocol::OpenAi,
-                "https://nope.example.com/v1",
-            ))
-            .await;
-        assert!(rejected.is_err(), "unknown provider must be refused");
-        Ok(())
-    }
-
-    /// The hard rule from spec §6: `ProviderCurrentConfig` is non-secret
-    /// routing config. This asserts against the **serialized JSON** — the
-    /// bytes that actually reach the manager — rather than against fields,
-    /// so a secret smuggled through `_meta` would fail too.
-    #[tokio::test]
-    async fn no_credential_appears_in_any_providers_response() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let wire = serde_json::to_string(&providers.list().await)?;
-        for secret in [
-            "sk-SECRET-ALPHA-DO-NOT-LEAK",
-            "sk-SECRET-BETA-DO-NOT-LEAK",
-            "sk-SECRET-DORMANT-DO-NOT-LEAK",
-        ] {
-            assert!(
-                !wire.contains(secret),
-                "a credential reached the providers wire: {wire}"
-            );
-        }
-        // Not just the exact strings — no `api_key`-shaped field at all.
-        assert!(!wire.contains("api_key"), "{wire}");
-        assert!(!wire.contains("sk-"), "{wire}");
-        // The provider ids a UI needs are still there.
-        assert!(wire.contains("alpha"), "{wire}");
-        assert!(wire.contains("beta"), "{wire}");
-        Ok(())
     }
 }

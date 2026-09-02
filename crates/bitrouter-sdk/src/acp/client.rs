@@ -744,8 +744,10 @@ impl AcpClient {
     ///
     /// Called on each path that abandons a request while its resolver is still
     /// alive: a turn given up on at [`ClientOptions::turn_timeout`], a turn
-    /// that failed, and teardown.
-    fn deny_outstanding_permissions(&self) -> usize {
+    /// that failed, and teardown. Public so an interactive consumer that
+    /// cancels a turn can deny while the connection is still live, rather than
+    /// relying on teardown ordering.
+    pub fn deny_outstanding_permissions(&self) -> usize {
         self.permissions.deny_outstanding()
     }
 

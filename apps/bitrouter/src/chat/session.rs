@@ -1,14 +1,15 @@
 //! The interactive half of `bitrouter chat` — the view, the loop, and the keys.
 //!
 //! `acp_cli` launches the session and decides its routing; from the moment
-//! there is a running `Session` and a terminal to draw it on, everything is
+//! there is a controlled session and a terminal to draw it on, everything is
 //! here. The split follows what the two halves *reach*: the launch preamble
 //! holds `Config`, the config source, and the daemon's control socket, while
 //! this module holds a journal, a writer, and stdin. It reaches neither the
-//! daemon module nor the route-control type — the routing surface arrives as
-//! a `SessionProviders`, already built. (Spelled in prose rather than as
-//! paths, because the guard in [`crate::chat`] scans this file's source and a
-//! doc comment naming them would trip it.)
+//! daemon module nor the credential binding — the routing surface arrives
+//! over ACP, as `_bitrouter/route/*` on the shared client, and the one handle
+//! it holds on the launch half is the session's own teardown. (Spelled in
+//! prose rather than as paths, because the guard in [`crate::chat`] scans
+//! this file's source and a doc comment naming them would trip it.)
 //!
 //! `bitrouter-tui` draws; it does not read. Keys, raw mode, and the session's
 //! lifetime belong here, because they are properties of *this* process rather
@@ -18,9 +19,8 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 
-use agent_client_protocol::schema::v1::{LlmProtocol, SessionUpdate};
-
-use crate::acp_cli::SessionProviders;
+use agent_client_protocol::schema::v1::SessionUpdate;
+use bitrouter_sdk::acp::client::{AcpClient, RouteError, RouteMethod};
 
 /// This process's session log, once the subscriber has opened one.
 ///
@@ -59,17 +59,37 @@ fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()> {
     .context("writing the session log tail")
 }
 
+/// Whether this session's route can be changed from the picker.
+///
+/// The contract's three-condition gate, asked of what the controller
+/// advertised at handshake and of nothing else: the picker lists with one
+/// method and sets with another, so both must be there. A controller with no
+/// trusted local binding — `--direct`, an explicit `--base-url` — advertises
+/// neither, and the picker is then absent rather than dead.
+pub(crate) fn can_reroute(client: &AcpClient) -> bool {
+    let capability = client.route_control();
+    capability.allows(RouteMethod::List) && capability.allows(RouteMethod::Set)
+}
+
 /// Draw a launched session until it ends.
 ///
-/// Everything this needs was decided by the caller: the session is running,
-/// the routing surface is built, and `routable` is the answer to "would the
-/// picker do anything" — asked there because the daemon and the launch token
-/// are the caller's to know. From here down it is a journal, a writer, and
+/// Everything this needs was decided by the caller: the harness is running
+/// behind its controller, the session is open, and the client has read what
+/// the controller advertises. From here down it is a journal, a writer, and
 /// stdin.
+///
+/// # Teardown is the session's
+///
+/// Every exit — Ctrl-D or Ctrl-C at the prompt, stdin ending, a signal —
+/// leaves through `session.shutdown()`, which is what confirms the harness
+/// child was reaped and revokes the controller credential. The terminal is
+/// given back *after* that, so the log tail written for an abnormal end lands
+/// in a terminal that is the shell's again.
 pub(crate) async fn run(
-    session: bitrouter_sdk::acp::engine::Session,
-    providers: SessionProviders,
-    routable: bool,
+    session: &mut crate::acp_cli::ControlledSession,
+    session_id: &str,
+    agent_id: &str,
+    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
     via: Option<String>,
 ) -> Result<()> {
     // The view opens **before** the stdin owner: the writer reads the cursor
@@ -91,7 +111,7 @@ pub(crate) async fn run(
     // Permission requests block the turn until a person answers. They are the
     // journal's, but they arrive on their own channel rather than as updates.
     let (permission_tx, mut permission_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut pending = session.permissions();
+    let mut pending = session.client.subscribe_permissions();
     let permissions = tokio::spawn(async move {
         while let Some(request) = pending.next().await {
             if permission_tx.send(request).is_err() {
@@ -103,7 +123,7 @@ pub(crate) async fn run(
     // The **raw** ACP stream, not the translated one: the journal is a
     // protocol client, and translating first would lose exactly the fidelity
     // it exists to retain.
-    let mut updates = session.raw_updates();
+    let mut updates = session.client.subscribe_raw_updates();
     let shared = std::sync::Arc::new(std::sync::Mutex::new(
         bitrouter_tui::journal::Journal::default(),
     ));
@@ -165,14 +185,14 @@ pub(crate) async fn run(
             continue;
         }
         // A line of exactly `/route` opens the picker. Only offered when the
-        // session can honour it — see `can_reroute`.
+        // controller advertised route control — see `can_reroute`.
         if line.trim() == "/route" {
-            if routable {
-                pick_provider(&mut view, &shared, &mut stdin, &providers).await?;
+            if can_reroute(&session.client) {
+                pick_route(&mut view, &shared, &mut stdin, &session.client, session_id).await?;
             } else {
                 view.notice(
-                    "this session cannot be rerouted (running direct, or its credential is \
-                     its own and cannot be attributed)",
+                    "this session cannot be rerouted (the controller advertises no route \
+                     control: running direct, or without a trusted local daemon binding)",
                 );
                 view.paint(&shared).context("painting a frame")?;
             }
@@ -186,7 +206,8 @@ pub(crate) async fn run(
         )));
         view.paint(&shared).context("painting a frame")?;
 
-        let turn = session.prompt(&line);
+        let started = std::time::Instant::now();
+        let turn = session.client.prompt(session_id, &line);
         tokio::pin!(turn);
         // The tick is the streaming frame budget. It lives here rather than at
         // the prompt because streaming is the only thing that needs
@@ -272,14 +293,18 @@ pub(crate) async fn run(
         if outcome.is_none() {
             // Tell the agent, not merely ourselves: dropping the turn future
             // stops this side waiting and leaves the agent working.
-            let told = session.cancel().await;
+            let told = session.client.cancel(session_id).await;
             // And leave no question hanging. A permission the agent asked
             // after the cancel has nobody to answer it, and an unanswered
             // question must resolve to deny — never to consent, and never by
-            // sitting there until a later keystroke picks an option.
+            // sitting there until a later keystroke picks an option. The
+            // channel is drained first; the client's ledger then answers
+            // anything it emitted that never reached the channel — while the
+            // connection is still live, rather than at teardown.
             while let Ok(request) = permission_rx.try_recv() {
                 deny(request);
             }
+            session.client.deny_outstanding_permissions();
             bitrouter_tui::view::lock(&shared).set_pending_permission(None);
             if let Err(e) = told {
                 tracing::warn!(error = %e, "cancelling the turn");
@@ -291,7 +316,18 @@ pub(crate) async fn run(
         while dirty_rx.try_recv().is_ok() {}
         view.notice(match outcome {
             None => "[turn cancelled]".to_string(),
-            Some(Ok(response)) => format!("[{:?}]", response.stop_reason),
+            Some(Ok(response)) => {
+                // The same record `prompt` and the piped path report, from the
+                // same round-trip.
+                crate::acp_cli::report_turn(
+                    &session.client,
+                    agent_id,
+                    recorder.as_ref(),
+                    &response,
+                    started.elapsed(),
+                );
+                format!("[{:?}]", response.stop_reason)
+            }
             Some(Err(e)) => {
                 // A failed turn is the abnormal exit the log tail exists for;
                 // it is written after teardown, when the terminal is the
@@ -312,9 +348,10 @@ pub(crate) async fn run(
     pump.abort();
     permissions.abort();
     // A session whose agent could not be shut down cleanly ended abnormally
-    // too, and the log is where the reason is.
-    let shutdown = session.shutdown().await;
-    abnormal = abnormal || shutdown.is_err();
+    // too, and the log is where the reason is. This is also where the child
+    // is confirmed reaped and the controller credential revoked.
+    let clean = session.shutdown().await;
+    abnormal = abnormal || !clean;
     // Leave the cursor below the document, then give the terminal back —
     // in that order, because the log tail below is written as ordinary
     // output and must land in a terminal that is the shell's again.
@@ -323,7 +360,13 @@ pub(crate) async fn run(
     if abnormal {
         write_session_log_tail(&mut std::io::stdout())?;
     }
-    shutdown.context("shutting down chat session")
+    if clean {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "shutting down chat session: teardown did not confirm; see the session log"
+        ))
+    }
 }
 
 /// Answer a permission nobody is going to answer.
@@ -394,7 +437,7 @@ fn prompt_chunk(line: &str, nth: usize) -> agent_client_protocol::schema::v1::Co
 /// shutdown to `chat`, which is also what makes the harness child's fate the
 /// controller's rather than this loop's.
 pub(crate) async fn chat_plain(
-    client: &bitrouter_sdk::acp::client::AcpClient,
+    client: &AcpClient,
     session_id: &str,
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
@@ -494,24 +537,38 @@ pub(crate) async fn chat_plain(
     }
 }
 
-/// Draw the provider picker and, on a selection, actually change the route.
+/// Draw the route picker and, on a selection, actually change the route.
 ///
-/// The order matters: `providers/set` is issued first and the list is re-read
-/// afterwards, so what the user ends up seeing is the route the daemon is
-/// serving rather than the one they asked for. A `set` that fails leaves the
-/// old route marked, and says why.
-async fn pick_provider(
+/// The order matters: `_bitrouter/route/set` is issued first and what it
+/// *confirms* is what the user sees, so the footer names the route the daemon
+/// is serving rather than the one they asked for. A `set` that fails leaves
+/// the old route marked, and says why — typed by the client, so a refused
+/// route and a vanished binding read differently without parsing text.
+async fn pick_route(
     view: &mut bitrouter_tui::view::View,
     shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
     stdin: &mut crate::chat::input::Stdin,
-    providers: &SessionProviders,
+    client: &AcpClient,
+    session_id: &str,
 ) -> Result<()> {
-    use bitrouter_sdk::acp::down::ProviderSurface;
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
-    let listed = providers.list().await;
-    let Some(picker) = bitrouter_tui::picker::Picker::open(true, &listed) else {
-        view.notice("no routable providers to choose between");
+    let listed = match client.route_list(session_id).await {
+        Ok(state) => state,
+        Err(error) => {
+            view.notice(format!("route unchanged: {error}"));
+            view.paint(shared).context("painting a frame")?;
+            return Ok(());
+        }
+    };
+    // `available` is the gate, asked again here so there is no way to draw a
+    // picker without answering it.
+    let Some(picker) = bitrouter_tui::picker::Picker::open(
+        can_reroute(client),
+        &listed.available,
+        listed.current.as_deref(),
+    ) else {
+        view.notice("no routes to choose between");
         view.paint(shared).context("painting a frame")?;
         return Ok(());
     };
@@ -533,8 +590,8 @@ async fn pick_provider(
                 }
                 match key.code {
                     KeyCode::Char(c) => {
-                        if let Some(id) = picker.choose(c) {
-                            break Some(id);
+                        if let Some(route) = picker.choose(c) {
+                            break Some(route);
                         }
                     }
                     KeyCode::Esc => break None,
@@ -548,34 +605,31 @@ async fn pick_provider(
     };
 
     view.close_modal();
-    let Some(id) = chosen else {
+    let Some(route) = chosen else {
         view.notice("route unchanged");
         view.paint(shared).context("painting a frame")?;
         return Ok(());
     };
 
-    // Attempt it, then report what is actually in force — never what was asked
-    // for. `providers/set` can legitimately refuse.
-    let request = agent_client_protocol::schema::v1::SetProviderRequest::new(
-        agent_client_protocol::schema::v1::ProviderId::new(id.clone()),
-        LlmProtocol::Other(String::new()),
-        String::new(),
-    );
-    match providers.set(request).await {
-        Ok(()) => {
-            let confirmed = providers.list().await;
-            let in_force = confirmed
-                .iter()
-                .find(|p| p.current.is_some())
-                .map(|p| p.provider_id.0.to_string())
-                .unwrap_or_else(|| "unchanged".to_string());
+    // Attempt it, then report what the daemon confirmed — never what was
+    // asked for. `set` can legitimately refuse.
+    match client.route_set(session_id, &route).await {
+        Ok(in_force) => {
             view.notice(format!("route: {in_force}"));
             // The footer names the route for the rest of the session, not just
             // for this frame.
             view.set_route(Some(in_force));
         }
-        Err(e) => {
-            view.notice(format!("route unchanged: {e}"));
+        Err(RouteError::InvalidRoute(message)) => {
+            view.notice(format!("route unchanged: {message}"));
+        }
+        Err(RouteError::Unavailable(message)) => {
+            view.notice(format!(
+                "route unchanged: route control is unavailable ({message})"
+            ));
+        }
+        Err(RouteError::Other(error)) => {
+            view.notice(format!("route unchanged: {error:#}"));
         }
     }
     view.paint(shared).context("painting a frame")

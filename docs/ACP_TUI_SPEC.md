@@ -495,6 +495,13 @@ credential (Claude Code on Max), requests never reach the daemon, so session
 cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
 visibly rather than silently. Inherit that behaviour; do not reinvent it.
 
+> **Superseded 2026-09-02 by [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md)
+> C2/C3/C5.** `Scope::Wider` left the ACP surface: `UsageUpdate.cost` is
+> session-attributed or absent, `_meta["bitrouter.dev/cost"]` marks
+> *provenance* rather than scope, and every unattributable case above is
+> reached through absence — the footer shows `cost unreported`, never a
+> daemon-wide figure.
+
 ## 9. Decision 6 — no crate yet, with a stated trigger
 
 > **SUPERSEDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** Build
