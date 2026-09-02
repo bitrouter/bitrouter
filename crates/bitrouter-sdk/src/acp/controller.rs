@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use agent_client_protocol::schema::InitializeProxyRequest;
 use agent_client_protocol::schema::v1::{
-    Implementation, InitializeResponse, ListProvidersRequest, ListProvidersResponse, LlmProtocol,
-    Meta, SetProviderRequest, SetProviderResponse,
+    Cost, Implementation, InitializeResponse, ListProvidersRequest, ListProvidersResponse,
+    LlmProtocol, Meta, SessionNotification, SetProviderRequest, SetProviderResponse,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     Agent, Client, Conductor, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled,
-    Proxy, Responder,
+    JsonRpcMessage, Proxy, Responder, UntypedMessage,
 };
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
@@ -232,6 +232,32 @@ pub trait RouteControl: Send + Sync {
     async fn disconnected(&self) -> Result<(), RouteControlError>;
 }
 
+/// `_meta` key on a decorated usage update naming **whose** figure `cost` is.
+///
+/// Present with [`COST_PROVENANCE_ROUTER`] when BitRouter metered and
+/// attributed the session's traffic; absent when the figure is the harness's
+/// own, forwarded untouched, or when there is no figure. It marks provenance,
+/// not scope: `cost` is specified as cumulative session cost and is never
+/// anything wider. Namespaced beside `bitrouter.dev/controller`.
+pub const COST_PROVENANCE_META_KEY: &str = "bitrouter.dev/cost";
+
+/// The [`COST_PROVENANCE_META_KEY`] value for a figure BitRouter metered.
+pub const COST_PROVENANCE_ROUTER: &str = "router";
+
+/// App-owned bridge from the protocol controller to session-attributed spend.
+///
+/// The controller never synthesizes a usage update: it consults this bridge
+/// only when the harness has emitted one, and decorates that update's `cost`
+/// with the answer while `used` and `size` pass through untouched. `None`
+/// means BitRouter did not meter this session's traffic, or holds no priced
+/// evidence for it, and the update is forwarded exactly as it arrived —
+/// never `$0.00`, never a wider figure.
+#[async_trait]
+pub trait SessionCost: Send + Sync {
+    /// Cumulative spend BitRouter attributed to one native session, if any.
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost>;
+}
+
 /// Non-secret identity of the pinned harness adapter behind one controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControllerIdentity {
@@ -319,6 +345,7 @@ pub struct Controller<A> {
     agent: A,
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 impl<A> Controller<A>
@@ -331,6 +358,7 @@ where
             agent,
             config,
             route_control: None,
+            session_cost: None,
         }
     }
 
@@ -338,6 +366,14 @@ where
     #[must_use]
     pub fn route_control(mut self, route_control: Arc<dyn RouteControl>) -> Self {
         self.route_control = Some(route_control);
+        self
+    }
+
+    /// Install the app-owned bridge that decorates the harness's usage
+    /// updates with session-attributed cost.
+    #[must_use]
+    pub fn session_cost(mut self, session_cost: Arc<dyn SessionCost>) -> Self {
+        self.session_cost = Some(session_cost);
         self
     }
 
@@ -351,6 +387,7 @@ where
         let proxy = ControllerProxy {
             config: self.config,
             route_control,
+            session_cost: self.session_cost,
         };
         let result = ConductorImpl::new_agent(
             "bitrouter-acp-controller",
@@ -375,6 +412,7 @@ where
 struct ControllerProxy {
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 const INITIALIZE_NOT_STARTED: u8 = 0;
@@ -390,6 +428,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let config = Arc::new(self.config);
         let route_control = self.route_control;
         let route_control_enabled = route_control.is_some();
+        let session_cost = self.session_cost;
+        let session_cost_enabled = session_cost.is_some();
         let list_control = route_control.clone();
         let set_control = route_control.clone();
         let reset_control = route_control.clone();
@@ -452,6 +492,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                 &mut response,
                                 &config,
                                 route_control_enabled,
+                                session_cost_enabled,
                             );
                             initialize_state.store(INITIALIZE_READY, Ordering::SeqCst);
                             responder.respond(response)
@@ -648,6 +689,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
             )
             .with_handler(ForwardMessages {
                 initialize_state: forwarding_state,
+                session_cost,
             })
             .connect_to(client)
             .await
@@ -722,6 +764,7 @@ fn decorate_initialize_response(
     response: &mut InitializeResponse,
     config: &ControllerConfig,
     route_control_enabled: bool,
+    session_cost_enabled: bool,
 ) {
     let upstream_info = response.agent_info.as_ref().map(|info| {
         serde_json::json!({
@@ -746,6 +789,17 @@ fn decorate_initialize_response(
             "scope": "session"
         })
     });
+    // Attributed cost is a capability, advertised the same way as route
+    // control: a manager probes version, scope, and field presence here and
+    // never infers it from the agent name.
+    let usage = session_cost_enabled.then(|| {
+        serde_json::json!({
+            "version": "1",
+            "fields": ["cost"],
+            "scope": "session",
+            "provenance": COST_PROVENANCE_META_KEY,
+        })
+    });
     let controller_meta = serde_json::json!({
         "harnessId": config.identity.harness_id,
         "adapter": {
@@ -754,6 +808,7 @@ fn decorate_initialize_response(
         },
         "upstreamAgentInfo": upstream_info,
         "routeControl": route_control,
+        "usage": usage,
     });
     response
         .meta
@@ -763,6 +818,7 @@ fn decorate_initialize_response(
 
 struct ForwardMessages {
     initialize_state: std::sync::Arc<AtomicU8>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 fn reject_manager_dispatch(
@@ -804,6 +860,19 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
             })
             .await
             .if_dispatch_from(Agent, async |message: Dispatch| {
+                // The one harness message the controller looks inside: a
+                // `session/update`, and only when a cost bridge is installed.
+                // Everything else keeps the verbatim path.
+                let message = match (message, self.session_cost.as_deref()) {
+                    (Dispatch::Notification(notification), Some(session_cost))
+                        if SessionNotification::matches_method(notification.method()) =>
+                    {
+                        Dispatch::Notification(
+                            decorate_usage_update(session_cost, notification).await,
+                        )
+                    }
+                    (message, _) => message,
+                };
                 connection.send_proxied_message_to(Client, message)?;
                 Ok(Handled::Yes)
             })
@@ -814,6 +883,72 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "BitRouterForwardMessages"
     }
+}
+
+/// Wire tag of the one `session/update` kind the controller decorates.
+///
+/// Pinned against the schema by `usage_update_kind_matches_the_schema`, so a
+/// renamed variant fails a test rather than silently ending decoration.
+const USAGE_UPDATE_KIND: &str = "usage_update";
+
+/// Decorate one harness `session/update` that carries a usage update with the
+/// session's attributed cost.
+///
+/// Deliberately narrow: any other update kind, any shape this controller does
+/// not recognise, and any lookup that yields no figure returns the
+/// notification exactly as it arrived. Nothing here can drop or fail a
+/// message.
+async fn decorate_usage_update(
+    session_cost: &dyn SessionCost,
+    notification: UntypedMessage,
+) -> UntypedMessage {
+    let Some(session_id) = usage_update_session(notification.params()) else {
+        return notification;
+    };
+    let Some(cost) = session_cost.attributed_cost(session_id).await else {
+        return notification;
+    };
+    match with_attributed_cost(notification.params(), cost) {
+        Some(params) => UntypedMessage {
+            method: notification.method,
+            params,
+        },
+        None => notification,
+    }
+}
+
+/// The session a `session/update` belongs to, when its update is a usage
+/// update; `None` for every other kind and for anything malformed.
+fn usage_update_session(params: &serde_json::Value) -> Option<&str> {
+    let kind = params.get("update")?.get("sessionUpdate")?.as_str()?;
+    if kind != USAGE_UPDATE_KIND {
+        return None;
+    }
+    params.get("sessionId")?.as_str()
+}
+
+/// A copy of `params` whose usage update carries BitRouter's `cost` and the
+/// provenance marker. `used`, `size`, every other field of the update, and
+/// the notification's own `_meta` stay the harness's, byte for byte.
+///
+/// `None` when `update` or its `_meta` is not an object; the caller then
+/// forwards the original rather than guess at a shape it does not know.
+fn with_attributed_cost(params: &serde_json::Value, cost: Cost) -> Option<serde_json::Value> {
+    let cost = serde_json::to_value(cost).ok()?;
+    let mut params = params.clone();
+    let update = params.get_mut("update")?.as_object_mut()?;
+    update.insert("cost".to_string(), cost);
+    let meta = update
+        .entry("_meta")
+        .or_insert_with(|| serde_json::Value::Object(Meta::new()));
+    if meta.is_null() {
+        *meta = serde_json::Value::Object(Meta::new());
+    }
+    meta.as_object_mut()?.insert(
+        COST_PROVENANCE_META_KEY.to_string(),
+        serde_json::Value::String(COST_PROVENANCE_ROUTER.to_string()),
+    );
+    Some(params)
 }
 
 #[cfg(test)]
@@ -827,7 +962,7 @@ mod tests {
     use agent_client_protocol::schema::v1::{
         AgentAuthCapabilities, AgentCapabilities, AuthCapabilities, AuthMethod, AuthMethodAgent,
         AuthenticateRequest, AuthenticateResponse, CancelNotification, ClientCapabilities,
-        CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk,
+        CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Cost,
         CreateElicitationRequest, CreateElicitationResponse, CreateTerminalRequest,
         CreateTerminalResponse, DeleteSessionRequest, DeleteSessionResponse, ElicitationAction,
         ElicitationCapabilities, ElicitationFormCapabilities, ElicitationFormMode,
@@ -847,7 +982,7 @@ mod tests {
         SetProviderResponse, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
         SetSessionModeRequest, SetSessionModeResponse, StopReason, TerminalExitStatus,
         TerminalOutputRequest, TerminalOutputResponse, TextContent, ToolCallUpdate,
-        ToolCallUpdateFields, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
+        ToolCallUpdateFields, UsageUpdate, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
         WriteTextFileRequest, WriteTextFileResponse,
     };
     use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcResponse};
@@ -855,10 +990,10 @@ mod tests {
     use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
     use super::{
-        Controller, ControllerConfig, ControllerIdentity, ListProvidersRpc,
-        ListProvidersRpcResponse, ProviderEndpointPlan, RouteControl, RouteControlError,
-        RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest, SetProviderRpc,
-        SetProviderRpcResponse,
+        COST_PROVENANCE_META_KEY, Controller, ControllerConfig, ControllerIdentity,
+        ListProvidersRpc, ListProvidersRpcResponse, ProviderEndpointPlan, RouteControl,
+        RouteControlError, RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest,
+        SessionCost, SetProviderRpc, SetProviderRpcResponse,
     };
 
     async fn receive<T: JsonRpcResponse + Send>(
@@ -964,6 +1099,78 @@ mod tests {
         async fn disconnected(&self) -> Result<(), RouteControlError> {
             self.disconnected.store(true, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    /// Harness that answers each prompt with a message chunk and then its own
+    /// usage update — occupancy figures, a cost of its own, and `_meta` on
+    /// both the update and the notification — so a decoration that touched
+    /// anything beyond `cost` and the marker would show.
+    struct UsageAgent;
+
+    impl ConnectTo<Client> for UsageAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Agent
+                .builder()
+                .name("usage-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, connection| {
+                        let session_id = request.session_id.clone();
+                        connection.send_notification(SessionNotification::new(
+                            session_id.clone(),
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new("hi")),
+                            )),
+                        ))?;
+                        connection.send_notification(
+                            SessionNotification::new(
+                                session_id.clone(),
+                                SessionUpdate::UsageUpdate(
+                                    UsageUpdate::new(1_200, 200_000)
+                                        .cost(Cost::new(9.99, "EUR"))
+                                        .meta(Meta::from_iter([(
+                                            "harness.usage".to_string(),
+                                            serde_json::json!(true),
+                                        )])),
+                                ),
+                            )
+                            .meta(Meta::from_iter([(
+                                "harness.update".to_string(),
+                                serde_json::json!(session_id.0.as_ref()),
+                            )])),
+                        )?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    /// Bridge that knows a figure for some sessions and records every lookup,
+    /// so a test can pin that only usage updates trigger one.
+    struct RecordingSessionCost {
+        figures: HashMap<String, f64>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionCost for RecordingSessionCost {
+        async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+            record(&self.asked, session_id.to_string());
+            self.figures
+                .get(session_id)
+                .map(|amount| Cost::new(*amount, "USD"))
         }
     }
 
@@ -2969,6 +3176,244 @@ mod tests {
             .clone();
         assert_eq!(closed, vec!["close-me"]);
         assert!(routes.disconnected.load(Ordering::SeqCst));
+        Ok(())
+    }
+
+    /// Drive `UsageAgent` through a controller and collect every
+    /// `session/update` the manager receives, plus the initialize `_meta`.
+    async fn run_usage_manager(
+        controller: Controller<UsageAgent>,
+    ) -> anyhow::Result<(Option<Meta>, Vec<SessionNotification>)> {
+        let updates = Arc::new(Mutex::new(Vec::<SessionNotification>::new()));
+        let observed_updates = Arc::clone(&updates);
+        let initialize_meta = Arc::new(Mutex::new(None));
+        let observed_meta = Arc::clone(&initialize_meta);
+        let (manager_out, controller_in) = duplex(16_384);
+        let (controller_out, manager_in) = duplex(16_384);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("usage-manager")
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    record(&observed_updates, notification);
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    let initialized = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await?;
+                    match observed_meta.lock() {
+                        Ok(mut meta) => *meta = initialized.meta,
+                        Err(poisoned) => *poisoned.into_inner() = initialized.meta,
+                    }
+                    for session in ["native-a", "native-b"] {
+                        let response = receive(connection.send_request(PromptRequest::new(
+                            session,
+                            vec![ContentBlock::Text(TextContent::new("go"))],
+                        )))
+                        .await?;
+                        assert_eq!(response.stop_reason, StopReason::EndTurn);
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
+
+        let meta = match initialize_meta.lock() {
+            Ok(meta) => meta.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        let updates = match updates.lock() {
+            Ok(updates) => updates.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        Ok((meta, updates))
+    }
+
+    fn usage_for(
+        updates: &[SessionNotification],
+        session: &str,
+    ) -> anyhow::Result<(UsageUpdate, Option<Meta>)> {
+        updates
+            .iter()
+            .find_map(|notification| match &notification.update {
+                SessionUpdate::UsageUpdate(usage)
+                    if notification.session_id.0.as_ref() == session =>
+                {
+                    Some((usage.clone(), notification.meta.clone()))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("usage update for {session} did not reach the manager"))
+    }
+
+    #[tokio::test]
+    async fn usage_updates_are_decorated_with_attributed_cost_only() -> anyhow::Result<()> {
+        let bridge = Arc::new(RecordingSessionCost {
+            figures: HashMap::from([("native-a".to_string(), 0.42)]),
+            asked: Mutex::new(Vec::new()),
+        });
+        let controller = Controller::new(
+            UsageAgent,
+            ControllerConfig::new(ControllerIdentity::new(
+                "claude-acp",
+                "@agentclientprotocol/claude-agent-acp",
+                "0.70.0",
+            )),
+        )
+        .session_cost(bridge.clone());
+
+        let (meta, updates) = run_usage_manager(controller).await?;
+
+        // C4: advertised as a capability, gated like route control.
+        assert_eq!(
+            meta.as_ref()
+                .and_then(|meta| meta.get("bitrouter.dev/controller"))
+                .and_then(|value| value.get("usage")),
+            Some(&serde_json::json!({
+                "version": "1",
+                "fields": ["cost"],
+                "scope": "session",
+                "provenance": "bitrouter.dev/cost",
+            }))
+        );
+
+        // C1–C3: the attributed session's update carries BitRouter's figure
+        // and the provenance marker; occupancy and every other field are the
+        // harness's.
+        let (attributed, notification_meta) = usage_for(&updates, "native-a")?;
+        assert_eq!((attributed.used, attributed.size), (1_200, 200_000));
+        assert_eq!(attributed.cost, Some(Cost::new(0.42, "USD")));
+        let attributed_meta = attributed
+            .meta
+            .ok_or_else(|| anyhow::anyhow!("decorated update lost its _meta"))?;
+        assert_eq!(
+            attributed_meta.get(COST_PROVENANCE_META_KEY),
+            Some(&serde_json::json!("router"))
+        );
+        assert_eq!(
+            attributed_meta.get("harness.usage"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            notification_meta.and_then(|meta| meta.get("harness.update").cloned()),
+            Some(serde_json::json!("native-a"))
+        );
+
+        // C5: nothing attributed, nothing decorated — the harness's own
+        // figure survives, and no marker claims it.
+        let (untouched, _) = usage_for(&updates, "native-b")?;
+        assert_eq!((untouched.used, untouched.size), (1_200, 200_000));
+        assert_eq!(untouched.cost, Some(Cost::new(9.99, "EUR")));
+        assert!(untouched.meta.as_ref().is_some_and(|meta| {
+            !meta.contains_key(COST_PROVENANCE_META_KEY) && meta.contains_key("harness.usage")
+        }));
+
+        // Every other update takes the verbatim path and never consults the
+        // bridge.
+        let chunks = updates
+            .iter()
+            .filter(|notification| {
+                matches!(notification.update, SessionUpdate::AgentMessageChunk(_))
+            })
+            .count();
+        assert_eq!(chunks, 2);
+        let asked = match bridge.asked.lock() {
+            Ok(asked) => asked.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(asked, vec!["native-a", "native-b"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn usage_capability_is_absent_without_a_cost_bridge() -> anyhow::Result<()> {
+        let controller = Controller::new(
+            UsageAgent,
+            ControllerConfig::new(ControllerIdentity::new(
+                "claude-acp",
+                "@agentclientprotocol/claude-agent-acp",
+                "0.70.0",
+            )),
+        );
+
+        let (meta, updates) = run_usage_manager(controller).await?;
+
+        assert_eq!(
+            meta.as_ref()
+                .and_then(|meta| meta.get("bitrouter.dev/controller"))
+                .and_then(|value| value.get("usage")),
+            Some(&serde_json::Value::Null)
+        );
+        let (forwarded, _) = usage_for(&updates, "native-a")?;
+        assert_eq!((forwarded.used, forwarded.size), (1_200, 200_000));
+        assert_eq!(forwarded.cost, Some(Cost::new(9.99, "EUR")));
+        assert!(forwarded.meta.as_ref().is_some_and(|meta| {
+            !meta.contains_key(COST_PROVENANCE_META_KEY) && meta.contains_key("harness.usage")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn usage_update_kind_matches_the_schema() -> anyhow::Result<()> {
+        let wire = serde_json::to_value(SessionUpdate::UsageUpdate(UsageUpdate::new(1, 2)))?;
+        assert_eq!(
+            wire.get("sessionUpdate"),
+            Some(&serde_json::json!(super::USAGE_UPDATE_KIND))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decoration_touches_only_cost_and_the_marker() -> anyhow::Result<()> {
+        let params = serde_json::to_value(
+            SessionNotification::new(
+                "native-a",
+                SessionUpdate::UsageUpdate(UsageUpdate::new(7, 9).cost(Cost::new(1.0, "EUR"))),
+            )
+            .meta(Meta::from_iter([(
+                "harness.update".to_string(),
+                serde_json::json!(1),
+            )])),
+        )?;
+        assert_eq!(super::usage_update_session(&params), Some("native-a"));
+
+        let decorated = super::with_attributed_cost(&params, Cost::new(0.5, "USD"))
+            .ok_or_else(|| anyhow::anyhow!("a well-formed usage update must decorate"))?;
+        let mut expected = params.clone();
+        expected["update"]["cost"] = serde_json::json!({"amount": 0.5, "currency": "USD"});
+        expected["update"]["_meta"] = serde_json::json!({"bitrouter.dev/cost": "router"});
+        assert_eq!(decorated, expected);
+
+        // Any other update kind is not a usage update.
+        let chunk = serde_json::to_value(SessionNotification::new(
+            "native-a",
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
+        ))?;
+        assert_eq!(super::usage_update_session(&chunk), None);
+
+        // A `_meta` that is not an object is a shape this controller does
+        // not know: the caller forwards the original rather than guess.
+        let mut malformed = params.clone();
+        malformed["update"]["_meta"] = serde_json::json!("not-an-object");
+        assert!(super::with_attributed_cost(&malformed, Cost::new(0.5, "USD")).is_none());
         Ok(())
     }
 }

@@ -4,23 +4,32 @@
 //! cannot know about — the footer composed around it, and the terminal the
 //! writer paints into.
 //!
-//! # The one thing the caller must supply
+//! # Cost is read, never inferred
 //!
-//! ACP carries `UsageUpdate.cost` but nothing saying *whose* spend it is, and
-//! a currency figure with no scope is the most misleading thing a session view
-//! can draw. So [`View::open`] takes a [`CostReader`]: the caller's answer to
-//! "given this usage, whose number is it?", because only the caller knows how
-//! its agent conveys that — for BitRouter, a namespaced `_meta` key that has
-//! no business being named in here.
+//! ACP carries `UsageUpdate.cost` but nothing saying *who wrote it*, and a
+//! currency figure nobody can vouch for is the most misleading thing a
+//! session view can draw. [`crate::cost::from_usage`] reads the provenance
+//! marker off the `_meta` key the controller writes: marked `router`, the
+//! figure is BitRouter's meter and is drawn plainly; unmarked, it is the
+//! harness's own and is drawn labelled as the agent's; marked with something
+//! this renderer does not know, it is not drawn at all.
 //!
-//! A reader returning `None` is not an error and not a zero: it renders as
-//! *unreported*, which is what a client that cannot see a price has actually
-//! observed.
+//! `None` is not an error and not a zero: it renders as *unreported*, which is
+//! what a client that cannot see a price has actually observed.
+//!
+//! # Context occupancy is the half that needs no attribution
+//!
+//! The same `UsageUpdate` carries `used` and `size`, and those are the
+//! harness's own: it owns the context window, and the figure means the same
+//! thing whoever routed the traffic. So [`crate::render::session::context`]
+//! draws them whenever the harness sends them, including in every session
+//! where cost is *unreported*. It is drawn only as a pair — see that
+//! function for why half of it is worse than none.
 //!
 //! # Ordering is part of the honesty
 //!
-//! The footer's rows go cost, route, session state, notice, pending
-//! permission, modal, input. Two of those placements are load-bearing rather
+//! The footer's rows go cost, context window, route, session state, notice,
+//! pending permission, modal, input. Two of those placements are load-bearing rather
 //! than aesthetic: a question waiting on a person outranks everything else
 //! down here, and the input line is last so it is never pushed off-screen by
 //! something the agent said.
@@ -28,28 +37,17 @@
 use std::io;
 use std::sync::{Mutex, MutexGuard};
 
-use agent_client_protocol_schema::v1::UsageUpdate;
 use ratatui::text::{Line, Span};
 
-use crate::cost::Cost;
 use crate::journal::Journal;
 use crate::render::Registry;
 use crate::writer::{Cache, Writer};
-
-/// How the caller reads whose spend a `UsageUpdate` describes.
-///
-/// `None` means *not reported* — either the agent sent no cost, or it sent one
-/// with no scope. Both must read as "unreported" rather than as the session's,
-/// because a generic agent may well send `cost` with no notion of the
-/// distinction.
-pub type CostReader = fn(&UsageUpdate) -> Option<Cost>;
 
 /// The live view of one chat session.
 pub struct View {
     writer: Writer<ratatui::backend::CrosstermBackend<io::Stdout>>,
     cache: Cache,
     registry: Registry,
-    cost: CostReader,
     /// How this session is routed. Fixed for its life unless the caller
     /// changes it, and absent when the session is direct.
     route: Option<String>,
@@ -58,7 +56,15 @@ pub struct View {
     /// than accumulated: it is about the last thing that happened, and the
     /// session log is where the history lives.
     notice: Vec<Line<'static>>,
-    /// A row owned by an open modal. Today only the provider picker.
+    /// The permission question waiting for an answer, if any.
+    ///
+    /// The view's rather than the journal's: `session/request_permission` is a
+    /// **request**, not an update, so it is not part of the projection of the
+    /// update stream that the journal is. Whoever owns the answer owns the
+    /// question, and that is the caller's loop — which sets it here and clears
+    /// it when the request is resolved.
+    permission: Option<crate::permission::Prompt>,
+    /// A row owned by an open modal. Today only the route picker.
     modal: Option<Line<'static>>,
     /// The line being typed. Raw mode means nothing is echoed unless the
     /// footer echoes it.
@@ -71,15 +77,15 @@ impl View {
     /// Call this **before** the caller's stdin owner exists: the writer reads
     /// the cursor once at construction, which on a real terminal is a DSR
     /// query, and a reader already sitting on stdin would take the answer.
-    pub fn open(route: Option<String>, cost: CostReader) -> io::Result<Self> {
+    pub fn open(route: Option<String>) -> io::Result<Self> {
         let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
         Ok(Self {
             writer: Writer::new(backend)?,
             cache: Cache::default(),
             registry: Registry::default(),
-            cost,
             route,
             notice: Vec::new(),
+            permission: None,
             modal: None,
             input: String::new(),
         })
@@ -111,7 +117,12 @@ impl View {
         self.notice.clear();
     }
 
-    /// Give a modal its row. Today only the provider picker has one.
+    /// Show a permission question, or take it back down once it is answered.
+    pub fn set_permission(&mut self, prompt: Option<crate::permission::Prompt>) {
+        self.permission = prompt;
+    }
+
+    /// Give a modal its row. Today only the route picker has one.
     pub fn open_modal(&mut self, row: Line<'static>) {
         self.modal = Some(row);
     }
@@ -131,9 +142,12 @@ impl View {
     fn footer(&self, journal: &Journal) -> Vec<Line<'static>> {
         let cost = journal
             .usage()
-            .and_then(self.cost)
+            .and_then(crate::cost::from_usage)
             .map_or_else(crate::cost::unreported, |cost| cost.render());
         let mut status: Vec<Span<'static>> = cost.spans;
+        // Beside the cost, because both answer "what is this turn consuming" —
+        // and this half needs no attribution, so it shows where cost cannot.
+        status.extend(crate::render::session::context(journal.usage()));
         if let Some(route) = &self.route {
             status.push(Span::raw(format!(" · via {route}")));
         }
@@ -146,7 +160,7 @@ impl View {
         let mut rows = vec![Line::from(status)];
         rows.extend(self.notice.iter().cloned());
         // A question waiting on a person outranks anything else down here.
-        if let Some(prompt) = journal.pending_permission() {
+        if let Some(prompt) = &self.permission {
             rows.push(prompt.render());
         }
         if let Some(modal) = &self.modal {
@@ -203,48 +217,53 @@ pub fn lock(shared: &Mutex<Journal>) -> MutexGuard<'_, Journal> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::cost::Scope;
+    use agent_client_protocol_schema::v1::UsageUpdate;
 
-    fn usage(cost: bool) -> UsageUpdate {
+    fn usage(cost: bool, marker: Option<&str>) -> UsageUpdate {
         let mut usage = UsageUpdate::new(1_500, 200_000);
         if cost {
             usage.cost = Some(agent_client_protocol_schema::v1::Cost::new(0.42, "USD"));
         }
+        if let Some(marker) = marker {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                crate::cost::COST_PROVENANCE_META_KEY.to_string(),
+                serde_json::Value::String(marker.to_string()),
+            );
+            usage.meta = Some(meta);
+        }
         usage
     }
 
-    /// A reader that declines to scope the figure must produce *unreported*,
-    /// never a zero and never an unlabelled number.
-    #[test]
-    fn a_declining_cost_reader_renders_unreported() {
-        let declined: CostReader = |_| None;
-        let usage = usage(true);
-        let rendered = crate::plain::text(
-            &Some(&usage)
-                .and_then(declined)
-                .map_or_else(crate::cost::unreported, |c| c.render()),
-        );
-        assert!(rendered.contains("unreported"), "{rendered:?}");
-        assert!(!rendered.contains('0'), "{rendered:?}");
+    fn rendered(usage: &UsageUpdate) -> String {
+        crate::plain::text(
+            &crate::cost::from_usage(usage).map_or_else(crate::cost::unreported, |c| c.render()),
+        )
     }
 
-    /// The reader's answer is what reaches the line — the view never decides
-    /// scope for itself.
+    /// No figure at all renders *unreported*, never a zero. This is the case
+    /// every harness that does not report cost lands in — and every
+    /// unmetered BitRouter session, which is forwarded with no figure.
     #[test]
-    fn the_readers_scope_is_the_one_rendered() {
-        let wider: CostReader = |u| {
-            u.cost
-                .as_ref()
-                .map(|c| Cost::new(c.amount, "USD", Scope::Wider))
-        };
-        let usage = usage(true);
-        let rendered = crate::plain::text(
-            &Some(&usage)
-                .and_then(wider)
-                .map_or_else(crate::cost::unreported, |c| c.render()),
-        );
-        assert!(rendered.contains("all callers"), "{rendered:?}");
-        assert!(rendered.contains("0.42"), "{rendered:?}");
+    fn an_absent_cost_renders_unreported() {
+        let text = rendered(&usage(false, None));
+        assert!(text.contains("unreported"), "{text:?}");
+        assert!(!text.contains('0'), "{text:?}");
+    }
+
+    /// The marker on the wire is what reaches the line — the view never
+    /// decides whose number it is.
+    #[test]
+    fn the_wire_provenance_is_the_one_rendered() {
+        let ours = rendered(&usage(true, Some(crate::cost::COST_PROVENANCE_ROUTER)));
+        assert!(ours.contains("0.42"), "{ours:?}");
+        assert!(!ours.contains("agent"), "{ours:?}");
+
+        let theirs = rendered(&usage(true, None));
+        assert!(theirs.contains("agent"), "{theirs:?}");
+        assert!(theirs.contains("0.42"), "{theirs:?}");
+
+        let unknown = rendered(&usage(true, Some("something-new")));
+        assert!(unknown.contains("unreported"), "{unknown:?}");
     }
 }

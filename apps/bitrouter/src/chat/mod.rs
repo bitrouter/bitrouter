@@ -12,9 +12,16 @@
 //!
 //! | exit | route |
 //! |---|---|
-//! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `Stdin`'s `Drop`, which also covers every `?` out of `chat` |
+//! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `session::run` drops `Stdin` after teardown; `Stdin`'s `Drop` also covers every `?` out of `chat` |
 //! | panic | `bitrouter_tui::lifecycle::install_panic_restore`, chained in front of the existing hook |
-//! | INT / TERM / HUP | [`crate::tui::lifecycle::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
+//! | INT / TERM / HUP | [`signals::Shutdown`] as the one `select!` arm in `session::run`'s single loop |
+//!
+//! Giving the terminal back is only half of an exit. The other half is the
+//! harness child and this session's route leases, and those are
+//! `ControlledSession::shutdown`'s — which is why the loop lives in a function
+//! whose errors `session::run` *carries* rather than returns. A `?` that
+//! escaped would restore the terminal (`Drop` sees to that) and leave the child
+//! unreaped.
 //!
 //! ## Checking it by hand
 //!
@@ -35,9 +42,9 @@
 //! `lifecycle`'s `the_panic_hook_restores_and_still_reports`, which pins that
 //! `restore` runs *and* that the panic is still reported afterwards.
 
-pub mod cost;
 pub mod input;
 pub mod session;
+pub mod signals;
 
 #[cfg(test)]
 mod tests {
@@ -46,22 +53,26 @@ mod tests {
     ///
     /// `picker.rs` and the rendering half of `cost.rs` went back to
     /// `bitrouter-tui`, where the compiler keeps them honest. What is left
-    /// here is the part that genuinely is not ACP — the `_meta` key, the wire
-    /// spelling, this process's stdin — and it gets this instead: the chat
+    /// here is the part that genuinely is not ACP — this process's stdin,
+    /// its signals, its session log — and it gets this instead: the chat
     /// module may read the ACP wire and the terminal, and nothing else. No
-    /// `Config`, no metering store, no control socket.
+    /// `Config`, no metering store, no control socket, and none of the
+    /// daemon bridges the launch half builds — the route surface it drives
+    /// is `_bitrouter/route/*` on the shared client, which *is* the wire.
+    /// The one handle it holds on the launch half is the session's own
+    /// teardown, because the session's lifetime is this module's charter.
     ///
     /// Checked against the sources themselves rather than by review, so it
     /// fails the build that breaks it instead of the review that misses it.
     #[test]
     fn the_chat_module_reaches_nothing_daemon_wide() {
         let sources = [
-            ("cost.rs", include_str!("cost.rs")),
             ("input.rs", include_str!("input.rs")),
+            ("session.rs", include_str!("session.rs")),
         ];
         // Spelled as paths and type names, so a mention in prose — "the
-        // daemon's total", which `cost.rs` explains at length — is not a
-        // false positive.
+        // daemon's total" — is not a false positive. `session.rs` states in
+        // prose what it does not reach, for exactly that reason.
         let forbidden = [
             "crate::daemon",
             "crate::metering",
@@ -69,7 +80,9 @@ mod tests {
             "MeteringStore",
             "bitrouter_sdk::config",
             "control_socket",
-            "RouteControl",
+            "DaemonRouteControl",
+            "DaemonSessionCost",
+            "LocalControllerBinding",
         ];
         for (name, source) in sources {
             for reach in forbidden {

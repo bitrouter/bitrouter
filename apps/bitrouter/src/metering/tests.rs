@@ -1562,3 +1562,353 @@ async fn an_untagged_caller_is_still_recorded_just_not_attributed() -> Result<()
     assert_eq!(rows.len(), 1, "the row exists");
     Ok(())
 }
+
+// ── session-attributed spend ─────────────────────────────────────────────────
+
+/// The identity event the session hook emits for one routed model request,
+/// varying only the fields `spend_summary_for_acp_session` keys on. No
+/// `acp_session_id`: no maintained adapter sends the dynamic header, so the
+/// persisted binding is the native root/thread pair.
+fn acp_identity(
+    request_id: &str,
+    controller: Option<&str>,
+    harness: &str,
+    root: Option<&str>,
+    thread: Option<&str>,
+) -> SessionIdentityObserved {
+    SessionIdentityObserved {
+        router_request_id: request_id.to_string(),
+        origin: if controller.is_some() {
+            RequestOrigin::AcpHarnessRequest
+        } else {
+            RequestOrigin::PureModelApi
+        },
+        // The public API-key identity, which reaches spans. It is **not** what
+        // the spend query filters on — that is the route scope, derived from
+        // the caller — so varying it here would separate nothing.
+        api_principal_id: "local".to_string(),
+        harness: Some(harness.to_string()),
+        claimed_controller_instance_id: controller.map(str::to_string),
+        acp_session_id: None,
+        native_root_session_id: root.map(str::to_string),
+        native_agent_thread_id: thread.map(str::to_string),
+        native_parent_agent_thread_id: None,
+        native_turn_id: None,
+        legacy_workflow_session_id: None,
+        api_continuation_id: None,
+        evidence: Vec::new(),
+        conflicts: Vec::new(),
+        attributed: root.is_some() || thread.is_some(),
+        route_scope: "default".to_string(),
+        route_lease_id: None,
+        route_lease_outcome: None,
+    }
+}
+
+/// Record one priced request (`prompt × 2 + completion × 10` µ$) carrying
+/// `identity`, under an explicit request id so equal token counts never
+/// collide.
+async fn record_attributed(
+    recorder: &MeteringRecorder,
+    request_id: &str,
+    prompt: u64,
+    completion: u64,
+    identity: SessionIdentityObserved,
+) -> Result<()> {
+    record_attributed_as("acp", recorder, request_id, prompt, completion, identity).await
+}
+
+/// The same, under a named caller — whose api-key identity becomes the route
+/// scope the spend query filters on.
+async fn record_attributed_as(
+    api_key: &str,
+    recorder: &MeteringRecorder,
+    request_id: &str,
+    prompt: u64,
+    completion: u64,
+    identity: SessionIdentityObserved,
+) -> Result<()> {
+    let mut request = ctx(api_key, prompt, completion);
+    request.request_id = request_id.to_string();
+    request.emit(identity);
+    recorder.record(&mut request).await
+}
+
+#[tokio::test]
+async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    // Two controllers whose harnesses happen to report the same session id.
+    // Spec §5.5: neither may read the other's spend through it.
+    record_attributed(
+        &recorder,
+        "one",
+        10,
+        5,
+        acp_identity("one", Some("brc_one"), "claude_code", Some("shared"), None),
+    )
+    .await?;
+    record_attributed(
+        &recorder,
+        "two",
+        20,
+        7,
+        acp_identity("two", Some("brc_two"), "claude_code", Some("shared"), None),
+    )
+    .await?;
+
+    let one = store
+        .spend_summary_for_acp_session("acp", "brc_one", "shared", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((one.requests, one.spend_micro_usd), (1, 70));
+    let two = store
+        .spend_summary_for_acp_session("acp", "brc_two", "shared", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((two.requests, two.spend_micro_usd), (1, 110));
+
+    // An unknown controller is empty, not an error and not everything.
+    let none = store
+        .spend_summary_for_acp_session("acp", "brc_never", "shared", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((none.requests, none.spend_micro_usd), (0, 0));
+    Ok(())
+}
+
+/// Two callers that declare the *same* controller and session — the case a
+/// claim-only key cannot separate.
+///
+/// The controller id is caller-declared and nothing verifies it, so two API
+/// principals can name the same one, deliberately or by collision. Route
+/// leases are namespaced by the route scope precisely so one cannot reach the
+/// other's; the spend behind attributed cost has to match, or a cost line
+/// would quietly sum two callers.
+///
+/// The isolation comes from the **caller**, not from a field on the identity
+/// event: the recorder derives the scope exactly as the session hook does, so
+/// an event that merely claimed a different principal would not separate
+/// anything.
+#[tokio::test]
+async fn one_caller_never_reads_another_callers_spend() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    let same_claim = |request_id: &str| {
+        acp_identity(
+            request_id,
+            Some("brc_same"),
+            "claude_code",
+            Some("same-session"),
+            None,
+        )
+    };
+    record_attributed_as("alice", &recorder, "alice", 10, 5, same_claim("alice")).await?;
+    record_attributed_as("bob", &recorder, "bob", 20, 7, same_claim("bob")).await?;
+
+    let alice = store
+        .spend_summary_for_acp_session("alice", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(
+        (alice.requests, alice.spend_micro_usd),
+        (1, 70),
+        "alice sees her own row and not bob's, despite identical claims"
+    );
+
+    let bob = store
+        .spend_summary_for_acp_session("bob", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((bob.requests, bob.spend_micro_usd), (1, 110));
+
+    // And a third scope making the same claim sees neither.
+    let stranger = store
+        .spend_summary_for_acp_session("carol", "brc_same", "same-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((stranger.requests, stranger.spend_micro_usd), (0, 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn child_agent_spend_counts_toward_its_root_session() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    // Claude (§4.2): the ACP id is the native session id; a subagent keeps
+    // it as root and adds its own agent id.
+    record_attributed(
+        &recorder,
+        "claude-root",
+        10,
+        5,
+        acp_identity(
+            "claude-root",
+            Some("brc_c"),
+            "claude_code",
+            Some("claude-session"),
+            None,
+        ),
+    )
+    .await?;
+    record_attributed(
+        &recorder,
+        "claude-child",
+        20,
+        7,
+        acp_identity(
+            "claude-child",
+            Some("brc_c"),
+            "claude_code",
+            Some("claude-session"),
+            Some("agent-1"),
+        ),
+    )
+    .await?;
+    // Codex (§4.2): a root thread carries equal session-id and thread-id; a
+    // child or fork keeps the root session-id under a new thread-id.
+    record_attributed(
+        &recorder,
+        "codex-root",
+        1,
+        1,
+        acp_identity(
+            "codex-root",
+            Some("brc_c"),
+            "codex",
+            Some("thread-root"),
+            Some("thread-root"),
+        ),
+    )
+    .await?;
+    record_attributed(
+        &recorder,
+        "codex-child",
+        2,
+        2,
+        acp_identity(
+            "codex-child",
+            Some("brc_c"),
+            "codex",
+            Some("thread-root"),
+            Some("thread-child"),
+        ),
+    )
+    .await?;
+    record_attributed(
+        &recorder,
+        "codex-fork",
+        3,
+        3,
+        acp_identity(
+            "codex-fork",
+            Some("brc_c"),
+            "codex",
+            Some("thread-root"),
+            Some("thread-fork"),
+        ),
+    )
+    .await?;
+
+    // The root's figure is the tree's: 70 + 110.
+    let claude = store
+        .spend_summary_for_acp_session("acp", "brc_c", "claude-session", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((claude.requests, claude.spend_micro_usd), (2, 180));
+    // 12 + 24 + 36.
+    let codex = store
+        .spend_summary_for_acp_session("acp", "brc_c", "thread-root", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((codex.requests, codex.spend_micro_usd), (3, 72));
+    // A fork is a session the manager holds by its own id, and its own
+    // traffic is reachable through it.
+    let fork = store
+        .spend_summary_for_acp_session("acp", "brc_c", "thread-fork", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((fork.requests, fork.spend_micro_usd), (1, 36));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unattributed_rows_never_match_a_session() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    // No identity at all: a direct API client.
+    recorder.record(&mut ctx("direct", 100, 100)).await?;
+    // A controller's request whose harness sent no session evidence.
+    record_attributed(
+        &recorder,
+        "no-session",
+        100,
+        100,
+        acp_identity("no-session", Some("brc_u"), "claude_code", None, None),
+    )
+    .await?;
+    // Pure model API traffic carrying a Claude session header that happens
+    // to equal the controller's session id: no credential bound it, so it
+    // belongs to no controller.
+    record_attributed(
+        &recorder,
+        "leaky",
+        100,
+        100,
+        acp_identity("leaky", None, "claude_code", Some("session-x"), None),
+    )
+    .await?;
+
+    let all = store.spend_summary(TimeWindow::ThisMonth).await?;
+    assert_eq!(all.requests, 3, "every row is still recorded");
+
+    let scoped = store
+        .spend_summary_for_acp_session("acp", "brc_u", "session-x", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!((scoped.requests, scoped.spend_micro_usd), (0, 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn acp_session_spend_honours_the_custom_window_end() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    record_attributed(
+        &recorder,
+        "windowed",
+        10,
+        5,
+        acp_identity(
+            "windowed",
+            Some("brc_w"),
+            "claude_code",
+            Some("session-w"),
+            None,
+        ),
+    )
+    .await?;
+
+    let now = chrono::Utc::now();
+    let closed_before = TimeWindow::Custom {
+        start: now - chrono::Duration::hours(1),
+        end: now - chrono::Duration::minutes(30),
+    };
+    let excluded = store
+        .spend_summary_for_acp_session("acp", "brc_w", "session-w", closed_before)
+        .await?;
+    assert_eq!(
+        (excluded.requests, excluded.spend_micro_usd),
+        (0, 0),
+        "a row after the window's end must not be counted"
+    );
+
+    let open_now = TimeWindow::Custom {
+        start: now - chrono::Duration::hours(1),
+        end: now + chrono::Duration::hours(1),
+    };
+    let included = store
+        .spend_summary_for_acp_session("acp", "brc_w", "session-w", open_now)
+        .await?;
+    assert_eq!((included.requests, included.spend_micro_usd), (1, 70));
+    Ok(())
+}

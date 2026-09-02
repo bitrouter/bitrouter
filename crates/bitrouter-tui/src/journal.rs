@@ -45,8 +45,6 @@ use agent_client_protocol_schema::v1::{
     SessionModeId, SessionUpdate, ToolCall, ToolCallId, ToolCallUpdate, UsageUpdate,
 };
 
-use crate::permission::Prompt;
-
 /// Ids synthesized for chunks that carry none are prefixed with this. An agent
 /// id colliding with it would have to contain a colon-delimited `journal`
 /// namespace, which no agent has reason to mint.
@@ -129,8 +127,6 @@ pub struct Journal {
     config: Vec<SessionConfigOption>,
     title: Option<String>,
     usage: Option<UsageUpdate>,
-    /// Not a `SessionUpdate`: permission arrives on its own request channel.
-    pending_permission: Option<Prompt>,
     /// The open run, if any — at most one across all voices, because the
     /// other voice speaking is what closes it.
     open: Option<(Voice, MessageId)>,
@@ -205,15 +201,6 @@ impl Journal {
         }
     }
 
-    /// Set or clear the open permission prompt.
-    ///
-    /// Separate from [`Journal::apply`] because `session/request_permission`
-    /// is a request, not an update: it arrives on its own channel and is
-    /// resolved by an answer rather than superseded by the next notification.
-    pub fn set_pending_permission(&mut self, prompt: Option<Prompt>) {
-        self.pending_permission = prompt;
-    }
-
     /// The document, in first-seen order.
     ///
     /// Each item carries its id and revision as well as its content, because
@@ -258,11 +245,6 @@ impl Journal {
     /// Context-window and cost, as last reported.
     pub fn usage(&self) -> Option<&UsageUpdate> {
         self.usage.as_ref()
-    }
-
-    /// The permission question waiting for an answer, if any.
-    pub fn pending_permission(&self) -> Option<&Prompt> {
-        self.pending_permission.as_ref()
     }
 
     /// Append a chunk to the open run, or start a new one.
@@ -396,10 +378,10 @@ fn block_text(block: &ContentBlock) -> String {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol_schema::v1::{
-        AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate, Diff, PermissionOption,
-        PermissionOptionId, PermissionOptionKind, PlanEntry, PlanEntryPriority, PlanEntryStatus,
-        SessionConfigBoolean, SessionConfigId, SessionConfigKind, SessionInfoUpdate, TextContent,
-        ToolCallContent, ToolCallStatus, ToolCallUpdateFields, ToolKind,
+        AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate, Diff, PlanEntry,
+        PlanEntryPriority, PlanEntryStatus, SessionConfigBoolean, SessionConfigId,
+        SessionConfigKind, SessionInfoUpdate, TextContent, ToolCallContent, ToolCallStatus,
+        ToolCallUpdateFields, ToolKind,
     };
 
     use super::*;
@@ -835,29 +817,5 @@ mod tests {
         cleared.title = agent_client_protocol_schema::MaybeUndefined::Null;
         journal.apply(SessionUpdate::SessionInfoUpdate(cleared));
         assert_eq!(journal.title(), None, "an explicit null does clear it");
-    }
-
-    /// Permission is set and cleared by the caller, not by the stream.
-    #[test]
-    fn a_pending_permission_is_set_and_cleared_by_its_owner() {
-        let mut journal = Journal::default();
-        assert!(journal.pending_permission().is_none());
-
-        journal.set_pending_permission(Some(Prompt::new(
-            Some("Write src/lib.rs".to_string()),
-            "t1",
-            vec![PermissionOption::new(
-                PermissionOptionId::new("allow"),
-                "Allow",
-                PermissionOptionKind::AllowOnce,
-            )],
-        )));
-        assert!(journal.pending_permission().is_some());
-
-        journal.set_pending_permission(None);
-        assert!(
-            journal.pending_permission().is_none(),
-            "an answered question stops being asked"
-        );
     }
 }

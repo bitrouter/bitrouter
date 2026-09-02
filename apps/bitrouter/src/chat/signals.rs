@@ -3,7 +3,8 @@
 //! Entering and restoring the terminal live in [`bitrouter_tui::lifecycle`],
 //! because they are properties of a terminal and that crate is what draws to
 //! one. Signals are not: which of them exist, and what a process wants to do
-//! about them, is a fact about *this* binary. So the registration stays here.
+//! about them, is a fact about *this* binary. So the registration stays here,
+//! beside [`session`](super::session) — its only caller.
 
 /// The signals a terminal session has to survive, registered once.
 ///

@@ -37,6 +37,10 @@ pub enum ReconciliationStatus {
 /// Normalized agent-session correlation persisted with one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeteringSessionIdentity {
+    /// Route namespace this request was attributed under — the only field
+    /// here that is an authorization boundary rather than a declared
+    /// correlation, and the one a spend query must key on.
+    pub route_scope_id: String,
     /// Recognized harness.
     pub agent_harness: Option<String>,
     /// Caller-declared controller correlation.

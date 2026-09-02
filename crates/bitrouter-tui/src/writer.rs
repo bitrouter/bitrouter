@@ -487,8 +487,15 @@ impl Schedule {
 ///
 /// Without this, §4.1's first step is a full re-derivation of the document on
 /// every frame — every diff hunked again, every tool's output re-capped — up
-/// to thirty times a second. The key is `(width, revision)`: rendering depends
-/// on the width, and the revision is how the journal says an entity moved on.
+/// to thirty times a second.
+///
+/// The key is `(size, revision)`: the revision is how the journal says an
+/// entity moved on, and **both** terminal dimensions are part of what a
+/// renderer saw. Width is the obvious one — it is what rows are wrapped to.
+/// Height is the one that is easy to miss: [`crate::render::diff::render`] is
+/// capped at the terminal's height, so a window made shorter leaves cached
+/// diff blocks that are taller than the screen they are now drawn on, and a
+/// window made taller leaves them clipped shorter than they need to be.
 #[derive(Debug, Default)]
 pub struct Cache {
     rows: std::collections::HashMap<EntryId, Cached>,
@@ -496,7 +503,7 @@ pub struct Cache {
 
 #[derive(Debug)]
 struct Cached {
-    width: u16,
+    size: Size,
     revision: u64,
     rows: Vec<Line<'static>>,
 }
@@ -518,9 +525,10 @@ impl Cache {
         let mut live: std::collections::HashSet<EntryId> = std::collections::HashSet::new();
 
         for item in journal.entries() {
-            let fresh = self.rows.get(&item.id).is_some_and(|cached| {
-                cached.width == size.width && cached.revision == item.revision
-            });
+            let fresh = self
+                .rows
+                .get(&item.id)
+                .is_some_and(|cached| cached.size == size && cached.revision == item.revision);
             if !fresh {
                 let rows = match item.entry {
                     Entry::Message(message) => render::message(message),
@@ -530,7 +538,7 @@ impl Cache {
                 self.rows.insert(
                     item.id.clone(),
                     Cached {
-                        width: size.width,
+                        size,
                         revision: item.revision,
                         rows,
                     },
@@ -1064,20 +1072,38 @@ mod tests {
         assert_eq!(count.get(), 2, "a changed entity is re-rendered");
     }
 
-    /// The width is half the cache key: the same entity at a new width is a
-    /// different rendering, because wrapping and every cap depend on it.
+    /// The terminal's **size** is half the cache key, not its width.
+    ///
+    /// Width is the obvious half: wrapping and every cap depend on it. Height
+    /// is the one that was missing — `render::diff::render` caps a diff at the
+    /// terminal's height, so a window resized vertically with the width
+    /// unchanged would otherwise keep serving diff blocks measured against a
+    /// screen that is no longer there.
     #[test]
-    fn a_width_change_invalidates_the_cache() {
-        let (registry, count) = counting_registry();
-        let mut journal = Journal::default();
-        journal.apply(SessionUpdate::ToolCall(
-            ToolCall::new(ToolCallId::new("t1"), "Read src/lib.rs").kind(ToolKind::Read),
-        ));
-        let mut cache = Cache::default();
+    fn a_resize_in_either_dimension_invalidates_the_cache() {
+        for (before, after) in [
+            (Size::new(80, 24), Size::new(40, 24)),
+            (Size::new(80, 24), Size::new(80, 12)),
+        ] {
+            let (registry, count) = counting_registry();
+            let mut journal = Journal::default();
+            journal.apply(SessionUpdate::ToolCall(
+                ToolCall::new(ToolCallId::new("t1"), "Read src/lib.rs").kind(ToolKind::Read),
+            ));
+            let mut cache = Cache::default();
 
-        cache.document(&journal, &registry, Size::new(80, 24), &[]);
-        cache.document(&journal, &registry, Size::new(40, 24), &[]);
-        assert_eq!(count.get(), 2);
+            cache.document(&journal, &registry, before, &[]);
+            cache.document(&journal, &registry, after, &[]);
+            assert_eq!(
+                count.get(),
+                2,
+                "{before:?} -> {after:?} kept a stale render"
+            );
+
+            // And an unchanged size still hits.
+            cache.document(&journal, &registry, after, &[]);
+            assert_eq!(count.get(), 2, "an unchanged size must still hit the cache");
+        }
     }
 
     /// The footer is the document's tail, and is never cached — it is composed

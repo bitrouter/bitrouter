@@ -80,7 +80,7 @@ pub struct Config {
     pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bitrouter agents` CLI (list / check / install). Empty by default.
-    pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
+    pub agents: HashMap<String, crate::acp::transport::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's
