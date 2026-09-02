@@ -38,7 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport};
+use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 use futures::StreamExt;
 use serde::Serialize;
@@ -50,8 +50,6 @@ use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
 };
-use bitrouter_sdk::acp::engine::LaunchOptions;
-use bitrouter_sdk::acp::telemetry::RequestCompleted;
 use bitrouter_sdk::acp::translate::SessionUpdateKind;
 
 use crate::paths::ConfigSource;
@@ -2018,6 +2016,51 @@ fn drain_telemetry_record(r: RequestCompleted) {
         context_size = r.context.map(|c| c.size),
         "acp turn completed"
     );
+}
+
+/// How to launch one harness process and drive it.
+///
+/// Lived in the SDK while `engine::Session` did the launching. It is the
+/// app's now: every field is consumed by a different part of the shared
+/// stack — `strip_inherited_env` by `AgentProcess`, `turn_timeout` by
+/// `ClientOptions`, `mcp_servers` by `AcpClient::new_session` — so there is no
+/// one SDK type it belongs to.
+#[derive(Clone, Debug, Default)]
+pub struct LaunchOptions {
+    /// Inherited environment names to remove before applying the explicit
+    /// transport and launch overlays. This lets isolated callers prevent
+    /// ambient credentials from crossing into an agent process while still
+    /// permitting a deliberately configured credential to win.
+    pub strip_inherited_env: Vec<String>,
+    /// Per-turn deadline. On elapse the agent is asked to cancel cooperatively
+    /// (`session/cancel`); if it does not comply within the client's grace the
+    /// turn errors.
+    pub turn_timeout: Option<Duration>,
+    /// MCP servers passed to the agent in `session/new` (`mcpServers`) — the
+    /// caller's tool surface for the session.
+    pub mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
+}
+
+/// A completed ACP turn, as this process records it.
+///
+/// Also came from the SDK, where an `ExecutionHook` on the ACP pipeline was
+/// the only thing that produced one. That pipeline routed to a single pinned
+/// target its executor ignored, and nothing outside the SDK ever registered a
+/// hook on it, so it went with the engine. The record survives because it is
+/// what the span recorder and the per-turn log consume — rebuilt now from the
+/// prompt round-trip itself, which is where the latency and stop reason were
+/// visible all along.
+#[derive(Debug, Clone)]
+pub struct RequestCompleted {
+    /// The agent name that handled the turn.
+    pub agent: String,
+    /// The stop reason rendered as a string (e.g. `"EndTurn"`, `"MaxTokens"`).
+    pub stop_reason: String,
+    /// Wall-clock latency for the turn in milliseconds.
+    pub latency_ms: u64,
+    /// Context-window occupancy as of the latest `UsageUpdate`, when the agent
+    /// has reported one.
+    pub context: Option<bitrouter_sdk::acp::telemetry::ContextUsage>,
 }
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:

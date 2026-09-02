@@ -62,7 +62,7 @@ The class where a mistake grants consent that nobody gave.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I1** | An abandoned permission resolves to the agent's **reject option**, never consent and never silence | `client.rs` — parked handler `Err(_) => reject`, **plus** `PermissionLedger::deny_outstanding` on every path that abandons a live request | `up.rs` `dropping_pending_permission_defaults_to_deny` (drop arm, end to end) | shared client — **landed** | `client.rs` `dropping_every_clone_still_defaults_to_deny`, `teardown_denies_an_outstanding_permission`, `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` |
+| **I1** | An abandoned permission resolves to the agent's **reject option**, never consent and never silence | `client.rs` — parked handler `Err(_) => reject`, **plus** `PermissionLedger::deny_outstanding` on every path that abandons a live request | `up.rs` `dropping_pending_permission_defaults_to_deny` (drop arm, end to end; ported onto `AgentProcess` + `AcpClient` when `UpstreamConnection` was deleted) | shared client — **landed** | `client.rs` `dropping_every_clone_still_defaults_to_deny`, `teardown_denies_an_outstanding_permission`, `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` |
 | **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs` `sanitize_selection_preserves_exact_known_id`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
 | **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs` `sanitize_selection` | `translate.rs` `sanitize_selection_cancelled_passes_through` `sanitize_selection_cancelled_passes_through` | shared client | existing |
 | **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
@@ -74,7 +74,7 @@ The class where a mistake grants consent that nobody gave.
 
 | Invariant | Enforced today | Pinned today | Why it goes |
 |---|---|---|---|
-| A manager that detaches and reattaches sees still-outstanding permissions replayed | `PermissionRegistry` (re-subscribable, sole consumer of the take-once stream) | `permissions.rs` `reattach_sees_outstanding_permission`, `engine.rs` `outstanding_permission_survives_detach_and_reissues_on_reattach` | Reattach is not in the controller model. `ACP_CONTROLLER_SPEC.md` §9 instructs managers to assume nothing survives reconnect. Irrelevant to `chat`, which is one process and one connection. **Delete the tests in the same commit, with this row cited.** |
+| A manager that detaches and reattaches sees still-outstanding permissions replayed | `PermissionRegistry` — **deleted** with the engine | its two tests went with it | Reattach is not in the controller model. `ACP_CONTROLLER_SPEC.md` §9 instructs managers to assume nothing survives reconnect. Irrelevant to `chat`, which is one process and one connection. |
 
 ---
 
@@ -82,8 +82,8 @@ The class where a mistake grants consent that nobody gave.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` — for `prompt`, `chat`, and piped `chat` alike; `engine.rs`'s arm has no caller | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
-| **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn.rs` `flush()` `flush()` + `engine.rs` (the flushed value` flushed value | `turn.rs` (queue tests`, `:175`, `:224`, `:239`, `:258` | **none — not load-bearing** | n/a |
+| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` — for `prompt`, `chat`, and piped `chat` alike | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
+| **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn::TurnController` — **deleted** with the engine | its queue tests went with it | **none — not load-bearing** | n/a |
 
 I9 is safe to drop: every production caller sends one prompt at a time —
 `chat` (`session.rs` (the turn loop`, next read only after the outcome), `chat_plain`,

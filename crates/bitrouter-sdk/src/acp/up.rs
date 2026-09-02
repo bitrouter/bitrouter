@@ -14,20 +14,12 @@
 //! [`AcpClient`] directly and drives it on the caller's runtime.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    InitializeRequest, InitializeResponse, McpServer, PromptRequest, PromptResponse, SessionUpdate,
-};
+use agent_client_protocol::schema::v1::InitializeRequest;
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
-use futures::Stream;
 use futures::channel::oneshot;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-use crate::acp::client::{AcpClient, ClientOptions, PendingPermission, SessionIds};
-use crate::acp::telemetry::SharedContextUsage;
-use crate::acp::translate::SessionUpdateKind;
 
 /// The ACP-over-stdio transport wired to a spawned agent child.
 type AgentTransport =
@@ -144,18 +136,6 @@ impl ConnectTo<Client> for AgentProcess {
         }
         result
     }
-}
-
-/// A live ACP `Client` connection to one agent child, driven on its own thread.
-///
-/// `spawn` runs `initialize` only; the session itself is created later via
-/// [`new_session`](Self::new_session) so the caller can relay a manager's
-/// `cwd` and `mcpServers` into it instead of fabricating them at launch.
-pub struct UpstreamConnection {
-    /// The shared client. Every method here delegates to it.
-    client: AcpClient,
-    /// Keeps the driver thread alive for the connection's lifetime.
-    _thread: std::thread::JoinHandle<()>,
 }
 
 /// Inherited env vars an agent child must never see. The substrate launches
@@ -331,137 +311,6 @@ fn spawn_child_reaper(
     });
 }
 
-impl UpstreamConnection {
-    /// Spawn the agent process, connect as an ACP `Client`, and run
-    /// `initialize`. Returns once the handshake completes and the command loop
-    /// is resident, or an error if spawn/handshake failed.
-    pub async fn spawn(
-        command: &str,
-        args: &[String],
-        env: &HashMap<String, String>,
-    ) -> anyhow::Result<Self> {
-        Self::spawn_with_stripped_env(command, args, env, &[]).await
-    }
-
-    /// Like [`spawn`](Self::spawn), but first removes `strip_inherited_env`
-    /// names from the inherited environment, so an isolated caller can stop
-    /// ambient credentials crossing into the agent while still letting a
-    /// deliberately configured `env` entry win.
-    pub async fn spawn_with_stripped_env(
-        command: &str,
-        args: &[String],
-        env: &HashMap<String, String>,
-        strip_inherited_env: &[String],
-    ) -> anyhow::Result<Self> {
-        let mut process = AgentProcess::new(command.to_string(), args.to_vec(), env.clone())
-            .strip_inherited_env(strip_inherited_env.to_vec());
-        // Taken before the process is handed over: the reaper lives on the
-        // runtime built below, and this thread must not drop that runtime
-        // until the child is gone. See [`AgentProcess::reaped`].
-        let reaped = process.reaped();
-        // The deadline stays with `engine::Session` on this path; the shared
-        // client enforces its own only where a caller asked for one.
-        let (ready, driver) = AcpClient::wire(process, ClientOptions::default());
-        let thread = std::thread::Builder::new()
-            .name("bitrouter-acp-up".to_string())
-            .spawn(move || {
-                match tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                {
-                    // Dropping `driver` unpolled closes the handshake channel,
-                    // so `ready` below reports the failure rather than hanging.
-                    Err(e) => tracing::error!(error = %e, "failed to start the ACP runtime"),
-                    Ok(rt) => {
-                        rt.block_on(driver);
-                        // The connection is down, which is not the same as the
-                        // child being gone: the SDK dropped the transport task
-                        // rather than letting it confirm. Wait here, on the
-                        // runtime the reaper is running on, before it goes.
-                        if rt
-                            .block_on(tokio::time::timeout(REAP_CONFIRM, reaped))
-                            .is_err()
-                        {
-                            tracing::warn!(
-                                "agent child not confirmed reaped within {REAP_CONFIRM:?};                                  a wrapped grandchild may have survived"
-                            );
-                        }
-                    }
-                }
-            })?;
-
-        Ok(Self {
-            client: ready.await?,
-            _thread: thread,
-        })
-    }
-
-    /// Create the upstream session: `session/new` with `cwd` and the given MCP
-    /// servers. Returns the minted wire identity.
-    pub async fn new_session(
-        &self,
-        cwd: PathBuf,
-        mcp_servers: Vec<McpServer>,
-    ) -> anyhow::Result<SessionIds> {
-        self.client.new_session(cwd, mcp_servers).await
-    }
-
-    /// The upstream agent's `initialize` response, captured at handshake.
-    pub fn upstream_init(&self) -> &InitializeResponse {
-        self.client.upstream_init()
-    }
-
-    /// Handle to the latest context-window usage reported by the upstream.
-    pub fn context_usage(&self) -> SharedContextUsage {
-        self.client.context_usage()
-    }
-
-    /// Subscribe to the stream of translated `session/update` notifications.
-    /// **Lossy under lag**, as documented on the shared client.
-    pub fn subscribe_updates(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdateKind> + Send>> {
-        self.client.subscribe_updates()
-    }
-
-    /// Subscribe to the stream of **raw** ACP `session/update` notifications,
-    /// untranslated. **Lossy under lag**, as documented on the shared client.
-    pub fn subscribe_raw_updates(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
-        self.client.subscribe_raw_updates()
-    }
-
-    /// Take the stream of pending permission requests. Single-consumer: the
-    /// first call returns the receiver; later calls return an empty stream.
-    pub fn subscribe_permissions(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = PendingPermission> + Send>> {
-        self.client.subscribe_permissions()
-    }
-
-    /// Send a typed `PromptRequest` and return the typed `PromptResponse`.
-    pub async fn prompt_typed(&self, req: PromptRequest) -> anyhow::Result<PromptResponse> {
-        self.client.prompt_typed(req).await
-    }
-
-    /// Text convenience over [`prompt_typed`](Self::prompt_typed).
-    pub async fn prompt(&self, session_id: &str, text: &str) -> anyhow::Result<PromptResponse> {
-        self.client.prompt(session_id, text).await
-    }
-
-    /// Send a `session/cancel` notification for `session_id`.
-    pub async fn cancel(&self, session_id: &str) -> anyhow::Result<()> {
-        self.client.cancel(session_id).await
-    }
-
-    /// Tear the connection down deterministically, killing the agent child.
-    /// Idempotent.
-    pub async fn shutdown(&self) -> anyhow::Result<()> {
-        self.client.shutdown().await
-    }
-}
-
 /// How long `health_check` waits for `initialize` before declaring the agent
 /// unhealthy. Generous enough for a cold npm start; tight enough to keep
 /// `bitrouter agents check` snappy when an agent hangs.
@@ -634,6 +483,27 @@ mod tests {
     }
 
     #[cfg(unix)]
+    use crate::acp::client::{AcpClient, ClientOptions};
+
+    /// Drive a bash-script agent through the shared client.
+    ///
+    /// These tests were written against `UpstreamConnection`, the thread-owning
+    /// wrapper the engine used. It is gone; the child itself is unchanged, so
+    /// the same scripts run through `AgentProcess` + `AcpClient`. Two of them
+    /// pin invariants — I1 (a dropped permission defaults to deny) and I10 (the
+    /// wrapper chain's process group dies with the connection) — so they are
+    /// ported rather than dropped with the type they happened to be written on.
+    fn connect_child(
+        script: &str,
+    ) -> impl std::future::Future<Output = anyhow::Result<AcpClient>> + use<> {
+        let process = AgentProcess::new(
+            "bash".to_string(),
+            vec!["-c".to_string(), script.to_string()],
+            HashMap::new(),
+        );
+        AcpClient::connect(process, ClientOptions::default())
+    }
+
     #[tokio::test]
     async fn connects_initializes_and_prompts() {
         let script = r#"
@@ -647,10 +517,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(&script).await.expect("spawn");
         let ids = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -694,10 +561,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(&script).await.expect("spawn");
         let usid = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -749,10 +613,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(&script).await.expect("spawn");
 
         conn.shutdown().await.expect("shutdown confirms");
 
@@ -794,9 +655,7 @@ done
         // `; :` keeps the outer bash alive as a parent instead of exec-ing
         // the inner command (which would collapse the chain to one process).
         let outer = format!("bash {} ; :", inner.display());
-        let conn = UpstreamConnection::spawn("bash", &["-c".into(), outer], &HashMap::new())
-            .await
-            .expect("spawn wrapper chain");
+        let conn = connect_child(&outer).await.expect("spawn wrapper chain");
 
         // The inner (grand)child is alive and identified.
         let mut inner_pid = String::new();
@@ -857,10 +716,7 @@ done
             sleep 0.3
             exit 0
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(&script).await.expect("spawn");
 
         // The child dies with this prompt unanswered. It must resolve to an
         // error promptly (bounded), never hang.
