@@ -218,7 +218,7 @@ Recorded rather than left to be rediscovered:
   best-effort.
 - `report_turn` and `spawn_tool_spans` emissions on the prompt, piped-chat,
   and interactive-chat paths.
-- Revocation of `chat`'s controller credential on each exit.
+- Cleanup of `chat`'s route leases on each exit.
   `ControlledSession::shutdown` and the launch failure paths call it, and a
   panic exit relies on the daemon-side TTL instead; nothing drives a live
   daemon through `chat`'s teardown and asserts the credential is gone.

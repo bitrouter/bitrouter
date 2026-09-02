@@ -29,7 +29,7 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
 `bitrouter chat` drives the same in-process controller through the same
-client, with two additions: it issues a controller credential over the local
+client, with two additions: it declares a route namespace over the local
 daemon socket (so its traffic meters by controller instance, and the
 controller decorates `usage_update` with attributed cost), and its `/route`
 picker is built on `_bitrouter/route/list|set` — available only when the
@@ -142,7 +142,7 @@ When API authentication is enabled, local routing uses the normal BitRouter
 API/virtual key for both model requests and the route principal. Under
 `skip_auth: true`, both use the deliberately shared `local` principal. The
 owner-only daemon socket carries route mutations but does not mint or validate
-a second controller credential. An explicit remote `--base-url` can still
+a second route namespace. An explicit remote `--base-url` can still
 configure the harness's model endpoint, but does not advertise route controls
 until hosted HTTP route control exists.
 
@@ -170,7 +170,7 @@ per-session cost; see the `usage` capability above.
 **harness-native** `session_id` (plus `agent_session_id` when the harness
 exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
 joins to spend: the daemon attributes ACP traffic by an authenticated
-controller credential, which only `acp serve` issues, so a prompt session's
+controller namespace, which only `acp serve` and `chat` declare, so a prompt session's
 rows carry no controller instance to key on.
 It no longer carries `record_id`; that alias is off the wire. Then come
 `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`

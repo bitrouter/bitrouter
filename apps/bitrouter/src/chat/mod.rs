@@ -17,7 +17,7 @@
 //! | INT / TERM / HUP | [`signals::Shutdown`] as the one `select!` arm in `session::run`'s single loop |
 //!
 //! Giving the terminal back is only half of an exit. The other half is the
-//! harness child and the controller credential, and those are
+//! harness child and this session's route leases, and those are
 //! `ControlledSession::shutdown`'s — which is why the loop lives in a function
 //! whose errors `session::run` *carries* rather than returns. A `?` that
 //! escaped would restore the terminal (`Drop` sees to that) and leave the child

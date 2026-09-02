@@ -572,10 +572,12 @@ async fn dispatch(
                     message: "principal, controller and session must not be empty".to_string(),
                 };
             }
-            // A controller id is minted per process, so "since the epoch" is
-            // "this controller's lifetime": no earlier row can carry it, and a
-            // session's cumulative figure must not reset at a month boundary
-            // the way the rolling windows do.
+            // Unbounded on purpose. This launcher mints a fresh controller id
+            // per process, so in practice "since the epoch" is "this
+            // controller's lifetime" — but that is a property of how we mint,
+            // not of the identifier, which is a claim nothing verifies. What
+            // the window must not do is reset a session's cumulative figure at
+            // a month boundary the way the rolling ones would.
             let window = TimeWindow::Custom {
                 start: DateTime::<Utc>::UNIX_EPOCH,
                 end: Utc::now(),

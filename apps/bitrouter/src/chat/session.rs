@@ -65,7 +65,7 @@ fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()> {
 /// The contract's three-condition gate, asked of what the controller
 /// advertised at handshake and of nothing else: the picker lists with one
 /// method and sets with another, so both must be there. A controller with no
-/// trusted local binding — `--direct`, an explicit `--base-url` — advertises
+/// local control binding — `--direct`, an explicit `--base-url` — advertises
 /// neither, and the picker is then absent rather than dead.
 pub(crate) fn can_reroute(client: &AcpClient) -> bool {
     let capability = client.route_control();
@@ -120,7 +120,7 @@ pub(crate) async fn run(
 
     // A session whose agent could not be shut down cleanly ended abnormally
     // too, and the log is where the reason is. This is also where the child is
-    // confirmed reaped and the controller credential revoked.
+    // confirmed reaped and this session's route leases dropped.
     let clean = session.shutdown().await;
     // Leave the cursor below the document, then give the terminal back — in
     // that order, because the log tail below is written as ordinary output and

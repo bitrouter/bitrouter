@@ -716,13 +716,26 @@ impl MeteringStore {
         Ok(summarize(charges))
     }
 
-    /// Spend + request count for one native ACP session under one
-    /// authenticated controller — the figure a controller may decorate onto
-    /// the harness's own `UsageUpdate`.
+    /// Spend + request count for one native ACP session under one **claimed**
+    /// controller — the figure a controller may decorate onto the harness's
+    /// own `UsageUpdate`.
     ///
     /// Keyed by `controller_instance_id` **and** the session, never the
-    /// session alone: two harness processes can mint the same-looking id, and
-    /// spec §5.5 says two controllers must not read each other's spend.
+    /// session alone: two harness processes can declare the same-looking id,
+    /// and one controller must not read another's spend.
+    ///
+    /// # Known gap: this is not scoped by API principal
+    ///
+    /// Route leases are keyed by `(api_principal, controller, session)`, so
+    /// one principal cannot reach another's. This query is keyed only by the
+    /// controller a request *claimed*, because `requests` carries no principal
+    /// column — the recorder puts `api_principal_id` in a span attribute and
+    /// nowhere else. Two principals that declare the same controller id would
+    /// therefore sum into one figure.
+    ///
+    /// The daemon checks the principal is non-empty and stops there. Closing
+    /// this needs a persisted principal to filter on; until then the asymmetry
+    /// with route control is real and recorded rather than implied.
     ///
     /// Within the controller, the manager's opaque id is matched against
     /// every native carrier the identity hook persists — the trusted

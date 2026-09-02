@@ -427,7 +427,7 @@ impl RouteControlCapability {
 /// and renders the message.
 #[derive(Debug)]
 pub enum RouteError {
-    /// The controller has no trusted local binding for this method: it did not
+    /// The controller has no route-control backend for this method: it did not
     /// advertise the method, answered `method_not_found`, or answered the route
     /// plane's `route_control_unavailable`.
     Unavailable(String),

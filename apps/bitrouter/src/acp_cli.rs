@@ -199,7 +199,7 @@ pub struct Routed {
     /// authentication, and rewriting it to attach attribution would break
     /// `skip_auth: false` — the same rule `spawn.rs` follows. A session
     /// without one has no per-launch attribution; on the controlled paths a
-    /// controller credential attributes by controller instance instead.
+    /// claimed controller namespace attributes by controller instance instead.
     pub launch_id: Option<String>,
     /// One controller process / harness connection correlation id. This is
     /// never an ACP session id and is absent for direct or legacy harnesses.
@@ -970,18 +970,22 @@ impl AcpSessionCost for CachedSessionCost {
     }
 }
 
-/// A controller credential minted over the daemon's owner-only control
-/// socket, and the identity it binds.
+/// The route namespace both controller bridges address, and the socket to
+/// reach it on.
 ///
-/// This is what makes the two controller bridges trustworthy: route leases
-/// are keyed by the authenticated controller instance, and so is the spend
-/// query behind attributed cost. Neither exists without it, which is why a
+/// **Nothing here is authenticated, and the naming is deliberate.** The
+/// principal comes from the ordinary API credential (or `local` under
+/// `skip_auth`), and the controller instance is a *claim* this process makes
+/// about itself — it is never verified, and phase 3 removed the minted
+/// credential that used to imply otherwise. What the pair buys is a namespace:
+/// route leases are keyed by it, so one principal's leases cannot be reached
+/// through another's. That is why a
 /// `--direct` session, an unroutable harness, or an explicit `--base-url`
-/// (no reviewed trusted binding) yields no binding at all.
+/// (no reviewed local control binding) yields no binding at all.
 ///
 /// The credential is revoked on every exit through [`Self::revoke`]. It
 /// also carries a daemon-side TTL, which is what bounds a panic exit — the
-/// The trusted local binding both ACP bridges hang off.
+/// The route namespace both ACP bridges hang off.
 ///
 /// Not a credential any more. `#853` replaced the minted `brac_` token with an
 /// `api_principal` the daemon derives itself, so there is nothing to issue and
@@ -1107,9 +1111,9 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    // The trusted local binding both bridges share: the same principal that
-    // makes route leases safe makes the spend query attributable, and neither
-    // exists without it.
+    // The namespace both bridges address: the principal that keeps one
+    // caller's route leases out of another's is the same one the spend query
+    // is scoped by, and neither bridge exists without it.
     let binding =
         LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
     let agent = config
@@ -1149,7 +1153,7 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 /// Launch a session for `agent_id` and hand it to the interactive renderer.
 ///
 /// This half is the composition root: it resolves routing, binds the
-/// controller credential, launches the harness behind an in-process
+/// route namespace, launches the harness behind an in-process
 /// controller, and attaches observability — all of which need `Config`, the
 /// config source, and the daemon's control socket. What it hands over needs
 /// none of them, which is why the loop itself lives in
@@ -1225,7 +1229,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     }
 
     // The picker exists only when the controller advertised route control —
-    // which it does only under a trusted local binding. Said here, before raw
+    // which it does only with a local control binding. Said here, before raw
     // mode, because a cooked newline in a raw terminal does not return the
     // carriage.
     if crate::chat::session::can_reroute(&session.client) {
@@ -1379,16 +1383,16 @@ where
     //
     // `session_id` is the harness-native ACP id — the one every subsequent
     // line and every ACP method uses. It is **not** the spend key on this
-    // path: metering attributes ACP traffic by the *authenticated* controller
-    // instance, and `prompt` routes with a launch token rather than a
-    // controller credential, so `requests.controller_instance_id` is null for
-    // every row it produces. `launch_id` is what joins here, as it always has.
+    // path: metering attributes ACP traffic by the controller instance a
+    // request *claims*, and `prompt` routes with a launch token and declares no
+    // controller, so `requests.controller_instance_id` is null for every row it
+    // produces. `launch_id` is what joins here, as it always has.
     //
     // The controller id is deliberately absent rather than reported: the value
     // this process mints reaches the daemon only as a *claimed* header, which
     // §5.5 of the controller spec treats as correlation evidence and not as
     // authorization. Emitting it would name a column that is null. When this
-    // path issues a controller credential — as `acp serve` and `chat` do — it
+    // path declares a controller namespace — as `acp serve` and `chat` do — it
     // can come back and be true.
     //
     // `via` is null when running direct.
@@ -1489,8 +1493,8 @@ fn teardown_result(clean: bool) -> Result<()> {
 /// harness child's I/O, and the client all run on this runtime.
 pub(crate) struct ControlledSession {
     pub(crate) client: AcpClient,
-    /// The controller credential this session's traffic meters under, when
-    /// it has one. Revoked by [`ControlledSession::shutdown`] on every exit.
+    /// The route namespace this session's leases live in, when it has one.
+    /// Cleaned up by [`ControlledSession::shutdown`] on every exit.
     binding: Option<LocalControllerBinding>,
     /// Resolves once the harness child and its process group are reaped.
     /// Awaited in [`ControlledSession::shutdown`], because tearing the
@@ -1508,8 +1512,8 @@ const CONTROLLER_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl ControlledSession {
     /// Tear the client down (which closes the duplex and so ends the
-    /// controller), wait for the controller to confirm, then revoke the
-    /// controller credential. Returns whether every step confirmed; failures
+    /// controller), wait for the controller to confirm, then drop every route
+    /// lease in the namespace. Returns whether every step confirmed; failures
     /// are logged rather than propagated, because the caller has already
     /// asked to stop and there is nothing left to retry — but an interactive
     /// caller wants to know the session ended abnormally, so it can say where
