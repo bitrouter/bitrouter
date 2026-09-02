@@ -401,6 +401,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let list_initialize_state = Arc::clone(&initialize_state);
         let set_initialize_state = Arc::clone(&initialize_state);
         let reset_initialize_state = Arc::clone(&initialize_state);
+        let close_initialize_state = Arc::clone(&initialize_state);
+        let delete_initialize_state = Arc::clone(&initialize_state);
         Proxy
             .builder()
             .name("bitrouter-controller-gate")
@@ -575,7 +577,11 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 >,
                       connection: ConnectionTo<Conductor>| {
                     let route_control = close_control.clone();
+                    let initialize_state = Arc::clone(&close_initialize_state);
                     async move {
+                        if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
                         let session_id = request.session_id.0.to_string();
                         let gate_connection = connection.clone();
                         connection.spawn(async move {
@@ -610,7 +616,11 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 >,
                       connection: ConnectionTo<Conductor>| {
                     let route_control = delete_control.clone();
+                    let initialize_state = Arc::clone(&delete_initialize_state);
                     async move {
+                        if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
                         let session_id = request.session_id.0.to_string();
                         let gate_connection = connection.clone();
                         connection.spawn(async move {
@@ -996,6 +1006,8 @@ mod tests {
     struct InitializeGateState {
         initialize_count: AtomicUsize,
         new_count: AtomicUsize,
+        close_count: AtomicUsize,
+        delete_count: AtomicUsize,
     }
 
     struct SlowInitializeAgent {
@@ -1009,6 +1021,8 @@ mod tests {
         ) -> Result<(), agent_client_protocol::Error> {
             let initialize_state = Arc::clone(&self.state);
             let new_state = Arc::clone(&self.state);
+            let close_state = Arc::clone(&self.state);
+            let delete_state = Arc::clone(&self.state);
             Agent
                 .builder()
                 .name("slow-initialize-agent")
@@ -1026,6 +1040,20 @@ mod tests {
                     async move |_request: NewSessionRequest, responder, _connection| {
                         new_state.new_count.fetch_add(1, Ordering::SeqCst);
                         responder.respond(NewSessionResponse::new("native-after-init"))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: CloseSessionRequest, responder, _connection| {
+                        close_state.close_count.fetch_add(1, Ordering::SeqCst);
+                        responder.respond(CloseSessionResponse::new())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: DeleteSessionRequest, responder, _connection| {
+                        delete_state.delete_count.fetch_add(1, Ordering::SeqCst);
+                        responder.respond(DeleteSessionResponse::new())
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1693,6 +1721,14 @@ mod tests {
             )),
         )
         .route_control(routes.clone());
+        {
+            let mut route_state = routes
+                .routes
+                .lock()
+                .map_err(|_| anyhow::anyhow!("route test state poisoned"))?;
+            route_state.insert("native-early-close".to_string(), "@balanced".to_string());
+            route_state.insert("native-early-delete".to_string(), "@balanced".to_string());
+        }
         let (manager_out, controller_in) = duplex(4096);
         let (controller_out, manager_in) = duplex(4096);
         let controller_transport = agent_client_protocol::ByteStreams::new(
@@ -1719,8 +1755,20 @@ mod tests {
                     let early_route = receive(
                         connection.send_request(RouteSetRequest::new("native-early", "@balanced")),
                     );
-                    let (initialize, early_session, early_route) =
-                        tokio::join!(initialize, early_session, early_route);
+                    let early_close = receive(
+                        connection.send_request(CloseSessionRequest::new("native-early-close")),
+                    );
+                    let early_delete = receive(
+                        connection.send_request(DeleteSessionRequest::new("native-early-delete")),
+                    );
+                    let (initialize, early_session, early_route, early_close, early_delete) =
+                        tokio::join!(
+                            initialize,
+                            early_session,
+                            early_route,
+                            early_close,
+                            early_delete
+                        );
                     initialize?;
                     let early_error = early_session
                         .err()
@@ -1730,6 +1778,14 @@ mod tests {
                         .err()
                         .ok_or_else(|| anyhow::anyhow!("early route bypassed initialize gate"))?;
                     assert_eq!(i32::from(early_route_error.code), -32600);
+                    let early_close_error = early_close
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("early close bypassed initialize gate"))?;
+                    assert_eq!(i32::from(early_close_error.code), -32600);
+                    let early_delete_error = early_delete
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("early delete bypassed initialize gate"))?;
+                    assert_eq!(i32::from(early_delete_error.code), -32600);
 
                     let duplicate_error = receive(
                         connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
@@ -1749,13 +1805,20 @@ mod tests {
             .await?;
         assert_eq!(state.initialize_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.new_count.load(Ordering::SeqCst), 1);
-        assert!(
-            routes
-                .routes
-                .lock()
-                .map_err(|_| anyhow::anyhow!("route test state poisoned"))?
-                .is_empty(),
-            "an early route request must not mutate route state"
+        assert_eq!(state.close_count.load(Ordering::SeqCst), 0);
+        assert_eq!(state.delete_count.load(Ordering::SeqCst), 0);
+        let route_state = routes
+            .routes
+            .lock()
+            .map_err(|_| anyhow::anyhow!("route test state poisoned"))?;
+        assert_eq!(route_state.len(), 2);
+        assert_eq!(
+            route_state.get("native-early-close").map(String::as_str),
+            Some("@balanced")
+        );
+        assert_eq!(
+            route_state.get("native-early-delete").map(String::as_str),
+            Some("@balanced")
         );
         Ok(())
     }
