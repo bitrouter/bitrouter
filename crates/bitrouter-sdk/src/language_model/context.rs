@@ -469,17 +469,29 @@ impl PipelineContext {
     }
 
     /// Whether the downstream client has disconnected from this request.
-    pub(crate) fn client_disconnected(&self) -> bool {
+    ///
+    /// This read-only predicate is for app-owned pre-dispatch and admission
+    /// boundaries, before provider or tool execution (or any other side
+    /// effect) starts. Never use it to cancel or race an already-started
+    /// provider or tool future; dispatched work and its settlement must finish.
+    pub fn client_disconnected(&self) -> bool {
         self.execution_control
             .client_disconnect
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
     }
 
-    /// A future that resolves when the downstream client disconnects.
+    /// Wait until the downstream client disconnects from this request.
     ///
-    /// Contexts without an installed signal remain continuable indefinitely.
-    pub(crate) async fn client_disconnected_signal(&self) {
+    /// This read-only signal is for app-owned pre-dispatch and admission waits,
+    /// so they can wake and re-check before provider, tool, or other side
+    /// effects begin. Never race it against or use it to cancel an
+    /// already-started provider or tool future; dispatched work and its
+    /// settlement must finish.
+    ///
+    /// When the SDK has not installed a detached non-stream disconnect signal,
+    /// this future remains pending indefinitely.
+    pub async fn client_disconnected_signal(&self) {
         match &self.execution_control.client_disconnect {
             Some(token) => token.cancelled().await,
             None => std::future::pending().await,
