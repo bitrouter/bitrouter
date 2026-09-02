@@ -1111,6 +1111,15 @@ async fn attach_observability(
     cost: Option<CostSink>,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Option<Arc<bitrouter_telemetry::otel::OtelExporter>> {
+    // This surface never builds an `App`, so it does not get the daemon's
+    // ignored-config warnings for free — and it reads the same telemetry
+    // config, which is exactly what the skill documents. Without this, a stale
+    // `plugins.bitrouter-observe` block is silent here while being loud on
+    // `serve`. The subscriber is already installed on this path, so unlike the
+    // daemon these can be emitted in place.
+    for message in crate::assemble::ignored_config_warnings(config) {
+        tracing::warn!("{message}");
+    }
     let exporter =
         crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
             .await;

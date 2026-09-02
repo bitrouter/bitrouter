@@ -61,7 +61,9 @@ process starts anyway. Two places report it:
 - The daemon logs one WARN per unread id on every start. This is the path that
   matters: validation is opt-in, the daemon always runs.
 
-The ids the binary reads are `bitrouter-guardrails` and `bitrouter-telemetry`.
+The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
+`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+rename that carries an obsolete setting along with it is not silent either.
 
 **Renamed in this release** — the old names are ignored, and the daemon warns
 when it sees one set:

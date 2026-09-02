@@ -209,9 +209,31 @@ impl ObserveStatusProvider for OtelExporterStatus {
 /// [`unknown_plugin_ids`] reports against, and it is the only thing standing
 /// between that class of typo and a silent misconfiguration.
 ///
-/// Keep it in step with the `config.plugins.get(...)` call sites below —
-/// `build_guardrail_config` and `build_otel_config` are the only two.
-pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-guardrails", "bitrouter-telemetry"];
+/// This list is derived from the call sites by
+/// `known_plugin_ids_cover_every_reader`, which scans this file's own source.
+/// Adding a reader without adding it here fails that test — the list cannot
+/// silently drift, which matters because a *missing* id is worse than no guard
+/// at all: the daemon would warn, on every start, about a plugin it reads.
+///
+/// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
+/// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
+/// a single-line grep did not see. Hence the scan.
+pub const KNOWN_PLUGIN_IDS: &[&str] = &[
+    "bitrouter-guardrails",
+    "bitrouter-policy",
+    "bitrouter-telemetry",
+];
+
+/// Sub-keys that were removed, and the block they sat under. Reported for the
+/// same reason as [`RENAMED_ENV_VARS`]: the guard below is id-level, so a
+/// migration that renames the *block* correctly and carries a dead sub-key
+/// with it would otherwise be silent — and that is the natural migration, since
+/// the id-level warning tells an operator to rename and nothing more.
+const REMOVED_PLUGIN_SUBKEYS: &[(&str, &str, &str)] = &[(
+    "bitrouter-telemetry",
+    "otlp_endpoint",
+    "removed with the `plugins.bitrouter-observe` rename; use `otel: { endpoint: … }`",
+)];
 
 /// `BITROUTER_*` environment variables that were renamed, and what to.
 ///
@@ -222,10 +244,21 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-guardrails", "bitrouter-telem
 /// exactly is precise, has no false positives, and is what an operator hitting
 /// this actually needs to be told.
 ///
-/// Both of these fail *closed* when a stale name goes unread —
-/// `ContentCaptureMode` defaults to `Off` and the attribute cap to 128 KiB —
-/// so the consequence is less content exported, never more. The warning exists
-/// because silence is confusing, not because the failure is dangerous.
+/// **These do not universally fail closed, and an earlier version of this
+/// comment claimed they did.** They do when the environment is the *only*
+/// source: `ContentCaptureMode` defaults to `Off` and the cap to 128 KiB, so a
+/// stale name leaves less content exported, not more.
+///
+/// They fail *open* when the environment was overriding YAML downward.
+/// `with_env_overrides` assigns unconditionally, so an operator whose config
+/// sets `content_capture: full` (directly, or via `telemetry.level: full`) and
+/// who pinned `BITROUTER_OBSERVE_CONTENT_CAPTURE=off` in a service unit as a
+/// kill-switch gets the opposite of what they pinned: the stale name is
+/// ignored, YAML wins, and prompt and response bodies start leaving the
+/// process. Same shape for a cap the environment lowered.
+///
+/// That is why this is a warning rather than a footnote, and why it names the
+/// new variable rather than only reporting the old one as unrecognised.
 const RENAMED_ENV_VARS: &[(&str, &str)] = &[
     (
         "BITROUTER_OBSERVE_CONTENT_CAPTURE",
@@ -258,13 +291,39 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// than only `bitrouter config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
-fn ignored_config_warnings(config: &Config) -> Vec<String> {
+///
+/// Public because `bitrouter acp serve|prompt` never builds an `App`: it takes
+/// its exporter straight from
+/// `build_otel_exporter_standalone_with_credentials`, which reads the same
+/// config. A guard covering only the daemon would leave that surface exactly
+/// as silent as before, on a path the skill documents as honouring the same
+/// telemetry configuration.
+pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
     let known = KNOWN_PLUGIN_IDS.join(", ");
     unknown_plugin_ids(config)
         .into_iter()
         .map(|id| {
             format!("plugins.{id} is not read by this binary and is ignored; known ids: {known}")
         })
+        .chain(REMOVED_PLUGIN_SUBKEYS.iter().filter_map(|(id, key, note)| {
+            config
+                .plugins
+                .get(*id)
+                .and_then(|block| block.get(*key))
+                .map(|_| format!("plugins.{id}.{key} is ignored — {note}"))
+        }))
+        .collect()
+}
+
+/// [`ignored_config_file_warnings`] plus the environment ones.
+///
+/// The split is what `bitrouter config validate` needs: it validates a *file*,
+/// possibly one belonging to another machine, so reporting this process's
+/// environment there would be noise at best and misleading at worst. Every
+/// runtime surface wants both.
+pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
+    ignored_config_file_warnings(config)
+        .into_iter()
         .chain(renamed_env_warnings(|name| {
             std::env::var_os(name).is_some()
         }))
@@ -1345,15 +1404,10 @@ enum BearerPlan {
 }
 
 /// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
-/// serve|prompt`). Same config resolution as the daemon path (telemetry
-/// opt-in / `otel:` block / legacy shim / env vars), including the live
-/// account-bearer plan. Returns `None` when nothing opts telemetry in;
-/// telemetry failures are surfaced as warnings, never as session failures.
-pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
-    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    build_otel_exporter_standalone_with_credentials(config, &cloud_credentials).await
-}
-
+/// serve|prompt`). Same config resolution as the daemon path (the telemetry
+/// opt-in, the `otel:` block, env vars), including the live account-bearer
+/// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
+/// surfaced as warnings, never as session failures.
 pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     config: &Config,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
@@ -1413,7 +1467,7 @@ struct OtelConfigPlan {
 fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
-    // the rename is safe to have made because `warn_ignored_config` reports an
+    // the rename is safe to have made because `ignored_config_warnings` reports an
     // unread `plugins.<id>` block on every daemon start, so a stale key is
     // loud rather than silent. See `docs/TELEMETRY_CRATE_SPEC.md` D6.
     let telemetry = config.plugins.get("bitrouter-telemetry");
@@ -2046,17 +2100,75 @@ mod otel_config_tests {
     }
 
     #[test]
-    fn every_known_plugin_id_is_recognised() {
-        // Guards the list against drifting from the `plugins.get` call sites:
-        // an id the binary reads but forgot to declare would be warned about
-        // on every start, which is worse than not warning at all.
-        let mut config = Config::default();
-        for id in super::KNOWN_PLUGIN_IDS {
-            config
-                .plugins
-                .insert((*id).to_string(), serde_json::json!({}));
+    fn known_plugin_ids_cover_every_reader() {
+        // The list's only real hazard is under-listing: an id the binary reads
+        // but forgot to declare gets warned about on every start, which is
+        // worse than not warning at all. That is not hypothetical — it shipped
+        // that way, because `bitrouter-policy` is read through a line-wrapped
+        // `config` / `.plugins` / `.get(…)` chain and the check was a human
+        // reading greps.
+        //
+        // So check against the source rather than against a hand-list. Any
+        // `.plugins` … `.get("<literal>")` in this file is a reader by
+        // definition, whatever whitespace sits between the pieces.
+        let source = include_str!("assemble.rs");
+        let mut readers: Vec<&str> = Vec::new();
+        for (index, _) in source.match_indices(".plugins") {
+            let rest = &source[index + ".plugins".len()..];
+            let Some(open) = rest.find(".get(") else {
+                continue;
+            };
+            // Only a call that follows immediately — whitespace, dots and
+            // comments aside — is the same expression. A `.get(` a hundred
+            // characters later belongs to something else.
+            if rest[..open].chars().any(|c| !c.is_whitespace()) {
+                continue;
+            }
+            let after = &rest[open + ".get(".len()..];
+            let after = after.trim_start();
+            let Some(quoted) = after.strip_prefix('"') else {
+                continue;
+            };
+            if let Some(end) = quoted.find('"') {
+                readers.push(&quoted[..end]);
+            }
         }
+        assert!(
+            !readers.is_empty(),
+            "the scan found no readers at all — it has stopped testing"
+        );
+        for id in &readers {
+            assert!(
+                super::KNOWN_PLUGIN_IDS.contains(id),
+                "plugins.{id} is read but missing from KNOWN_PLUGIN_IDS, so the \
+                 daemon would warn about a plugin it honours"
+            );
+        }
+        // And the inverse, so a stale entry cannot linger either.
+        for id in super::KNOWN_PLUGIN_IDS {
+            assert!(
+                readers.contains(id),
+                "KNOWN_PLUGIN_IDS names {id}, which nothing reads"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_sub_key_under_the_new_id_is_reported() {
+        // The natural migration: the id-level warning says "rename", the
+        // operator renames, and their v0 `otlp_endpoint` comes along with it.
+        // Id-level checking alone sees a known id and says nothing.
+        let config = config_with_telemetry(serde_json::json!({
+            "otlp_endpoint": "http://legacy:4318"
+        }));
         assert!(super::unknown_plugin_ids(&config).is_empty());
+        let warnings = super::ignored_config_warnings(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("plugins.bitrouter-telemetry.otlp_endpoint")),
+            "got: {warnings:?}"
+        );
     }
 }
 

@@ -62,6 +62,18 @@ compile_error!(
      OTLP/HTTP, or `otel-grpc` for OTLP/gRPC"
 );
 
+// `server` gates the ingress span, which lives inside the `otel` module — so
+// `server` without a transport compiles nothing at all while still pulling
+// axum, http-body, pin-project-lite and `bitrouter-sdk/server`. That is a
+// silent no-op, and silent no-op features are how a build ends up carrying
+// weight nobody can account for. Fail the same way the transport guard does.
+#[cfg(all(feature = "server", not(feature = "__otel-core")))]
+compile_error!(
+    "`server` only adds the inbound ingress span to the OTLP exporter, so it \
+     does nothing without a transport: enable `otel` (or `otel-http` / \
+     `otel-grpc`) alongside it"
+);
+
 #[cfg(feature = "__otel-core")]
 #[cfg_attr(docsrs, doc(cfg(feature = "otel")))]
 pub mod otel;

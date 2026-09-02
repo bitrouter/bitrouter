@@ -403,17 +403,33 @@ unknowable to the scanner. D6 names the two renames exactly instead. That is
 precise, has no false positives, and is what an operator hitting this actually
 needs told — at the cost of being a migration aid rather than a standing guard.
 
-#### Why the env rename is safe even so
+#### The env rename does NOT universally fail closed
 
-Both renamed env vars **fail closed** when a stale name is silently ignored:
-`ContentCaptureMode` defaults to `Off`, and `content_attr_max_bytes` defaults to
-128 KiB. A missed rename therefore exports *less* content and truncates *more*,
-never the reverse. That is the privacy-safe direction, and it is what makes
-renaming them acceptable despite env's weaker guard.
+**This section originally claimed it did. That was wrong, and the counterexample
+is the one that matters.**
 
-The YAML key fails closed too — no exporter is wired, so nothing leaves — but
-that is an observability outage rather than a safety problem, which is exactly
-what the startup warning is for.
+The claim held for the case it was reasoned about: when the environment is the
+*only* source, `ContentCaptureMode` defaults to `Off` and the cap to 128 KiB, so
+a stale name exports less content and truncates more.
+
+It fails **open** when the environment was overriding YAML *downward*.
+`OtelConfig::with_env_overrides` assigns unconditionally, and `content_capture`
+is also settable from YAML — directly, or via `telemetry.level: full`. So an
+operator whose config says `full` and who pinned
+`BITROUTER_OBSERVE_CONTENT_CAPTURE=off` in a service unit as a kill-switch gets
+the opposite of what they pinned: the stale name is ignored, YAML wins, and
+prompt and response bodies begin leaving the process. The same shape applies to
+a cap the environment had lowered.
+
+This is why the renamed-variable check is a *named* check that fires on the old
+name rather than a general "unrecognised variable" scan, and why the warning is
+not treated as a nicety. It is also the strongest argument for keeping the
+`BITROUTER_OBSERVE_*` names on the deprecation list for longer than the YAML
+key, should that ever be revisited.
+
+The YAML key does fail closed — no exporter is wired, so nothing leaves — but
+that is an observability outage rather than a safety problem, which is what the
+startup warning is for.
 
 #### As built
 
@@ -726,6 +742,75 @@ the move. Recorded because both are instructive about the guards themselves.
   for `opentelemetry` only, with the reason and the re-add condition in the
   job's comment, and the real fix filed separately.
 
+### What an adversarial review found
+
+An independent review of the branch found five things this document had wrong.
+All are fixed; they are recorded because four of them are failures of the same
+kind — a claim checked by reasoning where it should have been checked by
+running something.
+
+- **`KNOWN_PLUGIN_IDS` was missing `bitrouter-policy`, and the test could not
+  have caught it.** There are three readers, not two: `load_policy_store` gets
+  its block through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
+  a single-line grep does not match. The consequence is the exact case the
+  guard's own comment calls worse than no guard — every daemon start warning
+  about a plugin it honours. `every_known_plugin_id_is_recognised` passed for
+  any list including the empty one. Replaced by
+  `known_plugin_ids_cover_every_reader`, which scans this file's own source for
+  `.plugins` … `.get("<literal>")` and asserts the list matches in **both**
+  directions; verified non-vacuous by deleting an id (fails) and by adding a
+  phantom one (fails).
+
+- **The guard never fired on the ACP path.** `bitrouter acp serve|prompt` takes
+  its exporter from `build_otel_exporter_standalone_with_credentials` and never
+  builds an `App`, so the one scenario D6 exists for — a stale key, no
+  exporter, no error — stayed completely silent on a surface the skill
+  documents as honouring the same telemetry config. Now emitted at the top of
+  `attach_observability`, where the subscriber is already installed. **Not
+  verified live**: the ACP path fails fast on routing preflight before a
+  session exists, so exercising it needs a working harness and credentials.
+  Verified by placement and by the shared function's tests only.
+
+- **The guard was blind one level down, on the natural migration path.** The
+  id-level warning tells an operator to rename the block and nothing else. Doing
+  exactly that while carrying a v0 `otlp_endpoint` sub-key along produced a
+  known id, no warning, and no exporter. `REMOVED_PLUGIN_SUBKEYS` now names it,
+  in the same shape as `RENAMED_ENV_VARS`.
+
+- **"Fails closed" was false in the override-down direction.** See D6.
+
+- **`config validate` and the daemon reported different sets.** Validate carried
+  only unknown ids while the daemon also reported dead sub-keys. Split into
+  `ignored_config_file_warnings` (what a file can tell you — used by validate,
+  since it may be validating another machine's config) and
+  `ignored_config_warnings` (that plus the environment, used by every runtime
+  surface). The report field is `ignored_config` rather than
+  `unknown_plugins`, matching what it now carries.
+
+Two smaller ones: `build_otel_exporter_standalone` had no callers and is
+deleted (CLAUDE.md rule 4), and `--features server` without a transport was a
+silent no-op that still pulled axum — now a `compile_error!` mirroring the
+transport guard.
+
+**One claim in this document was retracted rather than fixed.** It said
+`tests/daemon.rs` "pins the deferral so a future edit cannot quietly move it
+back." It does not: it asserts the warnings are carried out, and re-adding a
+`tracing::warn!` inside assembly would still pass. The stronger assertion —
+that nothing was logged *during* assembly — was considered and rejected as
+unreliable in the wrong direction: `tracing`'s per-callsite `Interest` cache is
+process-global, so a sibling test touching the callsite with no subscriber
+installed makes a "nothing was logged" assertion pass vacuously. The test's own
+doc now says exactly this.
+
+**One design objection is not resolved and is left open**, because it is a
+judgement call rather than a defect: `observe::schema`'s `span_def_for`,
+`value_type_matches` and `render_json` have no non-test callers anywhere —
+their only users are conformance tests in `bitrouter-telemetry` and the
+artifact staleness test here. Ungating them was justified by "a check a second
+renderer cannot call is not a contract", which collides with this document's
+own position that a second renderer is undecided. The alternative is a
+`testing` feature. Recorded so the next reader can take it up deliberately.
+
 ### Measured
 
 | | |
@@ -733,7 +818,8 @@ the move. Recorded because both are instructive about the guards themselves.
 | `public-api-deps.txt` delta | **−`tracing_core`, −`tracing_subscriber`** — confirmed again after merging `main`. `+agent_client_protocol` is `main`'s, not this change's; see above. |
 | `cargo tree -p bitrouter-sdk --all-features -i opentelemetry` | fails — absent, as do the other six OTel names |
 | Lines moved / stayed | 5,594 / 1,275 (raw, ~42% `#[cfg(test)]`) |
-| Tests | 2,892 passed, 0 failed, 11 skipped after merging `main` (2,866 at the crate move; +6 for D6's guard and rename; the rest arrived with `main`) |
+| Tests | 2,893 passed, 0 failed, 11 skipped after merging `main` and applying the review fixes |
+| Guard, live | A config carrying `bitrouter-policy` (read), `bitrouter-guardrail` (typo) and `bitrouter-telemetry.otlp_endpoint` (dead sub-key) reports exactly the latter two, and `bitrouter-policy` is no longer falsely flagged |
 | `cargo clippy --workspace --all-features --tests --benches` | clean |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features` | clean |
 | `cargo fmt --all -- --check` | clean |
@@ -827,6 +913,12 @@ that cannot go stale. Note also that **`CLAUDE.md` never listed it** — that
 claim came from issue #808's lockstep list, not from `CLAUDE.md` itself, and it
 is retained in the list above only because a future editor will look for it.
 
-No registry changes, no `dist/` rebuild. `skills/bitrouter/` is unaffected: it
-documents CLI surface, and no CLI flag, port, env var or subcommand changes
-here.
+No registry changes, no `dist/` rebuild.
+
+`skills/bitrouter/` **is** affected and was updated: two env vars were renamed
+(`BITROUTER_OBSERVE_*` → `BITROUTER_TELEMETRY_*`), the config key moved, and
+`config validate` gained a reported field. An earlier draft of this line claimed
+the opposite — that no env var changed — which was simply false, and it survived
+review only because the skill happens not to document those two variables. The
+skill's `config validate` row and its ACP observability paragraph both carry the
+new names.

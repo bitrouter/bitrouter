@@ -2126,9 +2126,9 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
             // Reported, never fatal: an unread `plugins.<id>` block is a
             // misconfiguration rather than a malformed config, and this
             // command is CI-gating. The daemon warns about the same set on
-            // every start (`assemble::warn_ignored_config`) — that is the path
+            // every start (`assemble::ignored_config_warnings`) — that is the path
             // that reaches an operator who never runs `validate`.
-            .with_unknown_plugins(bitrouter::assemble::unknown_plugin_ids(&cfg))),
+            .with_ignored_config(bitrouter::assemble::ignored_config_file_warnings(&cfg))),
             Err(error) => Ok(ValidateReport::invalid(
                 path.display().to_string(),
                 error.to_string(),

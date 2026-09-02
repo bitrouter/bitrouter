@@ -16,11 +16,15 @@ pub struct UnsetVar {
 /// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
 /// unset-var `warnings`, and any `unknown_plugins`.
 ///
-/// `unknown_plugins` is a separate field rather than another `warnings` entry
+/// `ignored_config` is a separate field rather than another `warnings` entry
 /// because the two are different shapes and a consumer already parses
-/// `warnings[].unset_env`. Neither fails the validation: an unread
-/// `plugins.<id>` block is a misconfiguration, not a malformed config, and
-/// `valid` is what CI gates on.
+/// `warnings[].unset_env`. Neither fails the validation: config the binary
+/// ignores is a misconfiguration, not a malformed config, and `valid` is what
+/// CI gates on.
+///
+/// It carries the same lines the daemon logs at startup, minus the environment
+/// ones — this command validates a file, which may not belong to the machine
+/// running it.
 #[derive(Serialize)]
 pub struct ValidateReport {
     pub valid: bool,
@@ -35,9 +39,9 @@ pub struct ValidateReport {
     pub variants: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<UnsetVar>,
-    /// `plugins.<id>` keys the binary does not read, so they are ignored.
+    /// Configuration present in the file that the binary will not act on.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub unknown_plugins: Vec<String>,
+    pub ignored_config: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
 }
@@ -59,15 +63,15 @@ impl ValidateReport {
             presets: Some(presets),
             variants: Some(variants),
             warnings,
-            unknown_plugins: Vec::new(),
+            ignored_config: Vec::new(),
             errors: Vec::new(),
         }
     }
 
-    /// Attach the `plugins.<id>` keys the binary will ignore. Separate from
+    /// Attach the configuration the binary will ignore. Separate from
     /// [`Self::valid`] so its argument list does not keep growing.
-    pub fn with_unknown_plugins(mut self, unknown_plugins: Vec<String>) -> Self {
-        self.unknown_plugins = unknown_plugins;
+    pub fn with_ignored_config(mut self, ignored_config: Vec<String>) -> Self {
+        self.ignored_config = ignored_config;
         self
     }
 
@@ -80,7 +84,7 @@ impl ValidateReport {
             presets: None,
             variants: None,
             warnings: Vec::new(),
-            unknown_plugins: Vec::new(),
+            ignored_config: Vec::new(),
             errors: vec![error],
         }
     }
@@ -108,20 +112,16 @@ impl CliReport for ValidateReport {
                     h.line(&format!("    - ${{{}}}", w.unset_env))?;
                 }
             }
-            if !self.unknown_plugins.is_empty() {
+            if !self.ignored_config.is_empty() {
                 h.blank()?;
                 h.line(&format!(
-                    "  note: {} plugins.<id> block(s) this binary does not read — \
-                     they are ignored, which is silent at runtime:",
-                    self.unknown_plugins.len()
+                    "  note: {} setting(s) this binary does not act on — ignored, \
+                     which is silent at runtime:",
+                    self.ignored_config.len()
                 ))?;
-                for id in &self.unknown_plugins {
-                    h.line(&format!("    - plugins.{id}"))?;
+                for line in &self.ignored_config {
+                    h.line(&format!("    - {line}"))?;
                 }
-                h.line(&format!(
-                    "    known ids: {}",
-                    crate::assemble::KNOWN_PLUGIN_IDS.join(", ")
-                ))?;
             }
             Ok(())
         } else {
@@ -144,20 +144,23 @@ mod tests {
     use crate::output::CliReport;
 
     #[test]
-    fn unknown_plugins_are_reported_without_failing_validation() {
+    fn ignored_config_is_reported_without_failing_validation() {
         let report = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![])
-            .with_unknown_plugins(vec!["bitrouter-guardrail".into()]);
+            .with_ignored_config(vec!["plugins.bitrouter-guardrail is ignored".into()]);
         // A misconfiguration, not a malformed config: CI gates on `valid`, and
         // an ignored block must not turn a green pipeline red.
         assert_eq!(report.exit_code(), 0);
         let v = serde_json::to_value(&report).unwrap();
-        assert_eq!(v["unknown_plugins"][0], "bitrouter-guardrail");
+        assert_eq!(
+            v["ignored_config"][0],
+            "plugins.bitrouter-guardrail is ignored"
+        );
         // and it is omitted entirely when there is nothing to say.
         let clean = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![]);
         assert!(
             serde_json::to_value(&clean)
                 .unwrap()
-                .get("unknown_plugins")
+                .get("ignored_config")
                 .is_none()
         );
     }

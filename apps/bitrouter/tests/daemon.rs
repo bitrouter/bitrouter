@@ -107,10 +107,19 @@ async fn wait_until_ready(socket: &std::path::Path) {
 /// into a process with no subscriber installed and is dropped silently.
 ///
 /// That is exactly how the first version of this guard shipped-and-did-nothing
-/// in local testing, so the regression is worth pinning. Asserting on
-/// `Assembled::ignored_config` checks the half that can actually be observed
-/// without a capturing subscriber; `main.rs` emitting it is one `for` loop
-/// after the subscriber init it must stay below.
+/// in local testing, so the regression is worth pinning.
+///
+/// **Be precise about what this does and does not pin.** It asserts the
+/// warnings are *carried out* of assembly. It does **not** assert that nothing
+/// was logged during assembly, so re-adding a `tracing::warn!` inside
+/// `build_app_with_path` would still pass here. That assertion was considered
+/// and rejected as unreliable in the wrong direction: `tracing`'s per-callsite
+/// `Interest` cache is process-global, so a sibling test in this binary hitting
+/// the same callsite with no subscriber installed caches `Interest::never` —
+/// and a "nothing was logged" assertion then passes vacuously, which is exactly
+/// the failure it exists to catch. `crates/bitrouter-telemetry/tests/ingress_log_target.rs`
+/// is a separate binary for the same reason; the difference is that its
+/// assertion is positive, so a vacuous run fails rather than passes.
 #[tokio::test]
 async fn ignored_config_is_carried_out_of_assembly_not_logged_inside_it() {
     let dir = tempdir("ignored-config");
