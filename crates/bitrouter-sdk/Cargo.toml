@@ -54,13 +54,13 @@ agent-client-protocol-schema = { workspace = true, optional = true }
 # builders, and stdio transport the live thin proxy (`acp::up` / `acp::down`)
 # drives. Only the runtime needs it; the pure-routing pipeline does not.
 agent-client-protocol = { workspace = true, optional = true }
-# `acp-controller` feature — the official connection-level conductor. It lazily
-# builds the agent/proxy chain from the manager's initialize request and
-# forwards unhandled ACP traffic bidirectionally, which is the controller
-# kernel. NOT on `acp`: it depends on `agent-client-protocol-trace-viewer`,
-# which depends on `axum` non-optionally, so putting it on `acp` made every
-# consumer wanting ACP *routing* link an HTTP server. See the feature comment
-# below.
+# `acp` feature — the official connection-level conductor. It lazily builds the
+# agent/proxy chain from the manager's initialize request and forwards
+# unhandled ACP traffic bidirectionally, which is the controller kernel.
+#
+# It reaches `axum` non-optionally, through
+# `agent-client-protocol-trace-viewer`, so enabling `acp` links an HTTP server.
+# That is unwanted and is tracked upstream; see the `acp` feature's comment.
 agent-client-protocol-conductor = { workspace = true, optional = true }
 # `acp` feature — the proxy's stream/compat glue: `BroadcastStream` for the
 # fan-out planes and `tokio_util::compat` to hand the child's tokio pipes to
@@ -94,6 +94,7 @@ mcp = ["dep:rmcp", "tokio/process"]
 acp = [
     "dep:agent-client-protocol-schema",
     "dep:agent-client-protocol",
+    "dep:agent-client-protocol-conductor",
     "dep:tokio-stream",
     "dep:anyhow",
     "dep:rustix",
@@ -103,21 +104,19 @@ acp = [
     "tokio-util/compat",
 ]
 
-# Serving the connection-level ACP controller (`acp::controller::Controller::run`).
-# Split out of `acp` because that one method is the only thing in the crate that
-# needs `agent-client-protocol-conductor`, and that crate depends on
-# `agent-client-protocol-trace-viewer`, which depends on `axum`
-# **non-optionally** with no feature to turn it off.
+# NOTE: `acp` pulls `agent-client-protocol-conductor`, which reaches `axum`
+# non-optionally through `agent-client-protocol-trace-viewer`. So enabling
+# `acp` links an HTTP server, which a consumer wanting ACP routing should not
+# have to.
 #
-# Folded in, it made `acp` — documented as "the ACP thin proxy … plus the live
-# runtime" — drag a whole HTTP server behind it, so a consumer enabling ACP for
-# pure routing linked axum. `helpers/dist-helper` was doing exactly that.
-#
-# The gate is on `run`, not on the `controller` module: #848's `acp::client`
-# imports that module's route-control types, and those name no conductor type.
-# So `acp` builds and configures a `Controller`; `acp-controller` serves one.
-# `feature-isolation` guards the split.
-acp-controller = ["acp", "dep:agent-client-protocol-conductor"]
+# An `acp-controller` split was built and then withdrawn. It failed the test
+# this workspace applies everywhere else — name the beneficiary: `apps/bitrouter`
+# is the only consumer of `acp`, and it wants the controller. The one real
+# victim was `helpers/dist-helper`, which enabled `acp` without ever using it;
+# trimming that is the fix that shipped. #848 also fused the two halves —
+# `acp::client` imports `controller`'s route-control types — so separating them
+# now means restructuring that module, for nobody. The real fix is upstream
+# making the trace viewer optional. Revisit when a consumer exists.
 
 [target.'cfg(unix)'.dependencies]
 # `acp` feature — safe `killpg(2)` for reaping an agent child's whole process

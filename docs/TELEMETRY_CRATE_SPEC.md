@@ -745,13 +745,25 @@ the move. Recorded because both are instructive about the guards themselves.
   `acp` alone leaves the schema semantically identical — `mcp` is the one the
   schema needs, and `dist-helper` never used `acp` at all.
 
-  The fix is two parts, both in this branch. `dist-helper` stops enabling a
-  feature it does not use; and `acp::controller` — the only module needing the
-  conductor — moves behind a new `acp-controller` feature, so `acp` stops
-  dragging an HTTP server behind a capability documented as a thin proxy. The
-  carve-out and its comment are gone, `dist-helper` is back in the main loop,
-  and a new job step asserts `acp` alone reaches neither `axum` nor the
-  conductor.
+  **The fix that shipped is one part, not two.** `dist-helper` stops enabling a
+  feature it never used — that removes the carve-out, puts `dist-helper` back in
+  the main loop, and clears both `axum` and `opentelemetry` from its tree.
+
+  A second part was built and then **withdrawn**: moving the conductor behind a
+  new `acp-controller` feature so `acp` would stop dragging an HTTP server. It
+  died on this document's own standard. *Name the beneficiary:* `apps/bitrouter`
+  is the only consumer of `acp` in the workspace and it wants the controller, so
+  after the `dist-helper` trim the split helped **nobody**. It also stopped being
+  cheap: `main`'s #848 fused the halves — `acp::client` imports `controller`'s
+  route-control types — so a narrow gate on `Controller::run` left half the
+  module unreachable, which `-D warnings` correctly rejected as dead code, and
+  the honest version would have meant restructuring a module that landed the day
+  before. The real fix is upstream making
+  `agent-client-protocol-trace-viewer`'s `axum` dependency optional.
+
+  Recorded rather than quietly dropped, because the invariant is still worth
+  wanting: `docs/DEVELOPMENT.md` states it as a known wart with the condition
+  for revisiting it.
 
   It also exposed something worse than the axum edge, which is recorded under
   *Measured*: the committed schema's **byte order** depended on that dependency
@@ -835,7 +847,7 @@ own position that a second renderer is undecided. The alternative is a
 | Lines moved / stayed | 5,594 / 1,275 (raw, ~42% `#[cfg(test)]`) |
 | Tests | 2,893 passed, 0 failed, 11 skipped after merging `main` and applying the review fixes |
 | Guard, live | A config carrying `bitrouter-policy` (read), `bitrouter-guardrail` (typo) and `bitrouter-telemetry.otlp_endpoint` (dead sub-key) reports exactly the latter two, and `bitrouter-policy` is no longer falsely flagged |
-| `acp` alone | reaches neither `axum` nor `agent-client-protocol-conductor`; `acp-controller` reaches both. Guarded by a new `feature-isolation` step. |
+| `dist-helper` | reaches neither `axum` nor `opentelemetry`, and is back in `feature-isolation`'s main consumer loop. `acp` still links `axum` through the conductor — a known wart, see *As built*. |
 | `dist/schema/…json` | now key-sorted by construction, and **byte-identical with and without** the `serde_json/preserve_order`-bearing chain — verified by re-adding `acp` to `dist-helper` and regenerating. Previously its byte order was a function of unrelated crates' feature unification: dropping one feature reordered all 3,234 lines without changing a value. |
 | `cargo clippy --workspace --all-features --tests --benches` | clean |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features` | clean |

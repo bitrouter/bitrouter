@@ -14,12 +14,9 @@ use agent_client_protocol::{
     Agent, Client, Conductor, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled,
     JsonRpcMessage, Proxy, Responder, UntypedMessage,
 };
-// The only conductor use in the workspace, and the reason `acp-controller`
-// exists as a separate feature: this crate reaches `axum` non-optionally
-// through `agent-client-protocol-trace-viewer`. Everything else in this module
-// — the route-control types `acp::client` depends on — names no conductor type
-// and stays on plain `acp`.
-#[cfg(feature = "acp-controller")]
+// The only conductor use in the workspace. It reaches `axum` non-optionally
+// through `agent-client-protocol-trace-viewer`, which is why `acp` links an
+// HTTP server — see the `acp` feature's comment in `Cargo.toml`.
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 
@@ -384,16 +381,6 @@ where
     }
 
     /// Serve the controller on a manager-facing ACP transport.
-    ///
-    /// Gated on `acp-controller`: this is the one method that reaches
-    /// `agent-client-protocol-conductor`, and that crate depends on
-    /// `agent-client-protocol-trace-viewer` -> `axum`, non-optionally. Building
-    /// and configuring a `Controller` needs none of it, and neither do this
-    /// module's route-control types, which `acp::client` imports — so plain
-    /// `acp` stays free of an HTTP server and only *serving* a controller pays
-    /// for one.
-    #[cfg(feature = "acp-controller")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "acp-controller")))]
     pub async fn run(
         self,
         transport: impl ConnectTo<Agent>,

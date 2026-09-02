@@ -47,10 +47,6 @@ pub mod transport;
 #[cfg(feature = "acp")]
 pub mod client;
 
-// Gated on `acp`, but the conductor-backed `Controller` inside it is gated on
-// `acp-controller` — #848's `acp::client` needs this module's route-control
-// types, and those name no conductor type. See the feature's comment in
-// `Cargo.toml`.
 #[cfg(feature = "acp")]
 pub mod controller;
 #[cfg(feature = "acp")]
