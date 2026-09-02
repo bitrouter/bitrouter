@@ -1,18 +1,31 @@
 # Spec: the chat loop as an explicit machine (steps 2A and 2B)
 
-Status: **draft; §2.3 and §4.2 superseded** · Author: Claude (with Spikel) ·
-Date: 2026-09-01
+Status: **accepted; §2.3 and §4.2 re-derived against the shared client** ·
+Author: Claude (with Spikel) · Date: 2026-09-01, revised 2026-09-02
 
-> **Superseded in part (2026-09-02).** §2.3 and §4.2 are written against
-> `engine::Session` — `PendingPermission` and a borrowing `Session::prompt`.
-> [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md) retires that
-> type in favour of a shared ACP client, so both sections need rewriting before
-> this plan is executed. The state machine itself — `Phase`, `Action`,
-> `Effect`, `step()`, and the key table in §1.1 — is unaffected: it is
-> transport-agnostic by construction, which is why it survived the change of
-> stack underneath it. Per the amendment's §6, this work is step 9 and lands
-> last. The picker phase in §3 is deleted rather than ported; see the
-> amendment's §5.
+> **Revised (2026-09-02), and the revision is the reason to read this note.**
+> §2.3 and §4.2 were written against `engine::Session` — a `PendingPermission`
+> in `acp::up`, and a `Session::prompt(&self)` that borrowed the session.
+> [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md) retired that
+> stack for `bitrouter_sdk::acp::client::AcpClient`, so both sections were
+> re-derived from what is actually there before this plan was executed. **Both
+> conclusions survived, for different reasons than the ones originally given**
+> — see the "re-derived" notes in each section.
+>
+> The state machine itself — `Phase`, `Action`, `Effect`, `step()`, and the key
+> table in §1.1 — was unaffected: it is transport-agnostic by construction,
+> which is why it survived the change of stack underneath it.
+>
+> **One structural correction.** The original draft cut `Phase::Routing`,
+> because the amendment's §5 was read as deleting the picker. It does not:
+> §5 deletes `SessionProviders` and manager-side `providers/*`, and says
+> explicitly that `picker::Picker` *survives* with its `available` parameter
+> re-pointed at the controller's three-condition `routeControl` gate. Step 6
+> rebuilt `/route` on `_bitrouter/route/*` and it is live. The machine
+> therefore has **four** phases, not three: `Idle`, `Turn`, `Answering`,
+> `Routing`. §3 is a port, not a deletion.
+>
+> Per the amendment's §6, this work is step 9 and lands last.
 
 Companion to the one-crate refactor discussed on
 `claude/bitrouter-tui-architecture-2cc5ce` and to
@@ -127,8 +140,19 @@ This is the decision most worth checking, so here is the audit that settles it.
 | needs | already available in the crate |
 |---|---|
 | `crossterm::event::Event` | ✅ `crossterm` is a direct dependency |
-| `PermissionOption`, `RequestPermissionOutcome`, `ProviderInfo`, `StopReason` | ✅ `agent-client-protocol-schema` |
-| `Editor`, `permission::Prompt`, `picker::Picker` | ✅ already in this crate |
+| `PermissionOption`, `PermissionOptionId`, `RequestPermissionOutcome`, `StopReason` | ✅ `agent-client-protocol-schema` |
+| `Editor`, `permission::Prompt`, `picker::Picker`, `writer::Trigger` | ✅ already in this crate |
+| `ratatui::text::Line`, for the modal row a phase hands the view | ✅ `ratatui` |
+
+**Re-checked after the migration (2026-09-02).** The route plane replaced
+`providers/*`, so the row that used to read `ProviderInfo` is gone — and what
+replaced it is *less* demanding, not more: `_bitrouter/route/list` yields
+`Vec<String>` and an `Option<String>`, which are not types at all. The one
+new question the shared client raises is whether the reducer needs
+`RouteError`; it does not, because the driver renders an error to a string
+before it ever becomes an `Action` (§3.2). Likewise `StopReason` reaches the
+reducer but `PromptResponse` does not: `report_turn` is the driver's, and it
+runs on the round-trip before the action is built.
 
 It needs **no** `tokio`, **no** `anyhow`, and — see §2.3 — **no**
 `bitrouter-sdk`. So `crates/bitrouter-tui/src/machine.rs` adds zero
@@ -138,23 +162,46 @@ driver left to move, which is the part that genuinely needs `tokio`.
 
 ### 2.3 The machine must not hold a `PendingPermission`
 
-`bitrouter_sdk::acp::up::PendingPermission::new` is `pub(crate)`. Nothing
-outside `bitrouter-sdk` can construct one. If `Action::Permission` carried it,
-every reducer test touching a permission would be unwritable — which is most of
-the tests that matter.
+**Re-derived 2026-09-02.** The type moved — it is
+`bitrouter_sdk::acp::client::PendingPermission` now — and its shape changed:
+it grew a public `request_id`, its `tool_call`/`options` fields are public, and
+it carries a shared `Arc<PermissionResolver>` so `resolve(&self)` is
+idempotent across clones. Three of the four things that made the original
+argument have therefore gone. The argument still holds, on the one that did
+not, plus one the shared client added:
 
-So the payload splits:
+1. **`PendingPermission::new` is still `pub(crate)`.** Every field a test would
+   need is public, but there is no way to *build* one from outside
+   `bitrouter-sdk`. A reducer test that had to construct a permission would be
+   unwritable — which is most of the tests that matter (T2, T3, T4, T6).
+2. **`bitrouter-tui` does not depend on `bitrouter-sdk`, and must not start.**
+   This is new since the original draft: under the engine, the reducer's home
+   crate was an open question, and the type's constructor was the whole
+   argument. Now the machine's home is settled (§2.2) and holding a
+   `PendingPermission` would add an SDK edge to the renderer purely to carry a
+   resolver the reducer must never call. A resolver is I/O; `step` owns none.
+
+So the payload splits, exactly as originally drawn:
 
 - **The machine** holds `permission::Prompt`, a crate type built from
-  `(request_id, title, tool_call_id, options)` and freely constructible in a
-  test.
+  `(id, title, tool_call_id, options)` and freely constructible in a test.
 - **The driver** holds `HashMap<String, PendingPermission>` keyed by
-  `request_id`, and `Effect::Resolve { id, outcome }` is a map lookup plus
-  `request.resolve(outcome)`.
+  `PendingPermission::request_id`, and `Effect::Resolve { id, outcome }` is a
+  map lookup plus `request.resolve(outcome)`.
 
-`permission::Prompt` gains an `id` field and an `id()` accessor for this. That
-is needed anyway once permissions can queue (§4.4) — a queue of prompts with no
-identity cannot route its answers.
+`permission::Prompt` gains an `id` field and an `id()` accessor for this, fed
+from `PendingPermission::request_id` — which is the one piece of the new shape
+that makes the split *cheaper* than it was, since the id no longer has to be
+minted by the driver. It is needed anyway once permissions can queue (§4.4):
+a queue of prompts with no identity cannot route its answers.
+
+**Removing an entry is the driver's, and it must not be skipped.** `resolve`
+is idempotent, so a stale entry cannot double-answer — but it holds a strong
+`Arc` on the resolver, and the client's ledger holds only a weak one *on
+purpose*, so that a dropped request still denies itself (I1's drop arm). A
+driver that never removed answered entries would keep every request of the
+session alive and quietly disable that arm. So `Effect::Resolve` **removes**
+rather than looks up, and `Effect::Cancel` clears the map.
 
 ### 2.4 The `Schedule` stays exactly where it is
 
@@ -194,7 +241,10 @@ pub struct State {
     pub editor: Editor,
     /// How many prompts this session has sent, so two in a row cannot merge.
     pub prompts: usize,
-    /// Whether the agent serves `providers/*` and this session is attributable.
+    /// Whether the controller advertised `_bitrouter/route/list` **and**
+    /// `_bitrouter/route/set` for this session. A controller with no trusted
+    /// local binding advertises neither, and `/route` then says so rather
+    /// than opening a picker that cannot act.
     pub routable: bool,
 }
 
@@ -204,10 +254,17 @@ pub enum Action {
     InputClosed,
     /// INT / TERM / HUP.
     Signal,
-    /// `providers/list` came back.
-    ProvidersListed(Vec<ProviderInfo>),
-    /// `providers/set` came back, with the route now actually in force.
+    /// `_bitrouter/route/list` came back, or failed with a rendered message.
+    Routes(Result<Routes, String>),
+    /// `_bitrouter/route/set` came back, with the route now actually in force.
     Routed(Result<String, String>),
+}
+
+/// What `_bitrouter/route/list` reported: the routes on offer, and the lease
+/// the daemon says is in force.
+pub struct Routes {
+    pub available: Vec<String>,
+    pub current: Option<String>,
 }
 
 pub enum Effect {
@@ -221,9 +278,11 @@ pub enum Effect {
     Modal(Option<Line<'static>>),
     /// Send this line as a turn. `nth` keys the journal chunk.
     Prompt { line: String, nth: usize },
-    ListProviders,
-    SetProvider(String),
-    SetRoute(Option<String>),
+    ListRoutes,
+    SetRoute(String),
+    /// The route the footer names for the rest of the session — the one the
+    /// daemon confirmed, never the one that was asked for.
+    RouteInForce(Option<String>),
     Exit,
 }
 
@@ -264,25 +323,33 @@ owners; with the buffer in `State` and the screen behind `Effect::Echo`, there
 is one owner and no callback. `input.rs` drops from 145 lines to roughly 85 —
 `Stdin::open`, `next_event`, and `Drop`.
 
-`pick_provider` is deleted. Its loop becomes three transitions:
+`pick_route` is deleted. Its loop becomes these transitions:
 
 | from | on | to | effects |
 |---|---|---|---|
-| `Idle` | `Key` submitting `/route`, `routable` | `Idle` | `[ClearNotice, ListProviders]` |
-| `Idle` | `Key` submitting `/route`, not `routable` | `Idle` | `[Notice("this session cannot be rerouted…"), Paint(Key)]` |
-| `Idle` | `ProvidersListed(ps)` where `Picker::open(true, &ps)` is `Some` | `Routing(p)` | `[Modal(Some(p.render())), Paint(Key)]` |
-| `Idle` | `ProvidersListed(ps)` where it is `None` | `Idle` | `[Notice("no routable providers…"), Paint(Key)]` |
-| `Routing` | `Key` selecting provider `id` | `Idle` | `[Modal(None), SetProvider(id)]` |
+| `Idle` | `Key` submitting `/route`, `routable` | `Idle` | `[Echo, ClearNotice, ListRoutes]` |
+| `Idle` | `Key` submitting `/route`, not `routable` | `Idle` | `[Echo, ClearNotice, Notice("this session cannot be rerouted…"), Paint(Key)]` |
+| `Idle` | `Routes(Ok(r))` where `Picker::open(routable, …)` is `Some` | `Routing(p)` | `[Modal(Some(p.render())), Paint(Key)]` |
+| `Idle` | `Routes(Ok(r))` where it is `None` | `Idle` | `[Notice("no routes to choose between"), Paint(Key)]` |
+| `Idle` | `Routes(Err(e))` | `Idle` | `[Notice("route unchanged: {e}"), Paint(Key)]` |
+| `Routing` | `Key` selecting route `r` | `Idle` | `[Modal(None), SetRoute(r)]` |
 | `Routing` | `Key` cancelling | `Idle` | `[Modal(None), Notice("route unchanged"), Paint(Key)]` |
-| `Idle` | `Routed(Ok(in_force))` | `Idle` | `[SetRoute(Some(in_force)), Notice("route: …"), Paint(Key)]` |
-| `Idle` | `Routed(Err(e))` | `Idle` | `[Notice("route unchanged: {e}"), Paint(Key)]` |
+| `Idle` | `Routed(Ok(in_force))` | `Idle` | `[RouteInForce(Some(in_force)), Notice("route: …"), Paint(Key)]` |
+| `Idle` | `Routed(Err(message))` | `Idle` | `[Notice(message), Paint(Key)]` |
+
+`Routed(Err)` carries a message the driver already rendered, rather than a
+`RouteError`: a refused route, a vanished binding, and a transport failure read
+differently, and the branch that knows the difference is the one that holds the
+typed error. Keeping the rendering in the driver is what keeps `bitrouter-sdk`
+out of the reducer's vocabulary (§2.2).
 
 ### 3.3 Effects that await
 
-`ListProviders` and `SetProvider` are `await`ed inline in the effect runner,
-exactly as `pick_provider` awaits them today. This is behaviour-preserving, and
-it is safe **because these effects are reachable only from `Idle`**, where no
-turn is streaming and nothing else needs the loop.
+`ListRoutes` and `SetRoute` are `await`ed inline in the effect runner, exactly
+as `pick_route` awaits them today, and their answers are fed back as
+`Action::Routes` / `Action::Routed` on the next pass. This is
+behaviour-preserving, and it is safe **because these effects are reachable only
+from `Idle`**, where no turn is streaming and nothing else needs the loop.
 
 That gives a rule worth writing down and keeping:
 
@@ -291,13 +358,19 @@ That gives a rule worth writing down and keeping:
 
 2B honours it: `Resolve` is synchronous (`PendingPermission::resolve` takes
 `&self` and sends on a oneshot), and `Cancel` is awaited only after the turn
-has been abandoned. If a future step needs an awaiting effect from a live
-phase, it must spawn and feed the answer back as an `Action` instead.
+has been abandoned — and what it awaits, `AcpClient::cancel`, is an
+`unbounded_send` behind an `async fn` and never actually parks. If a future
+step needs an awaiting effect from a live phase, it must spawn and feed the
+answer back as an `Action` instead.
 
 ### 3.4 Behaviour preserved exactly
 
-- `/route` still issues `providers/set` first and re-reads `providers/list`
-  afterwards, so what is reported is what is in force, never what was asked for.
+- `/route` still reports what `_bitrouter/route/set` **confirmed**, never what
+  was asked for, and a `set` that fails leaves the old route marked and says
+  why.
+- The picker is still gated on the controller's three-condition `routeControl`
+  capability, asked in two places that must agree: `routable` on the state, and
+  `Picker::open`'s `available`.
 - A control chord in the picker still closes it. (§6.1 proposes changing the
   `Ctrl-L` case; that is a 2B decision, not a 2A one.)
 - `Esc` at an idle prompt is still ignored.
@@ -346,19 +419,24 @@ pub queued: VecDeque<Prompt>,
 let mut turn: Option<Pin<Box<dyn Future<Output = Result<PromptResponse>> + '_>>> = None;
 
 loop {
-    let action = tokio::select! {
-        () = shutdown.recv()          => Action::Signal,
-        event = stdin.next_event()    => match event {
-            Some(e) => Action::Key(e),
-            None => Action::InputClosed,
+    // An effect that awaited inline may have produced an answer; it is
+    // dispatched before the select is entered again.
+    let action = match queued_actions.pop_front() {
+        Some(action) => action,
+        None => tokio::select! {
+            () = shutdown.recv()          => Action::Signal,
+            event = stdin.next_event()    => match event {
+                Some(e) => Action::Key(e),
+                None => Action::InputClosed,
+            },
+            Some(()) = dirty_rx.recv()    => Action::Dirty,
+            Some(req) = permissions.next() => Action::Permission(remember(req)),
+            result = in_flight(&mut turn) => { turn = None; ended(result) }
+            _ = ticker.tick(), if state.streaming() => Action::Tick,
         },
-        Some(()) = dirty_rx.recv()    => Action::Dirty,
-        Some(req) = permissions.next() => Action::Permission(prompt_of(&req), remember(req)),
-        result = in_flight(&mut turn) => Action::TurnEnded(result.map(|r| r.stop_reason)
-                                                                 .map_err(|e| e.to_string())),
-        _ = ticker.tick(), if state.streaming() => Action::Tick,
     };
     for effect in machine::step(&mut state, action) { /* run it */ }
+    if exited { break }
 }
 ```
 
@@ -366,16 +444,39 @@ loop {
 mutates by `&mut`; a `!Unpin` future being polled across iterations cannot go
 there. So it lives in the driver as a boxed future, and the invariant
 "`turn.is_some()` iff `phase` is `Turn` or `Answering`" is maintained by exactly
-two lines: `Effect::Prompt` sets it, `Action::TurnEnded` and `Effect::Cancel`
-clear it.
+two lines: `Effect::Prompt` sets it, and the `TurnEnded` arm plus
+`Effect::Cancel` clear it.
 
-The cost is one `Box` allocation per turn. The alternative — `tokio::spawn` plus
-a oneshot — was rejected because `Session::prompt(&self, ...)` borrows the
-session, so spawning would require an `Arc<Session>` and change ownership well
-beyond this step.
+**Re-derived 2026-09-02: the idiom survives, and one of the two reasons for it
+did not.**
 
-Awaiting an `Option<F>` without `.unwrap()` uses the same idiom
-`signals::Shutdown` already uses for a missing signal registration:
+`Session::prompt(&self, …)` became `AcpClient::prompt(&self, session_id, text)`.
+The *shape* the original argument turned on is unchanged in the part that
+matters and changed in the part that does not:
+
+- **Still borrowing.** `prompt` takes `&self`, so its future carries a
+  `&AcpClient` and is not `'static`. `tokio::spawn` therefore still needs an
+  `Arc<AcpClient>` — and `ControlledSession` owns its client by value, so
+  reaching for one would change ownership across `acp_cli` well beyond this
+  step. The boxed-future-in-the-driver conclusion stands, for the original
+  reason.
+- **No longer `!Unpin` by construction.** The old reason the box was
+  *necessary* was that the future had to be pinned across iterations;
+  `tokio::pin!` in a `loop` body cannot survive one. That is still true, so the
+  box is still how it is done, but note what it buys: `Pin<Box<dyn Future>>` is
+  `Unpin`, so `&mut F` is itself a `Future`, and dropping that borrow when the
+  select loses the race does **not** drop the boxed future. That is what makes
+  the arm cancel-safe, and it is a property of the box rather than of the
+  session type — which is why the change of stack did not disturb it.
+- **The output type changed and the cost did not.** `prompt` returns
+  `anyhow::Result<PromptResponse>` rather than the engine's own result, so
+  `report_turn` — which needs the whole response, not just the stop reason —
+  runs in the arm, before the action is built. One `Box` allocation per turn,
+  as before.
+
+So `in_flight` stays, spelled the way `signals::Shutdown` already spells a
+missing signal registration — and for the same reason, which is that neither
+may `.unwrap()` an absent one:
 
 ```rust
 /// Await the turn if there is one, and never resolve if there is not.
@@ -387,9 +488,10 @@ async fn in_flight<F: Future + Unpin>(slot: &mut Option<F>) -> F::Output {
 }
 ```
 
-`Pin<Box<dyn Future>>` is `Unpin`, so `&mut F` is itself a `Future`. Dropping
-that borrow when the select loses the race does **not** drop the boxed future,
-which is what makes the arm cancel-safe.
+**One correction to the sketch.** `Action::Permission` carries only the
+`permission::Prompt`; the `PendingPermission` itself is `remember`ed in the
+driver's map (§2.3), so the arm is a side effect plus a plain-data action
+rather than a two-field one.
 
 ### 4.3 The tick arm is gated
 
@@ -470,7 +572,32 @@ arm. Random selection gives each ready arm a fair share. Determinism is not
 needed for tests, because tests drive `step` directly rather than through the
 select.
 
-### 4.9 What can be trimmed in the same step (optional, separable)
+### 4.9 One loop, one exit — including `?`
+
+`run` today has **four** ways out and only three of them reach
+`ControlledSession::shutdown`: the two `break`s and the falling-off-the-end
+path do, and every `?` — a failed paint, a failed redraw, a failed
+`view.finish()` — does not. `Stdin`'s `Drop` still gives the terminal back
+(I12 is unaffected), but the harness child is not confirmed reaped and the
+controller credential is not revoked. The step-6 implementer left this here
+deliberately, on the grounds that a single flat loop with one exit is the
+natural fix rather than a fourth special case. It is.
+
+So `run` splits in two:
+
+- **`drive(...) -> Result<bool>`** holds the loop and every `?` in it, and
+  returns whether the session ended abnormally.
+- **`run(...)`** owns the view and stdin, calls `drive`, and then runs teardown
+  **unconditionally** — `shutdown()`, then `view.finish()`, then the terminal,
+  then the log tail — before deciding what to return.
+
+A failed drive is an abnormal end, so it writes the session-log tail like any
+other, and its error is the one reported. `View::open` and `Stdin::open` are the
+only things left outside `drive`, and the one path where they fail shuts the
+session down explicitly rather than by `?`. This is I10, and after this change
+it holds for every exit rather than for most of them.
+
+### 4.10 What can be trimmed in the same step (optional, separable)
 
 The permission pump task and its channel exist only to make the stream
 `select!`-safe, which `StreamExt::next` on a retained stream already is. Polling
@@ -488,8 +615,10 @@ this one's.
 
 ## 5. The tests
 
-Five named regression tests, all of them on `step` with no runtime, no
-terminal, and no session.
+Seven named regression tests, all of them on `step` with no runtime, no
+terminal, and no session. They are the only coverage this surface has: `chat`'s
+interactive loop has no integration test, and the three exits are checked by
+the manual steps in `chat/mod.rs`.
 
 **T1 — the key table.** One table-driven test over (phase × key) asserting the
 effects, covering every cell of §1.1. This is the test that makes the four
@@ -520,11 +649,20 @@ behaviour change.
 Plus **T6 — a permission outside a turn is denied** (§4.4), which is the
 regression guard for §1.3.
 
+And **T7 — every way out of `Answering` answers the question.** Not in the
+original draft, because the shapes that reach it did not exist: flat, a turn can
+*end* with a question still open (the agent gave up on its own tool call), and a
+signal can arrive with one open (§6.2's second consequence). Both are new
+reachable states, and both must resolve to the agent's reject option rather than
+to silence. Written as an exhaustive sweep over `Action` from `Answering`, so a
+variant added later fails the test rather than escaping it — this is I5, and it
+is the invariant with the worst failure mode in the file.
+
 ---
 
 ## 6. Behaviour changes, and one open decision
 
-### 6.1 `Ctrl-L` in a modal — **needs your call**
+### 6.1 `Ctrl-L` in a modal — **decided: (a), in its own commit**
 
 Today it denies the permission / closes the picker, because both modals treat
 any control chord as a cancel (§1.1). The flat table makes the cell visible.
@@ -536,9 +674,12 @@ Two options:
 - **(b) Preserve it.** Keep the control-chord-is-cancel rule verbatim, and note
   it in the table as deliberate.
 
-I recommend **(a)**. It is a one-cell change, it is what the rest of the table
-already does, and "the redraw key silently denied the agent's request" is a bad
-surprise. But it is a behaviour change and it is yours to approve.
+**Approved: (a), and landed as its own final commit.** The refactor implements
+**(b)** first — the table verbatim, both bold cells included — and T1 pins it.
+The fix is then a separate commit that changes two cells and nothing else, so
+it can be reverted without touching the machine. Splitting it this way is the
+point: the flattening is behaviour-preserving and reviewable as such, and the
+one deliberate key change is reviewable as *itself*.
 
 ### 6.2 The transcript no longer freezes during a permission — intentional
 
@@ -547,13 +688,28 @@ change most visible to a user, and it is an improvement: the tool output that
 *explains* what the agent is asking permission for now arrives while the
 question is up, rather than after it is answered.
 
-### 6.3 `/commands` becomes live rather than a snapshot
+A second consequence rides with it, smaller and in the same direction: a
+**signal** delivered while a permission is on screen is now acted on
+immediately. Today `answer_permission` awaits stdin alone, so the `shutdown`
+arm is not being polled at all and the signal waits for the question to be
+answered before the session ends. Nothing is lost either way — `tokio`'s
+handler keeps the signal pending — so this is latency, not correctness. It is
+named because it is a difference a person can observe.
 
-Today `/commands` renders the command list at the moment it was typed and
-freezes it in the notice. As `Notice::Commands` the view re-renders from the
-journal each frame, so an `AvailableCommandsUpdate` arriving afterwards is
-reflected. Strictly better, and it falls out of moving the notice from rendered
-lines to an enum.
+### 6.3 `/commands` stays a snapshot — **not adopted**
+
+The original draft proposed making `/commands` live: as `Notice::Commands` the
+view could re-render from the journal each frame, so an
+`AvailableCommandsUpdate` arriving afterwards would be reflected. It is
+strictly better and it does fall out of the enum.
+
+**It is deliberately not done here.** This step is behaviour-preserving apart
+from §6.1 and §6.2, both of which are named, tested, and — for §6.1 — isolated
+in their own commit. A third change, in a surface with no integration coverage,
+buys a refresh nobody has asked for at the cost of blurring what the refactor
+did. `Notice::Commands` is still the effect's shape, because the reducer cannot
+render; the driver answers it with the snapshot it renders today. Making it
+live later is then a one-line change in the driver.
 
 ### 6.4 Not in scope, but newly possible
 
@@ -585,10 +741,21 @@ refactor.
 
 ## 8. Sequencing and reviewability
 
-| step | commits | what a reviewer checks |
-|---|---|---|
-| 2A | 1. add `machine.rs` with `Phase::{Idle,Routing}` + tests<br>2. drive the outer loop from it; delete `read_line`/`Echo`/`pick_provider` | that the picker table in §3.2 matches the deleted function line for line |
-| 2B | 3. `Prompt` gains `id` + `unanswered`; `Journal::pending_permission` deleted<br>4. flatten: `Phase::{Turn,Answering}`, one select, `in_flight`<br>5. *(optional)* drop the permission pump task | T1–T6, and the cancel-safety table in §4.7 |
+**As landed (2026-09-02).** 2A and 2B went together rather than as two steps.
+The reason is the one §3.1 already gives from the other direction: a `Phase`
+with `Idle` and `Routing` but no `Turn` has no reader for the turn, so 2A alone
+would have shipped a machine that the driver consults for two of five loops and
+bypasses for the other three — two sources of truth about what a key means,
+which is the defect this whole spec exists to remove. `machine.rs` and the
+flattening are therefore one commit; a reducer with no driver would have been
+dead code in the same breath.
 
-Landing 2A alone is worthwhile even if 2B is deferred: it deletes two loops and
-the echo callback, and it puts the vocabulary in the crate.
+| commit | what it does | what a reviewer checks |
+|---|---|---|
+| 1 | `Prompt` gains `id` + `unanswered`; `Journal::pending_permission` deleted, `View::set_permission` added | that the journal is a projection of the update stream again, and nothing else writes it |
+| 2 | `machine.rs`, and `run` flattened onto it: four phases, one select, `in_flight`, one exit through teardown | T1–T7, the picker table in §3.2 against the deleted `pick_route`, and the cancel-safety table in §4.7 |
+| 3 | drop the permission pump task (§4.10) | that `StreamExt::next` on a retained stream is the same cancel-safety the channel gave |
+| 4 | §6.1's two `Ctrl-L` cells | that it changes two cells of T1 and nothing else |
+
+Commits 3 and 4 are separable on purpose: a bisect can put the flattening on
+one side and either of them on the other.
