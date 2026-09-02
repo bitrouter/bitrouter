@@ -17,7 +17,7 @@ name = "bitrouter"
 path = "src/main.rs"
 
 [dependencies]
-bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
+bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp-controller"] }
 # `server`: the inbound ingress SERVER span, which wraps the SDK router this
 # binary serves. A deployment that builds its own ingress span takes
 # `otel-http` alone.

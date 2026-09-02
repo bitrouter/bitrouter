@@ -260,6 +260,8 @@ jobs:
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
       - run: cargo check -p bitrouter-sdk --no-default-features --features server
+      - run: cargo check -p bitrouter-sdk --no-default-features --features acp
+      - run: cargo check -p bitrouter-sdk --no-default-features --features acp-controller
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-grpc
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel,server
@@ -297,6 +299,23 @@ jobs:
             fi
             if cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
               echo "::error::$pkg reached bitrouter-sdk — the OTLP renderer belongs in bitrouter-telemetry; see docs/TELEMETRY_CRATE_SPEC.md"; exit 1
+            fi
+          done
+      - name: "`acp` routing does not drag an HTTP server"
+        # `acp` is documented as the thin proxy plus the live runtime. The
+        # connection-level controller sits behind `acp-controller` because it
+        # needs `agent-client-protocol-conductor`, which reaches `axum`
+        # non-optionally through `agent-client-protocol-trace-viewer`. Folded
+        # together, a consumer wanting ACP routing linked a whole HTTP server —
+        # `dist-helper` did, until it stopped enabling a feature it never used.
+        run: |
+          if ! cargo tree -p bitrouter-sdk --no-default-features --features acp-controller \
+               -e normal -i agent-client-protocol-conductor >/dev/null 2>&1; then
+            echo "::error::the conductor is in no tree at all — has acp-controller been renamed?"; exit 1
+          fi
+          for pkg in axum agent-client-protocol-conductor; do
+            if cargo tree -p bitrouter-sdk --no-default-features --features acp -e normal -i "$pkg" >/dev/null 2>&1; then
+              echo "::error::$pkg reached the SDK through the \`acp\` feature; the controller belongs behind \`acp-controller\`"; exit 1
             fi
           done
       - name: SDK default tree stays lean
@@ -361,20 +380,7 @@ jobs:
           if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i opentelemetry >/dev/null 2>&1; then
             echo "::error::opentelemetry resolves in no tree at all — misspelled?"; exit 1
           fi
-          #
-          # `dist-helper` is checked for `opentelemetry` only, and the omission
-          # is a recorded debt rather than an oversight. It reaches `axum`
-          # today: it enables `bitrouter-sdk/acp` (which it needs — dropping
-          # the feature guts `dist/schema/bitrouter.config.schema.json`,
-          # verified by regenerating), `acp` pulls
-          # `agent-client-protocol-conductor`, that pulls
-          # `agent-client-protocol-trace-viewer`, and that depends on `axum`
-          # non-optionally. None of that is telemetry's doing and none of it is
-          # this job's to fix; it arrived with the ACP controller and was never
-          # caught because the previous version of this job had no such loop.
-          # Re-add `axum` here once the SDK's `acp` feature stops dragging an
-          # HTTP server behind it.
-          for crate in bitrouter-sdk bitrouter-guardrails bitrouter-providers; do
+          for crate in bitrouter-sdk bitrouter-guardrails bitrouter-providers dist-helper; do
             # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
             # comment), so prove membership before trusting anything below.
             if ! cargo metadata --no-deps --format-version 1 \
@@ -387,13 +393,6 @@ jobs:
               fi
             done
           done
-          if ! cargo metadata --no-deps --format-version 1 \
-               | jq -e '.packages[] | select(.name == "dist-helper")' >/dev/null; then
-            echo "::error::unknown workspace crate: dist-helper"; exit 1
-          fi
-          if cargo tree -p dist-helper -e normal -i opentelemetry >/dev/null 2>&1; then
-            echo "::error::dist-helper must not depend on opentelemetry when resolved on its own"; exit 1
-          fi
       - name: "the OTel core without a transport is a compile error"
         run: |
           if out=$(cargo check -p bitrouter-telemetry --features __otel-core --message-format=short 2>&1); then

@@ -125,7 +125,10 @@ The SDK keeps its default dependency tree minimal — capabilities that pull wei
 | `server`       | axum, tower                           | The HTTP server, SSE handlers, admin endpoints                |
 | `config_file`  | serde-saphyr, `tokio::fs`             | YAML `bitrouter.yaml` loading                                 |
 | `mcp`          | rmcp                                  | The bundled `RmcpExecutor` for the `mcp` pipeline             |
-| `acp`          | `tokio` process / io-util             | `ConfigAcpRoutingTable` for the pure-routing `acp` pipeline    |
+| `acp`          | `tokio` process / io-util             | `ConfigAcpRoutingTable` for the pure-routing `acp` pipeline, plus the live thin proxy (`up` / `engine` / `down`) |
+| `acp-controller` | `acp` + `agent-client-protocol-conductor` | `acp::controller` — one manager connection fronting many harness-owned sessions |
+
+> **`acp-controller` is split out of `acp` deliberately.** The conductor depends on `agent-client-protocol-trace-viewer`, which depends on **`axum` non-optionally**, with no feature to switch it off. Folded into `acp`, it made a feature documented as "the ACP thin proxy" drag a whole HTTP server behind it, so a consumer enabling ACP for pure routing linked axum — `helpers/dist-helper` did exactly that, for a build helper that only renders JSON Schema and registry files. `feature-isolation` now asserts that `acp` alone reaches neither `axum` nor the conductor. If upstream ever makes the trace viewer optional, the two features can be merged again.
 
 `observe` — the span schema and the `SpanAttributes` hatch — is **not** in this table: it is ungated and carries no dependency beyond `serde`.
 

@@ -53,7 +53,11 @@ pub mod transport;
 #[cfg(feature = "acp")]
 pub mod config_routing;
 
-#[cfg(feature = "acp")]
+// `acp-controller`, not `acp`: this is the only module needing
+// `agent-client-protocol-conductor`, which drags `axum` in transitively. See
+// the feature's comment in `Cargo.toml`.
+#[cfg(feature = "acp-controller")]
+#[cfg_attr(docsrs, doc(cfg(feature = "acp-controller")))]
 pub mod controller;
 
 #[cfg(feature = "acp")]

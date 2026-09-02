@@ -730,17 +730,32 @@ the move. Recorded because both are instructive about the guards themselves.
   foundation crate with nothing in place to notice, and the first thing this
   job ever did was notice. The manifest records where the line came from.
 
-- **A pre-existing violation surfaced, and is carved out rather than papered
-  over.** `dist-helper` reaches `axum`: it enables `bitrouter-sdk/acp`, which
-  pulls `agent-client-protocol-conductor`, which pulls
+- **A pre-existing violation surfaced and was then fixed, not carved out.**
+  `dist-helper` reached `axum`: it enabled `bitrouter-sdk/acp`, which pulled
+  `agent-client-protocol-conductor`, which pulls
   `agent-client-protocol-trace-viewer`, which depends on `axum`
-  non-optionally. `main`'s version of `feature-isolation` had no such loop —
-  it still ran `cargo check -p bitrouter-observe` and asserted one thing — so
-  this was never checked there. Trimming `dist-helper`'s features is **not**
-  the fix: dropping `mcp`/`acp` guts `dist/schema/bitrouter.config.schema.json`,
-  verified by regenerating and reverting. `dist-helper` is therefore checked
-  for `opentelemetry` only, with the reason and the re-add condition in the
-  job's comment, and the real fix filed separately.
+  non-optionally. `main`'s version of `feature-isolation` had no such loop — it
+  still ran `cargo check -p bitrouter-observe` and asserted one thing — so it
+  was never checked there.
+
+  It was briefly carved out of the job, on the strength of a claim that turned
+  out to be **wrong**: that trimming `dist-helper`'s features would gut
+  `dist/schema/bitrouter.config.schema.json`. That came from an experiment
+  which dropped `mcp` *and* `acp` and was judged from a truncated diff. Dropping
+  `acp` alone leaves the schema semantically identical — `mcp` is the one the
+  schema needs, and `dist-helper` never used `acp` at all.
+
+  The fix is two parts, both in this branch. `dist-helper` stops enabling a
+  feature it does not use; and `acp::controller` — the only module needing the
+  conductor — moves behind a new `acp-controller` feature, so `acp` stops
+  dragging an HTTP server behind a capability documented as a thin proxy. The
+  carve-out and its comment are gone, `dist-helper` is back in the main loop,
+  and a new job step asserts `acp` alone reaches neither `axum` nor the
+  conductor.
+
+  It also exposed something worse than the axum edge, which is recorded under
+  *Measured*: the committed schema's **byte order** depended on that dependency
+  chain.
 
 ### What an adversarial review found
 
@@ -820,6 +835,8 @@ own position that a second renderer is undecided. The alternative is a
 | Lines moved / stayed | 5,594 / 1,275 (raw, ~42% `#[cfg(test)]`) |
 | Tests | 2,893 passed, 0 failed, 11 skipped after merging `main` and applying the review fixes |
 | Guard, live | A config carrying `bitrouter-policy` (read), `bitrouter-guardrail` (typo) and `bitrouter-telemetry.otlp_endpoint` (dead sub-key) reports exactly the latter two, and `bitrouter-policy` is no longer falsely flagged |
+| `acp` alone | reaches neither `axum` nor `agent-client-protocol-conductor`; `acp-controller` reaches both. Guarded by a new `feature-isolation` step. |
+| `dist/schema/…json` | now key-sorted by construction, and **byte-identical with and without** the `serde_json/preserve_order`-bearing chain — verified by re-adding `acp` to `dist-helper` and regenerating. Previously its byte order was a function of unrelated crates' feature unification: dropping one feature reordered all 3,234 lines without changing a value. |
 | `cargo clippy --workspace --all-features --tests --benches` | clean |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features` | clean |
 | `cargo fmt --all -- --check` | clean |
