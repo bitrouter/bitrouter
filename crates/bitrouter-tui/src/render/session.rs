@@ -19,7 +19,7 @@
 
 use agent_client_protocol_schema::v1::{
     AvailableCommand, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionConfigKind,
-    SessionConfigOption, SessionModeId,
+    SessionConfigOption, SessionModeId, UsageUpdate,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -120,6 +120,62 @@ pub fn state(
     spans
 }
 
+/// When the context window is close enough to full that the reader should be
+/// told. Below this the figure is background; at or above it, running out is
+/// plausibly the next thing that happens to the session.
+const CROWDED: f64 = 0.8;
+
+/// How full the context window is, for the footer.
+///
+/// `used` and `size` are the harness's own — it owns the context window, and
+/// this renderer never computes or adjusts them. Unlike cost, they need no
+/// attribution: the number means the same thing whoever routed the traffic.
+///
+/// **Empty when there is nothing honest to say.** `UsageUpdate` is optional,
+/// so a session may never carry one; and a `size` of zero is the harness
+/// saying it does not know its own window. Either way the pair is the unit of
+/// meaning — almost all the value here is *proximity to a limit*, so a used
+/// figure with no window to measure it against is the same error as an
+/// unscoped cost: a number the reader cannot act on. Half a pair is not drawn.
+pub fn context(usage: Option<&UsageUpdate>) -> Vec<Span<'static>> {
+    let Some(usage) = usage.filter(|usage| usage.size > 0) else {
+        return Vec::new();
+    };
+    // Saturating rather than exact: a harness that reports more used than its
+    // window holds is describing a full context, not a 120% one.
+    let share = (usage.used as f64 / usage.size as f64).min(1.0);
+    let style = if share >= CROWDED {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    vec![Span::styled(
+        format!(" · ctx {}/{}", compact(usage.used), compact(usage.size)),
+        style,
+    )]
+}
+
+/// `12_400` → `12.4k`. The footer is one row shared with everything else the
+/// session has to say, and what the reader wants from a token count is its
+/// magnitude rather than its digits.
+fn compact(tokens: u64) -> String {
+    let (value, suffix) = if tokens >= 1_000_000 {
+        (tokens as f64 / 1_000_000.0, "M")
+    } else if tokens >= 1_000 {
+        (tokens as f64 / 1_000.0, "k")
+    } else {
+        return tokens.to_string();
+    };
+    // A trailing `.0` is noise at this width: `200k`, not `200.0k`.
+    if (value.fract() * 10.0).round() == 0.0 {
+        format!("{value:.0}{suffix}")
+    } else {
+        format!("{value:.1}{suffix}")
+    }
+}
+
 /// What a configuration option is currently set to.
 ///
 /// A selector reports the id it is on rather than the label: the label lives
@@ -161,6 +217,76 @@ mod tests {
 
     fn spans_text(spans: &[Span<'static>]) -> String {
         spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    fn usage(used: u64, size: u64) -> UsageUpdate {
+        UsageUpdate::new(used, size)
+    }
+
+    /// The rule this renderer shares with `cost`: a figure the reader cannot
+    /// act on is not drawn. Almost all the value of an occupancy figure is
+    /// proximity to a limit, so without a window there is nothing to say.
+    #[test]
+    fn half_a_pair_is_never_drawn() {
+        assert!(context(None).is_empty(), "no usage at all");
+        assert!(
+            context(Some(&usage(12_400, 0))).is_empty(),
+            "a harness that does not know its own window"
+        );
+        assert!(context(Some(&usage(0, 0))).is_empty(), "neither half known");
+    }
+
+    /// Both halves, and in the compact spelling the one-row footer needs.
+    #[test]
+    fn context_reports_the_pair() {
+        assert_eq!(
+            spans_text(&context(Some(&usage(12_400, 200_000)))),
+            " · ctx 12.4k/200k"
+        );
+    }
+
+    /// Below the threshold the figure is background; at or above it the reader
+    /// is told, because running out is plausibly what happens next.
+    #[test]
+    fn a_crowded_window_is_flagged_and_a_roomy_one_is_not() {
+        let roomy = context(Some(&usage(20_000, 200_000)));
+        let crowded = context(Some(&usage(160_000, 200_000)));
+
+        assert_eq!(
+            roomy.first().map(|span| span.style.fg),
+            Some(None),
+            "a roomy window carries no warning colour"
+        );
+        assert_eq!(
+            crowded.first().and_then(|span| span.style.fg),
+            Some(Color::Yellow),
+            "at {CROWDED:.0?} of the window the reader is told"
+        );
+    }
+
+    /// A harness reporting more used than its window holds is describing a
+    /// full context, not a 120% one — and must not panic or render one.
+    #[test]
+    fn an_overfull_window_saturates() {
+        let over = context(Some(&usage(250_000, 200_000)));
+        assert_eq!(spans_text(&over), " · ctx 250k/200k");
+        assert_eq!(
+            over.first().and_then(|span| span.style.fg),
+            Some(Color::Yellow)
+        );
+    }
+
+    /// The compact spelling: magnitude, not digits — and no trailing `.0`,
+    /// which is pure noise at this width.
+    #[test]
+    fn compact_keeps_the_magnitude_and_drops_the_noise() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(999), "999");
+        assert_eq!(compact(1_500), "1.5k");
+        assert_eq!(compact(12_400), "12.4k");
+        assert_eq!(compact(200_000), "200k", "no trailing .0");
+        assert_eq!(compact(1_500_000), "1.5M");
+        assert_eq!(compact(2_000_000), "2M");
     }
 
     /// `Plan` renders — every step, its state, and the two priorities worth

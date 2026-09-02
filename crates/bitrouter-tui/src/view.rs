@@ -16,10 +16,19 @@
 //! other than BitRouter would always land there is correct — it has told us a
 //! number and not whose it is.
 //!
+//! # Context occupancy is the half that needs no attribution
+//!
+//! The same `UsageUpdate` carries `used` and `size`, and those are the
+//! harness's own: it owns the context window, and the figure means the same
+//! thing whoever routed the traffic. So [`crate::render::session::context`]
+//! draws them whenever the harness sends them, including in every session
+//! where cost is *unreported*. It is drawn only as a pair — see that
+//! function for why half of it is worse than none.
+//!
 //! # Ordering is part of the honesty
 //!
-//! The footer's rows go cost, route, session state, notice, pending
-//! permission, modal, input. Two of those placements are load-bearing rather
+//! The footer's rows go cost, context window, route, session state, notice,
+//! pending permission, modal, input. Two of those placements are load-bearing rather
 //! than aesthetic: a question waiting on a person outranks everything else
 //! down here, and the input line is last so it is never pushed off-screen by
 //! something the agent said.
@@ -121,6 +130,9 @@ impl View {
             .and_then(crate::cost::from_usage)
             .map_or_else(crate::cost::unreported, |cost| cost.render());
         let mut status: Vec<Span<'static>> = cost.spans;
+        // Beside the cost, because both answer "what is this turn consuming" —
+        // and this half needs no attribution, so it shows where cost cannot.
+        status.extend(crate::render::session::context(journal.usage()));
         if let Some(route) = &self.route {
             status.push(Span::raw(format!(" · via {route}")));
         }

@@ -185,7 +185,7 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 
 | Command | What it does |
 |---|---|
-| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and the turn's measured cost. Draws inline — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
+| `bitrouter chat <agent> [--turn-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Render one ACP agent session in the terminal: streamed messages, reasoning, tool calls with diffs, permission prompts, and how full the context window is (`ctx 12.4k/200k`, highlighted at 80%). The cost line reads `cost unreported`: `chat` still runs the local engine rather than connecting to the controller, so nothing attributes spend to it — see **Session cost** for the `acp serve` path, which does. Draws inline — output lands in real scrollback, so terminal search/selection keep working and exiting leaves the transcript. |
 
 **Raw mode**: `chat` holds the terminal in raw mode for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are its own line editor's rather than the shell's. Typing, backspace, word-delete and bracketed paste; no history, no multi-line. A redirected stdout takes no raw mode and prints plain text with no escape sequences.
 
