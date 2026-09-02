@@ -332,7 +332,7 @@ pub(crate) async fn run(
 /// must never resolve to consent. This is the same `Prompt::deny()` path an
 /// `Esc` at the prompt takes, so there is exactly one rule for "no answer" and
 /// it is the safe one.
-fn deny(request: bitrouter_sdk::acp::up::PendingPermission) {
+fn deny(request: bitrouter_sdk::acp::client::PendingPermission) {
     let prompt = bitrouter_tui::permission::Prompt::new(
         request.tool_call.fields.title.clone(),
         request.tool_call.tool_call_id.0.to_string(),
@@ -575,7 +575,7 @@ async fn answer_permission(
     view: &mut bitrouter_tui::view::View,
     shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
     stdin: &mut crate::chat::input::Stdin,
-    request: bitrouter_sdk::acp::up::PendingPermission,
+    request: bitrouter_sdk::acp::client::PendingPermission,
 ) -> Result<()> {
     use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};

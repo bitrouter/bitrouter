@@ -20,10 +20,18 @@ Every manager-visible `sessionId` is the opaque ID returned by the harness.
 BitRouter does not generate an alias, store a session catalog or transcript,
 or read Claude/Codex session files.
 
-`bitrouter acp prompt` and `bitrouter chat` still use the local single-session
-engine. That engine owns a local `record_id`, a FIFO turn queue, cooperative
-cancellation, optional `--turn-timeout`, telemetry, and the interactive route
-surface. Do not project those local-engine semantics onto `acp serve`.
+`bitrouter acp prompt` runs the **same controller**, in-process: it launches the
+harness behind a connection-level controller and drives it over an in-process
+duplex channel as that controller's own manager. Session identity is therefore
+harness-native there too — there is no `record_id` alias. What `prompt` adds on
+top of the controller is client-side: `--turn-timeout` (cooperative
+`session/cancel` plus a three-second grace), headless permission denial, OTel
+turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
+
+`bitrouter chat` is the one surface still on the local single-session engine,
+which owns a local `record_id`, a FIFO turn queue, and the interactive route
+surface. Do not project those local-engine semantics onto `acp serve` or
+`acp prompt`.
 
 ## Controller launch and initialization
 
@@ -152,8 +160,11 @@ per-session cost; see the `usage` capability above.
 
 ## One-shot NDJSON
 
-`acp prompt`/`spawn -p` emits a first `session` line with its local `record_id`
-and `via`, followed by `message_chunk`, `thought_chunk`, `tool_call`,
-`tool_call_update`, and `usage` lines, then a `result` line. `--no-wait` emits
-`submitted`. This format belongs to the single-session engine only; it is not
-the `acp serve` wire format.
+`acp prompt`/`spawn -p` emits a first `session` line carrying the
+**harness-native** `session_id` (plus `agent_session_id` when the harness
+exposes one), the `controller_instance_id`, `agent`, `via`, and `launch_id` —
+the identifiers the daemon meters ACP traffic by, so the line joins to spend.
+It no longer carries `record_id`; that alias is off the wire. Then come
+`message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`
+lines, and a `result` line. `--no-wait` emits `submitted`. This NDJSON
+presentation belongs to `prompt` only; it is not the `acp serve` wire format.

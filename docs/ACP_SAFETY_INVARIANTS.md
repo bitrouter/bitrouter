@@ -24,7 +24,12 @@ direction of *more* permission and *fewer* dead processes reaped.
 row's "enforced today" location until that row's "owner after" column names a
 merged implementation and its "pinned after" column names a passing test.
 
-## The one that has no equivalent yet
+**Status.** Phase 2.5 step 4 (the shared client in `bitrouter-sdk::acp::client`,
+with `acp prompt` migrated onto it and an in-process controller) has re-homed
+I1, I2, I4, I6, I7, I8 and I11. The rows below record where each lives now.
+I5 still belongs to `chat`, which is still on `engine::Session`.
+
+## The one that had no equivalent
 
 **I1 is the finding this document exists for.** In the engine, a consumer that
 loses interest in a permission request denies it by *dropping* — the parked
@@ -34,9 +39,16 @@ forwards `session/request_permission` to the manager as an open JSON-RPC
 request, and only an explicit response closes it. Nothing converts silence into
 denial.
 
-So the engine's "deny by dropping" has to become **"deny explicitly, on every
-path that can abandon a request"** — and every such path has to be enumerated,
+So the engine's "deny by dropping" had to become **"deny explicitly, on every
+path that can abandon a request"** — and every such path had to be enumerated,
 because the compiler will not find them.
+
+Both mechanisms now coexist in `AcpClient`. Drop-denial survives unchanged: the
+client's `PermissionLedger` tracks each request by a **weak** handle, so holding
+a ledger entry never keeps a request alive and never disables the drop arm. The
+ledger exists only for the paths drop-denial cannot reach — a consumer still
+holding a live `PendingPermission` it will never answer. Those paths are
+enumerated in *Summary of what must be written* at the end of this file.
 
 ---
 
@@ -46,13 +58,13 @@ The class where a mistake grants consent that nobody gave.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I1** | An abandoned permission resolves to the agent's **reject option**, never consent and never silence | `up.rs:867-869` — parked handler, `Err(_) => select_option(Deny, &options)` | `up.rs:1235` `dropping_pending_permission_defaults_to_deny` | **shared client — NEW CODE** | *must be written* |
-| **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs:338-351` `sanitize_selection` | `translate.rs:601`, `:625`, `:641` | shared client (pure fn, moves unchanged) | existing three, re-pointed |
+| **I1** | An abandoned permission resolves to the agent's **reject option**, never consent and never silence | `client.rs` — parked handler `Err(_) => reject`, **plus** `PermissionLedger::deny_outstanding` on every path that abandons a live request | `up.rs` `dropping_pending_permission_defaults_to_deny` (drop arm, end to end) | shared client — **landed** | `client.rs` `dropping_every_clone_still_defaults_to_deny`, `teardown_denies_an_outstanding_permission`, `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` |
+| **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs:601`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
 | **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs:343` | `translate.rs:641` `sanitize_selection_cancelled_passes_through` | shared client | existing |
-| **I4** | Each request is answered **exactly once**; later answers are no-ops | `up.rs:148-154` — `guard.take()`, first wins | implied via `is_resolved` (`up.rs:158`) | shared client | *needs an explicit test* |
+| **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
 | **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `chat/session.rs` cancel path — drain `permission_rx`, `deny`, clear pending | `chat/session.rs:668`, `:690` | state machine reducer | CHAT_MACHINE_SPEC T2 + T3 |
-| **I6** | A **headless** path denies rather than hanging the harness | `acp_cli.rs:1147` `pending.deny()`; `chat_plain` denies inline | `tests/acp.rs:778` `prompt_headless_denies_permission_and_completes` | NDJSON + pipe presentations | existing, re-pointed |
-| **I7** | A permission outstanding at **session teardown** is denied | last-clone drop → `up.rs:867` `Err` branch; the registry is the last holder | — (inverse pinned at `permissions.rs:212`) | shared client teardown | *must be written* |
+| **I6** | A **headless** path denies rather than hanging the harness | `acp_cli.rs` `prompt` — the deny pump over `AcpClient::subscribe_permissions`; `chat_plain` denies inline | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` | NDJSON + pipe presentations — **landed for `prompt`** | existing, unchanged |
+| **I7** | A permission outstanding at **session teardown** is denied | `client.rs` `AcpClient::shutdown` denies, then waits (bounded) for the parked handlers to answer before the transport goes; the command loop and the driver tail repeat it for the drop path | `client.rs` `teardown_denies_an_outstanding_permission` | shared client teardown — **landed** | `client.rs` `teardown_denies_an_outstanding_permission` |
 
 ### Deliberately dropped
 
@@ -66,7 +78,7 @@ The class where a mistake grants consent that nobody gave.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `engine.rs:387-410` | `engine.rs:889` | **shared client — NEW CODE** (~20 lines) | *must be written* |
+| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` (for `prompt`); `engine.rs:387-410` still (for `chat`) | `engine.rs:889` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
 | **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn.rs:92-99` `flush()` + `engine.rs:414` flushed value | `turn.rs:147`, `:175`, `:224`, `:239`, `:258` | **none — not load-bearing** | n/a |
 
 I9 is safe to drop: every production caller sends one prompt at a time —
@@ -77,8 +89,10 @@ session was `down.rs`'s `SessionAgent`, now unreachable. **Say so in the
 commit rather than letting it disappear.**
 
 I8 is **not** safe to drop. `--turn-timeout` is a documented flag on `chat`,
-`acp prompt`, `acp serve`, and `spawn`, and
-`skills/bitrouter/references/cli.md:163` promises `prompt` and `chat` retain it.
+`acp prompt`, `acp serve`, and `spawn`, and `skills/bitrouter/references/cli.md`
+promises `prompt` and `chat` retain it. It is now the client's for `prompt` and
+still the engine's for `chat`; `acp serve` says on stderr that it does not
+enforce one, because deadlines belong to the manager on a transparent path.
 
 ---
 
@@ -87,7 +101,7 @@ I8 is **not** safe to drop. `--turn-timeout` is a documented flag on `chat`,
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
 | **I10** | The harness child **and its process group** are killed on teardown, on child exit, and on reaper-handle drop | `up.rs:477-502` `spawn_child_reaper` → `kill_process_group`; `AgentProcess` awaits a 2s confirm | `up.rs:1330` `shutdown_kills_wrapper_chain_process_group` | `AgentProcess` — **already the controller's, unchanged** | existing |
-| **I11** | A harness that dies mid-prompt **fails the turn** instead of hanging it | `AgentProcess::connect_to` — `select!` on `dead_rx`, "agent process exited while the ACP controller was connected" | — | unchanged | *needs a test* |
+| **I11** | A harness that dies mid-prompt **fails the turn** instead of hanging it | `AgentProcess::connect_to` — `select!` on `dead_rx`, "agent process exited while the ACP controller was connected" | `tests/acp.rs` `prompt_fails_fast_when_the_harness_dies_mid_turn`; `up.rs` `agent_crash_fails_pending_commands_fast` | unchanged — **now the only child-owning path** | those two |
 
 **Known weakness in I10, unchanged by this work but worth recording:** the
 group kill runs in a tokio task, so the **panic** exit can end the process
@@ -141,12 +155,21 @@ not have.
 
 ## Summary of what must be written
 
-Four invariants need new implementations, and three of those need new tests:
+Four invariants needed new implementations, and three of those needed new
+tests. All four landed with the shared client:
 
-- **I1** — explicit denial on every abandonment path *(no equivalent exists; the highest-risk item)*
+- **I1** — explicit denial on every abandonment path *(the highest-risk item)*.
+  The enumerated paths in `AcpClient` are: no consumer on the permission stream
+  (the item drops, the parked handler denies); every clone dropped (same); a
+  turn abandoned at `turn_timeout`, denied before `session/cancel` goes out; a
+  turn that returned an error, denied on the way out of `prompt_typed`; the
+  command loop ending, by explicit shutdown or by the last client handle
+  dropping; the connection driver returning for any reason; and
+  `shutdown`, which denies and then waits for the responses before the
+  transport closes.
 - **I7** — denial at session teardown
 - **I8** — turn timeout with cooperative cancel and grace
-- **I4** — answered-exactly-once *(mechanism likely survives; needs an explicit test)*
+- **I4** — answered-exactly-once
 
 Two are deliberately dropped and must be named in their commit: reattach replay,
 and the turn queue flush.

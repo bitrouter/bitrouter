@@ -47,13 +47,14 @@ use async_trait::async_trait;
 use futures::Stream;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
+use crate::acp::client::{PendingPermission, SessionIds};
 use crate::acp::executor::SessionExecutor;
 use crate::acp::permissions::PermissionRegistry;
 use crate::acp::session::SessionState;
 use crate::acp::telemetry::{RequestCompleted, TelemetryHook};
 use crate::acp::translate::SessionUpdateKind;
 use crate::acp::turn::TurnController;
-use crate::acp::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
+use crate::acp::up::UpstreamConnection;
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
 /// before [`TurnController::try_submit`] reports backpressure. `prompt` uses the
@@ -82,7 +83,8 @@ pub struct LaunchOptions {
     /// `bitrouter launch` wires into the harness it starts.
     /// Only the immediate-open launch path consumes this; a deferred launch
     /// (`launch_deferred`) relays the **manager's** descriptors via
-    /// [`Session::open`] instead.
+    /// [`Session::open`] instead. `acp prompt` reads the same field off its
+    /// own options and passes it to `AcpClient::new_session`.
     pub mcp_servers: Vec<McpServer>,
 }
 
@@ -140,7 +142,7 @@ pub struct Session {
     cwd: PathBuf,
     /// Wire identity, set exactly once — at launch (immediate open) or when
     /// the manager's `session/new` arrives ([`Session::open`]).
-    wire: Arc<OnceLock<UpstreamSessionIds>>,
+    wire: Arc<OnceLock<SessionIds>>,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
@@ -258,7 +260,7 @@ impl Session {
         // or by `Session::open` when the manager's `session/new` arrives. The
         // turn closure and `cancel` read it; a prompt before the session is
         // open fails with a clear error.
-        let wire: Arc<OnceLock<UpstreamSessionIds>> = Arc::new(OnceLock::new());
+        let wire: Arc<OnceLock<SessionIds>> = Arc::new(OnceLock::new());
         if open_now {
             let ids = conn.new_session(cwd.clone(), mcp_servers).await?;
             state.set_acp_session_id(ids.acp_session_id.clone());

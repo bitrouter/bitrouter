@@ -48,6 +48,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use agent_client_protocol::schema::v1::{
     Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SetProviderRequest,
 };
+use bitrouter_sdk::acp::client::{AcpClient, ClientOptions};
 use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
@@ -1176,20 +1177,36 @@ where
         }
     };
 
-    let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
-    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter = attach_observability(&config, agent_id, &session, &cloud_credentials).await;
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
+        }
+    };
+    let observability =
+        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
 
     // First line: correlate this session with the cost/metering the
-    // orchestrator later queries. `via` is null when running direct.
+    // orchestrator later queries. The identifiers are the harness-native
+    // session id and this controller's instance id — the two columns the
+    // daemon meters ACP traffic by, so the line actually joins to spend.
+    // `via` is null when running direct.
     write_ndjson_line(
         out,
         &serde_json::json!({
             "type": "session",
-            "record_id": session.state().record_id,
+            "session_id": ids.acp_session_id,
+            "agent_session_id": ids.agent_session_id,
+            "controller_instance_id": routed.controller_instance_id,
             "agent": agent_id,
             "via": routed.via,
             // The token this session's requests carry, so an orchestrator can
@@ -1201,12 +1218,11 @@ where
     .await?;
 
     // Headless: there is no manager to broker permissions and none will ever
-    // attach, so explicitly DENY each request (the reject option). Since the
-    // session-scoped permission registry, merely *dropping* a pending item no
-    // longer defaults to Deny — a registry clone keeps it alive for a
-    // re-subscribing manager — so an unconsumed request would otherwise hang the
-    // turn forever.
-    let mut permissions = session.permissions();
+    // attach, so explicitly DENY each request (the reject option). The client
+    // also denies whatever is still outstanding when a turn is abandoned or
+    // the connection tears down; this loop is the one that answers promptly,
+    // so a turn that only needs consent it will never get ends now.
+    let mut permissions = session.client.subscribe_permissions();
     tokio::spawn(async move {
         while let Some(pending) = permissions.next().await {
             tracing::warn!(
@@ -1227,29 +1243,135 @@ where
         // killed on shutdown. Callers needing a persistent background session
         // should use `bitrouter acp serve` instead.
         write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await?;
-        session
-            .shutdown()
-            .await
-            .context("shutting down acp session")?;
-        if let Some(exporter) = exporter {
+        session.shutdown().await;
+        if let Some(exporter) = observability.exporter {
             exporter.shutdown();
         }
         return Ok(());
     }
 
-    let outcome = prompt_wait(session, text, contract, out).await;
-    if let Some(exporter) = exporter {
+    let turn = Turn {
+        client: &session.client,
+        session_id: &ids.acp_session_id,
+        agent_id,
+        recorder: observability.recorder.clone(),
+    };
+    let outcome = prompt_wait(&turn, text, contract, out).await;
+    session.shutdown().await;
+    if let Some(exporter) = observability.exporter {
         // Flush the span batch before exit; spans are lost otherwise.
         exporter.shutdown();
     }
     outcome
 }
 
-/// Inner implementation for the wait (non-`--no-wait`) path. Separated so the
-/// early-return in the `no_wait` branch above doesn't borrow `session` past its
-/// drop point.
+/// One harness behind an in-process connection-level controller, with the
+/// shared ACP client connected to that controller as its manager.
+///
+/// This is exactly the stack `acp serve` exposes over stdio; the only
+/// difference is that the manager on the other end of the duplex is this
+/// process. Session identity, lifecycle, and history therefore stay
+/// harness-native, and there is no second scheduler: the controller, the
+/// harness child's I/O, and the client all run on this runtime.
+struct ControlledSession {
+    client: AcpClient,
+    /// The controller's own `run`. It ends when the manager side of the duplex
+    /// closes, and awaiting it is what proves the harness child was reaped.
+    controller: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>>,
+}
+
+/// How long teardown waits for the controller to finish reaping its harness
+/// before giving up and reporting it.
+const CONTROLLER_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl ControlledSession {
+    /// Tear the client down (which closes the duplex and so ends the
+    /// controller), then wait for the controller to confirm. Failures are
+    /// reported rather than propagated: the caller has already asked to stop
+    /// and there is nothing left to retry.
+    async fn shutdown(&mut self) {
+        if let Err(error) = self.client.shutdown().await {
+            tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
+        }
+        match tokio::time::timeout(CONTROLLER_EXIT_TIMEOUT, &mut self.controller).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => tracing::debug!(%error, "acp controller ended with an error"),
+            Ok(Err(error)) => tracing::warn!(%error, "acp controller task failed"),
+            Err(_) => {
+                tracing::warn!("acp controller did not exit within {CONTROLLER_EXIT_TIMEOUT:?}");
+                self.controller.abort();
+            }
+        }
+    }
+}
+
+/// Launch `agent_id` behind an in-process controller and connect the shared
+/// client to it. The controller carries the same identity and endpoint plan
+/// `acp serve` gives it, so a routed `prompt` configures the harness's
+/// provider through `providers/set` exactly as a served one does.
+async fn launch_controlled(
+    config: &Config,
+    agent_id: &str,
+    routed: &Routed,
+    options: LaunchOptions,
+) -> Result<ControlledSession> {
+    let agent = config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("no acp agent configured for '{agent_id}'"))?;
+    agent
+        .validate()
+        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
+    let AcpTransport::Stdio { command, args, env } = &agent.transport;
+
+    let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
+    if let Some(endpoint) = routed.endpoint_plan.as_ref() {
+        controller_config = controller_config.endpoint(controller_endpoint(endpoint));
+    }
+    let process =
+        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
+            .strip_inherited_env(options.strip_inherited_env);
+    let controller = bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+
+    // In-process duplex: no bytes, no pipe, no second process between the
+    // manager and the controller it drives.
+    let (manager_side, controller_side) = agent_client_protocol::Channel::duplex();
+    let controller = tokio::spawn(async move {
+        controller
+            .run(controller_side)
+            .await
+            .map_err(|error| anyhow::anyhow!("acp controller: {error}"))
+    });
+    let client = match AcpClient::connect(
+        manager_side,
+        ClientOptions {
+            turn_timeout: options.turn_timeout,
+        },
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            controller.abort();
+            return Err(error);
+        }
+    };
+    Ok(ControlledSession { client, controller })
+}
+
+/// Everything one prompt turn needs beyond its text: the client to drive, the
+/// harness-native session it belongs to, and where its telemetry goes.
+struct Turn<'a> {
+    client: &'a AcpClient,
+    session_id: &'a str,
+    agent_id: &'a str,
+    recorder: Option<Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+}
+
+/// Inner implementation for the wait (non-`--no-wait`) path.
 async fn prompt_wait<W>(
-    session: bitrouter_sdk::acp::engine::Session,
+    turn: &Turn<'_>,
     text: &str,
     contract: Option<crate::result_contract::ResultContract>,
     out: &mut W,
@@ -1258,14 +1380,13 @@ where
     W: AsyncWrite + Unpin,
 {
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
-    let mut updates = session.updates();
+    let mut updates = turn.client.subscribe_updates();
     let task = match &contract {
         // The contract clause rides the subagent's task prompt.
         Some(c) => format!("{text}{}", c.instruction()),
         None => text.to_string(),
     };
-    let (response, reply) =
-        run_turn(&session, &mut updates, &task, contract.is_some(), out).await?;
+    let (response, reply) = run_turn(turn, &mut updates, &task, contract.is_some(), out).await?;
 
     // Extract + validate the machine-consumable result. On failure: ONE
     // repair re-prompt, then `schema_ok:false` + raw text — the orchestrator
@@ -1275,14 +1396,8 @@ where
         Some(c) => match c.check(&reply) {
             Ok(value) => (response, Some(value), Some(true), None),
             Err(problem) => {
-                let (response, reply) = run_turn(
-                    &session,
-                    &mut updates,
-                    &c.repair_prompt(&problem),
-                    true,
-                    out,
-                )
-                .await?;
+                let (response, reply) =
+                    run_turn(turn, &mut updates, &c.repair_prompt(&problem), true, out).await?;
                 match c.check(&reply) {
                     Ok(value) => (response, Some(value), Some(true), None),
                     Err(_) => (
@@ -1310,18 +1425,14 @@ where
         },
     )
     .await?;
-
-    session
-        .shutdown()
-        .await
-        .context("shutting down acp session")?;
     Ok(())
 }
 
 /// Drive one prompt turn: stream its updates to `out` (accumulating message
-/// text when `capture`), and return the typed response plus the reply text.
+/// text when `capture`), report the turn's telemetry, and return the typed
+/// response plus the reply text.
 async fn run_turn<W>(
-    session: &bitrouter_sdk::acp::engine::Session,
+    turn: &Turn<'_>,
     updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
     text: &str,
     capture: bool,
@@ -1331,10 +1442,11 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut reply = String::new();
+    let started = std::time::Instant::now();
     // Drive updates and the prompt concurrently. The loop returns the resolved
     // `PromptResponse` directly, so there is no `Option` to unwrap afterward.
     let response = {
-        let prompt_future = session.prompt(text);
+        let prompt_future = turn.client.prompt(turn.session_id, text);
         tokio::pin!(prompt_future);
 
         loop {
@@ -1366,7 +1478,42 @@ where
             }
         }
     };
+    report_turn(turn, &response, started.elapsed());
     Ok((response, reply))
+}
+
+/// Re-derive this turn's completion record from the prompt round-trip and hand
+/// it to both telemetry consumers.
+///
+/// The engine's pipeline hook used to be the only thing that produced these.
+/// Latency and stop reason are visible right here on the round-trip, and
+/// context occupancy on the client's usage slot, so the record is built from
+/// what the turn itself observed.
+fn report_turn(
+    turn: &Turn<'_>,
+    response: &agent_client_protocol::schema::v1::PromptResponse,
+    latency: Duration,
+) {
+    let record = RequestCompleted {
+        agent: turn.agent_id.to_string(),
+        stop_reason: format!("{:?}", response.stop_reason),
+        latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
+        context: turn
+            .client
+            .context_usage()
+            .lock()
+            .ok()
+            .and_then(|slot| *slot),
+    };
+    if let Some(recorder) = &turn.recorder {
+        recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
+            stop_reason: record.stop_reason.clone(),
+            latency,
+            context_used: record.context.map(|c| c.used),
+            context_size: record.context.map(|c| c.size),
+        });
+    }
+    drain_telemetry_record(record);
 }
 
 /// Emit one update as NDJSON, accumulating message text into `reply` when the
@@ -1389,27 +1536,29 @@ where
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Attach observability to a session when the observe config opts telemetry
-/// in: every turn is drained to stderr (always) and, with an exporter,
-/// emitted as an OTel GenAI `invoke_agent` span; tool calls become
+/// Attach observability to an engine session when the observe config opts
+/// telemetry in: every turn is drained to stderr (always) and, with an
+/// exporter, emitted as an OTel GenAI `invoke_agent` span; tool calls become
 /// `execute_tool` spans from the translated update stream. Returns the
 /// exporter so the caller can flush it (`shutdown`) before exit.
+///
+/// The `prompt` path builds the same pieces directly — see
+/// [`build_observability`] and [`report_turn`] — because it has no pipeline
+/// hook to drain and reads latency and stop reason off the prompt round-trip
+/// instead.
 async fn attach_observability(
     config: &Config,
     agent_id: &str,
     session: &bitrouter_sdk::acp::engine::Session,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
-    let exporter =
-        crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
-            .await;
-    let recorder = exporter.as_ref().map(|exporter| {
-        Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
-            exporter,
-            agent_id,
-            session.state().record_id.clone(),
-        ))
-    });
+    let observability = build_observability(
+        config,
+        agent_id,
+        &session.state().record_id,
+        cloud_credentials,
+    )
+    .await;
 
     // Telemetry drain: stderr log per turn (always) and the invoke_agent span.
     //
@@ -1418,7 +1567,7 @@ async fn attach_observability(
     // nothing. Everything that needs per-turn records has to hang off this
     // loop.
     if let Some(mut rx) = session.telemetry() {
-        let recorder = recorder.clone();
+        let recorder = observability.recorder.clone();
         tokio::spawn(async move {
             while let Some(record) = rx.recv().await {
                 if let Some(recorder) = &recorder {
@@ -1434,41 +1583,76 @@ async fn attach_observability(
         });
     }
 
-    // Tool spans from the translated update stream (exporter-gated: without
-    // one there is nothing to emit to).
-    if let Some(recorder) = recorder {
-        let mut updates = session.updates();
-        tokio::spawn(async move {
-            use bitrouter_sdk::acp::translate::ToolStatus;
-            while let Some(update) = updates.next().await {
-                match update {
-                    SessionUpdateKind::ToolCall {
-                        id, title, status, ..
-                    } => match status {
-                        ToolStatus::Pending | ToolStatus::Running => {
-                            recorder.tool_started(id, title);
-                        }
-                        ToolStatus::Ok => recorder.tool_finished(&id, true, Some(&title)),
-                        ToolStatus::Failed => recorder.tool_finished(&id, false, Some(&title)),
-                    },
-                    SessionUpdateKind::ToolCallUpdate {
-                        id, status, title, ..
-                    } => match status {
-                        Some(ToolStatus::Ok) => {
-                            recorder.tool_finished(&id, true, title.as_deref());
-                        }
-                        Some(ToolStatus::Failed) => {
-                            recorder.tool_finished(&id, false, title.as_deref());
-                        }
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-        });
+    if let Some(recorder) = observability.recorder {
+        spawn_tool_spans(recorder, session.updates());
     }
+    observability.exporter
+}
 
-    exporter
+/// The OTel exporter for this process and, when one exists, the span recorder
+/// bound to one session.
+struct Observability {
+    exporter: Option<Arc<bitrouter_observe::otel::OtelExporter>>,
+    recorder: Option<Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+}
+
+/// Build the exporter and the session's span recorder. `conversation_id` is
+/// the span attribute every turn and tool span correlates on — the
+/// harness-native ACP session id on the controller path.
+async fn build_observability(
+    config: &Config,
+    agent_id: &str,
+    conversation_id: &str,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+) -> Observability {
+    let exporter =
+        crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
+            .await;
+    let recorder = exporter.as_ref().map(|exporter| {
+        Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
+            exporter,
+            agent_id,
+            conversation_id,
+        ))
+    });
+    Observability { exporter, recorder }
+}
+
+/// Emit an `execute_tool` span per completed tool call, read off the
+/// translated update stream. Exporter-gated by its `recorder` argument:
+/// without one there is nothing to emit to.
+fn spawn_tool_spans(
+    recorder: Arc<bitrouter_observe::acp::AcpSpanRecorder>,
+    mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
+) {
+    tokio::spawn(async move {
+        use bitrouter_sdk::acp::translate::ToolStatus;
+        while let Some(update) = updates.next().await {
+            match update {
+                SessionUpdateKind::ToolCall {
+                    id, title, status, ..
+                } => match status {
+                    ToolStatus::Pending | ToolStatus::Running => {
+                        recorder.tool_started(id, title);
+                    }
+                    ToolStatus::Ok => recorder.tool_finished(&id, true, Some(&title)),
+                    ToolStatus::Failed => recorder.tool_finished(&id, false, Some(&title)),
+                },
+                SessionUpdateKind::ToolCallUpdate {
+                    id, status, title, ..
+                } => match status {
+                    Some(ToolStatus::Ok) => {
+                        recorder.tool_finished(&id, true, title.as_deref());
+                    }
+                    Some(ToolStatus::Failed) => {
+                        recorder.tool_finished(&id, false, title.as_deref());
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    });
 }
 
 #[cfg(test)]

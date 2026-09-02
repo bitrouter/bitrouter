@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use futures::Stream;
 use tokio::sync::watch;
 
-use crate::acp::up::PendingPermission;
+use crate::acp::client::PendingPermission;
 
 /// The session-owned set of outstanding permission requests.
 pub struct PermissionRegistry {

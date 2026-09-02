@@ -200,7 +200,7 @@ ids resolve through the fallback chain — alias one in `bitrouter.yaml` if not.
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md` | `bitrouter/auto`, trace projections, policy locks |
 | `references/workflow-optimization.md`, `references/metering.md` | History-driven quality/cost optimization from traces + external evals; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP controller vs one-shot engine (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
 
 ## Gotchas
 

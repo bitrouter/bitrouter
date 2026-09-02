@@ -20,12 +20,16 @@
 //! external dependencies, so a consumer can wire ACP routing without pulling
 //! the ACP SDK in.
 //!
-//! Everything else rides the `acp` feature: the [`Pipeline`], the hook traits,
-//! the typed request/response payloads, [`config_routing::ConfigAcpRoutingTable`],
-//! and the **live thin proxy** — [`up`] (the agent child + ACP client role)
-//! and [`engine`] (one session wired to the pipeline); [`down`] keeps only the
-//! [`down::ProviderSurface`] trait until the picker migrates. This mirrors how
-//! [`crate::mcp::rmcp_executor`] rides the `mcp` feature. Typed
+//! Everything else rides the `acp` feature. The live stack is
+//! [`controller`] (the manager-facing, connection-level server),
+//! [`client`] (the **one** BitRouter ACP client — transport-generic, so it
+//! drives either a harness child or an in-process [`controller::Controller`]
+//! over a duplex channel, on the caller's runtime), and [`up`] (the
+//! agent-process transport). [`engine`] is the retiring single-session path
+//! that only `bitrouter chat` still uses, together with the [`Pipeline`], the
+//! hook traits, the typed request/response payloads, and
+//! [`config_routing::ConfigAcpRoutingTable`]; [`down`] keeps only the
+//! [`down::ProviderSurface`] trait until the picker migrates. Typed
 //! health-checking (initialize-only) is [`up::health_check`].
 
 #[cfg(feature = "acp")]
@@ -47,6 +51,9 @@ pub mod transport;
 
 #[cfg(feature = "acp")]
 pub mod config_routing;
+
+#[cfg(feature = "acp")]
+pub mod client;
 
 #[cfg(feature = "acp")]
 pub mod controller;
