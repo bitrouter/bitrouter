@@ -121,6 +121,8 @@ bitrouter route <exact model id>          # resolution + chain
 
 Canonical model identifiers are slash-form ids such as **`openai/gpt-4o`**. A colon-form id such as **`openrouter:openai/gpt-4o`** is a deliberate provider pin: it routes directly through the named provider when that provider is active. The exact canonical id strings come from the registry or your config's `models:` list — `bitrouter models` is authoritative.
 
+**Bare Anthropic ids** (`claude-sonnet-4-6`, sent by Claude Code and by anything speaking the Anthropic shape) resolve through the routing table's fallback chain rather than by exact match. `bitrouter route claude-sonnet-4-6` shows what they land on; if that is not what you want, alias the id explicitly under `models:` in `bitrouter.yaml`.
+
 ## Symptom: env var change didn't propagate
 
 ```bash
