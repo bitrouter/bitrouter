@@ -48,7 +48,7 @@ harness endpoint from controller to harness; it is not a manager-side
 BitRouter route picker. The connection uses stable ACP v1 wire semantics; the
 Rust runtime crate's major version is not an ACP wire-version selector.
 
-When the controller has a trusted local daemon binding, initialize metadata
+When the controller has a local daemon route-control backend, initialize metadata
 advertises `_meta["bitrouter.dev/controller"].routeControl` with
 `version: "1"`, `scope: "session"`, and these methods:
 
@@ -113,23 +113,26 @@ to opt out, `--model` to pin the logical model, `--base-url` to select a daemon,
 and `--no-start` to disable local daemon auto-start. Routing/auth failures occur
 before the ACP handshake.
 
-Local routing obtains a short-lived `brac_*` controller credential through the
-owner-only daemon control socket. That credential binds model requests and
-route leases to one controller instance. An explicit `--base-url` can still
+When API authentication is enabled, local routing uses the normal BitRouter
+API/virtual key for both model requests and the route principal. Under
+`skip_auth: true`, both use the deliberately shared `local` principal. The
+owner-only daemon socket carries route mutations but does not mint or validate
+a second controller credential. An explicit remote `--base-url` can still
 configure the harness's model endpoint, but does not advertise route controls
-because it has no reviewed trusted control binding. User API keys are never
-promoted into controller credentials.
+until hosted HTTP route control exists.
 
 The model-router ingress continues to preserve ordinary model API session
-parsing. Authenticated routed adapter requests normalize the static BitRouter
+parsing. Routed adapter requests normalize caller-declared BitRouter
 controller/harness headers together with Claude or Codex native
 session/thread/agent/turn evidence. Session routes are ephemeral leases keyed
-by authenticated controller plus native session. An explicit caller route or
-preset and a Responses continuation pin remain stronger than a lease.
+by API principal, declared controller, and native session. These headers are
+correlation and routing claims, not authenticated facts; processes sharing one
+API key can deliberately reuse them. An explicit caller route or preset and a
+Responses continuation pin remain stronger than a lease.
 
 Close/delete removes a lease only after the harness operation succeeds;
-disconnect, credential expiry, reset, and controller revocation also clean it
-up. None of these operations changes harness session storage. The normalized
+disconnect, lease expiry, reset, daemon restart, and controller cleanup also
+remove it. None of these operations changes harness session storage. The normalized
 identity event joins controlled capture/replay, spans, route decisions, and
 nullable metering columns by `router_request_id`; authorization, cookies, and
 credentials are excluded, and raw identifiers are never aggregate metric

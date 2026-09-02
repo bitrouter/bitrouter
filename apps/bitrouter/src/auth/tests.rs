@@ -11,10 +11,8 @@ use bitrouter_sdk::language_model::{
     Prompt, Role,
 };
 
-use crate::acp_runtime::AcpRuntime;
 use crate::auth::db::{self, NewApiKey};
-use crate::auth::events::Authenticated;
-use crate::auth::events::ControllerAuthenticated;
+use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
 use crate::auth::hook::AuthHook;
 use crate::auth::keys;
 
@@ -89,39 +87,18 @@ async fn valid_key_authenticates_and_emits_event() {
     let event = ctx.get_event::<Authenticated>().expect("event emitted");
     assert_eq!(event.api_key_id, key_id);
     assert_eq!(event.policy_id.as_deref(), Some("pol_default"));
-}
-
-#[tokio::test]
-async fn controller_credential_authenticates_before_skip_auth_short_circuit() {
-    let pool = pool().await;
-    let runtime = std::sync::Arc::new(AcpRuntime::new());
-    let grant = runtime
-        .issue_controller("brc_auth", std::time::Duration::from_secs(60))
-        .expect("controller credential");
-    let hook = AuthHook::with_acp_runtime(pool, runtime);
-    let mut ctx = ctx_with(CallerContext::local(), Some(grant.token()));
-
-    assert!(matches!(
-        hook.check(&mut ctx).await.unwrap(),
-        HookDecision::Allow
-    ));
-    assert!(!ctx.caller().is_local());
-    assert_eq!(ctx.caller().api_key_id(), "acp-controller");
-    assert_eq!(ctx.caller().user_id(), "acp-controller");
-    assert_eq!(ctx.caller().security_scope_id(), "brc_auth");
     assert_eq!(
-        ctx.get_event::<ControllerAuthenticated>()
-            .expect("controller event")
-            .controller_instance_id,
-        "brc_auth"
+        ctx.get_event::<ApiPrincipalEstablished>()
+            .expect("route principal event")
+            .route_scope_id,
+        keys::hash_key(&secret)
     );
 }
 
 #[tokio::test]
-async fn copied_controller_header_without_valid_credential_stays_untrusted() {
+async fn skip_auth_keeps_declared_controller_headers_on_the_local_principal() {
     let pool = pool().await;
-    let runtime = std::sync::Arc::new(AcpRuntime::new());
-    let hook = AuthHook::with_acp_runtime(pool, runtime);
+    let hook = AuthHook::new(pool);
     let mut request = PipelineRequest::new("m", CallerContext::local(), prompt());
     request
         .headers
@@ -136,7 +113,7 @@ async fn copied_controller_header_without_valid_credential_stays_untrusted() {
         HookDecision::Allow
     ));
     assert!(ctx.caller().is_local());
-    assert!(ctx.get_event::<ControllerAuthenticated>().is_none());
+    assert!(ctx.get_event::<ApiPrincipalEstablished>().is_none());
 }
 
 #[tokio::test]

@@ -1,18 +1,22 @@
 # Spec: the ACP controller runtime
 
-Status: **Phase 2 controller core implemented; Phase 3 product surfaces proposed** · Date: 2026-09-02
+Status: **Phase 3 stable-v1 controller implemented; next iterations specified** · Date: 2026-09-02
 
 Implementation note: Phase 0 pins stable ACP v1 wire semantics and maintained
 Claude/Codex adapters behind one endpoint plan. Phase 1 ships the manager-first
 connection controller used by `acp serve`, including provider setup gating,
-native multi-session lifecycle forwarding, callbacks, and extension fidelity.
-Phase 2 now ships daemon-issued controller credentials, authenticated
+native lifecycle forwarding, callbacks, and extension fidelity. Phase 2 ships
 Claude/Codex request-session normalization, ephemeral native-session route
 leases, `_bitrouter/route/*`, `SessionIdentityObserved`, controlled
-capture/replay, span attributes, and nullable metering correlation. The
-existing single-session engine remains the implementation of `acp prompt` and
-`chat`. TUI migration and automatic harness selection are deliberately outside
-this phase and this implementation change.
+capture/replay, span attributes, and nullable metering correlation. Phase 3
+removes the former daemon-issued `brac_*` controller credential: normal
+BitRouter API authentication is the only authentication boundary, while
+controller/session headers are explicitly caller-declared routing and
+observability signals. It also pins one coherent Rust SDK/schema line and adds
+stable-v1 forwarding contracts. The remaining roadmap includes
+API-key-authenticated hosted-Core route control, migration of the
+single-user-session TUI, pre-connection harness selection, and release
+hardening.
 
 This document defines the core runtime beneath BitRouter's ACP-facing products.
 It is authoritative for session ownership, controller topology, capability
@@ -22,11 +26,16 @@ existing pure model API session heuristics and Responses continuation state.
 
 It supersedes the following decisions in [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md):
 
-- the single-session product boundary in §§2, 8.3, 11, and 12;
 - the use of standard ACP `providers/*` methods for BitRouter's internal route
   selection in §§6 and 10; and
 - the assumption that one `Session` relay per manager connection is the right
   long-term ACP architecture in §5.
+
+It retains and sharpens that document's single-user-session product boundary:
+one TUI user session selects one harness and one harness-native session. The
+TUI may recreate its ACP connection to resume that session, but neither
+same-connection multi-session UX nor concurrently open TUI sessions is a
+roadmap goal.
 
 It does **not** supersede the shipped renderer, inline terminal behavior,
 permission UI, cost presentation, or the `chat` command. Those become clients
@@ -41,11 +50,17 @@ BitRouter will own the **ACP control plane**, not the agent's conversation
 state.
 
 One BitRouter ACP controller instance launches and controls one agent harness
-process. That connection may carry multiple harness-native sessions. The
-controller configures the harness to send model traffic through BitRouter,
-forwards the harness's ACP session lifecycle without replacing its identifiers,
-and attaches enough controller and native-agent identity to model requests for
-the router to attribute and isolate them accurately.
+process over one ACP connection. For a BitRouter TUI user session, that
+connection is bound to one harness-native session. The controller configures
+the harness to send model traffic through BitRouter, forwards the harness's ACP
+session lifecycle without replacing its identifiers, and attaches enough
+controller and native-agent identity to model requests for the router to
+attribute and isolate them accurately.
+
+The controller remains a protocol-transparent ACP v1 Agent and does not need
+to reject a generic manager that sends more than one `session/new` on the same
+connection. That protocol compatibility is not a BitRouter product surface,
+process-sharing strategy, TUI requirement, or acceptance criterion.
 
 The harness remains the only authority for:
 
@@ -90,10 +105,16 @@ TUI / IDE / CLI  -- ACP -->  BitRouter ACP Controller  -- ACP -->  Harness
                                            route + meter
 ```
 
+Physically, stable ACP v1 uses a client-launched local stdio wrapper process;
+that wrapper launches one selected local harness process. BitRouter Core is a
+separate HTTP(S) service and may run locally or in a hosted deployment. Local
+auto-start is a CLI convenience, not an architectural dependency and not a
+shared ACP daemon.
+
 - The **manager plane** controls sessions and renders updates.
 - The **harness plane** owns agent behavior and session data.
-- The **model plane** routes and meters model requests using native session
-  evidence plus authenticated controller correlation.
+- The **model plane** routes and meters model requests using the normal API
+  principal plus declared controller and native-session evidence.
 
 The controller connects these planes without collapsing their ownership.
 
@@ -105,7 +126,8 @@ The controller connects these planes without collapsing their ownership.
    authentication, and static controller headers.
 2. Preserve harness-native ACP session IDs end to end.
 3. Forward all capability-gated ACP v1 session operations supported by the
-   harness, including multiple concurrent sessions on one connection.
+   harness without turning same-connection session multiplexing into a product
+   requirement.
 4. Negotiate capabilities honestly between the manager, controller, and
    harness instead of initializing the harness with empty client capabilities.
 5. Extract Claude and Codex native session, thread, agent, parent, and turn
@@ -121,15 +143,25 @@ The controller connects these planes without collapsing their ownership.
    model API.
 10. Make every BitRouter-added and harness-native session signal observable
     through one privacy-reviewed, replayable correlation contract.
+11. Allow a BitRouter-aware launcher or TUI to select a harness before opening
+    the controller connection, then keep that harness binding fixed for the
+    lifetime of the user session.
 
 ### 3.2 Non-goals
 
 - A BitRouter transcript store, session database, or session-file editor.
 - A cross-harness session catalog. A controller instance exposes the sessions
-  known to its one harness; a future harness supervisor may aggregate several
-  controllers without taking ownership of their sessions.
-- Automatic harness selection. Agent/harness routing is a separate policy and
-  evaluation problem layered above this controller.
+  known to its one harness; BitRouter does not merge catalogs from several
+  harnesses.
+- Same-connection multi-harness routing, virtual ACP session IDs, or a wrapper
+  that changes the harness behind an active session.
+- TUI multi-open or product-level multiplexing of several user sessions over
+  one ACP connection. Generic protocol pass-through may continue to tolerate
+  multiple native sessions, but no product behavior depends on it.
+- Cross-harness session migration or transcript conversion.
+- A unified local ACP service daemon. Each routed harness remains an ordinary
+  local ACP v1 process; BitRouter Core is the independently reachable HTTP(S)
+  service.
 - ACP v2 wire semantics.
 - A network ACP transport. Stdio remains the v1 transport; a future transport
   must not change the controller's ownership rules.
@@ -148,16 +180,18 @@ following names explicitly.
 
 | Name | Owner | Lifetime | Meaning |
 |---|---|---|---|
+| `tui_user_session` | BitRouter TUI | one interactive user experience | UI scope fixed to one selected harness and one harness-native session; not a transcript or ACP session authority |
 | `controller_instance_id` | BitRouter | one harness process / ACP connection | Correlates traffic with the controller that configured the harness |
 | `acp_session_id` | harness | harness-defined | Opaque ID returned by ACP and used for every session method |
 | `root_session_id` | harness | harness-defined | Root conversation identity observed on model HTTP traffic |
 | `agent_thread_id` | harness | harness-defined | Child agent or thread identity within the root session |
 | `parent_agent_thread_id` | harness | harness-defined | Native lineage when supplied |
 | `turn_id` | harness | harness-defined | Native turn identity when supplied |
+| `api_principal` | BitRouter Core | one API-authentication scope | Stable non-secret identity derived from a validated API key, or the singleton local caller when `skip_auth: true`; scopes route state but does not attest request headers |
 | `legacy_workflow_session_id` | BitRouter/caller | one inferred workflow | Existing `x-bitrouter-workflow-session`, adapter hint, or prompt-hash result used by pure model API traffic |
 | `api_continuation_id` | provider/BitRouter continuation service | one provider-side continuation chain | Responses `previous_response_id`; constrains provider state and is not an agent session ID |
 | `router_request_id` | BitRouter | one model request | BitRouter ingress and metering correlation |
-| `route_lease_id` | BitRouter | one live controller/session override | Authorizes and cleans up an ephemeral route override |
+| `route_lease_id` | BitRouter | one live controller/session override | Identifies and cleans up an ephemeral route override; it is not a credential |
 
 ### 4.1 Identity invariants
 
@@ -168,15 +202,20 @@ following names explicitly.
    current controller process has not seen it before. The harness, not an
    in-memory BitRouter map, decides whether it exists.
 4. `controller_instance_id` must never be placed in the ACP `sessionId` field.
-5. For authenticated ACP traffic, native request evidence wins over legacy
-   compatibility headers. Pure model API traffic retains the existing legacy
-   precedence in §10.2. Conflicts are diagnostic events, not a reason to erase
-   either signal.
+5. For traffic classified as coming from an ACP harness, native request
+   evidence wins over legacy compatibility headers. This classification is an
+   attribution decision, not authentication or attestation. Pure model API
+   traffic retains the existing legacy precedence in §10.2. Conflicts are
+   diagnostic events, not a reason to erase either signal.
 6. Missing identity never causes BitRouter to fabricate a confident session.
    The request uses the default route and is marked unattributed.
 7. Raw native IDs may exist in request scope and live controller memory.
    Existing metering and trace retention policy governs any diagnostic copy;
    the controller itself introduces no persistent session store.
+8. `tui_user_session` is not placed on the ACP wire as a replacement ID. Its
+   operational locator is the selected harness plus the opaque native
+   `acp_session_id`; reconnecting may replace `controller_instance_id` without
+   changing either of those identities.
 
 ### 4.2 Current harness mappings
 
@@ -200,7 +239,7 @@ of them into a universal session key.
 | Mechanism | Current key and precedence | Current effect | Controller treatment |
 |---|---|---|---|
 | Legacy workflow identity | `x-bitrouter-workflow-session`, then a detected adapter's body hint, then a low-confidence first-user-message hash | Structured workflow identity, trace/capture joins, and context analysis | Keep unchanged as the pure model API compatibility projection |
-| Local launch route override | `launch_id` parsed from a `Bearer brl_*` launch token | Rewrites the provider for one local launch before normal policy routing | Do not reuse; it is process attribution for the local `skip_auth` path, not an authenticated ACP session lease |
+| Local launch route override | `launch_id` parsed from a `Bearer brl_*` launch token | Rewrites the provider for one local launch before normal policy routing | Do not treat it as authentication; it is process attribution for the local `skip_auth` path, not an API principal |
 | Responses continuation | `previous_response_id` resolved by the continuation subsystem | Binds server-side provider state to the original provider, model, account, and caller | Keep separate and stronger than any ACP route preference |
 
 Ordinary workflow identity does not participate in the static predictive route
@@ -249,17 +288,26 @@ These are review gates, not preferences.
 - Standard `providers/*` is not advertised manager-side as a synonym for
   BitRouter's internal provider catalog.
 
-### 5.5 Authenticated routing scope
+### 5.5 API-authenticated, claim-scoped routing
 
-- Raw `x-bitrouter-controller-id` and `x-bitrouter-acp-session-id` headers are
-  correlation evidence, not authorization.
-- The harness uses a controller-scoped BitRouter credential. The daemon derives
-  the trusted controller identity from that credential and checks any claimed
-  header against it.
-- A session override is keyed by authenticated controller identity plus the
-  opaque ACP session ID. Model ingress matches source-specific native identity
-  candidates to that ID. Two controllers or two sessions cannot change each
-  other's routes.
+- BitRouter uses the existing API key or virtual key as its only authentication
+  boundary. Model calls and HTTP route-control calls use the same normal API
+  authentication path and resolve to the same non-secret `api_principal`.
+- `server.skip_auth: true` applies consistently to both model and route-control
+  endpoints. It resolves requests to the singleton local caller and does not
+  retain a hidden second authentication requirement for routing.
+- Raw `x-bitrouter-controller-id`, `x-bitrouter-acp-session-id`, and
+  harness-native session headers are caller-declared correlation and route
+  lookup inputs. They are not cryptographic proof of a controller, harness, or
+  session, and BitRouter does not claim to prevent a caller from forging them.
+- A session override is keyed by `api_principal`, the declared
+  `controller_instance_id`, and the opaque ACP/native session ID. This prevents
+  accidental and cross-principal collisions without pretending to attest the
+  claims. Holders of the same API key share one security principal and can
+  deliberately reuse each other's claimed identifiers; that is an accepted
+  boundary. Under `skip_auth`, all callers share the local principal.
+- Controllers generate high-entropy instance IDs to make accidental collision
+  negligible. Randomness is namespacing, not authorization.
 
 ### 5.6 The controller has no TUI dependency
 
@@ -280,7 +328,7 @@ The SDK owns protocol-correct, harness-independent behavior:
 - harness process transport and the harness-side ACP connection;
 - manager-side ACP serving;
 - initialization sequencing and capability composition;
-- multi-session request/notification forwarding;
+- transparent native-session request/notification forwarding;
 - in-flight prompt and cancellation correlation;
 - permission, elicitation, filesystem, terminal, and other client callbacks
   when supported by both sides;
@@ -319,9 +367,9 @@ The application owns BitRouter-specific policy:
 - the harness catalog and pinned adapter versions;
 - per-harness launch fallback configuration;
 - post-initialize `providers/set` configuration;
-- controller credentials and static metadata headers;
+- normal API credentials and static metadata headers;
 - `_bitrouter/route/*` request handling;
-- daemon route-lease installation and removal;
+- local or hosted route-lease installation and removal;
 - Claude/Codex native identity extraction at HTTP ingress; and
 - router-measured usage updates.
 
@@ -330,13 +378,19 @@ No ACP framing or session forwarding belongs in the TUI.
 
 ### 6.3 `bitrouter-tui`: optional manager client
 
-The existing TUI remains a standalone ACP client. It may add session listing,
-loading, resuming, closing, and deleting only by calling the corresponding ACP
-methods and honoring advertised capabilities. It must not read harness homes or
-invent a separate session model.
+The TUI remains a standalone ACP client. One TUI user session selects one
+harness, opens one current controller connection, and creates or restores one
+harness-native session. Reconnecting may replace the transport process, but it
+does not change the selected harness or native session identity.
 
-The first controller version does not require a session browser in the TUI.
-Headless protocol conformance is the acceptance gate.
+The TUI may list sessions from that selected harness so the user can choose a
+native session to load or resume. It may close or delete only by calling the
+corresponding ACP method and honoring advertised capabilities. It must not
+read harness homes, aggregate cross-harness catalogs, invent a separate session
+model, or expose multi-open as a product goal.
+
+Headless protocol conformance remains the controller acceptance gate; TUI
+behavior is a later product iteration over the same interface.
 
 ## 7. Controller lifecycle
 
@@ -344,8 +398,10 @@ Headless protocol conformance is the acceptance gate.
 
 The required sequence is:
 
-1. The app resolves an explicit harness and creates a
-   `controller_instance_id` plus a controller-scoped BitRouter credential.
+1. The app resolves an explicit harness, creates a high-entropy
+   `controller_instance_id`, and resolves the normal BitRouter API key accepted
+   by the target Core. Under `skip_auth`, a non-secret launch token or adapter
+   placeholder may still be supplied when the harness requires a value.
 2. The app builds one `HarnessEndpointPlan` containing the BitRouter base URL,
    logical model, authentication, and static headers.
 3. The app launches the pinned adapter with the plan's harness-specific
@@ -387,7 +443,8 @@ information for troubleshooting and UI labels.
 On manager disconnect or controller shutdown:
 
 1. cancel or finish in-flight local forwarding according to ACP semantics;
-2. remove every BitRouter route lease owned by the controller;
+2. remove every BitRouter route lease owned by the API-principal/controller
+   tuple;
 3. terminate the child adapter according to the existing process policy; and
 4. discard the ephemeral live-session index.
 
@@ -415,7 +472,7 @@ A field is never copied merely because both schemas contain the same name. Its
 requests, responses, notifications, cancellation, and error behavior must all
 be forwardable before it is advertised.
 
-### 8.2 Stable session methods
+### 8.2 ACP v1 session methods
 
 | ACP operation | Controller behavior |
 |---|---|
@@ -427,12 +484,13 @@ be forwardable before it is advertised.
 | `session/cancel` | Forward by native ID, including for a session first observed before controller restart |
 | `session/close` | Forward; remove BitRouter live state and route lease only after harness success |
 | `session/delete` | Forward; remove BitRouter live state and route lease only after harness success |
-| `session/fork` | Forward when advertised and return the new native ID unchanged; the fork may receive its own route lease |
 | `session/set_config_option` | Forward when advertised; do not mirror harness configuration locally |
 
-`session/list`, `load`, `resume`, `close`, `delete`, `fork`, and configuration
-methods are capability-gated. The controller does not emulate a missing
-harness capability with partial local state.
+`session/list`, `load`, `resume`, `close`, `delete`, and configuration methods
+are capability-gated. The controller does not emulate a missing harness
+capability with partial local state. `session/fork` may be forwarded as a
+version-gated experimental capability, but it is not part of the stable-v1
+product baseline or acceptance criteria.
 
 ### 8.3 Agent-to-client callbacks and updates
 
@@ -465,26 +523,27 @@ HarnessEndpointPlan
   base_url             BitRouter model endpoint
   protocol             Anthropic Messages or OpenAI Responses
   logical_model        model or BitRouter preset presented to the harness
-  controller_credential short-lived credential bound to the controller
+  api_key              existing BitRouter API/virtual key when auth is enabled
   static_headers
     x-bitrouter-controller-id
     x-bitrouter-harness
 ```
 
-The credential is passed through the adapter's secret-bearing configuration
-field or environment variable. It is never returned from `providers/list`,
-included in `_meta`, printed in logs, or rendered by the TUI.
+The API key is passed through the adapter's secret-bearing configuration field
+or environment variable. It is never returned from `providers/list`, included
+in `_meta`, printed in logs, or rendered by the TUI. No second controller
+credential is minted or exchanged.
 
 `x-bitrouter-controller-id` and `x-bitrouter-harness` improve diagnostics, but
-the daemon trusts the credential binding rather than those caller-controlled
-strings.
+remain caller-controlled strings. Core uses them as namespacing and attribution
+claims within the normal API principal, not as authenticated facts.
 
 ### 9.2 Preferred path: harness-side `providers/set`
 
 When the initialized harness advertises the provider capability, the
 controller calls `providers/set` after initialization and before any
 `session/new`, `load`, or `resume`. The configured provider points to BitRouter,
-uses the required wire protocol, carries the controller credential and static
+uses the required wire protocol, carries the normal API key and static
 headers, and is process-scoped.
 
 The controller verifies the effective non-secret URL/protocol/model through
@@ -541,19 +600,32 @@ platform constraints require a different version, the compatibility change
 must record the package version and upstream commit used by its conformance
 tests and rerun endpoint, session, capability, and identity smokes.
 
-### 9.6 Trusted local binding and remote limitation
+### 9.6 One API authentication boundary and the hosted-Core gap
 
-`acp serve` obtains a short-lived `brac_*` controller credential only from the
-owner-only control socket of the locally resolved daemon. That credential is
-used by both provider configuration and the launch fallback, and is revoked
-with all controller-owned leases when the controller exits normally.
+The Phase 2 local `acp serve` path obtained a short-lived `brac_*` controller
+credential from the owner-only daemon socket. Phase 3 removes that dedicated
+credential path. It did not attest session-header contents and is not part of
+the target protocol.
 
-An explicit `--base-url` continues to support model endpoint configuration,
-but this phase does not assume access to that endpoint's owner-only control
-plane. The controller therefore does not advertise `_bitrouter/route/*` for
-that path and model requests are handled as ordinary model API traffic unless
-the remote deployment supplies a separately reviewed trusted binding. A user
-API key or launch-attribution token is never promoted to controller authority.
+The target path uses the same API key for model requests and route-control
+requests. Core derives `api_principal` from its existing authentication
+middleware; the controller and session headers remain declared values inside
+that scope. If `skip_auth: true`, both request classes use the same local
+principal and no extra routing credential is required.
+
+An explicit `--base-url` already supports model endpoint configuration, but
+the implemented path does not yet expose a matching HTTP route-control
+surface. Until that gap is closed, the controller does not advertise
+`_bitrouter/route/*` for the remote path. Native Claude/Codex session evidence
+and static controller claims remain observable.
+
+The next hosted-Core iteration adds an HTTP(S) session-route list/set/reset
+surface protected by Core's existing API authentication middleware. Local and
+hosted Core use the same API and `skip_auth` semantics; no credential issue,
+renewal, revocation, or exchange endpoint is introduced. Route leases retain
+their own TTL and explicit cleanup so controller crashes do not leave permanent
+state. The existing `RouteControl` boundary receives an HTTP implementation;
+no local ACP service daemon is introduced.
 
 ## 10. Native identity at BitRouter model ingress
 
@@ -565,9 +637,10 @@ collapsing them into the current single `SessionSignal.key`:
 
 ```text
 RequestSessionContext
-  origin: PureModelApi | AuthenticatedAcpController
-  authenticated_controller_instance_id?
-  acp_session_id?                 # populated only after a trusted binding
+  origin: PureModelApi | AcpHarnessRequest
+  api_principal                   # API-key identity or local under skip_auth
+  claimed_controller_instance_id?
+  declared_acp_session_id?
   native:
     harness?
     root_session_id?
@@ -604,27 +677,30 @@ not parsed as Claude identity without Claude recognition, and a Responses
 `previous_response_id` remains continuation evidence rather than route
 authority.
 
-For `AuthenticatedAcpController`, the analysis projection uses:
+For `AcpHarnessRequest`, the analysis projection uses:
 
-1. a credential-bound, dynamically supplied `x-bitrouter-acp-session-id` when
-   an adapter can provide one;
+1. a dynamically supplied `x-bitrouter-acp-session-id` when an adapter can
+   provide one;
 2. Claude or Codex native request identity;
 3. the existing `x-bitrouter-workflow-session` compatibility signal;
 4. existing adapter body hints; and
 5. the low-confidence prompt hash.
 
-The route-lease projection is intentionally narrower. It accepts only a
-credential-bound ACP session ID or source-specific native session candidates.
-Legacy headers, user-agent detection, `previous_response_id`, and prompt hashes
-may improve analysis but cannot authorize a session route override.
+The route-lease projection is intentionally narrower. Within the request's
+normal `api_principal`, it accepts only the declared ACP session ID or
+source-specific native session candidates together with the declared
+controller instance ID. Legacy headers, user-agent detection,
+`previous_response_id`, and prompt hashes may improve analysis but do not form
+a route key.
 
 All evidence is retained. Resolving the ACP projection does not overwrite the
 legacy workflow projection, and conflicting evidence produces diagnostics.
-A static controller header identifies the controller process; it cannot carry
-a different ACP session ID for every request when one harness process runs
-concurrent sessions. Claude and Codex therefore use their native request
+A static controller header identifies the controller process; it is not a
+dynamic ACP session binding even when the product uses only one native session
+on that connection. Claude and Codex therefore use their native request
 headers as the primary per-session signal. The dynamic ACP header is supported
-for adapters that can emit it correctly, but it is not required.
+for adapters that can emit it correctly, but it is not required and must never
+be synthesized as a process-wide constant.
 
 ### 10.3 Claude precedence
 
@@ -656,20 +732,25 @@ native identity projection.
 ### 10.5 Conflict behavior
 
 If two native fields conflict, the extractor follows the source-specific
-precedence above, attaches a structured diagnostic, and avoids using the lower
-authority value for route scope. A private BitRouter harness header can help
+precedence above, attaches a structured diagnostic, and avoids using the
+lower-specificity value for route scope. This precedence improves deterministic
+routing and attribution; it does not make the selected value authentic. A
+private BitRouter harness header can help
 select an extractor only when no stronger native evidence identifies one; that
 harness-selector hint cannot replace a native session ID.
 
 ### 10.6 Pipeline carriers
 
-Identity normalization runs after authentication, because raw controller and
-ACP session headers are not trusted inputs. A `SessionContextHook` writes:
+Identity normalization runs after normal API authentication so route lookup can
+use the resolved `api_principal`. The ordering does not authenticate raw
+controller, ACP, or harness-native session headers. A `SessionContextHook`
+writes:
 
 - a typed request extension containing the full normalized context for route
   resolution and stream hooks; and
 - one redaction-safe `SessionIdentityObserved` event containing the transport
-  evidence, normalized correlation fields, trust decisions, and conflicts
+  evidence, normalized correlation fields, route-eligibility decisions, and
+  conflicts
   required by trace, replay, route-decision, and settlement recorders.
 
 Request extensions do not flow directly into settlement in the current
@@ -714,36 +795,37 @@ _bitrouter/route/reset
 model, or explicit provider/model where allowed by router policy. Credentials
 never cross this surface.
 
-`available` is the live daemon's logical-model suggestion list for a picker;
+`available` is the authoritative route-control backend's logical-model
+suggestion list for a picker;
 it is intentionally not an exhaustive grammar. Presets and permitted explicit
 provider/model routes remain valid free-form `set` inputs and are confirmed by
-the daemon before success.
+the backend before success.
 
-The controller acknowledges `set` only after the daemon confirms that the
-route lease is installed. `list` reports the effective route from the daemon,
-not a controller-local optimistic value.
+The controller acknowledges `set` only after the backend confirms that the
+route lease is installed. `list` reports the backend's effective route, not a
+controller-local optimistic value.
 
 Managers discover this extension from
 `initialize._meta["bitrouter.dev/controller"].routeControl`. An available v1
 surface reports `version: "1"`, the three method names above, and
 `scope: "session"`. An absent or `null` value means that this controller has no
-trusted route-control binding; callers must hide or disable the route surface.
+working route-control backend; callers must hide or disable the route surface.
 Calling an unavailable extension returns JSON-RPC method-not-found rather than
 silently falling back to a different authority.
 
 ### 11.3 Route key and descendant behavior
 
-The trusted daemon key is:
+The route-lease key is:
 
 ```text
-(authenticated_controller_instance_id, acp_session_id)
+(api_principal, claimed_controller_instance_id, acp_or_native_session_id)
 ```
 
-The daemon does not require the HTTP client to send a field literally named
+BitRouter Core does not require the HTTP client to send a field literally named
 `acp_session_id`. When an adapter can emit a dynamic
-`x-bitrouter-acp-session-id`, the daemon validates it against the authenticated
-controller binding and tries it first. Otherwise, or if it does not match a
-lease, the native extractor produces ordered lookup candidates:
+`x-bitrouter-acp-session-id`, Core tries it first inside the API-principal and
+claimed-controller namespace. Otherwise, or if it does not match a lease, the
+native extractor produces ordered lookup candidates:
 
 | Harness | Route lookup candidates |
 |---|---|
@@ -751,21 +833,26 @@ lease, the native extractor produces ordered lookup candidates:
 | Codex | `thread-id`, then `session-id` |
 
 For a root Codex session, both values normally match the ACP thread ID. For an
-ACP fork, the new `thread-id` can match its own route lease before falling back
-to the root `session-id`. For a subagent thread that is not separately exposed
-as an ACP session, no exact lease exists and the root session lease is
-inherited. Claude child agents inherit the lease selected by the Claude session
-ID. Explicit per-subagent route controls are out of scope for v1.
+experimental ACP fork, the new `thread-id` can match its own route lease before
+falling back to the root `session-id`. For a subagent thread that is not
+separately exposed as an ACP session, no exact lease exists and the root
+session lease is inherited. Claude child agents inherit the lease selected by
+the Claude session ID. Explicit per-subagent route controls are out of scope
+for v1.
 
-The manager can install the route immediately after `session/new`, `load`,
-`resume`, or `fork` returns because it already has the native ID. The first
-prompt therefore does not race route installation.
+The manager can install the route immediately after `session/new`, `load`, or
+`resume` returns because it already has the native ID. The same applies to an
+experimental fork when advertised. The first prompt therefore does not race
+route installation.
 
-If a model request has authenticated controller identity but neither a trusted
-dynamic ACP session ID nor native root session identity, no session override
-applies. The default router policy runs and telemetry marks the request
-unattributed. If it has a claimed ACP/native ID but an invalid controller
-credential, it cannot access another controller's lease.
+If a model request has no declared controller instance ID, or neither a
+declared dynamic ACP session ID nor native root session identity, no session
+override applies. The default router policy runs and telemetry marks the
+request unattributed. With API authentication enabled, an invalid or missing
+API key is rejected by the normal API path before route lookup. With
+`skip_auth: true`, the same claims are usable within the shared local principal.
+BitRouter deliberately does not attempt to detect a caller that forges those
+claims.
 
 ### 11.4 Lease lifetime
 
@@ -774,7 +861,8 @@ A route override is an ephemeral `route_lease`:
 - created or replaced by `_bitrouter/route/set`;
 - removed by `reset`;
 - removed after successful `session/close` or `session/delete`;
-- removed when the controller disconnects or its credential expires; and
+- removed when the controller disconnects or its independent lease TTL
+  expires; and
 - not restored automatically by harness `session/resume` after a new
   controller process starts.
 
@@ -789,22 +877,24 @@ The Phase 2 controller does not advertise or accept manager-side
 the only controller route namespace, and its availability is advertised under
 initialize response `_meta["bitrouter.dev/controller"].routeControl`.
 
-The shipped single-session TUI keeps its existing local route surface until a
-separate Phase 3 migration. That compatibility code is not part of the
-connection controller and does not weaken the controller namespace. A future
-explicit endpoint-administration mode may expose standard `providers/*` with
-its standard meaning, but it requires a separate security review.
+The shipped single-user-session TUI keeps its existing local route surface
+until its product migration. The migrated TUI selects one harness, opens one
+current controller connection, and controls one native session through
+`_bitrouter/route/*`. That compatibility code is not part of the connection
+controller and does not weaken the controller namespace. A future explicit
+endpoint-administration mode may expose standard `providers/*` with its
+standard meaning, but it requires a separate security review.
 
 ### 11.6 Pipeline integration and precedence
 
 The current launch-token override and policy-table transform run at ingress,
-before `AuthHook`. Trusted ACP routing cannot reuse that seam because controller
-authority has not been established there. The compatible control flow is:
+before `AuthHook`. ACP route lookup cannot reuse that seam because the normal
+API principal has not been established there. The compatible control flow is:
 
 ```text
 parse + existing ingress transforms
   -> AuthHook
-  -> SessionContextHook + authenticated route-lease lookup
+  -> SessionContextHook + API-principal-scoped route-lease lookup
   -> Responses continuation resolution
   -> policy composition
   -> route resolution
@@ -817,7 +907,7 @@ applies this precedence:
 ```text
 Responses continuation pin
   > original explicit caller route or preset
-  > authenticated ACP session route lease
+  > matching ACP session route lease
   > existing policy-table/default result
 ```
 
@@ -828,7 +918,7 @@ final authority when `previous_response_id` pins provider-side state, so an ACP
 preference can never move a continuation to a different provider, model,
 account, or caller.
 
-Expressed by pipeline responsibility, the new authenticated portion is:
+Expressed by pipeline responsibility, the new route-scoped portion is:
 
 ```text
 AuthHook
@@ -839,17 +929,17 @@ AuthHook
   -> route resolution
 ```
 
-This hook order changes only `AuthenticatedAcpController` requests with a
-matching route lease. Pure model API traffic and authenticated ACP requests
-without a matching native-session lease continue through the existing policy
-path unchanged.
+This hook order changes only requests whose API principal and declared
+controller/native-session claims match a route lease. Existing pure model API
+fixtures and ACP-attributed requests without a matching native-session lease
+continue through the existing policy path unchanged.
 
 ## 12. Session flows
 
 ### 12.1 New session
 
 ```text
-Manager                  Controller                 Harness          Daemon
+Manager                  Controller                 Harness     Route backend
    | session/new             |                         |                |
    |------------------------>| session/new             |                |
    |                         |------------------------>|                |
@@ -857,9 +947,10 @@ Manager                  Controller                 Harness          Daemon
    |<------------------------| same native id          |                |
 ```
 
-No daemon registration or BitRouter session record is created here. The
+No BitRouter session record is created here. The
 manager may immediately use the returned opaque native ID with a route-control
-method; that method creates the ephemeral lease only after daemon confirmation.
+method; that method creates the ephemeral lease only after backend
+confirmation.
 
 ### 12.2 List, load, and resume
 
@@ -882,7 +973,8 @@ Manager        Controller        Harness             BitRouter Core
    |-------------->| prompt(id)     |                       |
    |               |--------------->| model HTTP            |
    |               |                |---------------------->|
-   |               |                | controller credential |
+   |               |                | normal API key        |
+   |               |                | declared controller id|
    |               |                | native session fields |
    |               |                |                       | resolve lease
    |               |                |<----------------------|
@@ -892,14 +984,14 @@ Manager        Controller        Harness             BitRouter Core
 No controller-generated per-session header is required in this flow. Static
 controller correlation comes from endpoint configuration; session identity
 comes from the harness's native model client. An adapter that can correctly
-emit a dynamic, credential-bound `x-bitrouter-acp-session-id` may do so, but the
+emit a dynamic `x-bitrouter-acp-session-id` may do so, but the
 Claude and Codex baseline does not depend on it.
 
 ### 12.4 Close, delete, and disconnect
 
 The controller removes local route state only after the harness accepts close
 or delete. A failed harness operation leaves the route lease in place until an
-explicit reset, controller teardown, or credential expiry.
+explicit reset, controller teardown, or lease expiry.
 
 An ACP connection drop removes controller-owned leases but does not translate
 to harness `session/delete` or erase harness data.
@@ -918,10 +1010,10 @@ control that only changed local display state.
 | Effective provider mismatches endpoint plan | Fail initialize when verification is available |
 | Harness session method fails | Preserve harness ACP error and native ID; do not mutate local catalog |
 | Manager requests unsupported method | Protocol-defined unsupported/method-not-found response |
-| Route lease installation fails | `_bitrouter/route/set` fails; `current` remains daemon-confirmed state |
-| Trusted ACP/native model identity missing | Use default route; emit unattributed diagnostic; never fabricate ID |
+| Route lease installation fails | `_bitrouter/route/set` fails; `current` remains backend-confirmed state |
+| Declared ACP/native model identity missing | Use default route; emit unattributed diagnostic; never fabricate ID |
 | Native identity conflict | Use source-specific native precedence and emit conflict diagnostic |
-| Daemon unavailable | Model request fails through the normal provider path; controller surfaces relevant harness error/update |
+| BitRouter Core or route-control backend unavailable | Model request or route mutation fails through its normal path; controller surfaces the relevant sanitized error |
 | Adapter exits | Fail in-flight operations, remove route leases, retain harness-owned session files untouched |
 
 Agent stderr and BitRouter controller diagnostics continue to use the existing
@@ -930,21 +1022,31 @@ headers, and full provider configuration payloads are redacted at the source.
 
 ## 14. Security and privacy
 
-1. Controller credentials are short-lived, least-privilege, and bound to one
-   controller instance. Reusing a user's upstream model credential as the
-   controller credential is forbidden.
-2. The daemon authenticates route-control commands and model requests. Header
-   strings alone do not grant access to a route lease; an untrusted pure API
-   caller cannot activate ACP mode by copying controller or session headers.
-3. Provider configuration responses expose only non-secret effective fields.
-4. Session IDs are treated as opaque identifiers. They are not placed in error
+1. BitRouter's existing API key or virtual key is the only authentication
+   boundary for both model and HTTP route-control requests. No ACP-specific
+   credential is issued, exchanged, renewed, or revoked.
+2. `server.skip_auth: true` deliberately admits both request classes as the
+   local principal. Operators who select that mode are not given a misleading
+   secondary routing-authentication boundary.
+3. Controller, ACP session, and harness-native session headers are assertions
+   made by the caller. BitRouter uses them for attribution and route matching
+   but does not attest them or claim to prevent forgery.
+4. API-principal scoping prevents a caller authenticated as one key from
+   colliding with route state owned by another key. It does not stop two
+   processes sharing one API key from impersonating each other's claimed
+   controller/session namespace. Under `skip_auth`, all callers intentionally
+   share that authority.
+5. High-entropy controller IDs reduce accidental collisions only. They are not
+   secrets and must never be described as authorization tokens.
+6. Provider configuration responses expose only non-secret effective fields.
+7. Session IDs are treated as opaque identifiers. They are not placed in error
    messages that may be sent to an unrelated manager connection.
-5. The controller never reads harness session-storage directories merely to
+8. The controller never reads harness session-storage directories merely to
    populate UI or router state.
-6. Existing request tracing may associate metering with normalized agent
+9. Existing request tracing may associate metering with normalized agent
    identity, but it must not reinterpret that telemetry as a resumable session
    store.
-7. Custom base URLs and headers follow the existing BitRouter configuration
+10. Custom base URLs and headers follow the existing BitRouter configuration
    trust model. Any future remote controller transport requires a separate
    authentication and threat-model review.
 
@@ -955,9 +1057,9 @@ Every model request produces one `SessionIdentityObserved` event, including an
 explicit unattributed event when no session signal is present. Model-plane
 trace, route, usage, and settlement artifacts join exactly through
 `router_request_id`. Controller ACP events correlate at session scope through
-the authenticated controller ID and ACP/native identity, and at turn scope
-only when the harness exposes a native turn ID. None of these events is a
-replacement session record.
+the API principal, declared controller ID, and ACP/native identity, and at turn
+scope only when the harness exposes a native turn ID. None of these events is
+a replacement session record.
 
 ### 15.1 Required evidence inventory
 
@@ -968,7 +1070,7 @@ the normalized event records which exact field supplied each semantic value.
 | Source | Transport evidence | Normalized purpose |
 |---|---|---|
 | Request correlation | `x-bitrouter-request-id` | Join trace, route decision, usage, and settlement artifacts for one model request |
-| ACP controller | `x-bitrouter-controller-id`, `x-bitrouter-acp-session-id` | Record claimed controller/session identity separately from authenticated controller identity and trusted ACP binding |
+| ACP controller | `x-bitrouter-controller-id`, `x-bitrouter-acp-session-id` | Record declared controller/session identity and whether each value participated in route matching; do not label either value authenticated or trusted |
 | Existing BitRouter workflow | `x-bitrouter-workflow-session`, `x-bitrouter-parent-session-id`, `x-bitrouter-agent-session-id`, `x-bitrouter-agent-role`, `x-bitrouter-context-epoch`, `x-bitrouter-context-transition`, `x-bitrouter-session-fingerprint` | Preserve the legacy workflow projection, lineage, role, and compaction context |
 | Claude Code | `x-claude-code-session-id`, `x-claude-code-agent-id`, `x-claude-code-parent-agent-id` | Root Claude session and child-agent lineage |
 | Codex | `session-id`, `thread-id`, `x-codex-turn-metadata` | Root Codex session, exact thread, parent/subagent lineage, and turn identity |
@@ -977,8 +1079,9 @@ the normalized event records which exact field supplied each semantic value.
 | API continuation | Responses `previous_response_id` | Correlate provider-side continuation while keeping it distinct from agent session identity |
 
 Harness recognition fields such as `anthropic-beta`, `user-agent`,
-`x-bitrouter-harness`, and the trusted inbound protocol remain observable as
-adapter-selection evidence, but they do not become session IDs.
+`x-bitrouter-harness`, and the inbound protocol remain observable as
+adapter-selection evidence, but they do not become session IDs or authenticated
+harness claims.
 
 ### 15.2 Normalized event contract
 
@@ -989,9 +1092,9 @@ SessionIdentityObserved
   router_request_id
   origin
   harness
-  authenticated_controller_instance_id?
+  api_principal_id?               # non-secret stable identity/digest
   claimed_controller_instance_id?
-  acp_session_id?                 # only after trusted binding
+  declared_acp_session_id?
   native_root_session_id?
   native_agent_thread_id?
   native_parent_agent_thread_id?
@@ -1002,7 +1105,7 @@ SessionIdentityObserved
     transport: header | body | derived
     field
     source
-    trusted_for_route
+    used_for_route_match
     value?
     value_representation: raw | stable_digest | presence_only
   conflicts[]
@@ -1015,12 +1118,12 @@ Every identifier-valued field in a persisted event is logically an
 `IdentityValue { value, representation }`; the abbreviated schema above shows
 semantic names rather than implying that every sink receives a raw value.
 
-The event preserves both the claimed controller header and the authenticated
-controller identity so spoofing or configuration drift is visible without
-granting the claim authority. It preserves all competing session evidence;
-the selected projection does not erase lower-precedence inputs. Structured
-events contain only recognized fields from compound values such as
-`x-codex-turn-metadata` and `client_metadata`, never an unbounded metadata blob.
+The event preserves the normal API principal separately from every declared
+controller/session value, without implying that the principal attests those
+values. It preserves all competing session evidence; the selected projection
+does not erase lower-precedence inputs. Structured events contain only
+recognized fields from compound values such as `x-codex-turn-metadata` and
+`client_metadata`, never an unbounded metadata blob.
 
 ### 15.3 Required sinks and joins
 
@@ -1030,10 +1133,10 @@ field names and representation policy where their scope overlaps.
 
 | Sink | Required behavior |
 |---|---|
-| Structured trace/log spans | Attach request/controller/harness identity, normalized session lineage, evidence source/trust, attribution status, conflicts, effective route, scope, and lease outcome |
+| Structured trace/log spans | Attach request/API-principal/controller/harness correlation, normalized session lineage, evidence source and route use, attribution status, conflicts, effective route, scope, and lease outcome |
 | Controlled ingress capture and replay | In explicit replay-capable mode, preserve every privacy-reviewed header in §15.1 plus recognized body evidence with the exact values required to rerun extraction; replay must produce the same normalized event and route-attribution result as online ingestion |
 | Policy and route-decision records | Persist the normalized identity reference, matched lease key, precedence outcome, and unattributed/conflict reason |
-| Metering/settlement | Join by `router_request_id`; persist nullable harness, authenticated controller, ACP session, native root/thread/parent/turn, route-lease, and redaction-reviewed normalized-event fields; ordinary requests keep these fields null |
+| Metering/settlement | Join by `router_request_id`; persist nullable harness, API principal reference, declared controller/ACP session, native root/thread/parent/turn, route-lease, and redaction-reviewed normalized-event fields; ordinary requests keep these fields null |
 | Aggregate metrics | Count attributed/unattributed requests, evidence source, conflicts, and lease outcomes using low-cardinality enums only |
 | Controller lifecycle logs | Record adapter/version, endpoint configuration mode, ACP method, native ID presence, capability decision, process exit, and lease cleanup outcome |
 
@@ -1045,8 +1148,8 @@ and may report unknown rather than daemon-wide data as if it were session data.
 
 ### 15.4 Privacy, retention, and cardinality
 
-- `Authorization`, proxy authorization, cookies, provider API keys, controller
-  credentials, and full provider configuration never enter observability.
+- `Authorization`, proxy authorization, cookies, provider/API keys, and full
+  provider configuration never enter observability.
 - Session identifiers are sensitive correlation data. A controlled trace may
   retain raw values under the existing explicit capture and retention policy.
   Replay-capable captures require those exact allowlisted identity values. A
@@ -1080,27 +1183,37 @@ blob.
 
 ### 16.1 ACP SDK
 
-The workspace uses `agent-client-protocol` 2.0.0 as its Rust runtime and the
-stable v1 schema exposed by `agent-client-protocol-schema` 1.5.0. The runtime
-crate's major version does **not** select ACP v2 wire semantics: initialization
-requires `ProtocolVersion::V1`, controller types come from `schema::v1`, and
-the namespaced BitRouter route methods are v1-compatible extensions. ACP v2
-wire types remain out of scope.
+The workspace pins the official Rust SDK runtime and conductor at revision
+`c63610fc38a642f7a73ba2719f403f17d771c345` and uses
+`agent-client-protocol-schema` 1.7.0 throughout. The runtime crates retain
+their 2.0.0 crate versions, but that major version does **not** select ACP v2
+wire semantics: initialization requires `ProtocolVersion::V1`, controller
+types come from `schema::v1`, and the namespaced BitRouter route methods are
+v1-compatible extensions. ACP v2 wire types remain out of scope.
 
-### 16.2 Existing one-session `Session`
+This exact revision resolves the compatibility gap in the published crates.io
+runtime, which pins Rust schema 1.5.0 exactly. Upgrading only the direct schema
+dependency would create two incompatible type universes. The lockfile now has
+one schema 1.7.0 type universe, and contract tests prove that typed terminal
+authentication and elicitation capabilities plus ACP `_meta` survive the
+initialize handshake. Generic forwarding after initialization remains
+insufficient if decode/re-encode removes a typed field during that handshake.
+
+### 16.2 Existing one-shot `Session`
 
 The `record_id`-based `Session` path remains for `acp prompt` and `chat`. It is
 not used by `acp serve` and is not a compatibility layer around native IDs.
-The connection-level controller transparently serves multiple harness-native
-sessions; the one-shot engine retains its own local queue, recording, and TUI
-semantics until Phase 3 chooses whether to migrate those products.
+The connection-level controller transparently forwards native session methods;
+the one-shot engine retains its own local queue, recording, and TUI semantics
+until the single-user-session TUI migration replaces that path.
 
 ### 16.3 Existing commands
 
 - `bitrouter acp serve --agent <harness>` is the headless stdio entry point for
-  the multi-session controller; its explicit harness selection remains.
+  one fixed-harness controller connection; its explicit harness selection
+  remains.
 - `bitrouter chat <harness>` remains on the existing single-session engine in
-  Phase 2; TUI/controller convergence is separate Phase 3 product work.
+  Phase 2; TUI/controller convergence is separate product work.
 - Direct `bitrouter launch` remains the harness-owned native UX and is
   unaffected.
 - No TUI command is required to prove controller correctness.
@@ -1135,7 +1248,7 @@ Before Phases 0–2, the relay had these limitations:
   `providers/list` and `providers/set` as BitRouter route controls and scopes
   the daemon override with a launch ID. The behavior works for the shipped
   one-session TUI but has the wrong protocol meaning and process-level scope
-  for a multi-session controller.
+  for a native-session controller.
 - The legacy
   [Claude extractor](../apps/bitrouter/src/workflow_state/extractors/claude_code.rs)
   does not consume `x-claude-code-*` identity headers, and the
@@ -1152,11 +1265,13 @@ Before Phases 0–2, the relay had these limitations:
   trace sanitization omitted the native Claude/Codex identity headers.
 
 The implemented controller path replaces those limitations for `acp serve`:
-manager-first initialization and native multi-session forwarding live in
+manager-first initialization and native lifecycle forwarding live in
 `acp/controller.rs`; maintained adapter endpoint plans use exact pins;
-manager-side provider aliases are rejected; authenticated controller/session
-normalization and route leases run after `AuthHook`; and trace, spans, and
-metering consume the normalized identity event. The legacy one-shot engine and
+manager-side provider aliases are rejected; controller/session normalization
+and route leases run after `AuthHook`; and trace, spans, and metering consume
+the normalized identity event. The local path now uses the normal API
+principal, or the deliberately shared `local` principal under `skip_auth`, and
+does not mint a second controller credential. The legacy one-shot engine and
 pure model API projection intentionally remain available and behaviorally
 separate.
 
@@ -1170,14 +1285,16 @@ loaded and no real upstream model request was made.
 
 The implementation is divided along these boundaries:
 
-| Area | Current files | Phase 2 status |
+| Area | Current files | Phase 3 status |
 |---|---|---|
-| Controller lifecycle and capabilities | `crates/bitrouter-sdk/src/acp/controller.rs` | Implemented: manager-first stable-v1 controller, native IDs, multi-session forwarding, callbacks, and lifecycle-gated cleanup |
-| Harness configuration | `apps/bitrouter/src/harness.rs`, `acp_cli.rs` | Implemented for maintained Claude/Codex pins with one provider/fallback endpoint plan and local controller credential |
-| Route extensions | `crates/bitrouter-sdk/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `acp_runtime.rs` | Implemented: typed `_bitrouter/route/*`, daemon-confirmed mutations, controller/session isolation, expiry/revoke/close/delete cleanup |
+| Controller lifecycle and capabilities | `crates/bitrouter-sdk/src/acp/controller.rs` | Implemented: manager-first stable-v1 controller, native-ID lifecycle forwarding, stable auth/elicitation/filesystem/terminal callbacks, and lifecycle-gated cleanup on schema 1.7.0 |
+| Harness configuration | `apps/bitrouter/src/harness.rs`, `acp_cli.rs` | Implemented: maintained Claude/Codex pins and one provider/fallback endpoint plan using the normal API key or `skip_auth` local principal |
+| Route extensions | `crates/bitrouter-sdk/src/acp/controller.rs`, `apps/bitrouter/src/acp_cli.rs`, `daemon.rs`, `acp_runtime.rs` | Implemented locally: typed `_bitrouter/route/*`, daemon-confirmed mutations, and independent leases keyed by `(api_principal, controller claim, session claim)` |
 | Request session normalization | `apps/bitrouter/src/session_identity.rs`, hook assembly | Implemented after auth; legacy pure API projection remains separate and unchanged |
 | Session observability | `session_identity.rs`, `workflow_state/real_trace.rs`, `metering`, OTel exporter | Implemented: reviewed headers, typed event, span attributes, nullable metering correlation, no identifier metric labels |
-| TUI migration | `crates/bitrouter-tui`, `apps/bitrouter/src/chat` | Not part of Phase 2; coworker-facing interface contract is delivered separately and product work remains Phase 3 |
+| Hosted route control | Core HTTP control surface plus an app-owned `RouteControl` backend | Not implemented: explicit remote `--base-url` routes model traffic but has no normal-API-authenticated session-route surface |
+| TUI migration | `crates/bitrouter-tui`, `apps/bitrouter/src/chat` | Not part of Phase 2; product work keeps one user session bound to one selected harness and native session |
+| Harness selector | TUI/launcher policy above controller creation | Not implemented: selection occurs before connection creation and never changes the harness behind an active session |
 
 The implementation must not create an app dependency from the SDK or a TUI
 dependency from the controller.
@@ -1198,12 +1315,14 @@ dependency from the controller.
 - the §15.1 evidence inventory accepts every BitRouter, Claude, and Codex
   identity header, emits its exact source name, and excludes authorization,
   cookies, credentials, and unknown compound metadata;
-- `SessionIdentityObserved` distinguishes claimed headers from authenticated
-  controller/session bindings and retains conflicts without changing route
-  authority;
-- route keys derived from authenticated controller plus native root session;
-- raw ACP/controller headers without controller authentication cannot produce
-  a route-lease key;
+- `SessionIdentityObserved` distinguishes the normal API principal from every
+  declared controller/session value and retains conflicts without labeling a
+  claim trusted;
+- route keys derived from API principal plus declared controller and native
+  root session;
+- API-authenticated requests cannot cross API-principal route namespaces;
+- under `skip_auth`, declared ACP/controller headers can produce a route key in
+  the shared local namespace, as explicitly documented;
 - secret redaction from provider responses, logs, and errors; and
 - route-lease cleanup state transitions.
 
@@ -1214,29 +1333,36 @@ Drive raw JSON-RPC over stdio and prove:
 1. manager initialize capabilities affect harness initialize capabilities;
 2. manager-facing capabilities are an honest composition;
 3. `providers/set` runs after initialize and before the first session method;
-4. two sessions can prompt concurrently on one harness connection;
-5. list/load/resume/fork/close/delete are forwarded and preserve native IDs;
+4. list/load/resume/close/delete are forwarded and preserve native IDs;
+5. an experimental fork is forwarded only when version-gated and advertised;
 6. replay updates from load reach the manager unchanged;
-7. unknown update variants and `_meta` survive forwarding;
-8. permission/callback behavior matches negotiated capabilities; and
+7. unknown update variants, `_meta`, and initialize capabilities survive
+   forwarding;
+8. authentication, permission, elicitation, filesystem, terminal, and
+   cancellation behavior matches negotiated capabilities; and
 9. controller disconnect removes route leases without issuing session delete.
 
 ### 18.3 Router integration tests
 
-- Start two native sessions under one controller, install different routes,
+- Start two independent controllers/user sessions, install different routes,
   and prove their model requests resolve independently.
-- Start two controllers with equal-looking native session IDs and prove the
-  controller credential prevents collision.
+- Give those controllers equal-looking native session IDs and prove distinct
+  high-entropy controller IDs prevent accidental collision, including when the
+  normal API key is shared.
 - Prove Claude child agents and Codex child threads inherit the root route.
 - Prove an unattributed request uses the default route and cannot claim a
   session override.
-- Prove pure model API requests and authenticated ACP requests without a
+- Prove pure model API requests and ACP-attributed requests without a
   matching lease retain the existing policy result.
-- Prove a forged `x-bitrouter-controller-id` or
-  `x-bitrouter-acp-session-id` cannot activate another controller's lease.
+- Prove distinct API principals cannot activate each other's leases even when
+  they copy the same controller/session claims.
+- Prove a caller using the same API principal can deliberately reuse an exact
+  controller/session claim and document that this is accepted rather than
+  reported as spoofing resistance.
 - Prove Responses continuation keeps its original provider/model/account even
   when an ACP route preference points elsewhere.
-- Prove `_bitrouter/route/set` reports success only after daemon installation.
+- Prove `_bitrouter/route/set` reports success only after authoritative
+  route-control backend installation.
 - Prove session close/delete/disconnect removes only the intended lease.
 - Capture and replay Claude/Codex native identity and prove the normalized
   online and replayed contexts agree.
@@ -1256,12 +1382,12 @@ For each pinned Claude and Codex adapter, use a local capture server and dummy
 credentials to prove without touching the user's harness home:
 
 - the configured request reaches the BitRouter URL;
-- the controller credential and static headers arrive;
+- the normal API-key value or `skip_auth` adapter placeholder and static
+  headers arrive;
 - native session/root/thread/agent/turn fields arrive as documented;
 - every observed BitRouter/Claude/Codex identity field produces the expected
-  normalized observability evidence and source/trust annotation;
+  normalized observability evidence and source/route-use annotation;
 - `session/new`, list, load, and resume work when advertised;
-- two sessions work in one adapter process;
 - provider configuration or its documented fallback is the path actually used;
   and
 - no real upstream token is spent.
@@ -1280,23 +1406,26 @@ The implementation plan must finish with:
 
 ## 19. Acceptance criteria
 
-The full controller product is complete when all of the following are true.
-Items other than the explicitly Phase 3 TUI criterion define the Phase 2 core
-acceptance boundary:
+The completed controller core plus the next product iterations are accepted
+when all of the following are true:
 
-1. A generic headless ACP manager can initialize BitRouter and create two
-   concurrent sessions against one pinned Claude or Codex adapter process.
+1. A generic headless ACP manager can initialize BitRouter and create or
+   restore a native session against one pinned Claude or Codex adapter process.
 2. Every manager-visible session ID is exactly the harness-returned ID.
 3. A fresh controller can list/load/resume a harness-native session without a
    BitRouter session database.
 4. Capability-dependent methods appear only when the complete path works.
-5. Claude and Codex model requests reach BitRouter with authenticated controller
-   correlation and native root session identity.
-6. Two sessions select different BitRouter routes without cross-talk.
+5. Claude and Codex model requests reach BitRouter with the normal API
+   principal, declared controller correlation, and native root session
+   identity.
+6. Two independently launched user sessions select different BitRouter routes
+   without cross-talk, including when their native IDs are equal-looking.
 7. Standard ACP `providers/*` is used for harness endpoint configuration, not
    advertised as BitRouter route selection.
-8. **Phase 3:** the TUI can perform its existing prompt, permission, cost, and
-   route actions solely through ACP plus `_bitrouter/route/*`.
+8. The TUI binds one user session to one selected harness and one native
+   session, and performs prompt, permission, filesystem, terminal, elicitation,
+   authentication, cost, and route actions through ACP plus
+   `_bitrouter/route/*`.
 9. Restarting or disconnecting the controller loses only ephemeral BitRouter
    route state; harness-native sessions remain governed by the harness.
 10. No test or production path reads, copies, or mutates native session files.
@@ -1312,7 +1441,13 @@ acceptance boundary:
     request join through one `router_request_id` and agree on session identity.
 16. No aggregate metric uses a session, thread, turn, request, or controller ID
     as a label.
-17. Full workspace verification passes on the final tree.
+17. An explicit hosted `--base-url` can use the same normal API key for model
+    and `_bitrouter/route/*` requests through HTTPS, without a local ACP service
+    daemon or a controller-credential exchange.
+18. A BitRouter-aware launcher can choose Claude or Codex before creating the
+    controller connection, records the selection reason, and never changes the
+    harness behind the active native session.
+19. Full workspace verification passes on the final tree.
 
 ## 20. Delivery phases
 
@@ -1334,12 +1469,13 @@ These phases define scope boundaries, not an executable task plan.
 - compose capabilities manager-first;
 - preserve native IDs;
 - forward the complete capability-gated session lifecycle; and
-- support multiple sessions per connection.
+- remain protocol-transparent without making same-connection multiplexing a
+  BitRouter product feature.
 
-### Phase 2 — identity and route isolation (core implemented)
+### Phase 2 — identity and route scoping (implemented)
 
-- inject authenticated controller configuration;
-- add the authenticated request-session hook and parse Claude/Codex native
+- inject declared controller configuration and the Core's normal API key;
+- add the API-principal-scoped request-session hook and parse Claude/Codex native
   request identity without replacing the legacy pure API projection;
 - introduce session route leases and `_bitrouter/route/*`;
 - emit `SessionIdentityObserved`, preserve the full §15.1 evidence inventory
@@ -1350,31 +1486,99 @@ These phases define scope boundaries, not an executable task plan.
 - publish the controller interface needed for a separate TUI migration without
   adding TUI code to the controller change.
 
-### Phase 3 — product surfaces (proposed)
+### Phase 3 — stable-v1 compatibility hardening (implemented)
 
-- migrate the existing TUI route picker from its local manager-side
-  `providers/*` compatibility surface to `_bitrouter/route/*`;
-- add harness-native session browsing and lifecycle controls to the TUI if the
-  product requires them;
-- improve controller diagnostics and recovery UX; and
-- validate third-party ACP managers against the same controller surface.
+- remove `brac_*`, controller credential issue/revoke/authentication events,
+  and credential-bound session trust decisions;
+- key route state by the normal API principal plus declared controller/session
+  values, and preserve the explicitly open behavior of `skip_auth`;
+- pin the stable-v1 schema/runtime/conductor set from the current crates.io
+  1.5.0 schema combination to one reviewed official Rust SDK revision using
+  schema 1.7.0;
+- make typed initialize capability and ACP `_meta` forwarding lossless,
+  including terminal authentication and elicitation; arbitrary unknown
+  top-level initialize fields remain outside the typed SDK contract;
+- cover authenticate/logout, filesystem read/write, terminal lifecycle,
+  permission, elicitation, cancellation, modes/configuration, and additional
+  directories with protocol contract tests;
+- treat `session/fork` only as a version-gated experimental capability;
+- rerun pinned Claude/Codex lifecycle, capability, endpoint, and native-header
+  conformance; and
+- correct CLI/help text that describes one connection as one ACP session.
 
-Automatic harness selection is a later, separate design. It consumes explicit
-harness capabilities and evaluation evidence; it does not change session
-ownership or the controller contract.
+### Phase 4 — hosted-Core route control (P0/P1)
+
+- add an HTTP(S) `RouteControl` list/set/reset surface that uses the same normal
+  API-key middleware and `skip_auth` behavior as model inference;
+- use an independent route-lease TTL plus explicit
+  close/delete/disconnect cleanup, without issuing or renewing a controller
+  credential;
+- retain declared controller and native-session evidence for routing and
+  observability without labeling it authenticated or attested; and
+- prove that pure model API session parsing and routing are unchanged.
+
+This phase does not introduce a local ACP service daemon. BitRouter Core stays
+an independently deployed HTTP(S) service and each ACP wrapper stays an
+ordinary local process.
+
+### Phase 5 — single-user-session TUI (P1)
+
+- select one harness before opening the controller connection;
+- create one native session or list/load/resume one native session belonging to
+  that selected harness;
+- migrate the route picker from manager-side `providers/*` compatibility to
+  `_bitrouter/route/*`;
+- implement permission, filesystem, terminal, elicitation, terminal-auth,
+  modes/configuration, commands, plan/tool updates, usage, cost scope, and
+  diagnostics through ACP; and
+- preserve the hard no-transcript, no-shadow-catalog boundary.
+
+TUI multi-open and product-level reuse of one connection for several user
+sessions are not goals in this or a later scheduled phase.
+
+### Phase 6 — pre-connection harness selector (P2)
+
+- begin with explicit Claude/Codex selection;
+- maintain versioned capability, authentication-readiness, provider/model, and
+  health evidence for selectable harnesses;
+- let the TUI collect the initial task before connection creation, then select
+  a harness using task requirements, repository evidence, cost, latency,
+  availability, and offline evaluation results;
+- emit candidates, constraints, the selected harness, reasons, and fallback
+  outcomes as structured observability;
+- permit fallback only before `session/new`, `load`, or `resume` succeeds; and
+- keep the selected harness immutable for the active user session.
+
+This selector is a launcher/TUI policy above controller creation. It is not a
+virtual multi-harness ACP Agent and does not rewrite native session IDs.
+
+### Phase 7 — interoperability and release hardening (P2)
+
+- validate third-party ACP v1 managers against the fixed-harness controller;
+- automate adapter fixture refresh and capability-drift reporting;
+- exercise harness crashes, Core disconnects, lease expiry, resume
+  failures, and lease cleanup failures;
+- verify the documented same-principal claim-forgery behavior,
+  cross-API-principal lease isolation, redaction, and bounded metric
+  cardinality; and
+- publish operator diagnostics and release gates for the controller, hosted
+  Core, and TUI paths.
 
 ## 21. Risks and mitigations
 
 | Risk | Consequence | Mitigation |
 |---|---|---|
+| Stable-v1 schema pin lags upstream | Initialize drops capabilities that later forwarding cannot recover | Current stable schema pin, lossless initialize tests, and versioned conformance fixtures |
 | ACP provider configuration changes while Draft | Adapter upgrades break automatic endpoint setup | Feature detection, exact adapter pins, one canonical endpoint plan, tested fallbacks |
 | Adapter capabilities differ or drift | UI exposes controls that fail | Honest runtime composition plus adapter conformance fixtures |
+| An API key is shared by mutually untrusted processes, or `skip_auth` is enabled | One process can reuse another process's declared controller/session values and affect its route | Treat the API key/local mode as the explicit security boundary, recommend separate keys for separate trust domains, generate high-entropy controller IDs for accidental isolation, and make no anti-forgery claim |
 | Native request metadata changes | Session route or analysis loses attribution | Source-specific extractors, multiple evidence levels, conflict diagnostics, default-route fallback |
 | Each observability sink reparses identity independently | Trace, route, replay, and metering disagree about one request | One `SessionIdentityObserved` contract, `router_request_id` joins, and online/replay equivalence tests |
 | Raw session IDs become metric labels | Unbounded cardinality and sensitive identifier exposure | Stable transformed IDs only in approved trace/event stores; metrics use bounded attribution enums |
-| Route state is keyed only by process/launch | One session changes another | Authenticated `(controller, root session)` lease key and two-session tests |
+| Route state is keyed only by process/launch | One user session changes another accidentally | `(api_principal, declared controller, root session)` lease key and independent-controller isolation tests |
 | Controller becomes another session database | Native resume diverges from BitRouter state | Hard no-storage invariant and restart/load acceptance test |
 | TUI requirements leak into protocol core | Controller becomes hard to embed/test | SDK/TUI dependency boundary and headless acceptance gate |
+| Harness selector changes an active session's harness | Native context, tools, and identifiers become invalid | Select before connection/session creation and make the binding immutable after success |
 | Exact Claude turn correlation is unavailable | ACP prompt cannot be tied to one HTTP call with certainty | Treat session correlation as sufficient for v1; add adapter extension only if a measured use case requires turn-level precision |
 
 ## 22. Rejected alternatives
@@ -1403,12 +1607,13 @@ Rejected because ACP metadata forwarding does not guarantee propagation into a
 harness's model HTTP request. Native Claude/Codex request identity is both more
 accurate and already available.
 
-### 22.5 One harness process per session
+### 22.5 Same-connection product multiplexing
 
-Rejected as the controller architecture because ACP permits multiple sessions
-per connection and both target adapters implement multi-session lifecycle
-operations. Process-per-session may remain a diagnostic fallback, not the
-default or public ownership model.
+Rejected from the product roadmap. The controller remains transparent if a
+generic ACP manager uses several native sessions, but BitRouter does not build
+TUI multi-open, connection pooling, virtual session IDs, or multi-harness
+routing on top of that fact. One TUI user session uses one selected harness and
+one native session over its current controller connection.
 
 ### 22.6 Build the session manager in the TUI first
 
@@ -1416,12 +1621,47 @@ Rejected because it would encode protocol and storage assumptions in a
 presentation layer. The TUI can only be a faithful session UI after the
 controller transparently exposes harness-native lifecycle operations.
 
+### 22.7 Add a unified local ACP service daemon
+
+Rejected because stable ACP v1 uses a client-launched stdio Agent process and
+the wrapper has no session data that requires a shared local service. BitRouter
+Core may be local or hosted over HTTP(S); that deployment choice does not
+change the local ACP process shape. A supervisor would require a separate
+future need such as background work or multi-client attachment, neither of
+which is in this roadmap.
+
+### 22.8 Select the harness after creating the ACP session
+
+Rejected because `session/new` must return the native session ID before the
+first prompt. Deferring selection until `session/prompt` would require a
+wrapper-owned provisional ID and durable mapping. The BitRouter TUI instead
+collects the initial task first, selects the harness, opens the connection, and
+only then creates or restores the native session.
+
+### 22.9 Add a dedicated ACP controller credential or session attestation layer
+
+Rejected because a bearer credential held by the harness can identify the
+credential holder but cannot prove that controller, ACP session, or native
+session headers emitted by that holder are truthful. The previous `brac_*`
+design added a second issue/renew/revoke path and complicated hosted Core while
+providing no harness attestation. BitRouter instead uses its existing API key as
+the sole authentication boundary, scopes route state by that API principal,
+and treats all session/controller values as declared inputs. Operators needing
+isolation between mutually untrusted callers must give them different API keys;
+`skip_auth` explicitly provides no such isolation.
+
 ## 23. Authoritative references
 
 - [ACP architecture](https://agentclientprotocol.com/get-started/architecture)
+- [ACP transports](https://agentclientprotocol.com/protocol/v1/transports)
 - [ACP initialization](https://agentclientprotocol.com/protocol/v1/initialization)
+- [ACP authentication](https://agentclientprotocol.com/protocol/v1/authentication)
 - [ACP session setup and lifecycle](https://agentclientprotocol.com/protocol/v1/session-setup)
 - [ACP session listing](https://agentclientprotocol.com/protocol/v1/session-list)
+- [ACP elicitation](https://agentclientprotocol.com/protocol/v1/elicitation)
+- [ACP filesystem](https://agentclientprotocol.com/protocol/v1/file-system)
+- [ACP terminals](https://agentclientprotocol.com/protocol/v1/terminals)
+- [ACP schema releases](https://github.com/agentclientprotocol/agent-client-protocol/releases)
 - [ACP extensibility and metadata](https://agentclientprotocol.com/protocol/v1/extensibility)
 - [ACP metadata propagation RFD](https://agentclientprotocol.com/rfds/meta-propagation)
 - [ACP custom LLM endpoint RFD](https://agentclientprotocol.com/rfds/custom-llm-endpoint)

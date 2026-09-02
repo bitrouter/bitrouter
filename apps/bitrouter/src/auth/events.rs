@@ -26,19 +26,18 @@ impl PipelineEvent for Authenticated {
     }
 }
 
-/// A short-lived controller credential was authenticated. Claimed transport
-/// headers are intentionally absent; session normalization compares them to
-/// this credential-bound identity later.
+/// Opaque route namespace derived from the ordinary API credential.
+///
+/// This value is internal correlation state, not a second credential. The
+/// public API-key id remains on [`Authenticated`] and the request caller.
 #[derive(Debug, Clone, Serialize)]
-pub struct ControllerAuthenticated {
-    /// Credential-bound controller identity.
-    pub controller_instance_id: String,
-    /// RFC3339 credential expiry.
-    pub expires_at: String,
+pub struct ApiPrincipalEstablished {
+    /// Stable per-credential route namespace.
+    pub route_scope_id: String,
 }
 
-impl PipelineEvent for ControllerAuthenticated {
+impl PipelineEvent for ApiPrincipalEstablished {
     fn event_name(&self) -> &'static str {
-        "auth.acp_controller_authenticated"
+        "auth.api_principal_established"
     }
 }
