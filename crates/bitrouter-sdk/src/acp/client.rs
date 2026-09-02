@@ -53,7 +53,7 @@
 //!
 //! 1. **Dropping** every clone of a `PendingPermission` drops the resolver, and
 //!    the parked handler maps `Err(_)` onto the agent's reject option.
-//! 2. The client's [`PermissionLedger`] holds a **weak** handle to every
+//! 2. The client's permission ledger holds a **weak** handle to every
 //!    outstanding request so the paths that abandon one while the resolver is
 //!    still alive — a turn given up on at `turn_timeout`, a turn that failed,
 //!    client teardown — can deny it **explicitly**. Nothing else converts
@@ -61,7 +61,6 @@
 //!    `session/request_permission` is an open JSON-RPC request that only a
 //!    response closes.
 
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -490,9 +489,11 @@ enum Command {
 /// A live ACP `Client` connection to one agent — a spawned harness child, or an
 /// in-process controller over a duplex channel.
 pub struct AcpClient {
-    /// The agent's `initialize` response, captured at handshake.
-    init: Box<InitializeResponse>,
     /// What the handshake advertised under `routeControl`, parsed once.
+    ///
+    /// The `initialize` response itself is **not** retained: everything this
+    /// client acts on is read out of it here, at handshake, and keeping the
+    /// rest would be state with no reader.
     route_control: RouteControlCapability,
     /// Submits [`Command`]s into the connection's command loop.
     cmd_tx: mpsc::UnboundedSender<Command>,
@@ -522,27 +523,6 @@ impl AcpClient {
         transport: impl ConnectTo<Client> + 'static,
         options: ClientOptions,
     ) -> anyhow::Result<Self> {
-        let (ready, driver) = Self::wire(transport, options);
-        // Detached: the driver ends when the command channel closes (this
-        // client dropped) or an explicit `shutdown` arrives.
-        tokio::spawn(driver);
-        ready.await
-    }
-
-    /// Split form of [`connect`](Self::connect): the first future resolves to
-    /// the client once the handshake completes, and the second **must be
-    /// polled** by someone for that to happen.
-    ///
-    /// `connect` puts the driver on the caller's runtime. The legacy
-    /// [`UpstreamConnection`](crate::acp::up::UpstreamConnection) polls it on
-    /// its own thread instead, which is the only reason this split exists.
-    pub(crate) fn wire(
-        transport: impl ConnectTo<Client> + 'static,
-        options: ClientOptions,
-    ) -> (
-        impl Future<Output = anyhow::Result<Self>> + Send,
-        impl Future<Output = ()> + Send,
-    ) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
         let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
@@ -565,24 +545,24 @@ impl AcpClient {
             handshake_tx,
         );
 
-        let ready = async move {
-            let init = handshake_rx
-                .await
-                .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
-            let route_control = RouteControlCapability::from_init(&init);
-            Ok(Self {
-                init,
-                route_control,
-                cmd_tx,
-                updates_tx,
-                raw_updates_tx,
-                permissions_rx: Mutex::new(Some(perm_rx)),
-                usage,
-                permissions,
-                turn_timeout: options.turn_timeout,
-            })
-        };
-        (ready, driver)
+        // Detached: the driver ends when the command channel closes (this
+        // client dropped) or an explicit `shutdown` arrives.
+        tokio::spawn(driver);
+
+        let init = handshake_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
+        let route_control = RouteControlCapability::from_init(&init);
+        Ok(Self {
+            route_control,
+            cmd_tx,
+            updates_tx,
+            raw_updates_tx,
+            permissions_rx: Mutex::new(Some(perm_rx)),
+            usage,
+            permissions,
+            turn_timeout: options.turn_timeout,
+        })
     }
 
     /// Create the session: `session/new` with `cwd` and the given MCP servers.
@@ -603,13 +583,6 @@ impl AcpClient {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("the agent dropped the session/new reply"))?
-    }
-
-    /// The agent's `initialize` response, captured at handshake. Under a
-    /// controller this is the controller's decorated response, including its
-    /// `_meta["bitrouter.dev/controller"]` capability block.
-    pub fn upstream_init(&self) -> &InitializeResponse {
-        &self.init
     }
 
     /// Handle to the latest context-window usage reported by the agent
@@ -1764,20 +1737,18 @@ mod tests {
         client.shutdown().await.expect("shutdown");
     }
 
-    /// Without a bridge the controller advertises `routeControl: null`; the
-    /// client then offers nothing and sends nothing.
+    /// Against a controller with no bridge, the client offers nothing and —
+    /// the half that matters — **sends** nothing: a method it did not see
+    /// advertised never reaches the wire, so a controller that would reject it
+    /// is never asked.
+    ///
+    /// What such a controller puts in the block (`null`, in
+    /// `decorate_initialize`) is not asserted here: the parser treats a null
+    /// block and an absent one alike, and
+    /// `route_control_capability_needs_all_three_conditions` pins both.
     #[tokio::test]
     async fn route_control_is_absent_without_a_binding() {
         let client = connect_to_controller(None).await;
-        assert_eq!(
-            client
-                .upstream_init()
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.get(CONTROLLER_META_KEY))
-                .and_then(|controller| controller.get("routeControl")),
-            Some(&serde_json::Value::Null)
-        );
         assert!(!client.route_control().allows(RouteMethod::List));
         assert!(matches!(
             client.route_list("native-1").await,

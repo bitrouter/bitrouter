@@ -7,11 +7,12 @@
 //! [`Controller`](crate::acp::controller::Controller) and the shared
 //! [`AcpClient`](crate::acp::client::AcpClient) reach a harness through it.
 //!
-//! [`UpstreamConnection`] is an [`AcpClient`] over an [`AgentProcess`], plus a
-//! dedicated thread running its own multi-thread tokio runtime — the shape
-//! [`engine::Session`](crate::acp::engine::Session) was built against, kept
-//! until that type retires. Every method delegates. New code connects an
-//! [`AcpClient`] directly and drives it on the caller's runtime.
+//! There is no wrapper type here any more. `UpstreamConnection` — an
+//! `AcpClient` over an `AgentProcess`, plus a dedicated thread running its own
+//! multi-thread tokio runtime — existed for the shape the retired engine was
+//! built against, and went with it. A caller connects an
+//! [`AcpClient`](crate::acp::client::AcpClient) directly and drives it on its
+//! own runtime.
 
 use std::collections::HashMap;
 
@@ -319,9 +320,9 @@ const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Spawn the agent, run ACP `initialize` only (no session), return elapsed on
 /// success or an error string. Used by `bitrouter agents check`.
 ///
-/// `env` is applied to the spawned child process (same plumbing as
-/// [`UpstreamConnection::spawn`]) so an agent that needs API-key vars answers
-/// the health-check.
+/// `env` is applied to the spawned child process (the same plumbing every
+/// other caller of [`AgentProcess`] gets) so an agent that needs API-key vars
+/// answers the health-check.
 ///
 /// Tears the connection down (drops) immediately after `initialize` succeeds
 /// or after `HEALTH_CHECK_TIMEOUT` (10s) elapses.
