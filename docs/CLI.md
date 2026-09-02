@@ -292,7 +292,7 @@ bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [-c <path>] <text>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one local session, sends one prompt, and streams self-describing NDJSON updates to stdout. Only the one-shot path writes session records under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter chat`
 

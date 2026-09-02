@@ -156,11 +156,11 @@ Two ACP execution modes share launch routing but not session ownership. `acp ser
 `_meta["bitrouter.dev/controller"].routeControl`. They operate on opaque native
 `sessionId` values and create daemon-confirmed ephemeral leases; manager-side
 `providers/*` remains unavailable. `--direct` and explicit remote `--base-url`
-connections do not advertise route control because they have no trusted local
-daemon binding. `route/list.available` is a logical-model suggestion list;
+connections do not advertise route control because hosted HTTP route control
+is not implemented yet. `route/list.available` is a logical-model suggestion list;
 presets and permitted explicit routes remain validated free-form `set` inputs.
 
-**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. Authorization, cookies, and controller credentials remain excluded. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
+**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged; it does not synthesize local per-session usage or timeout behavior. Routed model calls normalize the caller-declared BitRouter controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded from observability. `acp prompt` and `chat` retain the local `record_id`, OTel spans, FIFO queue, cooperative cancellation, and `--turn-timeout` behavior.
 
 **NDJSON format** (for `acp prompt` / `spawn -p`): the **first** line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — for joining the session to daemon cost/metering. Each update line is then a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` follows the session line. A fail-fast routing failure emits a single `{"type":"error","code":"daemon_unreachable"|"auth_required","via":…,"hint":…}` line instead, before any session is created.
 

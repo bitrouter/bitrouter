@@ -189,7 +189,7 @@ impl SettlementRecorder for MeteringRecorder {
             .as_ref()
             .filter(|event| {
                 event.attributed
-                    || event.authenticated_controller_instance_id.is_some()
+                    || event.claimed_controller_instance_id.is_some()
                     || event.harness.is_some()
             })
             .map(|event| {
@@ -201,7 +201,7 @@ impl SettlementRecorder for MeteringRecorder {
                 Ok::<MeteringSessionIdentity, bitrouter_sdk::BitrouterError>(
                     MeteringSessionIdentity {
                         agent_harness: event.harness.clone(),
-                        controller_instance_id: event.authenticated_controller_instance_id.clone(),
+                        controller_instance_id: event.claimed_controller_instance_id.clone(),
                         acp_session_id: event.acp_session_id.clone(),
                         native_root_session_id: event.native_root_session_id.clone(),
                         native_agent_thread_id: event.native_agent_thread_id.clone(),
@@ -297,10 +297,14 @@ fn session_span_attributes(
         ),
     ]);
     for (name, value) in [
+        (
+            "bitrouter.acp.api_principal_id",
+            Some(&event.api_principal_id),
+        ),
         ("bitrouter.agent.harness", event.harness.as_ref()),
         (
             "bitrouter.acp.controller_instance_id",
-            event.authenticated_controller_instance_id.as_ref(),
+            event.claimed_controller_instance_id.as_ref(),
         ),
         ("bitrouter.acp.session_id", event.acp_session_id.as_ref()),
         (

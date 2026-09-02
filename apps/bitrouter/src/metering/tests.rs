@@ -90,9 +90,9 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     attributed.request_id = "router-acp-request".to_string();
     attributed.emit(SessionIdentityObserved {
         router_request_id: attributed.request_id.clone(),
-        origin: RequestOrigin::AuthenticatedAcpController,
+        origin: RequestOrigin::AcpHarnessRequest,
+        api_principal_id: "key-acp".to_string(),
         harness: Some("codex".to_string()),
-        authenticated_controller_instance_id: Some("brc_metering".to_string()),
         claimed_controller_instance_id: Some("brc_metering".to_string()),
         acp_session_id: Some("acp-session".to_string()),
         native_root_session_id: Some("codex-root".to_string()),
@@ -105,7 +105,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
             transport: "header".to_string(),
             field: "thread-id".to_string(),
             source: "codex".to_string(),
-            trusted_for_route: true,
+            used_for_route_match: true,
             value_representation: "raw".to_string(),
             value: Some("codex-thread".to_string()),
         }],
@@ -151,6 +151,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     );
     let identity_json = row.try_get::<String>("", "session_identity_json")?;
     assert!(identity_json.contains("thread-id"));
+    assert!(identity_json.contains("key-acp"));
     for forbidden in ["prompt", "messages", "authorization", "cookie"] {
         assert!(!identity_json.to_ascii_lowercase().contains(forbidden));
     }
@@ -174,6 +175,18 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     let span = attributed
         .get_event::<bitrouter_observe::otel::SpanAttributes>()
         .expect("session span attributes");
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.api_principal_id")
+            .and_then(serde_json::Value::as_str),
+        Some("key-acp")
+    );
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.controller_instance_id")
+            .and_then(serde_json::Value::as_str),
+        Some("brc_metering")
+    );
     assert_eq!(
         span.0
             .get("bitrouter.agent.thread_id")

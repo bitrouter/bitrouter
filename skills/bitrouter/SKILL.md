@@ -167,7 +167,7 @@ sessions on one connection. BitRouter does not own their IDs, transcripts, or
 storage. This is stable ACP v1. A manager can use the capability-gated
 `_bitrouter/route/list|set|reset` extension for ephemeral native-session route
 leases when initialize metadata advertises route control; an explicit remote
-`--base-url` does not currently provide that trusted binding. Read
+`--base-url` does not currently provide that route-control backend. Read
 `references/sessions.md` before reasoning about this surface.
 
 ### 6. Verify
