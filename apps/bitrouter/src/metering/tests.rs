@@ -19,6 +19,9 @@ use crate::cloud::settlement::{
     SettlementClient, SettlementReceipt, SettlementState, SettlementUsage,
 };
 use crate::db;
+use crate::session_identity::{
+    IdentityEvidence, RequestOrigin, RouteLeaseObservation, SessionIdentityObserved,
+};
 
 async fn pool() -> DatabaseConnection {
     let db = db::connect("sqlite::memory:").await.unwrap();
@@ -74,6 +77,121 @@ async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
     recorder.record(&mut ctx("k1", 10, 5)).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 70);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_correlates_normalized_acp_identity_without_prompt_content() -> anyhow::Result<()>
+{
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store, pricing());
+    let mut attributed = ctx("acp", 10, 5);
+    attributed.request_id = "router-acp-request".to_string();
+    attributed.emit(SessionIdentityObserved {
+        router_request_id: attributed.request_id.clone(),
+        origin: RequestOrigin::AuthenticatedAcpController,
+        harness: Some("codex".to_string()),
+        authenticated_controller_instance_id: Some("brc_metering".to_string()),
+        claimed_controller_instance_id: Some("brc_metering".to_string()),
+        acp_session_id: Some("acp-session".to_string()),
+        native_root_session_id: Some("codex-root".to_string()),
+        native_agent_thread_id: Some("codex-thread".to_string()),
+        native_parent_agent_thread_id: Some("codex-parent".to_string()),
+        native_turn_id: Some("codex-turn".to_string()),
+        legacy_workflow_session_id: None,
+        api_continuation_id: None,
+        evidence: vec![IdentityEvidence {
+            transport: "header".to_string(),
+            field: "thread-id".to_string(),
+            source: "codex".to_string(),
+            trusted_for_route: true,
+            value_representation: "raw".to_string(),
+            value: Some("codex-thread".to_string()),
+        }],
+        conflicts: Vec::new(),
+        attributed: true,
+        route_scope: "session".to_string(),
+        route_lease_id: Some("brlease_metering".to_string()),
+        route_lease_outcome: Some(RouteLeaseObservation {
+            lease_id: "brlease_metering".to_string(),
+            matched_session_id: "codex-thread".to_string(),
+            route: "openai:gpt-5".to_string(),
+            applied: true,
+            reason: "applied".to_string(),
+        }),
+    });
+
+    recorder.record(&mut attributed).await?;
+    let mut ordinary = ctx("ordinary", 1, 1);
+    ordinary.request_id = "ordinary-request".to_string();
+    recorder.record(&mut ordinary).await?;
+
+    let row = pool
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT agent_harness, controller_instance_id, acp_session_id, native_root_session_id, native_agent_thread_id, native_parent_agent_thread_id, native_turn_id, route_lease_id, session_identity_json FROM requests WHERE request_id = 'router-acp-request'".to_owned(),
+        ))
+        .await?
+        .expect("attributed request row");
+    assert_eq!(row.try_get::<String>("", "agent_harness")?, "codex");
+    assert_eq!(
+        row.try_get::<String>("", "controller_instance_id")?,
+        "brc_metering"
+    );
+    assert_eq!(row.try_get::<String>("", "acp_session_id")?, "acp-session");
+    assert_eq!(
+        row.try_get::<String>("", "native_agent_thread_id")?,
+        "codex-thread"
+    );
+    assert_eq!(row.try_get::<String>("", "native_turn_id")?, "codex-turn");
+    assert_eq!(
+        row.try_get::<String>("", "route_lease_id")?,
+        "brlease_metering"
+    );
+    let identity_json = row.try_get::<String>("", "session_identity_json")?;
+    assert!(identity_json.contains("thread-id"));
+    for forbidden in ["prompt", "messages", "authorization", "cookie"] {
+        assert!(!identity_json.to_ascii_lowercase().contains(forbidden));
+    }
+
+    let ordinary = pool
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT controller_instance_id, session_identity_json FROM requests WHERE request_id = 'ordinary-request'".to_owned(),
+        ))
+        .await?
+        .expect("ordinary request row");
+    assert_eq!(
+        ordinary.try_get::<Option<String>>("", "controller_instance_id")?,
+        None
+    );
+    assert_eq!(
+        ordinary.try_get::<Option<String>>("", "session_identity_json")?,
+        None
+    );
+
+    let span = attributed
+        .get_event::<bitrouter_observe::otel::SpanAttributes>()
+        .expect("session span attributes");
+    assert_eq!(
+        span.0
+            .get("bitrouter.agent.thread_id")
+            .and_then(serde_json::Value::as_str),
+        Some("codex-thread")
+    );
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.route_lease_applied")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        span.0
+            .get("bitrouter.acp.route_lease_reason")
+            .and_then(serde_json::Value::as_str),
+        Some("applied")
+    );
     Ok(())
 }
 

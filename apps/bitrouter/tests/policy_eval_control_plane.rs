@@ -270,6 +270,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
     let observer = PredictiveResponseObserver::new(pending.clone());
     let mut context = PipelineContext::new(PipelineRequest {
         request_id: "request-observed".into(),
+        original_model: "model".into(),
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),

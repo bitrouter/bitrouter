@@ -164,7 +164,11 @@ For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
 `@agentclientprotocol/codex-acp@1.7.0`), initializes the harness with the
 manager's capabilities, and transparently carries multiple harness-native
 sessions on one connection. BitRouter does not own their IDs, transcripts, or
-storage. Read `references/sessions.md` before reasoning about this surface.
+storage. This is stable ACP v1. A manager can use the capability-gated
+`_bitrouter/route/list|set|reset` extension for ephemeral native-session route
+leases when initialize metadata advertises route control; an explicit remote
+`--base-url` does not currently provide that trusted binding. Read
+`references/sessions.md` before reasoning about this surface.
 
 ### 6. Verify
 

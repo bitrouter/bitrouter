@@ -923,7 +923,7 @@ impl ObserveHook for OtelExporter {
             // `PipelineContext::absorb_settlement` folds the settlement bus
             // back into `ctx` before this hook runs, so they're visible here.
             // Generic by design — the emitter names the keys, we just stamp.
-            if let Some(extra) = ctx.get_event::<SpanAttributes>() {
+            for extra in ctx.get_events::<SpanAttributes>() {
                 for (key, value) in &extra.0 {
                     match value {
                         serde_json::Value::String(s) => {
@@ -1917,6 +1917,10 @@ mod hop_tests {
         // Null / nested values are skipped (not representable as a scalar attr).
         attrs.insert("skipped_null".into(), serde_json::Value::Null);
         ctx.emit(SpanAttributes(attrs));
+        ctx.emit(SpanAttributes(serde_json::Map::from_iter([(
+            "bitrouter.agent.session_id".to_string(),
+            serde_json::json!("native-session"),
+        )])));
 
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
@@ -1933,6 +1937,10 @@ mod hop_tests {
         assert_eq!(f64_attr(root_chat, "$ai_total_cost_usd"), Some(0.00123456));
         assert_eq!(bool_attr(root_chat, "fallback"), Some(true));
         assert_eq!(i64_attr(root_chat, "bitrouter.retry_count"), Some(2));
+        assert_eq!(
+            str_attr(root_chat, "bitrouter.agent.session_id"),
+            Some("native-session")
+        );
         assert!(
             root_chat
                 .attributes

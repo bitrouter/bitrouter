@@ -58,6 +58,7 @@ fn request() -> PipelineRequest {
 
 fn request_for_model(model: &str) -> PipelineRequest {
     let mut request = request();
+    request.original_model = model.to_string();
     request.model = model.to_string();
     request.prompt.model = model.to_string();
     request

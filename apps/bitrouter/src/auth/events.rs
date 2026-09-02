@@ -25,3 +25,20 @@ impl PipelineEvent for Authenticated {
         "auth.authenticated"
     }
 }
+
+/// A short-lived controller credential was authenticated. Claimed transport
+/// headers are intentionally absent; session normalization compares them to
+/// this credential-bound identity later.
+#[derive(Debug, Clone, Serialize)]
+pub struct ControllerAuthenticated {
+    /// Credential-bound controller identity.
+    pub controller_instance_id: String,
+    /// RFC3339 credential expiry.
+    pub expires_at: String,
+}
+
+impl PipelineEvent for ControllerAuthenticated {
+    fn event_name(&self) -> &'static str {
+        "auth.acp_controller_authenticated"
+    }
+}

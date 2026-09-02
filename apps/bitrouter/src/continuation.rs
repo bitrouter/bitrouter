@@ -2080,7 +2080,11 @@ impl PreRequestHook for ContinuationRuntime {
         }
         let resolution = self
             .registry
-            .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
+            .resolve(
+                ctx.caller().security_scope_id(),
+                &previous_response_id,
+                Utc::now(),
+            )
             .await
             .map_err(|error| {
                 BitrouterError::internal(format!(
@@ -2220,7 +2224,11 @@ impl RouteHook for ContinuationRuntime {
             ContinuationResolution::Active(prepared.active.clone())
         } else {
             self.registry
-                .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
+                .resolve(
+                    ctx.caller().security_scope_id(),
+                    &previous_response_id,
+                    Utc::now(),
+                )
                 .await
                 .map_err(|error| {
                     BitrouterError::internal(format!(
@@ -2335,7 +2343,7 @@ impl ContinuationRuntime {
         let now = Utc::now();
         self.registry
             .bind_pending(
-                ctx.caller.user_id(),
+                ctx.caller.security_scope_id(),
                 &public_continuation_id,
                 ContinuationBinding {
                     provider_response_id,
@@ -3772,6 +3780,7 @@ mod tests {
         );
         PipelineContext::new(PipelineRequest {
             request_id: "next-gateway".into(),
+            original_model: "openai:gpt-5".into(),
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
@@ -7064,6 +7073,7 @@ mod tests {
         }
         PipelineRequest {
             request_id: request_id.into(),
+            original_model: "gpt-5".into(),
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),

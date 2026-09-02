@@ -34,6 +34,7 @@
 //! `bitrouter::paths`) and build a [`ConfigAcpRoutingTable`] from
 //! `config.agents` — the same table the GUI renderer uses.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -46,6 +47,9 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use agent_client_protocol::schema::v1::{
     Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SessionUpdate,
     SetProviderRequest, UsageUpdate,
+};
+use bitrouter_sdk::acp::controller::{
+    RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
 };
 use bitrouter_sdk::acp::engine::LaunchOptions;
 use bitrouter_sdk::acp::telemetry::RequestCompleted;
@@ -224,7 +228,35 @@ pub async fn apply_routing(
     opts: &RoutingOptions,
 ) -> std::result::Result<Routed, RoutingError> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    apply_routing_with_cloud_credentials(source, config, agent_id, opts, &cloud_credentials).await
+    apply_routing_with_cloud_credentials(
+        source,
+        config,
+        agent_id,
+        opts,
+        &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutingCredentialMode {
+    UserOrLaunch,
+    ControllerIssuedLocal,
+}
+
+fn user_key_required(
+    target_is_local: bool,
+    daemon_requires_key: bool,
+    uses_maintained_adapter: bool,
+    implicit_local_target: bool,
+    mode: RoutingCredentialMode,
+) -> bool {
+    daemon_requires_key
+        && !(target_is_local
+            && uses_maintained_adapter
+            && implicit_local_target
+            && mode == RoutingCredentialMode::ControllerIssuedLocal)
 }
 
 async fn apply_routing_with_cloud_credentials(
@@ -233,6 +265,7 @@ async fn apply_routing_with_cloud_credentials(
     agent_id: &str,
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    credential_mode: RoutingCredentialMode,
 ) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
@@ -327,6 +360,13 @@ async fn apply_routing_with_cloud_credentials(
     };
     // A remote daemon's `skip_auth` is unknowable here, so require a key.
     let require_key = !target_is_local || !config.server.skip_auth;
+    let require_user_key = user_key_required(
+        target_is_local,
+        require_key,
+        uses_maintained_adapter,
+        opts.base_url.is_none(),
+        credential_mode,
+    );
 
     // A harness whose credential isn't Bearer (gemini's `x-goog-api-key`) is
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
@@ -353,7 +393,7 @@ async fn apply_routing_with_cloud_credentials(
     // metering store has nothing to group by and cost can only be reported
     // daemon-wide.
     let supplied = explicit_key.or(stored_cloud_key);
-    if supplied.is_none() && require_key {
+    if supplied.is_none() && require_user_key {
         return Err(RoutingError::AuthRequired { via: base_url });
     }
     let auth = crate::spawn::resolve_launch_token(supplied, None);
@@ -679,6 +719,108 @@ fn controller_endpoint(
     }
 }
 
+struct DaemonRouteControl {
+    socket_path: PathBuf,
+    controller_instance_id: String,
+}
+
+impl DaemonRouteControl {
+    fn new(socket_path: PathBuf, controller_instance_id: impl Into<String>) -> Self {
+        Self {
+            socket_path,
+            controller_instance_id: controller_instance_id.into(),
+        }
+    }
+
+    async fn route_state(
+        &self,
+        command: crate::daemon::DaemonCommand,
+    ) -> std::result::Result<RouteControlState, RouteControlError> {
+        match crate::daemon::send_command(&self.socket_path, &command).await {
+            Ok(crate::daemon::DaemonResponse::AcpRouteState {
+                available, current, ..
+            }) => Ok(RouteControlState { available, current }),
+            Ok(crate::daemon::DaemonResponse::Error { message }) => {
+                if message.starts_with("route is not available") {
+                    Err(RouteControlError::invalid_route(message))
+                } else {
+                    Err(RouteControlError::unavailable(message))
+                }
+            }
+            Ok(other) => Err(RouteControlError::unavailable(format!(
+                "daemon returned an unexpected route-control response: {other:?}"
+            ))),
+            Err(error) => Err(RouteControlError::unavailable(format!(
+                "daemon route control is unavailable: {error}"
+            ))),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AcpRouteControl for DaemonRouteControl {
+    async fn list(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<RouteControlState, RouteControlError> {
+        self.route_state(crate::daemon::DaemonCommand::AcpRouteList {
+            controller_instance_id: self.controller_instance_id.clone(),
+            session_id: session_id.to_string(),
+        })
+        .await
+    }
+
+    async fn set(
+        &self,
+        session_id: &str,
+        route: &str,
+    ) -> std::result::Result<RouteControlState, RouteControlError> {
+        self.route_state(crate::daemon::DaemonCommand::AcpRouteSet {
+            controller_instance_id: self.controller_instance_id.clone(),
+            session_id: session_id.to_string(),
+            route: route.to_string(),
+        })
+        .await
+    }
+
+    async fn reset(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<RouteControlState, RouteControlError> {
+        self.route_state(crate::daemon::DaemonCommand::AcpRouteReset {
+            controller_instance_id: self.controller_instance_id.clone(),
+            session_id: session_id.to_string(),
+        })
+        .await
+    }
+
+    async fn session_closed(&self, session_id: &str) -> std::result::Result<(), RouteControlError> {
+        self.reset(session_id).await.map(|_| ())
+    }
+
+    async fn disconnected(&self) -> std::result::Result<(), RouteControlError> {
+        match crate::daemon::send_command(
+            &self.socket_path,
+            &crate::daemon::DaemonCommand::AcpControllerRevoke {
+                controller_instance_id: self.controller_instance_id.clone(),
+            },
+        )
+        .await
+        {
+            Ok(crate::daemon::DaemonResponse::Ok) => Ok(()),
+            Ok(crate::daemon::DaemonResponse::Error { message }) => {
+                Err(RouteControlError::unavailable(message))
+            }
+            Ok(other) => Err(RouteControlError::unavailable(format!(
+                "daemon returned an unexpected revoke response: {other:?}"
+            ))),
+            Err(error) => Err(RouteControlError::unavailable(format!(
+                "daemon controller revoke is unavailable: {error}"
+            ))),
+        }
+    }
+}
+
 /// Launch one harness process and expose its connection-level ACP controller
 /// over **stdio** until the manager disconnects.
 ///
@@ -701,22 +843,89 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // Returned, not `exit(1)`: a caller that never sees a value cannot render
     // one, and the shutdown path below is skipped either way because nothing
     // has been launched yet. `run_acp` renders it to stderr.
-    let routed = apply_routing_with_cloud_credentials(
+    let mut routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
+    config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
+        .validate()
+        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
+    let mut route_control: Option<Arc<dyn AcpRouteControl>> = None;
+    if let (Some(endpoint), Some(controller_instance_id)) = (
+        routed.endpoint_plan.clone(),
+        routed.controller_instance_id.clone(),
+    ) {
+        if routing.base_url.is_none() {
+            let socket_path = crate::daemon::socket_path_for(source, &config);
+            let issued = crate::daemon::send_command(
+                &socket_path,
+                &crate::daemon::DaemonCommand::AcpControllerIssue {
+                    controller_instance_id: controller_instance_id.clone(),
+                },
+            )
+            .await
+            .context("requesting a local ACP controller credential")?;
+            let credential = match issued {
+                crate::daemon::DaemonResponse::AcpControllerCredential {
+                    controller_instance_id: confirmed,
+                    credential,
+                    ..
+                } if confirmed == controller_instance_id => credential,
+                crate::daemon::DaemonResponse::Error { message } => {
+                    return Err(anyhow::anyhow!("ACP controller binding failed: {message}"));
+                }
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "daemon returned an unexpected ACP credential response: {other:?}"
+                    ));
+                }
+            };
+            let endpoint = endpoint.controller_credential(credential.as_str());
+            let overlay = match endpoint.fallback_overlay() {
+                Ok(overlay) => overlay,
+                Err(error) => {
+                    let _ = crate::daemon::send_command(
+                        &socket_path,
+                        &crate::daemon::DaemonCommand::AcpControllerRevoke {
+                            controller_instance_id: controller_instance_id.clone(),
+                        },
+                    )
+                    .await;
+                    return Err(error.context("rendering controller-authenticated fallback"));
+                }
+            };
+            if let Some(entry) = config.agents.get_mut(agent_id) {
+                let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
+                for (name, value) in overlay.env {
+                    env.insert(name, value);
+                }
+                args.extend(overlay.args);
+            }
+            routed.endpoint_plan = Some(endpoint);
+            route_control = Some(Arc::new(DaemonRouteControl::new(
+                socket_path,
+                controller_instance_id,
+            )));
+        } else {
+            eprintln!(
+                "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
+                 the remote model endpoint remains usable without trusted session leases"
+            );
+        }
+    }
     let agent = config
         .agents
         .get(agent_id)
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
-    agent
-        .validate()
-        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
@@ -732,7 +941,12 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let process =
         bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
             .strip_inherited_env(options.strip_inherited_env);
-    bitrouter_sdk::acp::controller::Controller::new(process, controller_config)
+    let mut controller =
+        bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(route_control) = route_control {
+        controller = controller.route_control(route_control);
+    }
+    controller
         .run(agent_client_protocol::Stdio::new())
         .await
         .map_err(|error| anyhow::anyhow!("acp serve: {error}"))
@@ -766,6 +980,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -872,6 +1087,7 @@ where
         agent_id,
         &routing,
         &cloud_credentials,
+        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     {
@@ -1573,7 +1789,53 @@ pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTab
 
 #[cfg(test)]
 mod controller_tests {
-    use super::controller_identity;
+    use super::{RoutingCredentialMode, controller_identity, user_key_required};
+
+    #[test]
+    fn local_maintained_controller_bootstraps_without_a_user_key() {
+        assert!(!user_key_required(
+            true,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            false,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            false,
+            true,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            true,
+            false,
+            RoutingCredentialMode::ControllerIssuedLocal,
+        ));
+        assert!(user_key_required(
+            true,
+            true,
+            true,
+            true,
+            RoutingCredentialMode::UserOrLaunch,
+        ));
+        assert!(!user_key_required(
+            true,
+            false,
+            true,
+            true,
+            RoutingCredentialMode::UserOrLaunch,
+        ));
+    }
 
     #[test]
     fn direct_maintained_adapter_keeps_exact_identity() {
@@ -1642,6 +1904,7 @@ mod cost_tests {
             user_id: "u1".into(),
             api_key_id: "k1".into(),
             launch_id: launch_id.map(ToString::to_string),
+            session_identity: None,
             model_id: "claude-sonnet-4-5".into(),
             provider_id: "anthropic".into(),
             prompt_tokens: 1_000,
@@ -1798,6 +2061,7 @@ mod cost_tests {
                 user_id: "u1".into(),
                 api_key_id: "k1".into(),
                 launch_id: None,
+                session_identity: None,
                 model_id: "claude-sonnet-4-5".into(),
                 provider_id: "anthropic".into(),
                 prompt_tokens: 1_000,
