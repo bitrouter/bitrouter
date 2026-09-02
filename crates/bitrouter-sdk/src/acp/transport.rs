@@ -5,9 +5,9 @@
 //! newline-delimited JSON-RPC messages over its stdio pipes. Spec:
 //! <https://agentclientprotocol.com/protocol/transports>.
 //!
-//! These types are always available (no `acp` feature required) so a
-//! consumer can implement a custom [`super::Executor`] against them without
-//! pulling in the bundled stdio executor.
+//! These types are always available (no `acp` feature required) so a consumer
+//! can read an agent's configured transport — to launch it, or to validate a
+//! `bitrouter.yaml` — without pulling in the ACP stack that dials it.
 
 use std::collections::HashMap;
 
@@ -37,9 +37,8 @@ pub enum AcpTransport {
 /// One configured upstream ACP agent, as written in `bitrouter.yaml` under
 /// `agents:`.
 ///
-/// The same `name` is what the [`super::RoutingTable`] resolves against;
-/// future inbound entry points (the `agent-proxy` CLI) address agents by
-/// this name.
+/// The same `name` is what every `bitrouter acp` subcommand addresses an
+/// agent by, and what [`AcpAgentConfig::validate`] constrains.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AcpAgentConfig {
     /// Agent id. Non-empty; no `/`.
@@ -68,9 +67,9 @@ pub enum AcpConfigError {
 }
 
 impl AcpAgentConfig {
-    /// Verify the config is internally consistent. Called by
-    /// [`super::config_routing::ConfigAcpRoutingTable`] at startup so a
-    /// malformed `bitrouter.yaml` is rejected before the first request.
+    /// Verify the config is internally consistent. Called before an agent is
+    /// launched, so a malformed `bitrouter.yaml` is rejected before a child
+    /// process is spawned rather than after.
     pub fn validate(&self) -> Result<(), AcpConfigError> {
         if self.name.is_empty() {
             return Err(AcpConfigError::InvalidName {

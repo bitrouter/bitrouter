@@ -31,28 +31,25 @@
 //! ```
 //!
 //! Both functions load their `Config` via the standard resolution chain (see
-//! `bitrouter::paths`) and build a [`ConfigAcpRoutingTable`] from
-//! `config.agents` — the same table the GUI renderer uses.
+//! `bitrouter::paths`) and launch the agent named under `config.agents`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use agent_client_protocol::schema::v1::{
-    Cost, LlmProtocol, ProviderCurrentConfig, ProviderId, ProviderInfo, SessionUpdate,
-    SetProviderRequest, UsageUpdate,
-};
+use agent_client_protocol::schema::v1::{Cost, LlmProtocol};
+use bitrouter_sdk::acp::client::{AcpClient, ClientOptions};
 use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
+    SessionCost as AcpSessionCost,
 };
-use bitrouter_sdk::acp::engine::LaunchOptions;
-use bitrouter_sdk::acp::telemetry::RequestCompleted;
 use bitrouter_sdk::acp::translate::SessionUpdateKind;
 
 use crate::paths::ConfigSource;
@@ -201,12 +198,15 @@ pub struct Routed {
     /// `None` when the caller supplied their own credential: that is real
     /// authentication, and rewriting it to attach attribution would break
     /// `skip_auth: false` — the same rule `spawn.rs` follows. A session
-    /// without one must report its spend as daemon-wide rather than implying
-    /// a precision it does not have.
+    /// without one has no per-launch attribution; on the controlled paths a
+    /// claimed controller namespace attributes by controller instance instead.
     pub launch_id: Option<String>,
     /// One controller process / harness connection correlation id. This is
     /// never an ACP session id and is absent for direct or legacy harnesses.
     pub controller_instance_id: Option<String>,
+    /// Opaque route namespace derived from the ordinary API credential, or
+    /// `local` under `skip_auth`. It is not a bearer credential.
+    pub api_principal: Option<String>,
     /// The one process-scoped endpoint plan used for both launch fallback and
     /// post-initialize ACP provider configuration.
     pub endpoint_plan: Option<crate::harness::HarnessEndpointPlan>,
@@ -228,35 +228,7 @@ pub async fn apply_routing(
     opts: &RoutingOptions,
 ) -> std::result::Result<Routed, RoutingError> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    apply_routing_with_cloud_credentials(
-        source,
-        config,
-        agent_id,
-        opts,
-        &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
-    )
-    .await
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoutingCredentialMode {
-    UserOrLaunch,
-    ControllerIssuedLocal,
-}
-
-fn user_key_required(
-    target_is_local: bool,
-    daemon_requires_key: bool,
-    uses_maintained_adapter: bool,
-    implicit_local_target: bool,
-    mode: RoutingCredentialMode,
-) -> bool {
-    daemon_requires_key
-        && !(target_is_local
-            && uses_maintained_adapter
-            && implicit_local_target
-            && mode == RoutingCredentialMode::ControllerIssuedLocal)
+    apply_routing_with_cloud_credentials(source, config, agent_id, opts, &cloud_credentials).await
 }
 
 async fn apply_routing_with_cloud_credentials(
@@ -265,7 +237,6 @@ async fn apply_routing_with_cloud_credentials(
     agent_id: &str,
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-    credential_mode: RoutingCredentialMode,
 ) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
@@ -360,13 +331,6 @@ async fn apply_routing_with_cloud_credentials(
     };
     // A remote daemon's `skip_auth` is unknowable here, so require a key.
     let require_key = !target_is_local || !config.server.skip_auth;
-    let require_user_key = user_key_required(
-        target_is_local,
-        require_key,
-        uses_maintained_adapter,
-        opts.base_url.is_none(),
-        credential_mode,
-    );
 
     // A harness whose credential isn't Bearer (gemini's `x-goog-api-key`) is
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
@@ -393,11 +357,16 @@ async fn apply_routing_with_cloud_credentials(
     // metering store has nothing to group by and cost can only be reported
     // daemon-wide.
     let supplied = explicit_key.or(stored_cloud_key);
-    if supplied.is_none() && require_user_key {
+    if supplied.is_none() && require_key {
         return Err(RoutingError::AuthRequired { via: base_url });
     }
     let auth = crate::spawn::resolve_launch_token(supplied, None);
     let launch_id = crate::spawn::is_launch_token(&auth).then(|| auth.clone());
+    let api_principal = if target_is_local && config.server.skip_auth {
+        "local".to_string()
+    } else {
+        crate::auth::keys::hash_key(&auth)
+    };
 
     // Daemon liveness: auto-start a local daemon, then probe. Fail fast if the
     // daemon is still unreachable (a routed sub-agent without one is
@@ -453,6 +422,7 @@ async fn apply_routing_with_cloud_credentials(
         via: Some(base_url),
         launch_id,
         controller_instance_id: endpoint_plan.as_ref().map(|_| controller_instance_id),
+        api_principal: endpoint_plan.as_ref().map(|_| api_principal),
         endpoint_plan,
     })
 }
@@ -721,13 +691,19 @@ fn controller_endpoint(
 
 struct DaemonRouteControl {
     socket_path: PathBuf,
+    api_principal: String,
     controller_instance_id: String,
 }
 
 impl DaemonRouteControl {
-    fn new(socket_path: PathBuf, controller_instance_id: impl Into<String>) -> Self {
+    fn new(
+        socket_path: PathBuf,
+        api_principal: impl Into<String>,
+        controller_instance_id: impl Into<String>,
+    ) -> Self {
         Self {
             socket_path,
+            api_principal: api_principal.into(),
             controller_instance_id: controller_instance_id.into(),
         }
     }
@@ -764,6 +740,7 @@ impl AcpRouteControl for DaemonRouteControl {
         session_id: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteList {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
         })
@@ -776,6 +753,7 @@ impl AcpRouteControl for DaemonRouteControl {
         route: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteSet {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
             route: route.to_string(),
@@ -788,6 +766,7 @@ impl AcpRouteControl for DaemonRouteControl {
         session_id: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteReset {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
         })
@@ -801,7 +780,8 @@ impl AcpRouteControl for DaemonRouteControl {
     async fn disconnected(&self) -> std::result::Result<(), RouteControlError> {
         match crate::daemon::send_command(
             &self.socket_path,
-            &crate::daemon::DaemonCommand::AcpControllerRevoke {
+            &crate::daemon::DaemonCommand::AcpControllerCleanup {
+                api_principal: self.api_principal.clone(),
                 controller_instance_id: self.controller_instance_id.clone(),
             },
         )
@@ -812,11 +792,284 @@ impl AcpRouteControl for DaemonRouteControl {
                 Err(RouteControlError::unavailable(message))
             }
             Ok(other) => Err(RouteControlError::unavailable(format!(
-                "daemon returned an unexpected revoke response: {other:?}"
+                "daemon returned an unexpected cleanup response: {other:?}"
             ))),
             Err(error) => Err(RouteControlError::unavailable(format!(
-                "daemon controller revoke is unavailable: {error}"
+                "daemon controller cleanup is unavailable: {error}"
             ))),
+        }
+    }
+}
+
+/// Session-attributed spend read back from the daemon's metering store for
+/// this controller's own credential-bound traffic.
+struct DaemonSessionCost {
+    socket_path: PathBuf,
+    api_principal: String,
+    controller_instance_id: String,
+}
+
+/// How long one usage update may wait on the daemon before it is forwarded
+/// without a figure. The lookup sits on the controller's forward path, so a
+/// stalled daemon must cost the manager a cost line, never its update stream.
+const SESSION_COST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[async_trait::async_trait]
+impl AcpSessionCost for DaemonSessionCost {
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+        let command = crate::daemon::DaemonCommand::AcpSessionSpend {
+            api_principal: self.api_principal.clone(),
+            controller_instance_id: self.controller_instance_id.clone(),
+            session_id: session_id.to_string(),
+        };
+        let response = tokio::time::timeout(
+            SESSION_COST_LOOKUP_TIMEOUT,
+            crate::daemon::send_command(&self.socket_path, &command),
+        )
+        .await;
+        match response {
+            Ok(Ok(crate::daemon::DaemonResponse::AcpSessionSpend {
+                spend_micro_usd,
+                requests,
+                unpriced,
+            })) => attributed_cost(spend_micro_usd, requests, unpriced),
+            Ok(Ok(crate::daemon::DaemonResponse::Error { message })) => {
+                tracing::debug!(session_id, %message, "session cost is unavailable");
+                None
+            }
+            Ok(Ok(other)) => {
+                tracing::debug!(
+                    session_id,
+                    ?other,
+                    "daemon returned an unexpected session-spend response"
+                );
+                None
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(session_id, %error, "session cost lookup failed");
+                None
+            }
+            Err(_) => {
+                tracing::debug!(session_id, "session cost lookup timed out");
+                None
+            }
+        }
+    }
+}
+
+/// The figure a session's spend summary puts on the wire, or nothing.
+///
+/// Absent when no request was attributed to the session, and when none of
+/// the attributed requests carries charge evidence: a session BitRouter routed
+/// but could not price is not a free one, so it is never `$0.00`. When some
+/// rows are priced the figure is their sum — the same floor
+/// `bitrouter status --requests` reports alongside its unpriced count.
+fn attributed_cost(spend_micro_usd: u64, requests: u64, unpriced: u64) -> Option<Cost> {
+    (requests > 0 && unpriced < requests)
+        .then(|| Cost::new(spend_micro_usd as f64 / 1_000_000.0, "USD"))
+}
+
+/// Session-attributed spend, read **off** the controller's forward path.
+///
+/// The controller consults its cost bridge inside its dispatch handler, which
+/// the SDK runs one message at a time — so a bridge that awaited the daemon
+/// there would stop every `session/update` behind it for as long as the
+/// lookup took. Under `acp prompt` nobody notices; under interactive `chat` a
+/// person watches the transcript stop. This bridge therefore answers from a
+/// cache at once and refreshes it in the background, single-flight per
+/// session.
+///
+/// The honesty rule the cache keeps: a figure is stored only when the daemon
+/// measured one, so a session that was never metered stays absent rather
+/// than becoming `$0.00`; and a stale cumulative figure — the spend as of the
+/// previous refresh — is still a figure BitRouter measured, which understates
+/// rather than invents. A refresh that yields nothing never erases a figure
+/// already held.
+struct CachedSessionCost {
+    inner: Arc<dyn AcpSessionCost>,
+    /// Shared with each in-flight refresh task, which outlives the `&self`
+    /// borrow it was spawned from.
+    cache: Arc<CostCache>,
+}
+
+/// What the cache holds: the last figure the daemon confirmed per session,
+/// and which sessions have a refresh in flight — so a burst of usage updates
+/// costs one daemon round trip rather than one each.
+#[derive(Default)]
+struct CostCache {
+    figures: std::sync::Mutex<std::collections::HashMap<String, Cost>>,
+    refreshing: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl CostCache {
+    /// The figure held for `session_id`, if the daemon has ever confirmed one.
+    fn held(&self, session_id: &str) -> Option<Cost> {
+        match self.figures.lock() {
+            Ok(figures) => figures.get(session_id).cloned(),
+            Err(poisoned) => poisoned.into_inner().get(session_id).cloned(),
+        }
+    }
+
+    /// Claim the refresh for `session_id`; `false` when one is already running.
+    fn claim_refresh(&self, session_id: &str) -> bool {
+        match self.refreshing.lock() {
+            Ok(mut refreshing) => refreshing.insert(session_id.to_string()),
+            Err(poisoned) => poisoned.into_inner().insert(session_id.to_string()),
+        }
+    }
+
+    /// Record the daemon's answer and release the refresh claim. `None` keeps
+    /// whatever was held: a lookup that yielded nothing is not evidence that
+    /// an earlier figure was wrong.
+    fn settle_refresh(&self, session_id: &str, figure: Option<Cost>) {
+        if let Some(figure) = figure {
+            match self.figures.lock() {
+                Ok(mut figures) => {
+                    figures.insert(session_id.to_string(), figure);
+                }
+                Err(poisoned) => {
+                    poisoned.into_inner().insert(session_id.to_string(), figure);
+                }
+            }
+        }
+        match self.refreshing.lock() {
+            Ok(mut refreshing) => {
+                refreshing.remove(session_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(session_id);
+            }
+        }
+    }
+}
+
+impl CachedSessionCost {
+    fn new(inner: Arc<dyn AcpSessionCost>) -> Self {
+        Self {
+            inner,
+            cache: Arc::new(CostCache::default()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AcpSessionCost for CachedSessionCost {
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+        // Runs on the forward path: nothing here awaits the daemon. The
+        // refresh this update triggers lands in time for the *next* one.
+        if self.cache.claim_refresh(session_id) {
+            let inner = Arc::clone(&self.inner);
+            let cache = Arc::clone(&self.cache);
+            let session_id = session_id.to_string();
+            tokio::spawn(async move {
+                let figure = inner.attributed_cost(&session_id).await;
+                cache.settle_refresh(&session_id, figure);
+            });
+        }
+        self.cache.held(session_id)
+    }
+}
+
+/// The route namespace both controller bridges address, and the socket to
+/// reach it on.
+///
+/// **Nothing here is authenticated, and the naming is deliberate.** The
+/// principal comes from the ordinary API credential (or `local` under
+/// `skip_auth`), and the controller instance is a *claim* this process makes
+/// about itself — it is never verified, and phase 3 removed the minted
+/// credential that used to imply otherwise. What the pair buys is a namespace:
+/// route leases are keyed by it, so one principal's leases cannot be reached
+/// through another's. That is why a
+/// `--direct` session, an unroutable harness, or an explicit `--base-url`
+/// (no reviewed local control binding) yields no binding at all.
+///
+/// The credential is revoked on every exit through [`Self::revoke`]. It
+/// also carries a daemon-side TTL, which is what bounds a panic exit — the
+/// The route namespace both ACP bridges hang off.
+///
+/// Not a credential any more. `#853` replaced the minted `brac_` token with an
+/// `api_principal` the daemon derives itself, so there is nothing to issue and
+/// nothing to hand the harness — what remains is the principal/controller pair
+/// that names a lease namespace, and the socket to reach it on.
+///
+/// `None` when the session has no controller instance to bind (direct, or a
+/// harness without a maintained adapter), when the daemon supplied no
+/// principal, or when `explicit_base_url` names a daemon this process cannot
+/// vouch for. In every one of those the controller advertises no route control
+/// and no attributed cost, which is what makes their absence honest rather
+/// than a dead control.
+struct LocalControllerBinding {
+    socket_path: PathBuf,
+    api_principal: String,
+    controller_instance_id: String,
+}
+
+impl LocalControllerBinding {
+    fn open(
+        source: &ConfigSource,
+        config: &Config,
+        routed: &Routed,
+        explicit_base_url: bool,
+    ) -> Option<Self> {
+        let (Some(_endpoint), Some(controller_instance_id), Some(api_principal)) = (
+            routed.endpoint_plan.as_ref(),
+            routed.controller_instance_id.clone(),
+            routed.api_principal.clone(),
+        ) else {
+            return None;
+        };
+        if explicit_base_url {
+            eprintln!(
+                "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
+                 the remote model endpoint remains usable without session route control"
+            );
+            return None;
+        }
+        Some(Self {
+            socket_path: crate::daemon::socket_path_for(source, config),
+            api_principal,
+            controller_instance_id,
+        })
+    }
+
+    /// The route bridge this binding makes trustworthy.
+    fn route_control(&self) -> Arc<dyn AcpRouteControl> {
+        Arc::new(DaemonRouteControl::new(
+            self.socket_path.clone(),
+            self.api_principal.clone(),
+            self.controller_instance_id.clone(),
+        ))
+    }
+
+    /// The cost bridge this binding makes attributable — cached, so the
+    /// controller's forward path never waits on the daemon.
+    fn session_cost(&self) -> Arc<dyn AcpSessionCost> {
+        Arc::new(CachedSessionCost::new(Arc::new(DaemonSessionCost {
+            socket_path: self.socket_path.clone(),
+            api_principal: self.api_principal.clone(),
+            controller_instance_id: self.controller_instance_id.clone(),
+        })))
+    }
+
+    /// Drop every lease in this namespace. Idempotent on the daemon side, so
+    /// calling it after the controller's own disconnect cleanup costs one
+    /// round trip and nothing else; a failure is logged, because the caller is
+    /// already on its way out.
+    async fn revoke(&self) {
+        let cleaned = crate::daemon::send_command(
+            &self.socket_path,
+            &crate::daemon::DaemonCommand::AcpControllerCleanup {
+                api_principal: self.api_principal.clone(),
+                controller_instance_id: self.controller_instance_id.clone(),
+            },
+        )
+        .await;
+        match cleaned {
+            Ok(crate::daemon::DaemonResponse::Ok) => {}
+            Ok(other) => tracing::debug!(?other, "controller lease cleanup was not acknowledged"),
+            Err(error) => {
+                tracing::debug!(%error, "controller lease cleanup did not reach the daemon")
+            }
         }
     }
 }
@@ -843,13 +1096,12 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // Returned, not `exit(1)`: a caller that never sees a value cannot render
     // one, and the shutdown path below is skipped either way because nothing
     // has been launched yet. `run_acp` renders it to stderr.
-    let mut routed = apply_routing_with_cloud_credentials(
+    let routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -859,69 +1111,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    let mut route_control: Option<Arc<dyn AcpRouteControl>> = None;
-    if let (Some(endpoint), Some(controller_instance_id)) = (
-        routed.endpoint_plan.clone(),
-        routed.controller_instance_id.clone(),
-    ) {
-        if routing.base_url.is_none() {
-            let socket_path = crate::daemon::socket_path_for(source, &config);
-            let issued = crate::daemon::send_command(
-                &socket_path,
-                &crate::daemon::DaemonCommand::AcpControllerIssue {
-                    controller_instance_id: controller_instance_id.clone(),
-                },
-            )
-            .await
-            .context("requesting a local ACP controller credential")?;
-            let credential = match issued {
-                crate::daemon::DaemonResponse::AcpControllerCredential {
-                    controller_instance_id: confirmed,
-                    credential,
-                    ..
-                } if confirmed == controller_instance_id => credential,
-                crate::daemon::DaemonResponse::Error { message } => {
-                    return Err(anyhow::anyhow!("ACP controller binding failed: {message}"));
-                }
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "daemon returned an unexpected ACP credential response: {other:?}"
-                    ));
-                }
-            };
-            let endpoint = endpoint.controller_credential(credential.as_str());
-            let overlay = match endpoint.fallback_overlay() {
-                Ok(overlay) => overlay,
-                Err(error) => {
-                    let _ = crate::daemon::send_command(
-                        &socket_path,
-                        &crate::daemon::DaemonCommand::AcpControllerRevoke {
-                            controller_instance_id: controller_instance_id.clone(),
-                        },
-                    )
-                    .await;
-                    return Err(error.context("rendering controller-authenticated fallback"));
-                }
-            };
-            if let Some(entry) = config.agents.get_mut(agent_id) {
-                let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
-                for (name, value) in overlay.env {
-                    env.insert(name, value);
-                }
-                args.extend(overlay.args);
-            }
-            routed.endpoint_plan = Some(endpoint);
-            route_control = Some(Arc::new(DaemonRouteControl::new(
-                socket_path,
-                controller_instance_id,
-            )));
-        } else {
-            eprintln!(
-                "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
-                 the remote model endpoint remains usable without trusted session leases"
-            );
-        }
-    }
+    // The namespace both bridges address: the principal that keeps one
+    // caller's route leases out of another's is the same one the spend query
+    // is scoped by, and neither bridge exists without it.
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
     let agent = config
         .agents
         .get(agent_id)
@@ -943,8 +1137,10 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
             .strip_inherited_env(options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
-    if let Some(route_control) = route_control {
-        controller = controller.route_control(route_control);
+    if let Some(binding) = &binding {
+        controller = controller
+            .route_control(binding.route_control())
+            .session_cost(binding.session_cost());
     }
     controller
         .run(agent_client_protocol::Stdio::new())
@@ -956,10 +1152,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 /// Launch a session for `agent_id` and hand it to the interactive renderer.
 ///
-/// This half is the composition root: it resolves routing, launches the agent,
-/// attaches observability, and builds the routing surface — all of which need
-/// `Config`, the config source, and the daemon's control socket. What it hands
-/// over needs none of them, which is why the loop itself lives in
+/// This half is the composition root: it resolves routing, binds the
+/// route namespace, launches the harness behind an in-process
+/// controller, and attaches observability — all of which need `Config`, the
+/// config source, and the daemon's control socket. What it hands over needs
+/// none of them, which is why the loop itself lives in
 /// [`crate::chat::session`].
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     use std::io::IsTerminal as _;
@@ -974,66 +1171,131 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Fail fast, before any agent process exists — a person waiting at a
     // prompt should learn the route is dead now, not mid-turn.
+    //
+    // Controller-issued: the session's traffic meters under the controller
+    // instance rather than a launch token, which is what makes both a route
+    // lease and an attributable cost figure possible.
     let routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     .map_err(anyhow::Error::new)?;
-
-    let catalog = catalog_from_config(&config)?;
-    let cwd = std::env::current_dir().context("resolving current directory")?;
-    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
-        .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let exporter =
-        attach_observability(&config, agent_id, &session, None, &cloud_credentials).await;
 
     match &routed.via {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
         None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
     }
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
 
-    // A pipe cannot be drawn on. Everything below this point — the live row,
-    // the modals, raw mode — assumes a screen with a cursor on it, and writing
-    // those escapes into a file or a `| grep` would corrupt the very output
-    // the redirect exists to capture. So a redirected stdout gets the session
-    // as plain text instead, which is the one thing a pipe *can* use.
-    let ended = if std::io::stdout().is_terminal() {
-        // The picker exists only when this session can actually be rerouted,
-        // which needs both a daemon and an attributable launch (task 4.2).
-        // Probing that here rather than assuming it is what keeps a dead
-        // control off the screen — and it is probed here rather than in the
-        // renderer because the daemon socket is this half's to know.
-        let providers = SessionProviders::new(
+    // A pipe cannot be drawn on. Everything the terminal branch does — the
+    // live row, the modals, raw mode — assumes a screen with a cursor on it,
+    // and writing those escapes into a file or a `| grep` would corrupt the
+    // very output the redirect exists to capture. So a redirected stdout gets
+    // the session as plain text instead, which is the one thing a pipe *can*
+    // use.
+    if !std::io::stdout().is_terminal() {
+        return chat_piped(
             &config,
-            routed
-                .via
-                .as_ref()
-                .and(routed.launch_id.as_ref())
-                .map(|id| RouteControl {
-                    socket: crate::daemon::resolve_socket_path(
-                        source.home().join("bitrouter.yaml").as_path(),
-                        &config.server.control_socket,
-                    ),
-                    launch_id: id.clone(),
-                }),
-        );
-        let routable = providers.can_reroute();
-        if routable {
-            eprintln!("chat: type /route to change provider mid-session.");
-        }
-        eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
-        crate::chat::session::run(session, providers, routable, routed.via.clone()).await
-    } else {
-        crate::chat::session::chat_plain(session).await
-    };
+            agent_id,
+            &routed,
+            options,
+            &cloud_credentials,
+            binding,
+        )
+        .await;
+    }
 
-    if let Some(exporter) = exporter {
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
+        }
+    };
+    let observability =
+        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
+
+    // The picker exists only when the controller advertised route control —
+    // which it does only with a local control binding. Said here, before raw
+    // mode, because a cooked newline in a raw terminal does not return the
+    // carriage.
+    if crate::chat::session::can_reroute(&session.client) {
+        eprintln!("chat: type /route to change the route mid-session.");
+    }
+    eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
+    let ended = crate::chat::session::run(
+        &mut session,
+        &ids.acp_session_id,
+        agent_id,
+        observability.recorder,
+        routed.via.clone(),
+    )
+    .await;
+
+    if let Some(exporter) = observability.exporter {
+        exporter.shutdown();
+    }
+    ended
+}
+
+/// `chat` for a stdout that is not a terminal.
+///
+/// The same stack `acp serve` exposes and `acp prompt` drives: an in-process
+/// controller, the shared client, and harness-native session identity. What
+/// differs from `prompt` is only the consumer — a journal rendered per turn
+/// rather than an NDJSON stream — which is why the loop itself lives beside
+/// the renderers in [`crate::chat::session`].
+async fn chat_piped(
+    config: &Config,
+    agent_id: &str,
+    routed: &Routed,
+    options: LaunchOptions,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    binding: Option<LocalControllerBinding>,
+) -> Result<()> {
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(config, agent_id, routed, options, binding)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
+        }
+    };
+    let observability =
+        build_observability(config, agent_id, &ids.acp_session_id, cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
+
+    let ended = crate::chat::session::chat_plain(
+        &session.client,
+        &ids.acp_session_id,
+        agent_id,
+        observability.recorder,
+    )
+    .await;
+
+    // Teardown is here rather than in the loop: the loop borrows the client,
+    // and the controller that owns the harness child is this function's.
+    session.shutdown().await;
+    if let Some(exporter) = observability.exporter {
         exporter.shutdown();
     }
     ended
@@ -1087,7 +1349,6 @@ where
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     {
@@ -1099,23 +1360,48 @@ where
         }
     };
 
-    let catalog = catalog_from_config(&config)?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
-    let session = bitrouter_sdk::acp::engine::Session::launch(&catalog, agent_id, cwd, options)
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    // No cost sink: `prompt` has no manager on a down-facing wire — its
-    // output is the NDJSON stream, which carries its own terminal `result`.
-    let exporter =
-        attach_observability(&config, agent_id, &session, None, &cloud_credentials).await;
+    let ids = match session.client.new_session(cwd, mcp_servers).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error.context("opening the harness session"));
+        }
+    };
+    let observability =
+        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
+    if let Some(recorder) = observability.recorder.clone() {
+        spawn_tool_spans(recorder, session.client.subscribe_updates());
+    }
 
     // First line: correlate this session with the cost/metering the
-    // orchestrator later queries. `via` is null when running direct.
+    // orchestrator later queries.
+    //
+    // `session_id` is the harness-native ACP id — the one every subsequent
+    // line and every ACP method uses. It is **not** the spend key on this
+    // path: metering attributes ACP traffic by the controller instance a
+    // request *claims*, and `prompt` routes with a launch token and declares no
+    // controller, so `requests.controller_instance_id` is null for every row it
+    // produces. `launch_id` is what joins here, as it always has.
+    //
+    // The controller id is deliberately absent rather than reported: the value
+    // this process mints reaches the daemon only as a *claimed* header, which
+    // §5.5 of the controller spec treats as correlation evidence and not as
+    // authorization. Emitting it would name a column that is null. When this
+    // path declares a controller namespace — as `acp serve` and `chat` do — it
+    // can come back and be true.
+    //
+    // `via` is null when running direct.
     write_ndjson_line(
         out,
         &serde_json::json!({
             "type": "session",
-            "record_id": session.state().record_id,
+            "session_id": ids.acp_session_id,
+            "agent_session_id": ids.agent_session_id,
             "agent": agent_id,
             "via": routed.via,
             // The token this session's requests carry, so an orchestrator can
@@ -1127,12 +1413,11 @@ where
     .await?;
 
     // Headless: there is no manager to broker permissions and none will ever
-    // attach, so explicitly DENY each request (the reject option). Since the
-    // session-scoped permission registry, merely *dropping* a pending item no
-    // longer defaults to Deny — a registry clone keeps it alive for a
-    // re-subscribing manager — so an unconsumed request would otherwise hang the
-    // turn forever.
-    let mut permissions = session.permissions();
+    // attach, so explicitly DENY each request (the reject option). The client
+    // also denies whatever is still outstanding when a turn is abandoned or
+    // the connection tears down; this loop is the one that answers promptly,
+    // so a turn that only needs consent it will never get ends now.
+    let mut permissions = session.client.subscribe_permissions();
     tokio::spawn(async move {
         while let Some(pending) = permissions.next().await {
             tracing::warn!(
@@ -1153,29 +1438,210 @@ where
         // killed on shutdown. Callers needing a persistent background session
         // should use `bitrouter acp serve` instead.
         write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await?;
-        session
-            .shutdown()
-            .await
-            .context("shutting down acp session")?;
-        if let Some(exporter) = exporter {
+        let clean = session.shutdown().await;
+        if let Some(exporter) = observability.exporter {
             exporter.shutdown();
         }
-        return Ok(());
+        return teardown_result(clean);
     }
 
-    let outcome = prompt_wait(session, text, contract, out).await;
-    if let Some(exporter) = exporter {
+    let turn = Turn {
+        client: &session.client,
+        session_id: &ids.acp_session_id,
+        agent_id,
+        recorder: observability.recorder.clone(),
+    };
+    let outcome = prompt_wait(&turn, text, contract, out).await;
+    let clean = session.shutdown().await;
+    if let Some(exporter) = observability.exporter {
         // Flush the span batch before exit; spans are lost otherwise.
         exporter.shutdown();
     }
-    outcome
+    // The turn's own failure is the more specific thing that went wrong, so it
+    // outranks a teardown that did not confirm.
+    outcome?;
+    teardown_result(clean)
 }
 
-/// Inner implementation for the wait (non-`--no-wait`) path. Separated so the
-/// early-return in the `no_wait` branch above doesn't borrow `session` past its
-/// drop point.
+/// What a `prompt` exits with when the turn itself was fine.
+///
+/// A teardown that did not confirm **fails the command**. Before `prompt`
+/// moved onto the shared client it did this by `?`-ing on `shutdown()`; the
+/// controlled session logs and returns a flag instead, and the flag went
+/// unread — so an orchestrator scripting `bitrouter acp prompt` saw exit 0
+/// for a run whose harness child may still be alive. That was an undeclared
+/// change, and this is it declared: the NDJSON on stdout is already complete
+/// and correct, and the status code is what says the process did not end
+/// cleanly.
+fn teardown_result(clean: bool) -> Result<()> {
+    if clean {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "shutting down acp session: teardown did not confirm; see the session log"
+        ))
+    }
+}
+
+/// One harness behind an in-process connection-level controller, with the
+/// shared ACP client connected to that controller as its manager.
+///
+/// This is exactly the stack `acp serve` exposes over stdio; the only
+/// difference is that the manager on the other end of the duplex is this
+/// process. Session identity, lifecycle, and history therefore stay
+/// harness-native, and there is no second scheduler: the controller, the
+/// harness child's I/O, and the client all run on this runtime.
+pub(crate) struct ControlledSession {
+    pub(crate) client: AcpClient,
+    /// The route namespace this session's leases live in, when it has one.
+    /// Cleaned up by [`ControlledSession::shutdown`] on every exit.
+    binding: Option<LocalControllerBinding>,
+    /// Resolves once the harness child and its process group are reaped.
+    /// Awaited in [`ControlledSession::shutdown`], because tearing the
+    /// connection down is not the same as the child being gone — the SDK drops
+    /// the transport task rather than letting it confirm the kill.
+    reaped: futures::channel::oneshot::Receiver<()>,
+    /// The controller's own `run`. It ends when the manager side of the duplex
+    /// closes, and awaiting it is what proves the harness child was reaped.
+    controller: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>>,
+}
+
+/// How long teardown waits for the controller to finish reaping its harness
+/// before giving up and reporting it.
+const CONTROLLER_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl ControlledSession {
+    /// Tear the client down (which closes the duplex and so ends the
+    /// controller), wait for the controller to confirm, then drop every route
+    /// lease in the namespace. Returns whether every step confirmed; failures
+    /// are logged rather than propagated, because the caller has already
+    /// asked to stop and there is nothing left to retry — but an interactive
+    /// caller wants to know the session ended abnormally, so it can say where
+    /// the reason is.
+    pub(crate) async fn shutdown(&mut self) -> bool {
+        let mut clean = true;
+        if let Err(error) = self.client.shutdown().await {
+            tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
+            clean = false;
+        }
+        // The connection is down; the child may not be. `kill_on_drop` reaches
+        // the wrapper (`npx`) and not the `node` it spawned, so the group kill
+        // has to be confirmed rather than assumed.
+        if tokio::time::timeout(bitrouter_sdk::acp::up::REAP_CONFIRM, &mut self.reaped)
+            .await
+            .is_err()
+        {
+            tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
+            clean = false;
+        }
+        match tokio::time::timeout(CONTROLLER_EXIT_TIMEOUT, &mut self.controller).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => tracing::debug!(%error, "acp controller ended with an error"),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "acp controller task failed");
+                clean = false;
+            }
+            Err(_) => {
+                tracing::warn!("acp controller did not exit within {CONTROLLER_EXIT_TIMEOUT:?}");
+                self.controller.abort();
+                clean = false;
+            }
+        }
+        // The controller revokes on its own disconnect; this is the backstop
+        // for the paths where it never got that far.
+        if let Some(binding) = &self.binding {
+            binding.revoke().await;
+        }
+        clean
+    }
+}
+
+/// Launch `agent_id` behind an in-process controller and connect the shared
+/// client to it. The controller carries the same identity and endpoint plan
+/// `acp serve` gives it, so a routed session configures the harness's
+/// provider through `providers/set` exactly as a served one does — and, with
+/// a `binding`, the same route and cost bridges.
+async fn launch_controlled(
+    config: &Config,
+    agent_id: &str,
+    routed: &Routed,
+    options: LaunchOptions,
+    binding: Option<LocalControllerBinding>,
+) -> Result<ControlledSession> {
+    let agent = config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("no acp agent configured for '{agent_id}'"))?;
+    agent
+        .validate()
+        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
+    let AcpTransport::Stdio { command, args, env } = &agent.transport;
+
+    let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
+    if let Some(endpoint) = routed.endpoint_plan.as_ref() {
+        controller_config = controller_config.endpoint(controller_endpoint(endpoint));
+    }
+    let mut process =
+        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
+            .strip_inherited_env(options.strip_inherited_env);
+    let reaped = process.reaped();
+    let mut controller =
+        bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(binding) = &binding {
+        controller = controller
+            .route_control(binding.route_control())
+            .session_cost(binding.session_cost());
+    }
+
+    // In-process duplex: no bytes, no pipe, no second process between the
+    // manager and the controller it drives.
+    let (manager_side, controller_side) = agent_client_protocol::Channel::duplex();
+    let controller = tokio::spawn(async move {
+        controller
+            .run(controller_side)
+            .await
+            .map_err(|error| anyhow::anyhow!("acp controller: {error}"))
+    });
+    let client = match AcpClient::connect(
+        manager_side,
+        ClientOptions {
+            turn_timeout: options.turn_timeout,
+        },
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            // Aborted, not awaited: the controller's own disconnect revoke may
+            // never run, so the credential is revoked here.
+            controller.abort();
+            if let Some(binding) = &binding {
+                binding.revoke().await;
+            }
+            return Err(error);
+        }
+    };
+    Ok(ControlledSession {
+        client,
+        binding,
+        reaped,
+        controller,
+    })
+}
+
+/// Everything one prompt turn needs beyond its text: the client to drive, the
+/// harness-native session it belongs to, and where its telemetry goes.
+struct Turn<'a> {
+    client: &'a AcpClient,
+    session_id: &'a str,
+    agent_id: &'a str,
+    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+}
+
+/// Inner implementation for the wait (non-`--no-wait`) path.
 async fn prompt_wait<W>(
-    session: bitrouter_sdk::acp::engine::Session,
+    turn: &Turn<'_>,
     text: &str,
     contract: Option<crate::result_contract::ResultContract>,
     out: &mut W,
@@ -1184,14 +1650,13 @@ where
     W: AsyncWrite + Unpin,
 {
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
-    let mut updates = session.updates();
+    let mut updates = turn.client.subscribe_updates();
     let task = match &contract {
         // The contract clause rides the subagent's task prompt.
         Some(c) => format!("{text}{}", c.instruction()),
         None => text.to_string(),
     };
-    let (response, reply) =
-        run_turn(&session, &mut updates, &task, contract.is_some(), out).await?;
+    let (response, reply) = run_turn(turn, &mut updates, &task, contract.is_some(), out).await?;
 
     // Extract + validate the machine-consumable result. On failure: ONE
     // repair re-prompt, then `schema_ok:false` + raw text — the orchestrator
@@ -1201,14 +1666,8 @@ where
         Some(c) => match c.check(&reply) {
             Ok(value) => (response, Some(value), Some(true), None),
             Err(problem) => {
-                let (response, reply) = run_turn(
-                    &session,
-                    &mut updates,
-                    &c.repair_prompt(&problem),
-                    true,
-                    out,
-                )
-                .await?;
+                let (response, reply) =
+                    run_turn(turn, &mut updates, &c.repair_prompt(&problem), true, out).await?;
                 match c.check(&reply) {
                     Ok(value) => (response, Some(value), Some(true), None),
                     Err(_) => (
@@ -1236,18 +1695,14 @@ where
         },
     )
     .await?;
-
-    session
-        .shutdown()
-        .await
-        .context("shutting down acp session")?;
     Ok(())
 }
 
 /// Drive one prompt turn: stream its updates to `out` (accumulating message
-/// text when `capture`), and return the typed response plus the reply text.
+/// text when `capture`), report the turn's telemetry, and return the typed
+/// response plus the reply text.
 async fn run_turn<W>(
-    session: &bitrouter_sdk::acp::engine::Session,
+    turn: &Turn<'_>,
     updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
     text: &str,
     capture: bool,
@@ -1257,10 +1712,11 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut reply = String::new();
+    let started = std::time::Instant::now();
     // Drive updates and the prompt concurrently. The loop returns the resolved
     // `PromptResponse` directly, so there is no `Option` to unwrap afterward.
     let response = {
-        let prompt_future = session.prompt(text);
+        let prompt_future = turn.client.prompt(turn.session_id, text);
         tokio::pin!(prompt_future);
 
         loop {
@@ -1292,7 +1748,49 @@ where
             }
         }
     };
+    report_turn(
+        turn.client,
+        turn.agent_id,
+        turn.recorder.as_ref(),
+        &response,
+        started.elapsed(),
+    );
     Ok((response, reply))
+}
+
+/// Re-derive this turn's completion record from the prompt round-trip and hand
+/// it to both telemetry consumers.
+///
+/// The engine's pipeline hook used to be the only thing that produced these.
+/// Latency and stop reason are visible right here on the round-trip, and
+/// context occupancy on the client's usage slot, so the record is built from
+/// what the turn itself observed.
+///
+/// Takes its inputs loose rather than a `Turn`, because the piped chat path
+/// ([`crate::chat::session::chat_plain`]) reports the same record and has no
+/// prompt contract, no NDJSON sink, and therefore no `Turn`.
+pub(crate) fn report_turn(
+    client: &AcpClient,
+    agent_id: &str,
+    recorder: Option<&Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    response: &agent_client_protocol::schema::v1::PromptResponse,
+    latency: Duration,
+) {
+    let record = RequestCompleted {
+        agent: agent_id.to_string(),
+        stop_reason: format!("{:?}", response.stop_reason),
+        latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
+        context: client.context_usage().lock().ok().and_then(|slot| *slot),
+    };
+    if let Some(recorder) = recorder {
+        recorder.turn_completed(&bitrouter_telemetry::otel::acp::TurnRecord {
+            stop_reason: record.stop_reason.clone(),
+            latency,
+            context_used: record.context.map(|c| c.used),
+            context_size: record.context.map(|c| c.size),
+        });
+    }
+    drain_telemetry_record(record);
 }
 
 /// Emit one update as NDJSON, accumulating message text into `reply` when the
@@ -1315,18 +1813,22 @@ where
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Attach observability to a session when the observe config opts telemetry
-/// in: every turn is drained to stderr (always) and, with an exporter,
-/// emitted as an OTel GenAI `invoke_agent` span; tool calls become
-/// `execute_tool` spans from the translated update stream. Returns the
-/// exporter so the caller can flush it (`shutdown`) before exit.
-async fn attach_observability(
+/// The OTel exporter for this process and, when one exists, the span recorder
+/// bound to one session.
+struct Observability {
+    exporter: Option<Arc<bitrouter_telemetry::otel::OtelExporter>>,
+    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+}
+
+/// Build the exporter and the session's span recorder. `conversation_id` is
+/// the span attribute every turn and tool span correlates on — the
+/// harness-native ACP session id on the controller path.
+async fn build_observability(
     config: &Config,
     agent_id: &str,
-    session: &bitrouter_sdk::acp::engine::Session,
-    cost: Option<CostSink>,
+    conversation_id: &str,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-) -> Option<Arc<bitrouter_telemetry::otel::OtelExporter>> {
+) -> Observability {
     // This surface never builds an `App`, so it does not get the daemon's
     // ignored-config warnings for free — and it reads the same telemetry
     // config, which is exactly what the skill documents. Without this, a stale
@@ -1343,88 +1845,47 @@ async fn attach_observability(
         Arc::new(bitrouter_telemetry::otel::acp::AcpSpanRecorder::new(
             exporter,
             agent_id,
-            session.state().record_id.clone(),
+            conversation_id,
         ))
     });
+    Observability { exporter, recorder }
+}
 
-    // Telemetry drain: stderr log per turn (always), the invoke_agent span,
-    // and the router-measured `UsageUpdate` (§7).
-    //
-    // One drain, three consumers, because `Session::telemetry()` hands out the
-    // receiver exactly once — a second caller gets `None` and silently does
-    // nothing. Everything that needs per-turn records has to hang off this
-    // loop.
-    if let Some(mut rx) = session.telemetry() {
-        let recorder = recorder.clone();
-        tokio::spawn(async move {
-            // Opened lazily: the metering database may not exist until the
-            // first routed request has settled.
-            let mut store = None;
-            while let Some(record) = rx.recv().await {
-                if let Some(recorder) = &recorder {
-                    recorder.turn_completed(&bitrouter_telemetry::otel::acp::TurnRecord {
-                        stop_reason: record.stop_reason.clone(),
-                        latency: std::time::Duration::from_millis(record.latency_ms),
-                        context_used: record.context.map(|c| c.used),
-                        context_size: record.context.map(|c| c.size),
-                    });
-                }
-                if let Some(cost) = &cost {
-                    if store.is_none() {
-                        store = crate::metering::reader::open_readonly(&cost.source).await;
+/// Emit an `execute_tool` span per completed tool call, read off the
+/// translated update stream. Exporter-gated by its `recorder` argument:
+/// without one there is nothing to emit to.
+fn spawn_tool_spans(
+    recorder: Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>,
+    mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
+) {
+    tokio::spawn(async move {
+        use bitrouter_sdk::acp::translate::ToolStatus;
+        while let Some(update) = updates.next().await {
+            match update {
+                SessionUpdateKind::ToolCall {
+                    id, title, status, ..
+                } => match status {
+                    ToolStatus::Pending | ToolStatus::Running => {
+                        recorder.tool_started(id, title);
                     }
-                    if let Some(store) = &store
-                        && let Some(update) = measured_usage_update(
-                            store,
-                            cost.session_start,
-                            cost.launch_id.as_deref(),
-                            &record,
-                        )
-                        .await
-                    {
-                        let _ = cost.updates.send(update);
+                    ToolStatus::Ok => recorder.tool_finished(&id, true, Some(&title)),
+                    ToolStatus::Failed => recorder.tool_finished(&id, false, Some(&title)),
+                },
+                SessionUpdateKind::ToolCallUpdate {
+                    id, status, title, ..
+                } => match status {
+                    Some(ToolStatus::Ok) => {
+                        recorder.tool_finished(&id, true, title.as_deref());
                     }
-                }
-                drain_telemetry_record(record);
-            }
-        });
-    }
-
-    // Tool spans from the translated update stream (exporter-gated: without
-    // one there is nothing to emit to).
-    if let Some(recorder) = recorder {
-        let mut updates = session.updates();
-        tokio::spawn(async move {
-            use bitrouter_sdk::acp::translate::ToolStatus;
-            while let Some(update) = updates.next().await {
-                match update {
-                    SessionUpdateKind::ToolCall {
-                        id, title, status, ..
-                    } => match status {
-                        ToolStatus::Pending | ToolStatus::Running => {
-                            recorder.tool_started(id, title);
-                        }
-                        ToolStatus::Ok => recorder.tool_finished(&id, true, Some(&title)),
-                        ToolStatus::Failed => recorder.tool_finished(&id, false, Some(&title)),
-                    },
-                    SessionUpdateKind::ToolCallUpdate {
-                        id, status, title, ..
-                    } => match status {
-                        Some(ToolStatus::Ok) => {
-                            recorder.tool_finished(&id, true, title.as_deref());
-                        }
-                        Some(ToolStatus::Failed) => {
-                            recorder.tool_finished(&id, false, title.as_deref());
-                        }
-                        _ => {}
-                    },
+                    Some(ToolStatus::Failed) => {
+                        recorder.tool_finished(&id, false, title.as_deref());
+                    }
                     _ => {}
-                }
+                },
+                _ => {}
             }
-        });
-    }
-
-    exporter
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1515,258 +1976,6 @@ mod standalone_cloud_credentials_tests {
     }
 }
 
-// ── providers/* — BitRouter's routing surface, in ACP's nouns (spec §6) ──────
-
-/// Backs `providers/list` and `providers/set` for one live session.
-///
-/// **No credential ever crosses this wire.** `ProviderCurrentConfig` is
-/// specified as *non-secret* routing config, and this type is constructed from
-/// `api_base` / `api_protocol` only — `ProviderConfig::api_key` is never read
-/// here. Credential management stays on `bitrouter providers login`.
-///
-/// # Scope of `providers/set` today
-///
-/// The selection is **session-scoped and held in this process**: it is what
-/// `providers/list` reports as the effective route, and it is what a manager
-/// renders. It does not yet rewrite the model on traffic already in flight
-/// from the agent child to the daemon.
-///
-/// That last step is deliberately not faked here. The substrate is a separate
-/// process from the daemon and the agent child talks to the daemon directly,
-/// so the rewrite has to happen daemon-side, in the policy table (spec §6.1,
-/// probe 4). The table is now hot-swappable — that was the point of rebuilding
-/// it on reload — but reaching it from here needs a route-mutation command on
-/// the daemon control socket, which does not exist yet. Reporting a route this
-/// process cannot yet enforce is the honest half; claiming the traffic moved
-/// would not be.
-pub(crate) struct SessionProviders {
-    /// Non-secret catalog snapshot, taken once at session launch.
-    catalog: Vec<CatalogEntry>,
-    /// The provider this session's route currently points at. `None` until a
-    /// `providers/set` names one, at which point `providers/list` reports it.
-    selected: std::sync::RwLock<Option<String>>,
-    /// Where to install the override so it moves real traffic. `None` for a
-    /// `--direct` session or one whose credential cannot be attributed — and
-    /// in that case `set` **refuses** rather than reporting a switch it did
-    /// not perform.
-    control: Option<RouteControl>,
-}
-
-/// The daemon endpoint a route override is installed through, and the launch
-/// id that scopes it to this session.
-pub(crate) struct RouteControl {
-    socket: std::path::PathBuf,
-    launch_id: String,
-}
-
-/// One routable provider, reduced to what a UI may see.
-struct CatalogEntry {
-    id: String,
-    api_base: String,
-    protocol: String,
-}
-
-impl SessionProviders {
-    /// Snapshot the active providers from `config`, dropping every secret.
-    ///
-    /// `control` is `Some` only when this session's traffic can actually be
-    /// moved: that needs both a daemon to install the override in and a launch
-    /// id to scope it by.
-    pub(crate) fn new(config: &Config, control: Option<RouteControl>) -> Self {
-        let mut catalog: Vec<CatalogEntry> = config
-            .providers
-            .iter()
-            .filter(|(_, provider)| provider.active)
-            .map(|(id, provider)| CatalogEntry {
-                id: id.clone(),
-                api_base: provider.api_base.clone(),
-                protocol: provider
-                    .api_protocol
-                    .resolve("*")
-                    .and_then(|list| list.preferred().map(|p| p.as_str().to_string()))
-                    .unwrap_or_else(|| "openai".to_string()),
-            })
-            .collect();
-        // Stable order so a rendered list does not reshuffle between calls.
-        catalog.sort_by(|a, b| a.id.cmp(&b.id));
-        Self {
-            catalog,
-            selected: std::sync::RwLock::new(None),
-            control,
-        }
-    }
-
-    /// Whether this session's traffic can actually be moved.
-    ///
-    /// Gates the picker: a chooser that cannot change anything is worse than
-    /// no chooser, because absence is legible and a dead control is a lie.
-    pub(crate) fn can_reroute(&self) -> bool {
-        self.control.is_some()
-    }
-
-    /// The route in force, or `None` while the session is on its configured
-    /// default. A poisoned lock reads as "no override" rather than panicking.
-    fn effective(&self) -> Option<String> {
-        match self.selected.read() {
-            Ok(selected) => selected.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
-    }
-}
-
-/// Map a BitRouter protocol name onto ACP's `LlmProtocol`. Anything outside
-/// ACP's closed set is reported as `Other` rather than forced onto a protocol
-/// that means something different.
-fn llm_protocol(name: &str) -> LlmProtocol {
-    match name {
-        "anthropic" | "messages" => LlmProtocol::Anthropic,
-        "chat_completions" | "responses" | "openai" => LlmProtocol::OpenAi,
-        other => LlmProtocol::Other(other.to_string()),
-    }
-}
-
-#[async_trait::async_trait]
-impl bitrouter_sdk::acp::down::ProviderSurface for SessionProviders {
-    async fn list(&self) -> Vec<ProviderInfo> {
-        let effective = self.effective();
-        self.catalog
-            .iter()
-            .map(|entry| {
-                let protocol = llm_protocol(&entry.protocol);
-                // `current` marks the route in force. Before any
-                // `providers/set` no provider is singled out: the effective
-                // route is the config's cascade, and naming one would claim a
-                // decision the router has not made.
-                //
-                // It carries `api_type` and `base_url` and nothing else — the
-                // provider's `api_key` is never read on this path.
-                let current = (effective.as_deref() == Some(entry.id.as_str()))
-                    .then(|| ProviderCurrentConfig::new(protocol.clone(), entry.api_base.clone()));
-                ProviderInfo::new(
-                    ProviderId::new(entry.id.clone()),
-                    vec![protocol],
-                    // Nothing in a BitRouter catalog is undisablable — the
-                    // point of the router is that any provider can be routed
-                    // around.
-                    false,
-                    current,
-                )
-            })
-            .collect()
-    }
-
-    async fn set(&self, request: SetProviderRequest) -> std::result::Result<(), String> {
-        let requested = request.provider_id.0.to_string();
-        if !self.catalog.iter().any(|entry| entry.id == requested) {
-            return Err(format!(
-                "unknown provider '{requested}' — `providers/list` reports what is routable"
-            ));
-        }
-        // Move the traffic FIRST, and record the selection only if it moved.
-        // A `providers/list` reporting a route the daemon is not serving would
-        // be a lie the manager renders as a fact.
-        let Some(control) = &self.control else {
-            return Err(
-                "this session's traffic cannot be rerouted: it runs direct, or its credential \
-                 is the caller's own and so cannot be attributed to a launch"
-                    .to_string(),
-            );
-        };
-        let response = crate::daemon::send_command(
-            &control.socket,
-            &crate::daemon::DaemonCommand::SetRoute {
-                launch_id: control.launch_id.clone(),
-                provider_id: Some(requested.clone()),
-            },
-        )
-        .await
-        .map_err(|e| format!("reaching the daemon to install the route: {e}"))?;
-        if let crate::daemon::DaemonResponse::Error { message } = response {
-            return Err(format!("daemon refused the route change: {message}"));
-        }
-        match self.selected.write() {
-            Ok(mut selected) => {
-                *selected = Some(requested);
-                Ok(())
-            }
-            Err(_) => Err("provider selection lock was poisoned".to_string()),
-        }
-    }
-}
-
-/// Everything the telemetry drain needs to put measured cost on the wire.
-struct CostSink {
-    source: ConfigSource,
-    session_start: chrono::DateTime<chrono::Utc>,
-    /// This session's attribution token, when its traffic is separable from
-    /// every other caller's. `None` downgrades the reported scope rather than
-    /// silently counting someone else's spend.
-    launch_id: Option<String>,
-    updates: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
-}
-
-/// Router-measured session spend, synthesized as an ACP `UsageUpdate` on every
-/// settled turn (spec §7, decision 4).
-///
-/// BitRouter sits in the agent seat, so it can report what the upstream harness
-/// cannot: what the turn actually **cost**. Upstream `UsageUpdate.cost` is
-/// optional and most harnesses never send it, which is how the old status bar
-/// ended up presenting daemon-wide spend as the session's. This measures it
-/// instead, from the metering store, scoped to this session's window.
-///
-/// `used`/`size` come from the upstream's own context reporting and are `0`
-/// when it reports none — the context window is genuinely the harness's fact,
-/// and inventing a number for it would be the exact dishonesty this replaces.
-///
-/// Returns `None` when there is nothing to say: no metering database, no
-/// requests settled yet, or a read error. A silent gap beats a fabricated zero.
-async fn measured_usage_update(
-    store: &crate::metering::store::MeteringStore,
-    session_start: chrono::DateTime<chrono::Utc>,
-    launch_id: Option<&str>,
-    record: &RequestCompleted,
-) -> Option<SessionUpdate> {
-    use crate::metering::store::TimeWindow;
-    use bitrouter_tui::cost::Scope;
-
-    let window = TimeWindow::Custom {
-        start: session_start,
-        end: chrono::Utc::now(),
-    };
-    // Attribution decides the scope, and the scope decides the query. With a
-    // launch token the store can isolate this session's rows; without one the
-    // best available answer is every caller in the window — which is a
-    // different fact, so it travels labelled as one.
-    let (summary, scope) = match launch_id {
-        Some(id) => (
-            store.spend_summary_for_launch(id, window).await.ok()?,
-            Scope::Session,
-        ),
-        None => (store.spend_summary(window).await.ok()?, Scope::Wider),
-    };
-    if summary.requests == 0 {
-        return None;
-    }
-    let cost = Cost::new(summary.spend_micro_usd as f64 / 1_000_000.0, "USD");
-    let context = record.context;
-    // The scope rides in `_meta`: a client that renders a number without
-    // knowing whose it is cannot be honest about it, and ACP has no field for
-    // this.
-    let mut meta = serde_json::Map::new();
-    meta.insert(
-        crate::chat::cost::COST_SCOPE_META_KEY.to_string(),
-        serde_json::Value::String(crate::chat::cost::to_wire(scope).to_string()),
-    );
-    Some(SessionUpdate::UsageUpdate(
-        UsageUpdate::new(
-            context.map(|c| c.used).unwrap_or(0),
-            context.map(|c| c.size).unwrap_or(0),
-        )
-        .cost(cost)
-        .meta(meta),
-    ))
-}
-
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to
 /// `tracing::info!` which the acp CLI routes to stderr.
@@ -1781,6 +1990,51 @@ fn drain_telemetry_record(r: RequestCompleted) {
     );
 }
 
+/// How to launch one harness process and drive it.
+///
+/// Lived in the SDK while `engine::Session` did the launching. It is the
+/// app's now: every field is consumed by a different part of the shared
+/// stack — `strip_inherited_env` by `AgentProcess`, `turn_timeout` by
+/// `ClientOptions`, `mcp_servers` by `AcpClient::new_session` — so there is no
+/// one SDK type it belongs to.
+#[derive(Clone, Debug, Default)]
+pub struct LaunchOptions {
+    /// Inherited environment names to remove before applying the explicit
+    /// transport and launch overlays. This lets isolated callers prevent
+    /// ambient credentials from crossing into an agent process while still
+    /// permitting a deliberately configured credential to win.
+    pub strip_inherited_env: Vec<String>,
+    /// Per-turn deadline. On elapse the agent is asked to cancel cooperatively
+    /// (`session/cancel`); if it does not comply within the client's grace the
+    /// turn errors.
+    pub turn_timeout: Option<Duration>,
+    /// MCP servers passed to the agent in `session/new` (`mcpServers`) — the
+    /// caller's tool surface for the session.
+    pub mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
+}
+
+/// A completed ACP turn, as this process records it.
+///
+/// Also came from the SDK, where an `ExecutionHook` on the ACP pipeline was
+/// the only thing that produced one. That pipeline routed to a single pinned
+/// target its executor ignored, and nothing outside the SDK ever registered a
+/// hook on it, so it went with the engine. The record survives because it is
+/// what the span recorder and the per-turn log consume — rebuilt now from the
+/// prompt round-trip itself, which is where the latency and stop reason were
+/// visible all along.
+#[derive(Debug, Clone)]
+pub struct RequestCompleted {
+    /// The agent name that handled the turn.
+    pub agent: String,
+    /// The stop reason rendered as a string (e.g. `"EndTurn"`, `"MaxTokens"`).
+    pub stop_reason: String,
+    /// Wall-clock latency for the turn in milliseconds.
+    pub latency_ms: u64,
+    /// Context-window occupancy as of the latest `UsageUpdate`, when the agent
+    /// has reported one.
+    pub context: Option<bitrouter_sdk::acp::telemetry::ContextUsage>,
+}
+
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
 /// `--turn-timeout <secs>`.
 pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
@@ -1790,60 +2044,139 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     }
 }
 
-/// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.
-pub(crate) fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
-    ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
-        .context("building acp routing table from config")
-}
-
 #[cfg(test)]
 mod controller_tests {
-    use super::{RoutingCredentialMode, controller_identity, user_key_required};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
+    use agent_client_protocol::schema::v1::Cost;
+    use bitrouter_sdk::acp::controller::SessionCost;
+
+    use super::{CachedSessionCost, attributed_cost, controller_identity};
+
+    /// A daemon bridge that does not answer until released, and counts how
+    /// often it was asked.
+    struct StallingCost {
+        release: tokio::sync::Notify,
+        asked: AtomicUsize,
+        figure: Option<Cost>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionCost for StallingCost {
+        async fn attributed_cost(&self, _session_id: &str) -> Option<Cost> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            self.release.notified().await;
+            self.figure.clone()
+        }
+    }
+
+    async fn settled(cache: &CachedSessionCost, session_id: &str) -> Option<Cost> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let held = cache.cache.held(session_id);
+            if held.is_some() || std::time::Instant::now() >= deadline {
+                return held;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// The forward path never waits on the daemon: the first call returns at
+    /// once with no figure, the refresh it started lands in the background,
+    /// and the next call reads it. A burst of updates costs one lookup.
+    #[tokio::test]
+    async fn the_cached_cost_answers_without_awaiting_the_daemon() {
+        let daemon = Arc::new(StallingCost {
+            release: tokio::sync::Notify::new(),
+            asked: AtomicUsize::new(0),
+            figure: Some(Cost::new(0.42, "USD")),
+        });
+        let cache = CachedSessionCost::new(daemon.clone());
+
+        let first = tokio::time::timeout(Duration::from_millis(200), cache.attributed_cost("s1"))
+            .await
+            .expect("the forward path must not block on the daemon");
+        assert_eq!(first, None, "nothing measured yet is nothing, not zero");
+        let second = tokio::time::timeout(Duration::from_millis(200), cache.attributed_cost("s1"))
+            .await
+            .expect("still not blocked while the refresh is in flight");
+        assert_eq!(second, None);
+        tokio::task::yield_now().await;
+        assert_eq!(
+            daemon.asked.load(Ordering::SeqCst),
+            1,
+            "one refresh in flight per session, however many updates arrive"
+        );
+
+        daemon.release.notify_one();
+        assert_eq!(settled(&cache, "s1").await, Some(Cost::new(0.42, "USD")));
+        assert_eq!(
+            cache.attributed_cost("s1").await,
+            Some(Cost::new(0.42, "USD")),
+            "the figure the daemon confirmed is what the next update carries"
+        );
+    }
+
+    /// A session the daemon never measured stays absent, and a refresh that
+    /// yields nothing never erases a figure already held.
+    #[tokio::test]
+    async fn an_unmeasured_session_stays_absent_and_a_held_figure_survives() {
+        let daemon = Arc::new(StallingCost {
+            release: tokio::sync::Notify::new(),
+            asked: AtomicUsize::new(0),
+            figure: None,
+        });
+        let cache = CachedSessionCost::new(daemon.clone());
+        assert_eq!(cache.attributed_cost("never").await, None);
+        daemon.release.notify_one();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            cache.attributed_cost("never").await,
+            None,
+            "no priced evidence is no figure — not $0.00"
+        );
+
+        cache
+            .cache
+            .settle_refresh("held", Some(Cost::new(0.25, "USD")));
+        cache.cache.settle_refresh("held", None);
+        assert_eq!(
+            cache.cache.held("held"),
+            Some(Cost::new(0.25, "USD")),
+            "a stale measured figure understates; it is never dropped for nothing"
+        );
+    }
+
+    /// The provenance marker is one spelling in two crates: what the
+    /// controller writes is what the renderer reads.
     #[test]
-    fn local_maintained_controller_bootstraps_without_a_user_key() {
-        assert!(!user_key_required(
-            true,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            false,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            false,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            true,
-            false,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::UserOrLaunch,
-        ));
-        assert!(!user_key_required(
-            true,
-            false,
-            true,
-            true,
-            RoutingCredentialMode::UserOrLaunch,
-        ));
+    fn the_cost_marker_is_spelled_the_same_on_both_sides() {
+        assert_eq!(
+            bitrouter_tui::cost::COST_PROVENANCE_META_KEY,
+            bitrouter_sdk::acp::controller::COST_PROVENANCE_META_KEY
+        );
+        assert_eq!(
+            bitrouter_tui::cost::COST_PROVENANCE_ROUTER,
+            bitrouter_sdk::acp::controller::COST_PROVENANCE_ROUTER
+        );
+    }
+
+    /// C5: a session with no attributed traffic, or none that could be
+    /// priced, renders nothing — never `$0.00`.
+    #[test]
+    fn unattributed_or_unpriced_sessions_carry_no_figure() {
+        assert_eq!(attributed_cost(0, 0, 0), None);
+        assert_eq!(attributed_cost(0, 3, 3), None);
+    }
+
+    /// Priced evidence becomes a USD figure; a partially priced session
+    /// reports its priced floor rather than hiding it.
+    #[test]
+    fn priced_evidence_becomes_a_usd_figure() {
+        assert_eq!(attributed_cost(420_000, 2, 0), Some(Cost::new(0.42, "USD")));
+        assert_eq!(attributed_cost(250_000, 3, 2), Some(Cost::new(0.25, "USD")));
     }
 
     #[test]
@@ -1889,365 +2222,5 @@ mod controller_tests {
         assert_eq!(identity.harness_id, "codex-acp");
         assert_eq!(identity.adapter_package, "configured-acp-adapter");
         assert_eq!(identity.adapter_version, "configured");
-    }
-}
-
-#[cfg(test)]
-mod cost_tests {
-    use super::*;
-    use crate::metering::db::{ReconciliationStatus, RequestMetric};
-    use crate::metering::pricing::{
-        ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
-    };
-    use crate::metering::store::MeteringStore;
-
-    /// A settled turn must reach the manager carrying a **non-null** cost that
-    /// equals what the router actually measured — the whole point of decision
-    /// 4. Upstream `UsageUpdate.cost` is optional and usually absent; this is
-    /// the router reporting what only it can know.
-    /// Build a settled request row charged `charge_micro_usd`, attributed to
-    /// `launch_id` when one is given.
-    fn settled(request_id: &str, launch_id: Option<&str>, charge_micro_usd: i64) -> RequestMetric {
-        RequestMetric {
-            request_id: request_id.to_string(),
-            user_id: "u1".into(),
-            api_key_id: "k1".into(),
-            launch_id: launch_id.map(ToString::to_string),
-            session_identity: None,
-            model_id: "claude-sonnet-4-5".into(),
-            provider_id: "anthropic".into(),
-            prompt_tokens: 1_000,
-            completion_tokens: 200,
-            reasoning_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            uncached_input_tokens: 1_000,
-            output_tokens: 200,
-            usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
-            raw_usage: None,
-            charge_status: ChargeStatus::Computed,
-            charge_evidence: ChargeEvidence {
-                status: ChargeStatus::Computed,
-                charge_micro_usd: Some(charge_micro_usd),
-                normalized_usage: Default::default(),
-                effective_rates: EffectivePricingRates::default(),
-                pricing_source: PricingSource::Configured,
-                pricing_version: "sha256:test".to_string(),
-                unknown_reason: None,
-            },
-            reconciliation_status: ReconciliationStatus::NotApplicable,
-            estimated_charge_micro_usd: charge_micro_usd,
-            latency_ms: 1_200,
-            generation_time_ms: 900,
-            streamed: false,
-            error: None,
-        }
-    }
-
-    fn turn() -> RequestCompleted {
-        RequestCompleted {
-            agent: "claude-acp".into(),
-            stop_reason: "EndTurn".into(),
-            latency_ms: 1_200,
-            context: Some(bitrouter_sdk::acp::telemetry::ContextUsage {
-                used: 1_500,
-                size: 200_000,
-            }),
-        }
-    }
-
-    /// Read the cost and the `_meta` scope label off a synthesized update.
-    fn cost_and_scope(update: SessionUpdate) -> anyhow::Result<(f64, String)> {
-        let SessionUpdate::UsageUpdate(usage) = update else {
-            anyhow::bail!("expected a UsageUpdate");
-        };
-        let cost = usage
-            .cost
-            .ok_or_else(|| anyhow::anyhow!("UsageUpdate.cost must not be null"))?;
-        let scope = usage
-            .meta
-            .as_ref()
-            .and_then(|m| m.get(crate::chat::cost::COST_SCOPE_META_KEY))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("a cost must carry its scope"))?
-            .to_string();
-        Ok((cost.amount, scope))
-    }
-
-    /// Two callers settle spend in the same window. A session that can attribute
-    /// its traffic must report **only its own** — the wire previously reported
-    /// every caller's and called it the session's.
-    #[tokio::test]
-    async fn reported_cost_counts_only_this_session() -> anyhow::Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = MeteringStore::new(db);
-        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
-
-        // This session's spend, and a concurrent caller's — same window.
-        store
-            .record_request(settled("mine", Some("brl_mine"), 420_000))
-            .await?;
-        store
-            .record_request(settled("theirs", Some("brl_theirs"), 900_000))
-            .await?;
-        // Plus an untagged caller, which no launch id can claim.
-        store
-            .record_request(settled("anon", None, 1_500_000))
-            .await?;
-
-        let update = measured_usage_update(&store, session_start, Some("brl_mine"), &turn())
-            .await
-            .ok_or_else(|| anyhow::anyhow!("an attributed session must report its spend"))?;
-        let (amount, scope) = cost_and_scope(update)?;
-        assert_eq!(
-            amount, 0.42,
-            "only this session's $0.42 — not the other caller's $0.90 or the \
-             untagged $1.50"
-        );
-        assert_eq!(scope, "session", "attributed spend is labelled as such");
-        Ok(())
-    }
-
-    /// A session that cannot attribute its traffic — the caller supplied their
-    /// own credential, so nothing may be rewritten to tag it — must say the
-    /// number is daemon-wide rather than imply a precision it does not have.
-    #[tokio::test]
-    async fn unattributable_cost_is_labelled_daemon_wide() -> anyhow::Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = MeteringStore::new(db);
-        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
-
-        store
-            .record_request(settled("mine", Some("brl_mine"), 420_000))
-            .await?;
-        store
-            .record_request(settled("theirs", Some("brl_theirs"), 900_000))
-            .await?;
-
-        let update = measured_usage_update(&store, session_start, None, &turn())
-            .await
-            .ok_or_else(|| anyhow::anyhow!("an unattributed session still reports a window"))?;
-        let (amount, scope) = cost_and_scope(update)?;
-        assert_eq!(amount, 1.32, "every caller in the window: $0.42 + $0.90");
-        assert_eq!(
-            scope, "daemon_wide",
-            "an unattributable figure must never be presented as the session's"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_settled_turn_reports_router_measured_cost() -> anyhow::Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = MeteringStore::new(db);
-        let session_start = chrono::Utc::now() - chrono::Duration::seconds(5);
-
-        // No settled request yet: nothing to report, and reporting a zero
-        // would be a fabricated number.
-        let record = RequestCompleted {
-            agent: "claude-acp".into(),
-            stop_reason: "EndTurn".into(),
-            latency_ms: 1_200,
-            context: Some(bitrouter_sdk::acp::telemetry::ContextUsage {
-                used: 1_500,
-                size: 200_000,
-            }),
-        };
-        assert!(
-            measured_usage_update(&store, session_start, None, &record)
-                .await
-                .is_none(),
-            "no settled request means no usage update"
-        );
-
-        // Settle one request worth $0.42.
-        store
-            .record_request(RequestMetric {
-                request_id: "r1".into(),
-                user_id: "u1".into(),
-                api_key_id: "k1".into(),
-                launch_id: None,
-                session_identity: None,
-                model_id: "claude-sonnet-4-5".into(),
-                provider_id: "anthropic".into(),
-                prompt_tokens: 1_000,
-                completion_tokens: 200,
-                reasoning_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                uncached_input_tokens: 1_000,
-                output_tokens: 200,
-                usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
-                raw_usage: None,
-                charge_status: ChargeStatus::Computed,
-                charge_evidence: ChargeEvidence {
-                    status: ChargeStatus::Computed,
-                    charge_micro_usd: Some(420_000),
-                    normalized_usage: Default::default(),
-                    effective_rates: EffectivePricingRates::default(),
-                    pricing_source: PricingSource::Configured,
-                    pricing_version: "sha256:test".to_string(),
-                    unknown_reason: None,
-                },
-                reconciliation_status: ReconciliationStatus::NotApplicable,
-                estimated_charge_micro_usd: 420_000,
-                latency_ms: 1_200,
-                generation_time_ms: 900,
-                streamed: false,
-                error: None,
-            })
-            .await?;
-
-        let update = measured_usage_update(&store, session_start, None, &record)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("a settled request must produce a usage update"))?;
-
-        let SessionUpdate::UsageUpdate(usage) = update else {
-            anyhow::bail!("expected a UsageUpdate");
-        };
-        let cost = usage
-            .cost
-            .ok_or_else(|| anyhow::anyhow!("UsageUpdate.cost must not be null"))?;
-        assert_eq!(cost.amount, 0.42, "the measured charge, in USD");
-        assert_eq!(cost.currency, "USD");
-        // Context occupancy stays the upstream's fact, relayed unchanged.
-        assert_eq!(usage.used, 1_500);
-        assert_eq!(usage.size, 200_000);
-
-        // And the window is the session's, not the daemon's lifetime: a
-        // request settled before this session started must not be counted.
-        let later_start = chrono::Utc::now() + chrono::Duration::seconds(5);
-        assert!(
-            measured_usage_update(&store, later_start, None, &record)
-                .await
-                .is_none(),
-            "spend from before the session must not be attributed to it"
-        );
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod provider_tests {
-    use super::*;
-    use bitrouter_sdk::acp::down::ProviderSurface;
-
-    /// A config whose providers carry unmistakable secrets, so a leak in any
-    /// serialized field is impossible to miss.
-    fn config_with_secrets() -> anyhow::Result<Config> {
-        Ok(bitrouter_sdk::config::parse(
-            r#"inherit_defaults: false
-providers:
-  alpha:
-    api_base: https://alpha.example.com/v1
-    api_key: sk-SECRET-ALPHA-DO-NOT-LEAK
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - { id: m1 }
-  beta:
-    api_base: https://beta.example.com/v1
-    api_key: sk-SECRET-BETA-DO-NOT-LEAK
-    api_protocol:
-      - "*": anthropic
-    models:
-      - { id: m1 }
-  dormant:
-    active: false
-    api_base: https://dormant.example.com/v1
-    api_key: sk-SECRET-DORMANT-DO-NOT-LEAK
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - { id: m1 }
-"#,
-        )?)
-    }
-
-    #[tokio::test]
-    async fn providers_list_reports_the_routable_catalog() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let listed = providers.list().await;
-
-        let ids: Vec<String> = listed.iter().map(|p| p.provider_id.0.to_string()).collect();
-        // Active providers only, in a stable order — an inactive provider is
-        // not routable, so offering it would be offering a dead route.
-        assert_eq!(ids, vec!["alpha".to_string(), "beta".to_string()]);
-
-        // Protocols are mapped into ACP's vocabulary, not passed through raw.
-        assert_eq!(listed[0].supported, vec![LlmProtocol::OpenAi]);
-        assert_eq!(listed[1].supported, vec![LlmProtocol::Anthropic]);
-        // Nothing in a router's catalog is undisablable.
-        assert!(listed.iter().all(|p| !p.required));
-        // No `providers/set` yet: no provider claims to be the effective route.
-        assert!(listed.iter().all(|p| p.current.is_none()));
-        Ok(())
-    }
-
-    /// A session with no way to move its traffic must **refuse** rather than
-    /// report a switch it cannot perform. The reroute itself is a daemon-side
-    /// fact, proven by `set_route_reroutes_only_the_named_launch`.
-    #[tokio::test]
-    async fn providers_set_refuses_when_it_cannot_reroute() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let refused = providers
-            .set(SetProviderRequest::new(
-                ProviderId::new("beta"),
-                LlmProtocol::Anthropic,
-                "https://beta.example.com/v1",
-            ))
-            .await;
-        assert!(
-            refused.is_err(),
-            "a session that cannot reroute must not claim it did"
-        );
-        // And it must not then report a route it never installed.
-        assert!(
-            providers.list().await.iter().all(|p| p.current.is_none()),
-            "a refused set leaves no route in force"
-        );
-
-        // An unroutable target is refused before the daemon is ever asked —
-        // reporting success for a route that does not exist would be worse
-        // than the error.
-        let rejected = providers
-            .set(SetProviderRequest::new(
-                ProviderId::new("nonexistent"),
-                LlmProtocol::OpenAi,
-                "https://nope.example.com/v1",
-            ))
-            .await;
-        assert!(rejected.is_err(), "unknown provider must be refused");
-        Ok(())
-    }
-
-    /// The hard rule from spec §6: `ProviderCurrentConfig` is non-secret
-    /// routing config. This asserts against the **serialized JSON** — the
-    /// bytes that actually reach the manager — rather than against fields,
-    /// so a secret smuggled through `_meta` would fail too.
-    #[tokio::test]
-    async fn no_credential_appears_in_any_providers_response() -> anyhow::Result<()> {
-        let providers = SessionProviders::new(&config_with_secrets()?, None);
-        let wire = serde_json::to_string(&providers.list().await)?;
-        for secret in [
-            "sk-SECRET-ALPHA-DO-NOT-LEAK",
-            "sk-SECRET-BETA-DO-NOT-LEAK",
-            "sk-SECRET-DORMANT-DO-NOT-LEAK",
-        ] {
-            assert!(
-                !wire.contains(secret),
-                "a credential reached the providers wire: {wire}"
-            );
-        }
-        // Not just the exact strings — no `api_key`-shaped field at all.
-        assert!(!wire.contains("api_key"), "{wire}");
-        assert!(!wire.contains("sk-"), "{wire}");
-        // The provider ids a UI needs are still there.
-        assert!(wire.contains("alpha"), "{wire}");
-        assert!(wire.contains("beta"), "{wire}");
-        Ok(())
     }
 }

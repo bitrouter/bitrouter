@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport};
+use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 
 /// Bash ACP stub: initialize → session/new → prompt emits one update then
@@ -102,9 +102,34 @@ async fn prompt_ndjson() {
         "first NDJSON line must be the session line; got: {}",
         lines[0]
     );
+    // Contract break, `docs/ACP_CONTROLLER_AMENDMENT_1.md` §2: the minted
+    // `record_id` alias is gone from the wire. Session identity is
+    // harness-native, so the correlation line carries the id the harness
+    // itself minted plus the controller instance the daemon meters by — the
+    // two columns a spend query actually joins on.
     assert!(
-        first.get("record_id").and_then(|r| r.as_str()).is_some(),
-        "session line must carry a record_id: {}",
+        first.get("record_id").is_none(),
+        "the manager-facing record_id alias is off the wire: {}",
+        lines[0]
+    );
+    assert_eq!(
+        first.get("session_id").and_then(|r| r.as_str()),
+        Some("u1"),
+        "session line must carry the harness-native session id: {}",
+        lines[0]
+    );
+    // Not `is_some()`: `Value::get` on a JSON `null` returns `Some(Null)`, so
+    // that spelling passes for a field that is present and empty — which is
+    // what the previous assertion actually checked.
+    assert!(
+        first.get("controller_instance_id").is_none(),
+        "the controller id is a claimed header, not the spend key on this \
+         path, and must not be reported as though it joined: {}",
+        lines[0]
+    );
+    assert!(
+        first.get("launch_id").is_some(),
+        "launch_id is what attributes a prompt session's spend: {}",
         lines[0]
     );
     assert!(
@@ -840,6 +865,103 @@ async fn prompt_headless_denies_permission_and_completes() {
     assert!(
         output.contains("\"result\""),
         "turn must complete:\n{output}"
+    );
+}
+
+/// I8: a turn that blows `--turn-timeout` is cancelled cooperatively and then
+/// failed. The stub answers the handshake and `session/new`, acknowledges the
+/// `session/cancel` by doing nothing, and never answers `session/prompt` — so
+/// only the client's own deadline can end the turn.
+#[tokio::test]
+async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
+    const STALL_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+          esac
+        done
+    "#;
+    let base = tempfile::tempdir().expect("tempdir");
+    let orig_dir = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(base.path()).expect("set_current_dir");
+
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(STALL_STUB),
+        agent_id: "stub",
+        // One second, plus the client's three-second cooperative-cancel grace.
+        options: bitrouter::acp_cli::launch_options(Some(1)),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf),
+    )
+    .await;
+    let _ = std::env::set_current_dir(&orig_dir);
+
+    let result = outcome.expect("--turn-timeout must end the turn, not hang the process");
+    let error = format!("{:#}", result.expect_err("a stalled turn must fail"));
+    assert!(
+        error.contains("timed out"),
+        "the failure must name the deadline: {error}"
+    );
+}
+
+/// I11: a harness that dies mid-prompt fails the turn rather than hanging it.
+/// The stub answers the handshake and `session/new`, then exits with the
+/// prompt in flight.
+#[tokio::test]
+async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
+    const DYING_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)     printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+            *session/prompt*) exit 0;;
+          esac
+        done
+    "#;
+    let base = tempfile::tempdir().expect("tempdir");
+    let orig_dir = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(base.path()).expect("set_current_dir");
+
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(DYING_STUB),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf),
+    )
+    .await;
+    let _ = std::env::set_current_dir(&orig_dir);
+
+    let result = outcome.expect("a dead harness must fail the turn, not hang it");
+    assert!(
+        result.is_err(),
+        "a turn whose harness died must fail; output:\n{}",
+        String::from_utf8_lossy(&buf)
     );
 }
 

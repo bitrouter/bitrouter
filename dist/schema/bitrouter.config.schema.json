@@ -16,7 +16,7 @@
       ]
     },
     "AcpAgentConfig": {
-      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what the [`super::RoutingTable`] resolves against;\nfuture inbound entry points (the `agent-proxy` CLI) address agents by\nthis name.",
+      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what every `bitrouter acp` subcommand addresses an\nagent by, and what [`AcpAgentConfig::validate`] constrains.",
       "properties": {
         "name": {
           "description": "Agent id. Non-empty; no `/`.",

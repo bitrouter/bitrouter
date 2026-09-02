@@ -22,10 +22,10 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::RoutingPrefs;
 
-use crate::acp_runtime::AcpRuntime;
+use chrono::{DateTime, Utc};
 
-const ACP_CONTROLLER_CREDENTIAL_TTL: std::time::Duration =
-    std::time::Duration::from_secs(12 * 60 * 60);
+use crate::acp_runtime::AcpRuntime;
+use crate::metering::{MeteringStore, TimeWindow};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -80,41 +80,27 @@ pub enum DaemonCommand {
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
     /// CLI pretty-prints for `bitrouter observe status`.
     ObserveStatus,
-    /// Point one launch's traffic at a provider, or clear that redirection.
-    ///
-    /// Backs ACP `providers/set` (ACP_TUI_SPEC §6): the substrate is a
-    /// separate process from the daemon and the agent child talks to the
-    /// daemon directly, so a mid-session switch has to be installed *here*.
-    /// Scoped to a launch id, so it can only ever move the traffic of the
-    /// session that asked — never another caller's.
-    SetRoute {
-        /// The launch whose traffic moves. Attribution, not authorization:
-        /// see [`bitrouter_sdk::caller::launch_tag`].
-        launch_id: String,
-        /// Provider to route to, or `None` to drop the override.
-        #[serde(default)]
-        provider_id: Option<String>,
-    },
-    /// Mint a short-lived controller credential over the owner-only socket.
-    AcpControllerIssue {
-        /// Controller process identity that owns the credential and leases.
-        controller_instance_id: String,
-    },
-    /// Revoke one controller credential and every lease it owns.
-    AcpControllerRevoke {
-        /// Credential-bound controller process identity.
+    /// Remove every route lease in one principal/controller namespace.
+    AcpControllerCleanup {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
     },
     /// Query routes and exact lease state for one native session.
     AcpRouteList {
-        /// Credential-bound controller process identity.
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
     },
     /// Install or replace one native-session route lease.
     AcpRouteSet {
-        /// Credential-bound controller process identity.
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
@@ -122,30 +108,23 @@ pub enum DaemonCommand {
         route: String,
     },
     /// Remove one native-session route lease.
-    AcpRouteReset {
-        /// Credential-bound controller process identity.
+    /// Read the spend metered under one controller for one native session.
+    AcpSessionSpend {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
     },
-}
-
-/// Controller bearer transported only over the owner-only local daemon IPC.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ControllerCredential(String);
-
-impl ControllerCredential {
-    /// Borrow the credential for harness endpoint configuration.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for ControllerCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("[REDACTED]")
-    }
+    AcpRouteReset {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
 }
 
 /// One resolved hop of a route chain.
@@ -184,15 +163,6 @@ pub enum DaemonResponse {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
     },
-    /// Newly-issued controller credential and binding metadata.
-    AcpControllerCredential {
-        /// Credential-bound controller process identity.
-        controller_instance_id: String,
-        /// Redacted-on-debug bearer for the harness model endpoint.
-        credential: ControllerCredential,
-        /// RFC 3339 expiry timestamp.
-        expires_at: String,
-    },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
         /// Live model selectors accepted as logical routes.
@@ -201,6 +171,17 @@ pub enum DaemonResponse {
         current: Option<String>,
         /// `session` for a lease and `default` otherwise.
         scope: String,
+    },
+    /// Spend metered under one controller for one native session and its
+    /// descendants. Raw summary: the controller decides what reaches the
+    /// wire, and unpriced rows are never a computed zero.
+    AcpSessionSpend {
+        /// Micro-USD across the rows that carry charge evidence.
+        spend_micro_usd: u64,
+        /// Rows attributed to the session, priced or not.
+        requests: u64,
+        /// Rows without charge evidence, absent from `spend_micro_usd`.
+        unpriced: u64,
     },
     /// The command failed.
     Error {
@@ -431,7 +412,7 @@ pub async fn run_control_socket(
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
+    metering: MeteringStore,
 ) -> Result<()> {
     run_control_socket_with_acp_runtime(
         socket_path,
@@ -439,34 +420,40 @@ pub async fn run_control_socket(
         listen,
         reloader,
         observe,
-        policy_router,
-        Arc::new(AcpRuntime::new()),
+        AcpControlPlane {
+            runtime: Arc::new(AcpRuntime::new()),
+            metering,
+        },
     )
     .await
 }
 
-/// Run the control listener with the same authenticated ACP runtime used by
-/// the model request pipeline.
+/// Run the control listener with the same ACP route runtime used by the model
+/// request pipeline.
+/// Authenticated ACP control state the control socket shares with the model
+/// request pipeline.
+///
+/// One value rather than two parameters: `dispatch` already carries seven, and
+/// an eighth trips `clippy::too_many_arguments`, which the house rules forbid
+/// silencing.
+#[derive(Clone)]
+pub struct AcpControlPlane {
+    /// In-memory route leases, keyed by principal and controller.
+    pub runtime: Arc<AcpRuntime>,
+    /// Settled-request store behind session-attributed spend.
+    pub metering: MeteringStore,
+}
+
 pub async fn run_control_socket_with_acp_runtime(
     socket_path: PathBuf,
     app: Arc<App>,
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: Arc<AcpRuntime>,
+    acp: AcpControlPlane,
 ) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
-    let result = accept_loop(
-        &mut listener,
-        &app,
-        &listen,
-        &reloader,
-        &observe,
-        policy_router.as_ref(),
-        &acp_runtime,
-    )
-    .await;
+    let result = accept_loop(&mut listener, &app, &listen, &reloader, &observe, &acp).await;
     listener.cleanup().await;
     result
 }
@@ -477,24 +464,13 @@ async fn accept_loop(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(
-            stream,
-            app,
-            listen,
-            reloader,
-            observe,
-            policy_router,
-            acp_runtime,
-        )
-        .await?
-        {
+        if handle_connection(stream, app, listen, reloader, observe, acp).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -512,8 +488,7 @@ async fn handle_connection<S>(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -538,16 +513,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(
-        command,
-        app,
-        listen,
-        reloader,
-        observe,
-        policy_router,
-        acp_runtime,
-    )
-    .await;
+    let response = dispatch(command, app, listen, reloader, observe, acp).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -558,8 +524,7 @@ async fn dispatch(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
-    acp_runtime: &Arc<AcpRuntime>,
+    acp: &AcpControlPlane,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -595,63 +560,74 @@ async fn dispatch(
                 models,
             }
         }
-        DaemonCommand::SetRoute {
-            launch_id,
-            provider_id,
-        } => {
-            let Some(router) = policy_router else {
-                return DaemonResponse::Error {
-                    message: "no policy_table: section is configured, so this daemon has no \
-                              transform to install a route override into"
-                        .to_string(),
-                };
-            };
-            let installed = match &provider_id {
-                Some(provider) => router.set_route_override(&launch_id, provider),
-                None => router.clear_route_override(&launch_id),
-            };
-            if installed {
-                tracing::info!(launch_id, ?provider_id, "route override updated");
-                DaemonResponse::Ok
-            } else {
-                DaemonResponse::Error {
-                    message: "route override lock was poisoned; the route is unchanged".to_string(),
-                }
-            }
-        }
-        DaemonCommand::AcpControllerIssue {
-            controller_instance_id,
-        } => match acp_runtime
-            .issue_controller(&controller_instance_id, ACP_CONTROLLER_CREDENTIAL_TTL)
-        {
-            Ok(grant) => DaemonResponse::AcpControllerCredential {
-                controller_instance_id: grant.controller_instance_id().to_string(),
-                credential: ControllerCredential(grant.token().to_string()),
-                expires_at: grant.expires_at().to_rfc3339(),
-            },
-            Err(message) => DaemonResponse::Error { message },
-        },
-        DaemonCommand::AcpControllerRevoke {
-            controller_instance_id,
-        } => {
-            acp_runtime.revoke_controller(&controller_instance_id);
-            DaemonResponse::Ok
-        }
-        DaemonCommand::AcpRouteList {
+        DaemonCommand::AcpSessionSpend {
+            api_principal,
             controller_instance_id,
             session_id,
         } => {
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                return DaemonResponse::Error {
+                    message: "principal, controller and session must not be empty".to_string(),
+                };
+            }
+            // Unbounded on purpose. This launcher mints a fresh controller id
+            // per process, so in practice "since the epoch" is "this
+            // controller's lifetime" — but that is a property of how we mint,
+            // not of the identifier, which is a claim nothing verifies. What
+            // the window must not do is reset a session's cumulative figure at
+            // a month boundary the way the rolling ones would.
+            let window = TimeWindow::Custom {
+                start: DateTime::<Utc>::UNIX_EPOCH,
+                end: Utc::now(),
+            };
+            match acp
+                .metering
+                .spend_summary_for_acp_session(
+                    &api_principal,
+                    &controller_instance_id,
+                    &session_id,
+                    window,
+                )
+                .await
+            {
+                Ok(summary) => DaemonResponse::AcpSessionSpend {
+                    spend_micro_usd: summary.spend_micro_usd,
+                    requests: summary.requests,
+                    unpriced: summary.unpriced,
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("session spend is unavailable: {error}"),
+                },
+            }
+        }
+        DaemonCommand::AcpControllerCleanup {
+            api_principal,
+            controller_instance_id,
+        } => {
+            acp.runtime
+                .remove_controller(&api_principal, &controller_instance_id);
+            DaemonResponse::Ok
+        }
+        DaemonCommand::AcpRouteList {
+            api_principal,
+            controller_instance_id,
+            session_id,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
                 DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                }
-            } else if session_id.trim().is_empty() {
-                DaemonResponse::Error {
-                    message: "session id must not be empty".to_string(),
+                    message: "API principal, controller id, and session id must not be empty"
+                        .to_string(),
                 }
             } else {
-                let current = acp_runtime
-                    .current_route(&controller_instance_id, &session_id)
+                let current = acp
+                    .runtime
+                    .current_route(&api_principal, &controller_instance_id, &session_id)
                     .map(|lease| lease.route().to_string());
                 DaemonResponse::AcpRouteState {
                     available: route_suggestions(app),
@@ -666,6 +642,7 @@ async fn dispatch(
             }
         }
         DaemonCommand::AcpRouteSet {
+            api_principal,
             controller_instance_id,
             session_id,
             route,
@@ -675,14 +652,15 @@ async fn dispatch(
                     message: "no language_model pipeline configured".to_string(),
                 };
             };
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+                || route.trim().is_empty()
+            {
                 return DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                };
-            }
-            if session_id.trim().is_empty() || route.trim().is_empty() {
-                return DaemonResponse::Error {
-                    message: "session id and route must not be empty".to_string(),
+                    message:
+                        "API principal, controller id, session id, and route must not be empty"
+                            .to_string(),
                 };
             }
             if let Err(error) = pipeline
@@ -694,7 +672,12 @@ async fn dispatch(
                     message: format!("route is not available: {error}"),
                 };
             }
-            match acp_runtime.set_route(&controller_instance_id, &session_id, &route) {
+            match acp.runtime.set_route(
+                &api_principal,
+                &controller_instance_id,
+                &session_id,
+                &route,
+            ) {
                 Ok(lease) => DaemonResponse::AcpRouteState {
                     available: route_suggestions(app),
                     current: Some(lease.route().to_string()),
@@ -704,19 +687,21 @@ async fn dispatch(
             }
         }
         DaemonCommand::AcpRouteReset {
+            api_principal,
             controller_instance_id,
             session_id,
         } => {
-            if !acp_runtime.is_controller_active(&controller_instance_id) {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
                 DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                }
-            } else if session_id.trim().is_empty() {
-                DaemonResponse::Error {
-                    message: "session id must not be empty".to_string(),
+                    message: "API principal, controller id, and session id must not be empty"
+                        .to_string(),
                 }
             } else {
-                acp_runtime.reset_route(&controller_instance_id, &session_id);
+                acp.runtime
+                    .reset_route(&api_principal, &controller_instance_id, &session_id);
                 DaemonResponse::AcpRouteState {
                     available: route_suggestions(app),
                     current: None,

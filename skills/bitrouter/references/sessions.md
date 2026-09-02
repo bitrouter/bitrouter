@@ -1,10 +1,10 @@
-# ACP controller and one-shot sessions
+# ACP controller and native sessions
 
 How BitRouter's ACP surfaces divide ownership. For CLI flags see
 `references/cli.md` §ACP sessions; for adapter config see
 `references/providers.md` §ACP agents.
 
-## Controller vs one-shot engine
+## One controller, three drivers
 
 `bitrouter acp serve` is a connection-level ACP controller:
 
@@ -20,10 +20,21 @@ Every manager-visible `sessionId` is the opaque ID returned by the harness.
 BitRouter does not generate an alias, store a session catalog or transcript,
 or read Claude/Codex session files.
 
-`bitrouter acp prompt` and `bitrouter chat` still use the local single-session
-engine. That engine owns a local `record_id`, a FIFO turn queue, cooperative
-cancellation, optional `--turn-timeout`, telemetry, and the interactive route
-surface. Do not project those local-engine semantics onto `acp serve`.
+`bitrouter acp prompt` runs the **same controller**, in-process: it launches the
+harness behind a connection-level controller and drives it over an in-process
+duplex channel as that controller's own manager. Session identity is therefore
+harness-native there too — there is no `record_id` alias. What `prompt` adds on
+top of the controller is client-side: `--turn-timeout` (cooperative
+`session/cancel` plus a three-second grace), headless permission denial, OTel
+turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
+
+`bitrouter chat` drives the same in-process controller through the same
+client, with two additions: it declares a route namespace over the local
+daemon socket (so its traffic meters by controller instance, and the
+controller decorates `usage_update` with attributed cost), and its `/route`
+picker is built on `_bitrouter/route/list|set` — available only when the
+initialize metadata advertises them. There is no local engine, `record_id`,
+or FIFO turn queue on any path.
 
 ## Controller launch and initialization
 
@@ -48,7 +59,7 @@ harness endpoint from controller to harness; it is not a manager-side
 BitRouter route picker. The connection uses stable ACP v1 wire semantics; the
 Rust runtime crate's major version is not an ACP wire-version selector.
 
-When the controller has a trusted local daemon binding, initialize metadata
+When the controller has a local daemon route-control backend, initialize metadata
 advertises `_meta["bitrouter.dev/controller"].routeControl` with
 `version: "1"`, `scope: "session"`, and these methods:
 
@@ -65,6 +76,20 @@ BitRouter presets, logical models, or explicit provider/model routes allowed
 by current policy. `list.available` contains live logical-model picker
 suggestions, not an exhaustive grammar for presets or explicit routes. Do not
 use manager-side `providers/*` as a compatibility alias.
+
+The same trusted binding advertises `_meta["bitrouter.dev/controller"].usage`
+with `version: "1"`, `scope: "session"`, `fields: ["cost"]`, and
+`provenance: "bitrouter.dev/cost"`. It means the controller decorates the
+harness's own `usage_update` notifications: `used` and `size` are forwarded
+untouched, and `cost` is replaced by the spend BitRouter metered for that
+native session and its child agents, marked by
+`update._meta["bitrouter.dev/cost"] = "router"`. The controller never
+synthesizes a usage update — a harness that emits none shows no cost — and
+traffic BitRouter did not meter (`--direct`, an explicit `--base-url`, a
+harness on its own auth, or a session with no priced requests) leaves the
+harness's figure and `_meta` exactly as sent, with no marker. Probe the
+capability; an absent or null `usage` means `cost` is whatever the harness
+reports.
 
 ## Pinned Claude and Codex adapters
 
@@ -113,32 +138,41 @@ to opt out, `--model` to pin the logical model, `--base-url` to select a daemon,
 and `--no-start` to disable local daemon auto-start. Routing/auth failures occur
 before the ACP handshake.
 
-Local routing obtains a short-lived `brac_*` controller credential through the
-owner-only daemon control socket. That credential binds model requests and
-route leases to one controller instance. An explicit `--base-url` can still
+When API authentication is enabled, local routing uses the normal BitRouter
+API/virtual key for both model requests and the route principal. Under
+`skip_auth: true`, both use the deliberately shared `local` principal. The
+owner-only daemon socket carries route mutations but does not mint or validate
+a second route namespace. An explicit remote `--base-url` can still
 configure the harness's model endpoint, but does not advertise route controls
-because it has no reviewed trusted control binding. User API keys are never
-promoted into controller credentials.
+until hosted HTTP route control exists.
 
 The model-router ingress continues to preserve ordinary model API session
-parsing. Authenticated routed adapter requests normalize the static BitRouter
+parsing. Routed adapter requests normalize caller-declared BitRouter
 controller/harness headers together with Claude or Codex native
 session/thread/agent/turn evidence. Session routes are ephemeral leases keyed
-by authenticated controller plus native session. An explicit caller route or
-preset and a Responses continuation pin remain stronger than a lease.
+by API principal, declared controller, and native session. These headers are
+correlation and routing claims, not authenticated facts; processes sharing one
+API key can deliberately reuse them. An explicit caller route or preset and a
+Responses continuation pin remain stronger than a lease.
 
 Close/delete removes a lease only after the harness operation succeeds;
-disconnect, credential expiry, reset, and controller revocation also clean it
-up. None of these operations changes harness session storage. The normalized
+disconnect, lease expiry, reset, daemon restart, and controller cleanup also
+remove it. None of these operations changes harness session storage. The normalized
 identity event joins controlled capture/replay, spans, route decisions, and
 nullable metering columns by `router_request_id`; authorization, cookies, and
 credentials are excluded, and raw identifiers are never aggregate metric
-labels. The controller does not synthesize manager-facing per-session cost.
+labels. The controller decorates, and never synthesizes, manager-facing
+per-session cost; see the `usage` capability above.
 
 ## One-shot NDJSON
 
-`acp prompt`/`spawn -p` emits a first `session` line with its local `record_id`
-and `via`, followed by `message_chunk`, `thought_chunk`, `tool_call`,
-`tool_call_update`, and `usage` lines, then a `result` line. `--no-wait` emits
-`submitted`. This format belongs to the single-session engine only; it is not
-the `acp serve` wire format.
+`acp prompt`/`spawn -p` emits a first `session` line carrying the
+**harness-native** `session_id` (plus `agent_session_id` when the harness
+exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
+joins to spend: the daemon attributes ACP traffic by an authenticated
+controller namespace, which only `acp serve` and `chat` declare, so a prompt session's
+rows carry no controller instance to key on.
+It no longer carries `record_id`; that alias is off the wire. Then come
+`message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`
+lines, and a `result` line. `--no-wait` emits `submitted`. This NDJSON
+presentation belongs to `prompt` only; it is not the `acp serve` wire format.

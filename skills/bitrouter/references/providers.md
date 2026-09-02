@@ -409,7 +409,7 @@ Codex `-c` arguments.
 
 Every session ID and lifecycle operation remains harness-native. The controller
 stores neither transcripts nor a second session catalog, and it exits when the
-manager disconnects. For one-shot local-engine use,
+manager disconnects. For a one-shot turn on the same controller,
 `bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See
 `references/sessions.md` for the complete ownership boundary.
 

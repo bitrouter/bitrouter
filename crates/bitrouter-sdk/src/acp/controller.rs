@@ -6,21 +6,26 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use agent_client_protocol::schema::InitializeProxyRequest;
 use agent_client_protocol::schema::v1::{
-    Implementation, InitializeResponse, ListProvidersRequest, ListProvidersResponse, LlmProtocol,
-    Meta, SetProviderRequest, SetProviderResponse,
+    Cost, Implementation, InitializeResponse, ListProvidersRequest, ListProvidersResponse,
+    LlmProtocol, Meta, SessionNotification, SetProviderRequest, SetProviderResponse,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     Agent, Client, Conductor, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled,
-    Proxy, Responder,
+    JsonRpcMessage, Proxy, Responder, UntypedMessage,
 };
+// The only conductor use in the workspace, and the reason `acp-controller`
+// exists as a separate feature: this crate reaches `axum` non-optionally
+// through `agent-client-protocol-trace-viewer`. Everything else in this module
+// — the route-control types `acp::client` depends on — names no conductor type
+// and stays on plain `acp`.
+#[cfg(feature = "acp-controller")]
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 
-// agent-client-protocol-schema 1.5 exposes the unstable provider payloads,
-// while agent-client-protocol 2.0 does not yet attach its JSON-RPC traits to
-// them. Transparent local wrappers supply only that missing method binding;
-// the request and response bodies remain the official typed schema values.
+// Provider configuration remains an unstable internal extension. Transparent
+// local wrappers supply its method binding; request and response bodies remain
+// the official typed schema values.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
@@ -184,7 +189,7 @@ pub struct RouteControlError {
 }
 
 impl RouteControlError {
-    /// The daemon or trusted controller binding is unavailable.
+    /// The configured route-control backend is unavailable.
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self {
             code: "route_control_unavailable",
@@ -229,8 +234,34 @@ pub trait RouteControl: Send + Sync {
     async fn reset(&self, session_id: &str) -> Result<RouteControlState, RouteControlError>;
     /// Remove route state after the harness accepted close/delete.
     async fn session_closed(&self, session_id: &str) -> Result<(), RouteControlError>;
-    /// Revoke controller-owned authority and leases after disconnect.
+    /// Remove this controller connection's route leases after disconnect.
     async fn disconnected(&self) -> Result<(), RouteControlError>;
+}
+
+/// `_meta` key on a decorated usage update naming **whose** figure `cost` is.
+///
+/// Present with [`COST_PROVENANCE_ROUTER`] when BitRouter metered and
+/// attributed the session's traffic; absent when the figure is the harness's
+/// own, forwarded untouched, or when there is no figure. It marks provenance,
+/// not scope: `cost` is specified as cumulative session cost and is never
+/// anything wider. Namespaced beside `bitrouter.dev/controller`.
+pub const COST_PROVENANCE_META_KEY: &str = "bitrouter.dev/cost";
+
+/// The [`COST_PROVENANCE_META_KEY`] value for a figure BitRouter metered.
+pub const COST_PROVENANCE_ROUTER: &str = "router";
+
+/// App-owned bridge from the protocol controller to session-attributed spend.
+///
+/// The controller never synthesizes a usage update: it consults this bridge
+/// only when the harness has emitted one, and decorates that update's `cost`
+/// with the answer while `used` and `size` pass through untouched. `None`
+/// means BitRouter did not meter this session's traffic, or holds no priced
+/// evidence for it, and the update is forwarded exactly as it arrived —
+/// never `$0.00`, never a wider figure.
+#[async_trait]
+pub trait SessionCost: Send + Sync {
+    /// Cumulative spend BitRouter attributed to one native session, if any.
+    async fn attributed_cost(&self, session_id: &str) -> Option<Cost>;
 }
 
 /// Non-secret identity of the pinned harness adapter behind one controller.
@@ -320,6 +351,7 @@ pub struct Controller<A> {
     agent: A,
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 impl<A> Controller<A>
@@ -332,6 +364,7 @@ where
             agent,
             config,
             route_control: None,
+            session_cost: None,
         }
     }
 
@@ -342,7 +375,25 @@ where
         self
     }
 
+    /// Install the app-owned bridge that decorates the harness's usage
+    /// updates with session-attributed cost.
+    #[must_use]
+    pub fn session_cost(mut self, session_cost: Arc<dyn SessionCost>) -> Self {
+        self.session_cost = Some(session_cost);
+        self
+    }
+
     /// Serve the controller on a manager-facing ACP transport.
+    ///
+    /// Gated on `acp-controller`: this is the one method that reaches
+    /// `agent-client-protocol-conductor`, and that crate depends on
+    /// `agent-client-protocol-trace-viewer` -> `axum`, non-optionally. Building
+    /// and configuring a `Controller` needs none of it, and neither do this
+    /// module's route-control types, which `acp::client` imports — so plain
+    /// `acp` stays free of an HTTP server and only *serving* a controller pays
+    /// for one.
+    #[cfg(feature = "acp-controller")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "acp-controller")))]
     pub async fn run(
         self,
         transport: impl ConnectTo<Agent>,
@@ -352,6 +403,7 @@ where
         let proxy = ControllerProxy {
             config: self.config,
             route_control,
+            session_cost: self.session_cost,
         };
         let result = ConductorImpl::new_agent(
             "bitrouter-acp-controller",
@@ -376,6 +428,7 @@ where
 struct ControllerProxy {
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 const INITIALIZE_NOT_STARTED: u8 = 0;
@@ -391,6 +444,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let config = Arc::new(self.config);
         let route_control = self.route_control;
         let route_control_enabled = route_control.is_some();
+        let session_cost = self.session_cost;
+        let session_cost_enabled = session_cost.is_some();
         let list_control = route_control.clone();
         let set_control = route_control.clone();
         let reset_control = route_control.clone();
@@ -453,6 +508,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                 &mut response,
                                 &config,
                                 route_control_enabled,
+                                session_cost_enabled,
                             );
                             initialize_state.store(INITIALIZE_READY, Ordering::SeqCst);
                             responder.respond(response)
@@ -649,6 +705,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
             )
             .with_handler(ForwardMessages {
                 initialize_state: forwarding_state,
+                session_cost,
             })
             .connect_to(client)
             .await
@@ -657,7 +714,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
 
 fn route_control_unavailable() -> agent_client_protocol::Error {
     agent_client_protocol::Error::method_not_found()
-        .data("BitRouter route control requires a trusted local daemon binding")
+        .data("BitRouter route control is unavailable on this controller connection")
 }
 
 fn initialization_incomplete() -> agent_client_protocol::Error {
@@ -723,6 +780,7 @@ fn decorate_initialize_response(
     response: &mut InitializeResponse,
     config: &ControllerConfig,
     route_control_enabled: bool,
+    session_cost_enabled: bool,
 ) {
     let upstream_info = response.agent_info.as_ref().map(|info| {
         serde_json::json!({
@@ -747,6 +805,17 @@ fn decorate_initialize_response(
             "scope": "session"
         })
     });
+    // Attributed cost is a capability, advertised the same way as route
+    // control: a manager probes version, scope, and field presence here and
+    // never infers it from the agent name.
+    let usage = session_cost_enabled.then(|| {
+        serde_json::json!({
+            "version": "1",
+            "fields": ["cost"],
+            "scope": "session",
+            "provenance": COST_PROVENANCE_META_KEY,
+        })
+    });
     let controller_meta = serde_json::json!({
         "harnessId": config.identity.harness_id,
         "adapter": {
@@ -755,6 +824,7 @@ fn decorate_initialize_response(
         },
         "upstreamAgentInfo": upstream_info,
         "routeControl": route_control,
+        "usage": usage,
     });
     response
         .meta
@@ -764,6 +834,7 @@ fn decorate_initialize_response(
 
 struct ForwardMessages {
     initialize_state: std::sync::Arc<AtomicU8>,
+    session_cost: Option<Arc<dyn SessionCost>>,
 }
 
 fn reject_manager_dispatch(
@@ -805,6 +876,19 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
             })
             .await
             .if_dispatch_from(Agent, async |message: Dispatch| {
+                // The one harness message the controller looks inside: a
+                // `session/update`, and only when a cost bridge is installed.
+                // Everything else keeps the verbatim path.
+                let message = match (message, self.session_cost.as_deref()) {
+                    (Dispatch::Notification(notification), Some(session_cost))
+                        if SessionNotification::matches_method(notification.method()) =>
+                    {
+                        Dispatch::Notification(
+                            decorate_usage_update(session_cost, notification).await,
+                        )
+                    }
+                    (message, _) => message,
+                };
                 connection.send_proxied_message_to(Client, message)?;
                 Ok(Handled::Yes)
             })
@@ -817,39 +901,115 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
     }
 }
 
+/// Wire tag of the one `session/update` kind the controller decorates.
+///
+/// Pinned against the schema by `usage_update_kind_matches_the_schema`, so a
+/// renamed variant fails a test rather than silently ending decoration.
+const USAGE_UPDATE_KIND: &str = "usage_update";
+
+/// Decorate one harness `session/update` that carries a usage update with the
+/// session's attributed cost.
+///
+/// Deliberately narrow: any other update kind, any shape this controller does
+/// not recognise, and any lookup that yields no figure returns the
+/// notification exactly as it arrived. Nothing here can drop or fail a
+/// message.
+async fn decorate_usage_update(
+    session_cost: &dyn SessionCost,
+    notification: UntypedMessage,
+) -> UntypedMessage {
+    let Some(session_id) = usage_update_session(notification.params()) else {
+        return notification;
+    };
+    let Some(cost) = session_cost.attributed_cost(session_id).await else {
+        return notification;
+    };
+    match with_attributed_cost(notification.params(), cost) {
+        Some(params) => UntypedMessage {
+            method: notification.method,
+            params,
+        },
+        None => notification,
+    }
+}
+
+/// The session a `session/update` belongs to, when its update is a usage
+/// update; `None` for every other kind and for anything malformed.
+fn usage_update_session(params: &serde_json::Value) -> Option<&str> {
+    let kind = params.get("update")?.get("sessionUpdate")?.as_str()?;
+    if kind != USAGE_UPDATE_KIND {
+        return None;
+    }
+    params.get("sessionId")?.as_str()
+}
+
+/// A copy of `params` whose usage update carries BitRouter's `cost` and the
+/// provenance marker. `used`, `size`, every other field of the update, and
+/// the notification's own `_meta` stay the harness's, byte for byte.
+///
+/// `None` when `update` or its `_meta` is not an object; the caller then
+/// forwards the original rather than guess at a shape it does not know.
+fn with_attributed_cost(params: &serde_json::Value, cost: Cost) -> Option<serde_json::Value> {
+    let cost = serde_json::to_value(cost).ok()?;
+    let mut params = params.clone();
+    let update = params.get_mut("update")?.as_object_mut()?;
+    update.insert("cost".to_string(), cost);
+    let meta = update
+        .entry("_meta")
+        .or_insert_with(|| serde_json::Value::Object(Meta::new()));
+    if meta.is_null() {
+        *meta = serde_json::Value::Object(Meta::new());
+    }
+    meta.as_object_mut()?.insert(
+        COST_PROVENANCE_META_KEY.to_string(),
+        serde_json::Value::String(COST_PROVENANCE_ROUTER.to_string()),
+    );
+    Some(params)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use agent_client_protocol::schema::ProtocolVersion;
     use agent_client_protocol::schema::v1::{
-        AgentCapabilities, CancelNotification, ClientCapabilities, CloseSessionRequest,
-        CloseSessionResponse, ContentBlock, ContentChunk, DeleteSessionRequest,
-        DeleteSessionResponse, FileSystemCapabilities, ForkSessionRequest, ForkSessionResponse,
-        Implementation, InitializeRequest, InitializeResponse, ListProvidersResponse,
-        ListSessionsRequest, ListSessionsResponse, LlmProtocol, LoadSessionRequest,
-        LoadSessionResponse, Meta, NewSessionRequest, NewSessionResponse, PermissionOption,
-        PermissionOptionKind, PromptRequest, PromptResponse, ProviderCurrentConfig, ProviderInfo,
-        ProvidersCapabilities, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-        RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-        ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities,
-        SessionCloseCapabilities, SessionDeleteCapabilities, SessionForkCapabilities, SessionId,
-        SessionInfo, SessionListCapabilities, SessionNotification, SessionResumeCapabilities,
-        SessionUpdate, SetProviderRequest, SetProviderResponse, SetSessionConfigOptionRequest,
-        SetSessionConfigOptionResponse, StopReason, TextContent, ToolCallUpdate,
-        ToolCallUpdateFields,
+        AgentAuthCapabilities, AgentCapabilities, AuthCapabilities, AuthMethod, AuthMethodAgent,
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ClientCapabilities,
+        CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Cost,
+        CreateElicitationRequest, CreateElicitationResponse, CreateTerminalRequest,
+        CreateTerminalResponse, DeleteSessionRequest, DeleteSessionResponse, ElicitationAction,
+        ElicitationCapabilities, ElicitationFormCapabilities, ElicitationFormMode,
+        ElicitationSchema, ElicitationSessionScope, FileSystemCapabilities, ForkSessionRequest,
+        ForkSessionResponse, Implementation, InitializeRequest, InitializeResponse,
+        KillTerminalRequest, KillTerminalResponse, ListProvidersResponse, ListSessionsRequest,
+        ListSessionsResponse, LlmProtocol, LoadSessionRequest, LoadSessionResponse,
+        LogoutCapabilities, LogoutRequest, LogoutResponse, Meta, NewSessionRequest,
+        NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+        ProviderCurrentConfig, ProviderInfo, ProvidersCapabilities, ReadTextFileRequest,
+        ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+        ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome,
+        SessionCapabilities, SessionCloseCapabilities, SessionDeleteCapabilities,
+        SessionForkCapabilities, SessionId, SessionInfo, SessionListCapabilities,
+        SessionNotification, SessionResumeCapabilities, SessionUpdate, SetProviderRequest,
+        SetProviderResponse, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+        SetSessionModeRequest, SetSessionModeResponse, StopReason, TerminalExitStatus,
+        TerminalOutputRequest, TerminalOutputResponse, TextContent, ToolCallUpdate,
+        ToolCallUpdateFields, UsageUpdate, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
+        WriteTextFileRequest, WriteTextFileResponse,
     };
     use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcResponse};
     use tokio::io::duplex;
     use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
     use super::{
-        Controller, ControllerConfig, ControllerIdentity, ListProvidersRpc,
-        ListProvidersRpcResponse, ProviderEndpointPlan, RouteControl, RouteControlError,
-        RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest, SetProviderRpc,
-        SetProviderRpcResponse,
+        COST_PROVENANCE_META_KEY, Controller, ControllerConfig, ControllerIdentity,
+        ListProvidersRpc, ListProvidersRpcResponse, ProviderEndpointPlan, RouteControl,
+        RouteControlError, RouteControlState, RouteListRequest, RouteResetRequest, RouteSetRequest,
+        SessionCost, SetProviderRpc, SetProviderRpcResponse,
     };
 
     async fn receive<T: JsonRpcResponse + Send>(
@@ -958,6 +1118,78 @@ mod tests {
         }
     }
 
+    /// Harness that answers each prompt with a message chunk and then its own
+    /// usage update — occupancy figures, a cost of its own, and `_meta` on
+    /// both the update and the notification — so a decoration that touched
+    /// anything beyond `cost` and the marker would show.
+    struct UsageAgent;
+
+    impl ConnectTo<Client> for UsageAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Agent
+                .builder()
+                .name("usage-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, connection| {
+                        let session_id = request.session_id.clone();
+                        connection.send_notification(SessionNotification::new(
+                            session_id.clone(),
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new("hi")),
+                            )),
+                        ))?;
+                        connection.send_notification(
+                            SessionNotification::new(
+                                session_id.clone(),
+                                SessionUpdate::UsageUpdate(
+                                    UsageUpdate::new(1_200, 200_000)
+                                        .cost(Cost::new(9.99, "EUR"))
+                                        .meta(Meta::from_iter([(
+                                            "harness.usage".to_string(),
+                                            serde_json::json!(true),
+                                        )])),
+                                ),
+                            )
+                            .meta(Meta::from_iter([(
+                                "harness.update".to_string(),
+                                serde_json::json!(session_id.0.as_ref()),
+                            )])),
+                        )?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    /// Bridge that knows a figure for some sessions and records every lookup,
+    /// so a test can pin that only usage updates trigger one.
+    struct RecordingSessionCost {
+        figures: HashMap<String, f64>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionCost for RecordingSessionCost {
+        async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
+            record(&self.asked, session_id.to_string());
+            self.figures
+                .get(session_id)
+                .map(|amount| Cost::new(*amount, "USD"))
+        }
+    }
+
     #[derive(
         Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
     )]
@@ -995,6 +1227,9 @@ mod tests {
         initialize: Mutex<Option<InitializeRequest>>,
         permission_completed: AtomicBool,
         read_completed: AtomicBool,
+        write_completed: AtomicBool,
+        terminal_completed: AtomicBool,
+        elicitation_completed: AtomicBool,
         extension_completed: AtomicBool,
     }
 
@@ -1161,6 +1396,177 @@ mod tests {
                                 Ordering::SeqCst,
                             );
 
+                            let write = receive(
+                                connection.send_request(
+                                    WriteTextFileRequest::new(
+                                        request.session_id.clone(),
+                                        "/workspace/native.txt",
+                                        "harness-file",
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.write".to_string(),
+                                        serde_json::json!({"opaque": true}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let write = match write {
+                                Ok(write) => write,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.write_completed.store(
+                                write
+                                    .meta
+                                    .as_ref()
+                                    .is_some_and(|meta| meta.contains_key("manager.write")),
+                                Ordering::SeqCst,
+                            );
+
+                            let terminal = receive(
+                                connection.send_request(
+                                    CreateTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        "native-command",
+                                    )
+                                    .args(vec!["--opaque".to_string()])
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "create"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let terminal = match terminal {
+                                Ok(terminal) => terminal,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let terminal_id = terminal.terminal_id.clone();
+                            let create_preserved = terminal
+                                .meta
+                                .as_ref()
+                                .is_some_and(|meta| meta.contains_key("manager.terminal.create"));
+                            let output = receive(
+                                connection.send_request(
+                                    TerminalOutputRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "output"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let output = match output {
+                                Ok(output) => output,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let wait = receive(
+                                connection.send_request(
+                                    WaitForTerminalExitRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "wait"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let wait = match wait {
+                                Ok(wait) => wait,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let killed = receive(
+                                connection.send_request(
+                                    KillTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "kill"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let killed = match killed {
+                                Ok(killed) => killed,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let released = receive(
+                                connection.send_request(
+                                    ReleaseTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id,
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "release"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let released = match released {
+                                Ok(released) => released,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.terminal_completed.store(
+                                create_preserved
+                                    && output.output == "manager-output"
+                                    && output
+                                        .exit_status
+                                        .as_ref()
+                                        .and_then(|status| status.exit_code)
+                                        == Some(0)
+                                    && output.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.output")
+                                    })
+                                    && wait.exit_status.exit_code == Some(0)
+                                    && wait.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.wait")
+                                    })
+                                    && killed.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.kill")
+                                    })
+                                    && released.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.release")
+                                    }),
+                                Ordering::SeqCst,
+                            );
+
+                            let elicitation = receive(
+                                connection.send_request(
+                                    CreateElicitationRequest::new(
+                                        ElicitationFormMode::new(
+                                            ElicitationSessionScope::new(
+                                                request.session_id.clone(),
+                                            ),
+                                            ElicitationSchema::new().string("answer", true),
+                                        ),
+                                        "Choose an answer",
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.elicitation".to_string(),
+                                        serde_json::json!({"opaque": true}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let elicitation = match elicitation {
+                                Ok(elicitation) => elicitation,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.elicitation_completed.store(
+                                matches!(elicitation.action, ElicitationAction::Decline)
+                                    && elicitation.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.elicitation")
+                                    }),
+                                Ordering::SeqCst,
+                            );
+
                             let extension = receive(connection.send_request(
                                 HarnessExtensionRequest(serde_json::json!({
                                     "sessionId": request.session_id,
@@ -1214,39 +1620,85 @@ mod tests {
             let delete_state = Arc::clone(&self.state);
             let fork_state = Arc::clone(&self.state);
             let config_state = Arc::clone(&self.state);
+            let mode_state = Arc::clone(&self.state);
+            let auth_state = Arc::clone(&self.state);
+            let logout_state = Arc::clone(&self.state);
             Agent
                 .builder()
                 .name("transparent-agent")
                 .on_receive_request(
                     async move |request: InitializeRequest, responder, _connection| {
                         responder.respond(
-                            InitializeResponse::new(request.protocol_version).agent_capabilities(
-                                AgentCapabilities::new()
-                                    .load_session(true)
-                                    .session_capabilities(
-                                        SessionCapabilities::new()
-                                            .list(SessionListCapabilities::new())
-                                            .delete(SessionDeleteCapabilities::new())
-                                            .fork(SessionForkCapabilities::new())
-                                            .resume(SessionResumeCapabilities::new())
-                                            .close(SessionCloseCapabilities::new()),
+                            InitializeResponse::new(request.protocol_version)
+                                .agent_capabilities(
+                                    AgentCapabilities::new()
+                                        .load_session(true)
+                                        .auth(
+                                            AgentAuthCapabilities::new()
+                                                .logout(LogoutCapabilities::new()),
+                                        )
+                                        .session_capabilities(
+                                            SessionCapabilities::new()
+                                                .list(SessionListCapabilities::new())
+                                                .delete(SessionDeleteCapabilities::new())
+                                                .fork(SessionForkCapabilities::new())
+                                                .resume(SessionResumeCapabilities::new())
+                                                .close(SessionCloseCapabilities::new()),
+                                        ),
+                                )
+                                .auth_methods(vec![AuthMethod::Agent(
+                                    AuthMethodAgent::new("native-auth", "Native auth").meta(
+                                        Meta::from_iter([(
+                                            "harness.authMethod".to_string(),
+                                            serde_json::json!(true),
+                                        )]),
                                     ),
-                            ),
+                                )]),
                         )
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async move |_request: NewSessionRequest, responder, _connection| {
+                    async move |request: NewSessionRequest, responder, _connection| {
                         let index = new_state.next_session.fetch_add(1, Ordering::SeqCst);
                         let session_id = if index == 0 { "native-a" } else { "native-b" };
                         record(&new_state.requests, format!("new:{session_id}"));
+                        record(
+                            &new_state.requests,
+                            format!(
+                                "new-input:{}:{}",
+                                request.cwd.display(),
+                                request
+                                    .additional_directories
+                                    .iter()
+                                    .map(|path| path.display().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                        );
                         responder.respond(NewSessionResponse::new(session_id).meta(
                             Meta::from_iter([(
                                 "harness.response".to_string(),
                                 serde_json::json!(session_id),
                             )]),
                         ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: AuthenticateRequest, responder, _connection| {
+                        record(
+                            &auth_state.requests,
+                            format!("authenticate:{}", request.method_id.0),
+                        );
+                        responder.respond(AuthenticateResponse::new().meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: LogoutRequest, responder, _connection| {
+                        record(&logout_state.requests, "logout".to_string());
+                        responder.respond(LogoutResponse::new().meta(request.meta))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1369,6 +1821,16 @@ mod tests {
                         responder.respond(
                             SetSessionConfigOptionResponse::new(Vec::new()).meta(request.meta),
                         )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionModeRequest, responder, _connection| {
+                        record(
+                            &mode_state.requests,
+                            format!("mode:{}:{}", request.session_id.0, request.mode_id.0),
+                        );
+                        responder.respond(SetSessionModeResponse::new().meta(request.meta))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1615,6 +2077,22 @@ mod tests {
                     )]);
                     let capabilities = ClientCapabilities::new()
                         .terminal(true)
+                        .auth(
+                            AuthCapabilities::new()
+                                .terminal(true)
+                                .meta(Meta::from_iter([(
+                                    "client.auth".to_string(),
+                                    serde_json::json!({"terminal": "opaque"}),
+                                )])),
+                        )
+                        .elicitation(
+                            ElicitationCapabilities::new()
+                                .form(ElicitationFormCapabilities::new())
+                                .meta(Meta::from_iter([(
+                                    "client.elicitation".to_string(),
+                                    serde_json::json!({"form": "opaque"}),
+                                )])),
+                        )
                         .meta(capability_meta.clone());
                     let response = receive(
                         connection.send_request(
@@ -1687,6 +2165,32 @@ mod tests {
         };
         assert_eq!(requests.len(), 1, "initialize must reach the harness once");
         assert!(requests[0].client_capabilities.terminal);
+        assert!(requests[0].client_capabilities.auth.terminal);
+        assert_eq!(
+            requests[0]
+                .client_capabilities
+                .auth
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("client.auth")),
+            Some(&serde_json::json!({"terminal": "opaque"}))
+        );
+        assert!(
+            requests[0]
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .is_some_and(ElicitationCapabilities::supports_form)
+        );
+        assert_eq!(
+            requests[0]
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .and_then(|elicitation| elicitation.meta.as_ref())
+                .and_then(|meta| meta.get("client.elicitation")),
+            Some(&serde_json::json!({"form": "opaque"}))
+        );
         assert_eq!(
             requests[0]
                 .client_capabilities
@@ -2061,11 +2565,39 @@ mod tests {
             .connect_with(
                 manager_transport,
                 async |connection: ConnectionTo<Agent>| {
-                    receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
-                        .await?;
-                    let native_a =
-                        receive(connection.send_request(NewSessionRequest::new("/workspace")))
-                            .await?;
+                    let initialized = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await?;
+                    assert_eq!(initialized.auth_methods.len(), 1);
+                    assert_eq!(initialized.auth_methods[0].id().0.as_ref(), "native-auth");
+                    assert!(
+                        initialized.auth_methods[0]
+                            .meta()
+                            .is_some_and(|meta| meta.contains_key("harness.authMethod"))
+                    );
+                    assert!(initialized.agent_capabilities.auth.logout.is_some());
+                    let auth_meta = Meta::from_iter([(
+                        "manager.auth".to_string(),
+                        serde_json::json!({"opaque": true}),
+                    )]);
+                    let authenticated = receive(connection.send_request(
+                        AuthenticateRequest::new("native-auth").meta(auth_meta.clone()),
+                    ))
+                    .await?;
+                    assert_eq!(authenticated.meta, Some(auth_meta.clone()));
+                    let logged_out = receive(
+                        connection.send_request(LogoutRequest::new().meta(auth_meta.clone())),
+                    )
+                    .await?;
+                    assert_eq!(logged_out.meta, Some(auth_meta));
+                    let native_a = receive(
+                        connection.send_request(
+                            NewSessionRequest::new("/workspace")
+                                .additional_directories(vec![PathBuf::from("/workspace-extra")]),
+                        ),
+                    )
+                    .await?;
                     let native_b =
                         receive(connection.send_request(NewSessionRequest::new("/workspace")))
                             .await?;
@@ -2174,7 +2706,15 @@ mod tests {
                         ),
                     )
                     .await?;
-                    assert_eq!(configured.meta, Some(request_meta));
+                    assert_eq!(configured.meta, Some(request_meta.clone()));
+                    let mode = receive(
+                        connection.send_request(
+                            SetSessionModeRequest::new("never-observed-mode", "review")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(mode.meta, Some(request_meta));
 
                     let error =
                         receive(connection.send_request(DeleteSessionRequest::new("reject-me")))
@@ -2196,6 +2736,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         for expected in [
+            "authenticate:native-auth",
+            "logout",
+            "new-input:/workspace:/workspace-extra",
             "prompt:native-a",
             "prompt:native-b",
             "list:harness-cursor",
@@ -2205,6 +2748,7 @@ mod tests {
             "delete:never-observed-delete",
             "fork:never-observed-fork",
             "config:never-observed-config",
+            "mode:never-observed-mode:review",
             "delete:reject-me",
         ] {
             assert!(requests.iter().any(|request| request == expected));
@@ -2310,6 +2854,147 @@ mod tests {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
+                async move |request: WriteTextFileRequest, responder, _connection| {
+                    if request.path.to_string_lossy() != "/workspace/native.txt"
+                        || request.content != "harness-file"
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.write"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("write request was changed")),
+                        );
+                    }
+                    responder.respond(WriteTextFileResponse::new().meta(Meta::from_iter([(
+                        "manager.write".to_string(),
+                        serde_json::json!(["preserved"]),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CreateTerminalRequest, responder, _connection| {
+                    if request.command != "native-command"
+                        || request.args != ["--opaque"]
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.terminal"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal create was changed")),
+                        );
+                    }
+                    responder.respond(CreateTerminalResponse::new("manager-terminal").meta(
+                        Meta::from_iter([(
+                            "manager.terminal.create".to_string(),
+                            serde_json::json!(true),
+                        )]),
+                    ))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: TerminalOutputRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal output id was changed")),
+                        );
+                    }
+                    responder.respond(
+                        TerminalOutputResponse::new("manager-output", false)
+                            .exit_status(TerminalExitStatus::new().exit_code(0))
+                            .meta(Meta::from_iter([(
+                                "manager.terminal.output".to_string(),
+                                serde_json::json!(true),
+                            )])),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: WaitForTerminalExitRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal wait id was changed")),
+                        );
+                    }
+                    responder.respond(
+                        WaitForTerminalExitResponse::new(TerminalExitStatus::new().exit_code(0))
+                            .meta(Meta::from_iter([(
+                                "manager.terminal.wait".to_string(),
+                                serde_json::json!(true),
+                            )])),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: KillTerminalRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal kill id was changed")),
+                        );
+                    }
+                    responder.respond(KillTerminalResponse::new().meta(Meta::from_iter([(
+                        "manager.terminal.kill".to_string(),
+                        serde_json::json!(true),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: ReleaseTerminalRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal release id was changed")),
+                        );
+                    }
+                    responder.respond(ReleaseTerminalResponse::new().meta(Meta::from_iter([(
+                        "manager.terminal.release".to_string(),
+                        serde_json::json!(true),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CreateElicitationRequest, responder, _connection| {
+                    let schema_preserved = matches!(
+                        &request.mode,
+                        agent_client_protocol::schema::v1::ElicitationMode::Form(form)
+                            if form.requested_schema.properties.contains_key("answer")
+                    );
+                    if !schema_preserved
+                        || request.message != "Choose an answer"
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.elicitation"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("elicitation request was changed")),
+                        );
+                    }
+                    responder.respond(
+                        CreateElicitationResponse::new(ElicitationAction::Decline).meta(
+                            Meta::from_iter([(
+                                "manager.elicitation".to_string(),
+                                serde_json::json!(true),
+                            )]),
+                        ),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
                 async move |request: HarnessExtensionRequest, responder, _connection| {
                     responder.respond(HarnessExtensionResponse(serde_json::json!({
                         "managerEcho": request.0,
@@ -2326,8 +3011,14 @@ mod tests {
                         connection.send_request(
                             InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
                                 ClientCapabilities::new()
-                                    .fs(FileSystemCapabilities::new().read_text_file(true))
-                                    .terminal(true),
+                                    .fs(FileSystemCapabilities::new()
+                                        .read_text_file(true)
+                                        .write_text_file(true))
+                                    .terminal(true)
+                                    .elicitation(
+                                        ElicitationCapabilities::new()
+                                            .form(ElicitationFormCapabilities::new()),
+                                    ),
                             ),
                         ),
                     )
@@ -2379,9 +3070,20 @@ mod tests {
         }
         .ok_or_else(|| anyhow::anyhow!("harness did not receive initialize"))?;
         assert!(initialize.client_capabilities.fs.read_text_file);
+        assert!(initialize.client_capabilities.fs.write_text_file);
         assert!(initialize.client_capabilities.terminal);
+        assert!(
+            initialize
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .is_some_and(ElicitationCapabilities::supports_form)
+        );
         assert!(state.permission_completed.load(Ordering::SeqCst));
         assert!(state.read_completed.load(Ordering::SeqCst));
+        assert!(state.write_completed.load(Ordering::SeqCst));
+        assert!(state.terminal_completed.load(Ordering::SeqCst));
+        assert!(state.elicitation_completed.load(Ordering::SeqCst));
         assert!(state.extension_completed.load(Ordering::SeqCst));
         Ok(())
     }
@@ -2490,6 +3192,244 @@ mod tests {
             .clone();
         assert_eq!(closed, vec!["close-me"]);
         assert!(routes.disconnected.load(Ordering::SeqCst));
+        Ok(())
+    }
+
+    /// Drive `UsageAgent` through a controller and collect every
+    /// `session/update` the manager receives, plus the initialize `_meta`.
+    async fn run_usage_manager(
+        controller: Controller<UsageAgent>,
+    ) -> anyhow::Result<(Option<Meta>, Vec<SessionNotification>)> {
+        let updates = Arc::new(Mutex::new(Vec::<SessionNotification>::new()));
+        let observed_updates = Arc::clone(&updates);
+        let initialize_meta = Arc::new(Mutex::new(None));
+        let observed_meta = Arc::clone(&initialize_meta);
+        let (manager_out, controller_in) = duplex(16_384);
+        let (controller_out, manager_in) = duplex(16_384);
+        let controller_transport = agent_client_protocol::ByteStreams::new(
+            controller_out.compat_write(),
+            controller_in.compat(),
+        );
+        let manager_transport = agent_client_protocol::ByteStreams::new(
+            manager_out.compat_write(),
+            manager_in.compat(),
+        );
+
+        Client
+            .builder()
+            .name("usage-manager")
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    record(&observed_updates, notification);
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .with_spawned(|_connection| async move { controller.run(controller_transport).await })
+            .connect_with(
+                manager_transport,
+                async |connection: ConnectionTo<Agent>| {
+                    let initialized = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await?;
+                    match observed_meta.lock() {
+                        Ok(mut meta) => *meta = initialized.meta,
+                        Err(poisoned) => *poisoned.into_inner() = initialized.meta,
+                    }
+                    for session in ["native-a", "native-b"] {
+                        let response = receive(connection.send_request(PromptRequest::new(
+                            session,
+                            vec![ContentBlock::Text(TextContent::new("go"))],
+                        )))
+                        .await?;
+                        assert_eq!(response.stop_reason, StopReason::EndTurn);
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
+
+        let meta = match initialize_meta.lock() {
+            Ok(meta) => meta.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        let updates = match updates.lock() {
+            Ok(updates) => updates.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        Ok((meta, updates))
+    }
+
+    fn usage_for(
+        updates: &[SessionNotification],
+        session: &str,
+    ) -> anyhow::Result<(UsageUpdate, Option<Meta>)> {
+        updates
+            .iter()
+            .find_map(|notification| match &notification.update {
+                SessionUpdate::UsageUpdate(usage)
+                    if notification.session_id.0.as_ref() == session =>
+                {
+                    Some((usage.clone(), notification.meta.clone()))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("usage update for {session} did not reach the manager"))
+    }
+
+    #[tokio::test]
+    async fn usage_updates_are_decorated_with_attributed_cost_only() -> anyhow::Result<()> {
+        let bridge = Arc::new(RecordingSessionCost {
+            figures: HashMap::from([("native-a".to_string(), 0.42)]),
+            asked: Mutex::new(Vec::new()),
+        });
+        let controller = Controller::new(
+            UsageAgent,
+            ControllerConfig::new(ControllerIdentity::new(
+                "claude-acp",
+                "@agentclientprotocol/claude-agent-acp",
+                "0.70.0",
+            )),
+        )
+        .session_cost(bridge.clone());
+
+        let (meta, updates) = run_usage_manager(controller).await?;
+
+        // C4: advertised as a capability, gated like route control.
+        assert_eq!(
+            meta.as_ref()
+                .and_then(|meta| meta.get("bitrouter.dev/controller"))
+                .and_then(|value| value.get("usage")),
+            Some(&serde_json::json!({
+                "version": "1",
+                "fields": ["cost"],
+                "scope": "session",
+                "provenance": "bitrouter.dev/cost",
+            }))
+        );
+
+        // C1–C3: the attributed session's update carries BitRouter's figure
+        // and the provenance marker; occupancy and every other field are the
+        // harness's.
+        let (attributed, notification_meta) = usage_for(&updates, "native-a")?;
+        assert_eq!((attributed.used, attributed.size), (1_200, 200_000));
+        assert_eq!(attributed.cost, Some(Cost::new(0.42, "USD")));
+        let attributed_meta = attributed
+            .meta
+            .ok_or_else(|| anyhow::anyhow!("decorated update lost its _meta"))?;
+        assert_eq!(
+            attributed_meta.get(COST_PROVENANCE_META_KEY),
+            Some(&serde_json::json!("router"))
+        );
+        assert_eq!(
+            attributed_meta.get("harness.usage"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            notification_meta.and_then(|meta| meta.get("harness.update").cloned()),
+            Some(serde_json::json!("native-a"))
+        );
+
+        // C5: nothing attributed, nothing decorated — the harness's own
+        // figure survives, and no marker claims it.
+        let (untouched, _) = usage_for(&updates, "native-b")?;
+        assert_eq!((untouched.used, untouched.size), (1_200, 200_000));
+        assert_eq!(untouched.cost, Some(Cost::new(9.99, "EUR")));
+        assert!(untouched.meta.as_ref().is_some_and(|meta| {
+            !meta.contains_key(COST_PROVENANCE_META_KEY) && meta.contains_key("harness.usage")
+        }));
+
+        // Every other update takes the verbatim path and never consults the
+        // bridge.
+        let chunks = updates
+            .iter()
+            .filter(|notification| {
+                matches!(notification.update, SessionUpdate::AgentMessageChunk(_))
+            })
+            .count();
+        assert_eq!(chunks, 2);
+        let asked = match bridge.asked.lock() {
+            Ok(asked) => asked.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(asked, vec!["native-a", "native-b"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn usage_capability_is_absent_without_a_cost_bridge() -> anyhow::Result<()> {
+        let controller = Controller::new(
+            UsageAgent,
+            ControllerConfig::new(ControllerIdentity::new(
+                "claude-acp",
+                "@agentclientprotocol/claude-agent-acp",
+                "0.70.0",
+            )),
+        );
+
+        let (meta, updates) = run_usage_manager(controller).await?;
+
+        assert_eq!(
+            meta.as_ref()
+                .and_then(|meta| meta.get("bitrouter.dev/controller"))
+                .and_then(|value| value.get("usage")),
+            Some(&serde_json::Value::Null)
+        );
+        let (forwarded, _) = usage_for(&updates, "native-a")?;
+        assert_eq!((forwarded.used, forwarded.size), (1_200, 200_000));
+        assert_eq!(forwarded.cost, Some(Cost::new(9.99, "EUR")));
+        assert!(forwarded.meta.as_ref().is_some_and(|meta| {
+            !meta.contains_key(COST_PROVENANCE_META_KEY) && meta.contains_key("harness.usage")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn usage_update_kind_matches_the_schema() -> anyhow::Result<()> {
+        let wire = serde_json::to_value(SessionUpdate::UsageUpdate(UsageUpdate::new(1, 2)))?;
+        assert_eq!(
+            wire.get("sessionUpdate"),
+            Some(&serde_json::json!(super::USAGE_UPDATE_KIND))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decoration_touches_only_cost_and_the_marker() -> anyhow::Result<()> {
+        let params = serde_json::to_value(
+            SessionNotification::new(
+                "native-a",
+                SessionUpdate::UsageUpdate(UsageUpdate::new(7, 9).cost(Cost::new(1.0, "EUR"))),
+            )
+            .meta(Meta::from_iter([(
+                "harness.update".to_string(),
+                serde_json::json!(1),
+            )])),
+        )?;
+        assert_eq!(super::usage_update_session(&params), Some("native-a"));
+
+        let decorated = super::with_attributed_cost(&params, Cost::new(0.5, "USD"))
+            .ok_or_else(|| anyhow::anyhow!("a well-formed usage update must decorate"))?;
+        let mut expected = params.clone();
+        expected["update"]["cost"] = serde_json::json!({"amount": 0.5, "currency": "USD"});
+        expected["update"]["_meta"] = serde_json::json!({"bitrouter.dev/cost": "router"});
+        assert_eq!(decorated, expected);
+
+        // Any other update kind is not a usage update.
+        let chunk = serde_json::to_value(SessionNotification::new(
+            "native-a",
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("hi"),
+            ))),
+        ))?;
+        assert_eq!(super::usage_update_session(&chunk), None);
+
+        // A `_meta` that is not an object is a shape this controller does
+        // not know: the caller forwards the original rather than guess.
+        let mut malformed = params.clone();
+        malformed["update"]["_meta"] = serde_json::json!("not-an-object");
+        assert!(super::with_attributed_cost(&malformed, Cost::new(0.5, "USD")).is_none());
         Ok(())
     }
 }

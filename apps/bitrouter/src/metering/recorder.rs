@@ -22,6 +22,7 @@ use bitrouter_sdk::language_model::{
 };
 use serde::Serialize;
 
+use crate::auth::events::ApiPrincipalEstablished;
 use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
 use crate::metering::pricing::{
     ChargeEvidence, PricingSource, PricingTable, calculate_charge_evidence,
@@ -130,6 +131,23 @@ impl MeteringRecorder {
     }
 }
 
+/// The route namespace this request is attributed to, derived exactly as
+/// `SessionContextHook` derives the principal it resolves leases against.
+///
+/// Deliberately not `SessionIdentityObserved::api_principal_id`: that is the
+/// public API-key ID the span attribute carries, and with auth enabled it is a
+/// different value from the credential hash leases are keyed by. Reading the
+/// same event the hook reads is what keeps the spend query and the lease map
+/// answering about the same caller.
+fn route_scope(ctx: &SettlementContext) -> String {
+    if ctx.caller.is_local() {
+        return "local".to_string();
+    }
+    ctx.get_event::<ApiPrincipalEstablished>()
+        .map(|event| event.route_scope_id.clone())
+        .unwrap_or_else(|| ctx.caller.api_key_id().to_string())
+}
+
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
@@ -189,7 +207,7 @@ impl SettlementRecorder for MeteringRecorder {
             .as_ref()
             .filter(|event| {
                 event.attributed
-                    || event.authenticated_controller_instance_id.is_some()
+                    || event.claimed_controller_instance_id.is_some()
                     || event.harness.is_some()
             })
             .map(|event| {
@@ -200,8 +218,9 @@ impl SettlementRecorder for MeteringRecorder {
                 })?;
                 Ok::<MeteringSessionIdentity, bitrouter_sdk::BitrouterError>(
                     MeteringSessionIdentity {
+                        route_scope_id: route_scope(ctx),
                         agent_harness: event.harness.clone(),
-                        controller_instance_id: event.authenticated_controller_instance_id.clone(),
+                        controller_instance_id: event.claimed_controller_instance_id.clone(),
                         acp_session_id: event.acp_session_id.clone(),
                         native_root_session_id: event.native_root_session_id.clone(),
                         native_agent_thread_id: event.native_agent_thread_id.clone(),
@@ -297,10 +316,14 @@ fn session_span_attributes(
         ),
     ]);
     for (name, value) in [
+        (
+            "bitrouter.acp.api_principal_id",
+            Some(&event.api_principal_id),
+        ),
         ("bitrouter.agent.harness", event.harness.as_ref()),
         (
             "bitrouter.acp.controller_instance_id",
-            event.authenticated_controller_instance_id.as_ref(),
+            event.claimed_controller_instance_id.as_ref(),
         ),
         ("bitrouter.acp.session_id", event.acp_session_id.as_ref()),
         (

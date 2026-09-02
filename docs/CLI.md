@@ -150,17 +150,26 @@ Any provider API keys present in the current environment are forwarded to the da
 ```
 bitrouter status [-c <path>] [--socket <path>]
 bitrouter status --requests          # what the router has actually done
+bitrouter status --requests --human  # the same, as a table
 ```
 
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
 
-`--requests` (`-r`) prints what the router has actually done instead: a newest-first table of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a line stating daemon state and over today's spend and the trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (the state line says `history only` rather than showing an empty list that looks like idleness).
+`--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
 
-The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for a live view. Bare `bitrouter status` is unchanged.
+Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Bare `bitrouter status` is unchanged.
+
+The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter chat`'s cost line is the per-session figure.
+
+**Spend is reported only where there is evidence.** Each row carries a `charge_status` — `computed` and `not_charged` are evidence, `unknown` and `legacy_unknown` are not — and only evidenced rows contribute to the total. A request the daemon recorded but could not price shows `?` in the cost column rather than `—` (which would claim it was free) or `$0.00` (which would claim it was measured). When nothing in the window has evidence, `spend_micro_usd` is `null` and the human view reads `unreported`; when only some does, the total is labelled a floor. This is the rule `bitrouter chat`'s cost line keeps: a client that cannot see a price has not observed a free turn.
+
+Each row also carries `episode_id` — the trajectory episode to hand to `bitrouter trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
 Portable — there is no terminal-only path left to gate.
 
-> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed exactly what `--requests` prints now, so scripts that piped it need only the new flag name.
+> **`--requests` emits JSON by default as of 1.0.0-alpha.28.** It previously printed the table unconditionally, ignoring `--json` — the only `status` path that did. Scripts that parsed the table need `--human`; anything that wanted the data now gets one clean JSON object with a stable `rows[]`.
+>
+> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed what `--requests --human` prints now.
 
 ---
 
@@ -347,7 +356,7 @@ bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [-c <path>] <text>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session identity, history, and storage are the harness's own on every path; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter chat`
 
@@ -373,7 +382,7 @@ A tool call is **one entity, repainted in place**: a call going pending → in p
 | `Esc` | Answer the open permission prompt with *no*, or close the picker; with neither open, cancel the running turn |
 | `Ctrl-C` | Cancel the running turn; end the session when idle |
 | `Ctrl-D` | End the session (when idle) |
-| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal |
+| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal. Works with a permission prompt or the picker open, and leaves it open |
 | `Ctrl-W` | Delete the word before the cursor |
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
@@ -384,12 +393,12 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 
 | Input | Effect |
 |---|---|
-| `/route` | List routable providers and switch this session's route mid-session. Only offered when the session can honour it — see below. |
+| `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
 | `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
 
-**The cost line always states whose spend it is.** When the session's traffic is attributable, the figure is the session's. When it is not — you supplied your own credential, which BitRouter never rewrites to tag — the line reads `all callers` before the number, because it is then the daemon's total for the window and not yours alone. If the agent reports no cost, the line reads `cost unreported`, never `$0.00`.
+**The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
 
-**`/route` is absent when it cannot work.** Changing a live route needs a daemon to install the override in and an attributable launch id to scope it to. A `--direct` session has neither, and a session using your own credential has no launch id; in both cases `chat` says so rather than offering a command that would fail. When the switch is applied, `chat` re-reads `providers/list` and reports the route the daemon is actually serving — a refused change reports the old route and the reason.
+**`/route` is absent when it cannot work.** The picker is offered only when the controller advertised route control at initialize — `_meta["bitrouter.dev/controller"].routeControl` with `version: "1"`, `scope: "session"`, and both `_bitrouter/route/list` and `_bitrouter/route/set` listed — which it does only under a trusted local daemon binding. A `--direct` session or an explicit `--base-url` advertises nothing, and `chat` says so rather than offering a command that would fail. When a route is chosen, the footer shows the route the daemon **confirmed** in the set response, not the one asked for; a refused route reports the old route and the reason.
 
 On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
 
@@ -453,7 +462,7 @@ Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local p
 
 `--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 
-In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
+In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","session_id":"…","agent_session_id":…,"agent":"…","via":"http://127.0.0.1:4356","launch_id":…}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line. `session_id` is the harness's own session id, used by every ACP method and every later line. **`launch_id` is the spend key**: metering attributes ACP traffic by the *authenticated* controller instance, and `prompt` routes with a launch token rather than a controller credential, so no controller column is populated for its rows. There is no `record_id`: session identity is harness-native.
 
 ### `bitrouter policy`
 

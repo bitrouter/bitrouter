@@ -103,17 +103,20 @@ acp = [
     "tokio-util/compat",
 ]
 
-# The connection-level ACP controller (`acp::controller`) — one manager
-# connection fronting many harness-owned sessions. Split out of `acp` rather
-# than folded into it, because it is the only thing in the crate that needs
-# `agent-client-protocol-conductor`, and that crate depends on
+# Serving the connection-level ACP controller (`acp::controller::Controller::run`).
+# Split out of `acp` because that one method is the only thing in the crate that
+# needs `agent-client-protocol-conductor`, and that crate depends on
 # `agent-client-protocol-trace-viewer`, which depends on `axum`
 # **non-optionally** with no feature to turn it off.
 #
 # Folded in, it made `acp` — documented as "the ACP thin proxy … plus the live
 # runtime" — drag a whole HTTP server behind it, so a consumer enabling ACP for
-# pure routing linked axum. `helpers/dist-helper` was doing exactly that. The
-# split restores what `acp` claims to be; `feature-isolation` guards it.
+# pure routing linked axum. `helpers/dist-helper` was doing exactly that.
+#
+# The gate is on `run`, not on the `controller` module: #848's `acp::client`
+# imports that module's route-control types, and those name no conductor type.
+# So `acp` builds and configures a `Controller`; `acp-controller` serves one.
+# `feature-isolation` guards the split.
 acp-controller = ["acp", "dep:agent-client-protocol-conductor"]
 
 [target.'cfg(unix)'.dependencies]

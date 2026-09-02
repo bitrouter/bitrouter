@@ -16,8 +16,7 @@ dependencies = [
 [[package]]
 name = "agent-client-protocol"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d87bc7769eba641753ba5dc52f73ec3765d51022c6753bf040967125ddc86a8"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
@@ -40,8 +39,7 @@ dependencies = [
 [[package]]
 name = "agent-client-protocol-conductor"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76bc4fa6dce4d0c06726a091a134442048204ea6974b38e1d72fd49a6481458e"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-trace-viewer",
@@ -64,8 +62,7 @@ dependencies = [
 [[package]]
 name = "agent-client-protocol-derive"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3abd4080f51e4f24f5042beb7fb7a66ede29a2dc1c2582c329532e1c27264ddc"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "quote",
  "syn 3.0.3",
@@ -73,9 +70,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5c231915b4ab578c722eca2d1bd7df4d300bfd6cac3b8e9f0d1e3ddc95b187c"
+checksum = "ca98360c7bb8cc97d7acd49e2a8a851c3f7bee6b2f0535036d8ab86b5fcd223d"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -90,8 +87,7 @@ dependencies = [
 [[package]]
 name = "agent-client-protocol-trace-viewer"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "163ed8d901ef7e805e574f6d28e4bbc1cbe98c4ce82abac120833b58b43c306c"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "anyhow",
  "axum",

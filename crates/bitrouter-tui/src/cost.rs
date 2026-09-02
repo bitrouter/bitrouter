@@ -1,88 +1,87 @@
-//! The cost line: what a session spent, and **whose** spend that number is.
+//! The cost line: what a session spent, and **whose** number that is.
 //!
-//! # Why scope is not optional
+//! # Provenance, not scope
 //!
-//! A currency figure with no scope is the single most misleading thing an
-//! agent's UI can draw. BitRouter's previous status bar rendered the daemon's
-//! total and labelled it the session's, so a user with anything else routing
-//! saw a number that was real, precise, and about somebody else's work.
+//! ACP's `UsageUpdate.cost` is specified as this session's cumulative cost,
+//! so a figure that arrives there is never wider than the session — the
+//! daemon's total is answered by `bitrouter status --requests`, not here. What
+//! the specification cannot say is *who wrote the number*: two parties can. A
+//! harness may report its own provider relationship, and BitRouter may report
+//! its meter. They are different numbers, and a subscription harness's figure
+//! is not BitRouter's spend.
 //!
-//! ACP carries the figure — `UsageUpdate.cost` — but no field saying whose it
-//! is. So [`Scope`] is a **parameter**, not something this module infers: the
-//! caller has to answer it before a figure can be built, and there is no
-//! constructor that skips the question. Where the answer comes from is the
-//! caller's business; for BitRouter it rides in `_meta` under a namespaced key
-//! that lives in the app, not here.
+//! So the controller marks provenance in `_meta`, under
+//! [`COST_PROVENANCE_META_KEY`]: present as [`COST_PROVENANCE_ROUTER`] when
+//! BitRouter metered and attributed the session's traffic, absent when the
+//! figure is the harness's own, forwarded untouched. [`from_usage`] reads
+//! that marker back and [`Provenance`] carries it to the line.
 //!
-//! Three states, and each reads differently:
+//! # What is never drawn
 //!
-//! - **Session** — this session's own spend. Shown plainly.
-//! - **Wider** — a figure covering more than this session. Shown, and visibly
-//!   marked as not the session's.
-//! - **Unreported** — no cost was reported at all. Shown as *unreported* via
-//!   [`unreported`], never as `$0.00`: a client that cannot see a price has
-//!   not observed a free turn.
+//! A figure whose provenance is **unknown** — the marker is present but not
+//! a value this renderer knows — is not drawn at all, because we do not know
+//! whose it is, and the one thing this line must never do is show someone
+//! else's number as ours. And no figure at all is [`unreported`], never
+//! `$0.00`: a client that cannot see a price has not observed a free turn.
 
-use ratatui::style::{Color, Modifier, Style};
+use agent_client_protocol_schema::v1::UsageUpdate;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// Whose traffic a cost figure describes.
+/// `_meta` key on a `UsageUpdate` naming whose figure `cost` is.
 ///
-/// Two variants because two is what honesty needs: either the number is this
-/// session's, or it is not and must say so. A third state — no number at all —
-/// is [`unreported`] rather than a variant, so there is no way to render an
-/// absent figure through this type.
+/// The same spelling the controller writes; the app pins the two constants
+/// against each other so they cannot drift apart across the crate boundary.
+pub const COST_PROVENANCE_META_KEY: &str = "bitrouter.dev/cost";
+
+/// The [`COST_PROVENANCE_META_KEY`] value for a figure BitRouter metered.
+pub const COST_PROVENANCE_ROUTER: &str = "router";
+
+/// Who wrote a cost figure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    /// This session's own spend.
-    Session,
-    /// A figure covering more than this session — every caller the agent's
-    /// backend served in the window, because this session's traffic could not
-    /// be told apart.
-    Wider,
+pub enum Provenance {
+    /// BitRouter metered this session's traffic and attributed it.
+    Router,
+    /// The harness's own figure — its provider relationship, not our meter.
+    Harness,
 }
 
-/// A cost figure and the scope it applies to.
+/// A cost figure and who it came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cost {
     amount: f64,
     currency: String,
-    scope: Scope,
+    provenance: Provenance,
 }
 
 impl Cost {
     /// A figure that knows whose it is.
     ///
     /// There is deliberately no constructor taking a bare `UsageUpdate`: the
-    /// scope is not on the ACP wire, so a `From<UsageUpdate>` would have to
-    /// guess, and guessing "the session's" is the precise error this module
-    /// exists to prevent.
-    pub fn new(amount: f64, currency: impl Into<String>, scope: Scope) -> Self {
+    /// provenance is a `_meta` marker, and a `From<UsageUpdate>` would have to
+    /// guess at it. Guessing "ours" is the precise error this module exists
+    /// to prevent.
+    pub fn new(amount: f64, currency: impl Into<String>, provenance: Provenance) -> Self {
         Self {
             amount,
             currency: currency.into(),
-            scope,
+            provenance,
         }
     }
 
     /// The cost as it appears in the live area.
     pub fn render(&self) -> Line<'static> {
         let figure = format!("{} {:.4}", self.currency, self.amount);
-        match self.scope {
-            Scope::Session => Line::from(Span::styled(
+        match self.provenance {
+            Provenance::Router => Line::from(Span::styled(
                 figure,
                 Style::default().add_modifier(Modifier::DIM),
             )),
             // The qualifier is part of the figure, not a footnote: whatever
             // truncates this line must lose the number before the caveat.
-            Scope::Wider => Line::from(vec![
-                Span::styled(
-                    "all callers ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(figure, Style::default().fg(Color::Yellow)),
+            Provenance::Harness => Line::from(vec![
+                Span::styled("agent ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(figure, Style::default().add_modifier(Modifier::DIM)),
             ]),
         }
     }
@@ -90,9 +89,9 @@ impl Cost {
 
 /// What to draw when no cost was reported at all.
 ///
-/// A separate function rather than a [`Scope`] variant, so there is no way to
-/// render an absent figure as a number. Most ACP agents are not routers and
-/// will never send `cost`; that is not a zero.
+/// A separate function rather than a [`Provenance`] variant, so there is no
+/// way to render an absent figure as a number. Most ACP agents are not
+/// routers and will never send `cost`; that is not a zero.
 pub fn unreported() -> Line<'static> {
     Line::from(Span::styled(
         "cost unreported",
@@ -100,8 +99,30 @@ pub fn unreported() -> Line<'static> {
     ))
 }
 
+/// Read a cost off a `UsageUpdate`, when it carries one whose provenance is
+/// known.
+///
+/// `None` when the agent reported no cost, and when the marker names a
+/// provenance this renderer does not know. The footer draws [`unreported`]
+/// in its place — a number nobody can vouch for is worse than a blank.
+pub fn from_usage(usage: &UsageUpdate) -> Option<Cost> {
+    let cost = usage.cost.as_ref()?;
+    let marker = usage
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get(COST_PROVENANCE_META_KEY));
+    let provenance = match marker {
+        None => Provenance::Harness,
+        Some(value) if value.as_str() == Some(COST_PROVENANCE_ROUTER) => Provenance::Router,
+        Some(_) => return None,
+    };
+    Some(Cost::new(cost.amount, cost.currency.clone(), provenance))
+}
+
 #[cfg(test)]
 mod tests {
+    use agent_client_protocol_schema::v1::Cost as WireCost;
+
     use super::*;
 
     fn text(line: &Line<'static>) -> String {
@@ -111,32 +132,40 @@ mod tests {
             .collect::<String>()
     }
 
-    /// The scope label renders in both scopes, and the two must be tellable
-    /// apart at a glance.
-    #[test]
-    fn the_scope_label_renders_in_both_scopes() {
-        let session = text(&Cost::new(0.42, "USD", Scope::Session).render());
-        assert!(session.contains("0.42"), "{session:?}");
-        assert!(
-            !session.contains("all callers"),
-            "the session's own spend carries no caveat: {session:?}"
-        );
+    fn usage_with(cost: Option<WireCost>, marker: Option<serde_json::Value>) -> UsageUpdate {
+        let mut usage = UsageUpdate::new(1_500, 200_000);
+        usage.cost = cost;
+        if let Some(marker) = marker {
+            let mut meta = serde_json::Map::new();
+            meta.insert(COST_PROVENANCE_META_KEY.to_string(), marker);
+            usage.meta = Some(meta);
+        }
+        usage
+    }
 
-        let wider = text(&Cost::new(1.32, "USD", Scope::Wider).render());
-        assert!(wider.contains("1.32"), "{wider:?}");
+    /// The two provenances must be tellable apart at a glance: ours is the
+    /// bare figure, the harness's is labelled as the agent's.
+    #[test]
+    fn the_two_provenances_render_differently() {
+        let ours = text(&Cost::new(0.42, "USD", Provenance::Router).render());
+        assert!(ours.contains("0.42"), "{ours:?}");
+        assert!(!ours.contains("agent"), "{ours:?}");
+
+        let theirs = text(&Cost::new(1.32, "USD", Provenance::Harness).render());
+        assert!(theirs.contains("1.32"), "{theirs:?}");
         assert!(
-            wider.contains("all callers"),
-            "a wider figure must be visibly marked as not the session's: {wider:?}"
+            theirs.contains("agent"),
+            "the harness's own figure must be marked as not ours: {theirs:?}"
         );
-        assert_ne!(session, wider, "the two scopes must not render alike");
+        assert_ne!(ours, theirs);
     }
 
     /// The caveat precedes the number, so truncation loses the figure rather
     /// than the warning about it.
     #[test]
-    fn the_wider_caveat_precedes_the_figure() {
-        let rendered = text(&Cost::new(1.32, "USD", Scope::Wider).render());
-        let caveat = rendered.find("all callers").expect("caveat present");
+    fn the_harness_caveat_precedes_the_figure() {
+        let rendered = text(&Cost::new(1.32, "USD", Provenance::Harness).render());
+        let caveat = rendered.find("agent").expect("caveat present");
         let figure = rendered.find("1.32").expect("figure present");
         assert!(caveat < figure, "{rendered:?}");
     }
@@ -150,5 +179,43 @@ mod tests {
             !rendered.contains('0'),
             "an unobserved price must not read as a free turn: {rendered:?}"
         );
+        assert!(from_usage(&usage_with(None, None)).is_none());
+        assert!(
+            from_usage(&usage_with(None, Some(serde_json::json!("router")))).is_none(),
+            "a marker with no figure is still no figure"
+        );
+    }
+
+    /// The marker the controller writes is the one that makes a figure ours.
+    #[test]
+    fn the_router_marker_makes_the_figure_ours() {
+        let read = from_usage(&usage_with(
+            Some(WireCost::new(0.42, "USD")),
+            Some(serde_json::json!(COST_PROVENANCE_ROUTER)),
+        ))
+        .expect("a metered cost");
+        assert_eq!(read, Cost::new(0.42, "USD", Provenance::Router));
+    }
+
+    /// No marker means the harness wrote the number itself. It is shown, and
+    /// shown as the agent's — never as though BitRouter had measured it.
+    #[test]
+    fn an_unmarked_cost_is_the_harness_own() {
+        let read = from_usage(&usage_with(Some(WireCost::new(9.99, "EUR")), None))
+            .expect("the harness's figure");
+        assert_eq!(read, Cost::new(9.99, "EUR", Provenance::Harness));
+        assert!(text(&read.render()).contains("agent"));
+    }
+
+    /// A marker this renderer does not know is a figure nobody here can
+    /// vouch for. It is not drawn — not as ours, and not as the agent's.
+    #[test]
+    fn an_unknown_provenance_is_never_drawn() {
+        for marker in [serde_json::json!("something-new"), serde_json::json!(1)] {
+            assert!(
+                from_usage(&usage_with(Some(WireCost::new(0.42, "USD")), Some(marker))).is_none(),
+                "an unrecognised marker must not reach the screen"
+            );
+        }
     }
 }

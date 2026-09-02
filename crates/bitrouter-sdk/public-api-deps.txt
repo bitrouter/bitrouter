@@ -28,12 +28,19 @@
 # guard caught, on the first CI run after the job existed, which is the case
 # the guard was built for — a public dependency arriving unnoticed.
 #
+# `futures_channel` is the second such catch, from #848's ACP rebuild:
+# `acp::up::AgentProcess::reaped` returns a `futures_channel::oneshot::Receiver`.
+# `futures` 0.3's re-export means the call site reads `futures::channel`, so
+# nothing at the source names the crate that ends up in the contract — which is
+# exactly the shape this manifest exists to surface.
+#
 # Lines beginning with `#` are stripped before comparison.
 agent_client_protocol
 agent_client_protocol_schema
 anyhow
 axum
 axum_core
+futures_channel
 futures_core
 http
 pin_project_lite

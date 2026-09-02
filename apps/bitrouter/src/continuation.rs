@@ -2080,11 +2080,7 @@ impl PreRequestHook for ContinuationRuntime {
         }
         let resolution = self
             .registry
-            .resolve(
-                ctx.caller().security_scope_id(),
-                &previous_response_id,
-                Utc::now(),
-            )
+            .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
             .await
             .map_err(|error| {
                 BitrouterError::internal(format!(
@@ -2224,11 +2220,7 @@ impl RouteHook for ContinuationRuntime {
             ContinuationResolution::Active(prepared.active.clone())
         } else {
             self.registry
-                .resolve(
-                    ctx.caller().security_scope_id(),
-                    &previous_response_id,
-                    Utc::now(),
-                )
+                .resolve(ctx.caller().user_id(), &previous_response_id, Utc::now())
                 .await
                 .map_err(|error| {
                     BitrouterError::internal(format!(
@@ -2343,7 +2335,7 @@ impl ContinuationRuntime {
         let now = Utc::now();
         self.registry
             .bind_pending(
-                ctx.caller.security_scope_id(),
+                ctx.caller.user_id(),
                 &public_continuation_id,
                 ContinuationBinding {
                     provider_response_id,
