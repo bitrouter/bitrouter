@@ -1253,9 +1253,22 @@ where
     }
 
     // First line: correlate this session with the cost/metering the
-    // orchestrator later queries. The identifiers are the harness-native
-    // session id and this controller's instance id — the two columns the
-    // daemon meters ACP traffic by, so the line actually joins to spend.
+    // orchestrator later queries.
+    //
+    // `session_id` is the harness-native ACP id — the one every subsequent
+    // line and every ACP method uses. It is **not** the spend key on this
+    // path: metering attributes ACP traffic by the *authenticated* controller
+    // instance, and `prompt` routes with a launch token rather than a
+    // controller credential, so `requests.controller_instance_id` is null for
+    // every row it produces. `launch_id` is what joins here, as it always has.
+    //
+    // The controller id is deliberately absent rather than reported: the value
+    // this process mints reaches the daemon only as a *claimed* header, which
+    // §5.5 of the controller spec treats as correlation evidence and not as
+    // authorization. Emitting it would name a column that is null. When the
+    // controlled path issues a controller credential — as `acp serve` already
+    // does — it can come back and be true.
+    //
     // `via` is null when running direct.
     write_ndjson_line(
         out,
@@ -1263,7 +1276,6 @@ where
             "type": "session",
             "session_id": ids.acp_session_id,
             "agent_session_id": ids.agent_session_id,
-            "controller_instance_id": routed.controller_instance_id,
             "agent": agent_id,
             "via": routed.via,
             // The token this session's requests carry, so an orchestrator can
@@ -1332,6 +1344,11 @@ where
 /// harness child's I/O, and the client all run on this runtime.
 struct ControlledSession {
     client: AcpClient,
+    /// Resolves once the harness child and its process group are reaped.
+    /// Awaited in [`ControlledSession::shutdown`], because tearing the
+    /// connection down is not the same as the child being gone — the SDK drops
+    /// the transport task rather than letting it confirm the kill.
+    reaped: futures::channel::oneshot::Receiver<()>,
     /// The controller's own `run`. It ends when the manager side of the duplex
     /// closes, and awaiting it is what proves the harness child was reaped.
     controller: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>>,
@@ -1349,6 +1366,15 @@ impl ControlledSession {
     async fn shutdown(&mut self) {
         if let Err(error) = self.client.shutdown().await {
             tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
+        }
+        // The connection is down; the child may not be. `kill_on_drop` reaches
+        // the wrapper (`npx`) and not the `node` it spawned, so the group kill
+        // has to be confirmed rather than assumed.
+        if tokio::time::timeout(bitrouter_sdk::acp::up::REAP_CONFIRM, &mut self.reaped)
+            .await
+            .is_err()
+        {
+            tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
         }
         match tokio::time::timeout(CONTROLLER_EXIT_TIMEOUT, &mut self.controller).await {
             Ok(Ok(Ok(()))) => {}
@@ -1386,9 +1412,10 @@ async fn launch_controlled(
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let process =
+    let mut process =
         bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
             .strip_inherited_env(options.strip_inherited_env);
+    let reaped = process.reaped();
     let controller = bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
 
     // In-process duplex: no bytes, no pipe, no second process between the
@@ -1414,7 +1441,11 @@ async fn launch_controlled(
             return Err(error);
         }
     };
-    Ok(ControlledSession { client, controller })
+    Ok(ControlledSession {
+        client,
+        reaped,
+        controller,
+    })
 }
 
 /// Everything one prompt turn needs beyond its text: the client to drive, the

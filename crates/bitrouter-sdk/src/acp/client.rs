@@ -559,19 +559,34 @@ impl AcpClient {
             .map_err(|_| anyhow::anyhow!("acp command loop closed"))
     }
 
-    /// Tear the connection down **deterministically**: outstanding permissions
-    /// are denied, the command loop exits, the connection (and its transport)
-    /// drops — killing a spawned agent child — and this returns once the driver
-    /// confirms teardown. Idempotent. Errs only when the driver fails to
+    /// Tear the connection down: outstanding permissions are denied, the
+    /// command loop exits, and this returns once the driver confirms the
+    /// connection is closed. Idempotent. Errs only when the driver fails to
     /// confirm within `SHUTDOWN_TIMEOUT`.
+    ///
+    /// # What this does *not* confirm
+    ///
+    /// **The child process.** A closed connection drops the transport task,
+    /// which is what orders the kill — but nothing here waits for it. An owner
+    /// that spawned a child must take
+    /// [`AgentProcess::reaped`](crate::acp::up::AgentProcess::reaped) and await
+    /// that too, before dropping the runtime the reaper runs on.
+    ///
+    /// **Delivery of the denials.** Answering a parked handler resolves its
+    /// oneshot and lets it enqueue a response; whether those bytes reach the
+    /// agent before the transport goes is not something this can guarantee,
+    /// because the SDK's outgoing drain is private to it. What *is* guaranteed
+    /// is the part that matters: nothing resolves to consent, and the child is
+    /// killed rather than left parked on a broker that walked away.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         // Before the transport goes: a request still open here has no broker
-        // left, and the agent is entitled to an answer rather than a dead
-        // socket.
+        // left, and must resolve to a rejection rather than to silence.
         if self.deny_outstanding_permissions() > 0 {
-            // The denial is only a resolved oneshot until the parked handler
-            // wakes and answers. Wait for that here, while the connection is
-            // still fully alive, rather than racing it against teardown.
+            // Resolving the oneshot only *lets* the parked handler answer. This
+            // waits for it to have done so — which is as far as we can get:
+            // the response is then on the connection's outgoing queue, and the
+            // drain that would flush it is private to the SDK. Best-effort
+            // delivery of a decision that is never consent.
             self.permissions.wait_until_settled().await;
         }
         let (done_tx, done_rx) = oneshot::channel::<()>();

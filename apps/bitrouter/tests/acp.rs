@@ -118,9 +118,18 @@ async fn prompt_ndjson() {
         "session line must carry the harness-native session id: {}",
         lines[0]
     );
+    // Not `is_some()`: `Value::get` on a JSON `null` returns `Some(Null)`, so
+    // that spelling passes for a field that is present and empty — which is
+    // what the previous assertion actually checked.
     assert!(
-        first.get("controller_instance_id").is_some(),
-        "session line must carry the controller instance id field: {}",
+        first.get("controller_instance_id").is_none(),
+        "the controller id is a claimed header, not the spend key on this \
+         path, and must not be reported as though it joined: {}",
+        lines[0]
+    );
+    assert!(
+        first.get("launch_id").is_some(),
+        "launch_id is what attributes a prompt session's spend: {}",
         lines[0]
     );
     assert!(

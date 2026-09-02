@@ -162,8 +162,10 @@ per-session cost; see the `usage` capability above.
 
 `acp prompt`/`spawn -p` emits a first `session` line carrying the
 **harness-native** `session_id` (plus `agent_session_id` when the harness
-exposes one), the `controller_instance_id`, `agent`, `via`, and `launch_id` —
-the identifiers the daemon meters ACP traffic by, so the line joins to spend.
+exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
+joins to spend: the daemon attributes ACP traffic by an authenticated
+controller credential, which only `acp serve` issues, so a prompt session's
+rows carry no controller instance to key on.
 It no longer carries `record_id`; that alias is off the wire. Then come
 `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`
 lines, and a `result` line. `--no-wait` emits `submitted`. This NDJSON

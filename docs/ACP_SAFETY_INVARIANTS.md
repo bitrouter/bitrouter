@@ -59,10 +59,10 @@ The class where a mistake grants consent that nobody gave.
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
 | **I1** | An abandoned permission resolves to the agent's **reject option**, never consent and never silence | `client.rs` — parked handler `Err(_) => reject`, **plus** `PermissionLedger::deny_outstanding` on every path that abandons a live request | `up.rs` `dropping_pending_permission_defaults_to_deny` (drop arm, end to end) | shared client — **landed** | `client.rs` `dropping_every_clone_still_defaults_to_deny`, `teardown_denies_an_outstanding_permission`, `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` |
-| **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs:601`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
-| **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs:343` | `translate.rs:641` `sanitize_selection_cancelled_passes_through` | shared client | existing |
+| **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs` `sanitize_selection_preserves_exact_known_id`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
+| **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs` `sanitize_selection` | `translate.rs` `sanitize_selection_cancelled_passes_through` `sanitize_selection_cancelled_passes_through` | shared client | existing |
 | **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
-| **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `chat/session.rs` cancel path — drain `permission_rx`, `deny`, clear pending | `chat/session.rs:668`, `:690` | state machine reducer | CHAT_MACHINE_SPEC T2 + T3 |
+| **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `chat/session.rs` cancel path — drain `permission_rx`, `deny`, clear pending | `chat/session.rs` `an_unanswered_permission_takes_the_reject_option`, `:690` | state machine reducer | CHAT_MACHINE_SPEC T2 + T3 |
 | **I6** | A **headless** path denies rather than hanging the harness | `acp_cli.rs` `prompt` — the deny pump over `AcpClient::subscribe_permissions`; `chat_plain` denies inline | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` | NDJSON + pipe presentations — **landed for `prompt`** | existing, unchanged |
 | **I7** | A permission outstanding at **session teardown** is denied | `client.rs` `AcpClient::shutdown` denies, then waits (bounded) for the parked handlers to answer before the transport goes; the command loop and the driver tail repeat it for the drop path | `client.rs` `teardown_denies_an_outstanding_permission` | shared client teardown — **landed** | `client.rs` `teardown_denies_an_outstanding_permission` |
 
@@ -70,7 +70,7 @@ The class where a mistake grants consent that nobody gave.
 
 | Invariant | Enforced today | Pinned today | Why it goes |
 |---|---|---|---|
-| A manager that detaches and reattaches sees still-outstanding permissions replayed | `PermissionRegistry` (re-subscribable, sole consumer of the take-once stream) | `permissions.rs:174`, `engine.rs:787` | Reattach is not in the controller model. `ACP_CONTROLLER_SPEC.md` §9 instructs managers to assume nothing survives reconnect. Irrelevant to `chat`, which is one process and one connection. **Delete the tests in the same commit, with this row cited.** |
+| A manager that detaches and reattaches sees still-outstanding permissions replayed | `PermissionRegistry` (re-subscribable, sole consumer of the take-once stream) | `permissions.rs` `reattach_sees_outstanding_permission`, `engine.rs` `outstanding_permission_survives_detach_and_reissues_on_reattach` | Reattach is not in the controller model. `ACP_CONTROLLER_SPEC.md` §9 instructs managers to assume nothing survives reconnect. Irrelevant to `chat`, which is one process and one connection. **Delete the tests in the same commit, with this row cited.** |
 
 ---
 
@@ -78,11 +78,11 @@ The class where a mistake grants consent that nobody gave.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` (for `prompt`); `engine.rs:387-410` still (for `chat`) | `engine.rs:889` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
-| **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn.rs:92-99` `flush()` + `engine.rs:414` flushed value | `turn.rs:147`, `:175`, `:224`, `:239`, `:258` | **none — not load-bearing** | n/a |
+| **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` (for `prompt`); `engine.rs` (`turn_timeout` arm` still (for `chat`) | `engine.rs` `turn_timeout_cancels_cooperatively` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
+| **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn.rs` `flush()` `flush()` + `engine.rs` (the flushed value` flushed value | `turn.rs` (queue tests`, `:175`, `:224`, `:239`, `:258` | **none — not load-bearing** | n/a |
 
 I9 is safe to drop: every production caller sends one prompt at a time —
-`chat` (`session.rs:189`, next read only after the outcome), `chat_plain`,
+`chat` (`session.rs` (the turn loop`, next read only after the outcome), `chat_plain`,
 and `prompt`'s `run_turn` (at most two *sequential* turns via the repair
 re-prompt). The only path that could have issued concurrent prompts on one
 session was `down.rs`'s `SessionAgent`, now unreachable. **Say so in the
@@ -100,16 +100,37 @@ enforce one, because deadlines belong to the manager on a transparent path.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I10** | The harness child **and its process group** are killed on teardown, on child exit, and on reaper-handle drop | `up.rs:477-502` `spawn_child_reaper` → `kill_process_group`; `AgentProcess` awaits a 2s confirm | `up.rs:1330` `shutdown_kills_wrapper_chain_process_group` | `AgentProcess` — **already the controller's, unchanged** | existing |
+| **I10** | The harness child **and its process group** are killed on teardown, on child exit, and on reaper-handle drop — and teardown **waits for it** | `up.rs` `spawn_child_reaper` → `kill_process_group`; the confirmation is handed to the owner by `AgentProcess::reaped` | `up.rs` `shutdown_kills_wrapper_chain_process_group` | `AgentProcess` + each owner (`UpstreamConnection`'s thread, `ControlledSession::shutdown`) | existing, plus the owners' waits |
 | **I11** | A harness that dies mid-prompt **fails the turn** instead of hanging it | `AgentProcess::connect_to` — `select!` on `dead_rx`, "agent process exited while the ACP controller was connected" | `tests/acp.rs` `prompt_fails_fast_when_the_harness_dies_mid_turn`; `up.rs` `agent_crash_fails_pending_commands_fast` | unchanged — **now the only child-owning path** | those two |
 
-**Known weakness in I10, unchanged by this work but worth recording:** the
-group kill runs in a tokio task, so the **panic** exit can end the process
-before it executes, and `kill_on_drop` reaches `npx` but not the `node` it
-spawns. A subprocess `acp serve` would get stdin EOF and kill its own group;
-in-process does not. This is not a regression against today — the engine
-already owns the child in-process — but it is the one axis on which
-in-process is strictly weaker than subprocess.
+**History, because the shape of this one moved twice.** The group kill runs in
+a tokio task, so the **panic** exit can still end the process before it
+executes, and `kill_on_drop` reaches `npx` but not the `node` it spawns. That
+much is unchanged and remains the one axis on which in-process is weaker than a
+subprocess `acp serve`, which gets stdin EOF and kills its own group.
+
+What *did* change: moving to the shared client briefly weakened this on the
+**normal** path too. `connect_to` ordered the kill and awaited a confirmation
+in its tail — but when a connection closes the SDK drops the transport task
+mid-`select!`, so that tail never ran, and an owner dropping its runtime in the
+same breath could lose the wrapped grandchild. The kill still happened (the
+dropped `kill_tx` wakes the reaper) but nothing waited for it. It is fixed by
+handing the confirmation to the owner via `AgentProcess::reaped`, which lives
+outside the connection and so survives the drop. Note that
+`shutdown_kills_wrapper_chain_process_group` polls for two seconds *after*
+shutdown returns, so it passed throughout — it cannot distinguish a confirmed
+kill from a race that was usually won. It is **left as it is**: tightening the
+tolerance would buy a flaky test rather than a guarantee.
+
+**The guarantee is asymmetric, deliberately.** `ControlledSession::shutdown`
+awaits the reap directly, so a caller that has awaited it knows the child is
+gone. `UpstreamConnection` cannot: its reaper runs on the runtime its own
+thread owns, so the wait has to sit inside that thread — which keeps the
+runtime alive long enough for the reaper to be polled, but does not make
+`shutdown()` itself wait for it. That asymmetry is acceptable only because
+`UpstreamConnection` exists solely to carry `engine::Session` until `chat`
+moves to the controlled path, and both are deleted in the steps that follow.
+**Nothing pins the strong side yet** — see the unpinned list below.
 
 ---
 
@@ -117,7 +138,7 @@ in-process is strictly weaker than subprocess.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I12** | Raw mode is released on **all three exits** — normal (and every `?`), panic, and signal | `Stdin::drop` → `lifecycle::restore`; `lifecycle::install_panic_restore`; `signals::Shutdown` as a `select!` arm | `lifecycle.rs:76` `the_panic_hook_restores_and_still_reports`; `signals.rs` arm test; the terminal itself by the documented manual checks in `chat/mod.rs` | TUI presentation — unchanged | existing |
+| **I12** | Raw mode is released on **all three exits** — normal (and every `?`), panic, and signal | `Stdin::drop` → `lifecycle::restore`; `lifecycle::install_panic_restore`; `signals::Shutdown` as a `select!` arm | `lifecycle.rs` `the_panic_hook_restores_and_still_reports` `the_panic_hook_restores_and_still_reports`; `signals.rs` arm test; the terminal itself by the documented manual checks in `chat/mod.rs` | TUI presentation — unchanged | existing |
 
 Unaffected by the controller migration, but listed because the state-machine
 work touches the loop that owns all three, and because I10's weakness
@@ -129,8 +150,8 @@ interacts with the panic path.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I13** | A route lease is removed when its session closes **or** the controller disconnects; harness success precedes lease cleanup on close/delete | `controller.rs:596`, `:635` `session_closed`; `:362` `disconnected` | controller tests | unchanged — already the controller's | existing |
-| **I14** | Credentials never reach `Debug`, logs, or responses | hand-written `Debug`: `ProviderEndpointPlan` (`controller.rs:87`), `HarnessEndpointPlan` (`harness.rs:194`), `AgentProcess` (`up.rs`) | `up.rs` `agent_process_debug_redacts_arguments_and_environment_values` | unchanged | existing |
+| **I13** | A route lease is removed when its session closes **or** the controller disconnects; harness success precedes lease cleanup on close/delete | `controller.rs` (`session_closed` on close/delete`, `:635` `session_closed`; `:362` `disconnected` | controller tests | unchanged — already the controller's | existing |
+| **I14** | Credentials never reach `Debug`, logs, or responses | hand-written `Debug`: `ProviderEndpointPlan` (`controller.rs` (`ProviderEndpointPlan`'s hand-written `Debug``), `HarnessEndpointPlan` (`harness.rs` (`HarnessEndpointPlan`'s hand-written `Debug``), `AgentProcess` (`up.rs`) | `up.rs` `agent_process_debug_redacts_arguments_and_environment_values` | unchanged | existing |
 
 ---
 
@@ -138,7 +159,7 @@ interacts with the panic path.
 
 `chat` — the surface this migration changes most — has **no integration test**.
 Its only tests are the two pure-function permission tests at
-`chat/session.rs:668` and `:690`. `tests/acp.rs` covers `prompt`
+`chat/session.rs` `an_unanswered_permission_takes_the_reject_option` and `:690`. `tests/acp.rs` covers `prompt`
 (`prompt_ndjson`, `prompt_headless_denies_permission_and_completes`), `serve`
 (`serve_subprocess_e2e`, `conformance_forwarded_update_variants_survive_round_trip`),
 and the **pipe** branch of chat (`chat_on_a_pipe_is_plain_text`) — never the
@@ -152,6 +173,21 @@ signal is a person at a terminal.
 byte-level NDJSON assertions, and it exercises I1, I2, I6, I8 and I11 — five of
 the seven invariants that need new code. It is the parity oracle `chat` does
 not have.
+
+## Known-unpinned, as of this revision
+
+Recorded rather than left to be rediscovered:
+
+- `ControlledSession::shutdown` returning only after the child is reaped. The
+  behaviour is implemented; no test drives a real harness through teardown and
+  asserts no survivor.
+- Delivery — as opposed to resolution — of a denial issued at teardown. Covered
+  only over an in-memory transport, and see I1's note on why byte delivery is
+  best-effort.
+- `report_turn` and `spawn_tool_spans` emissions on the prompt and piped-chat
+  paths.
+- The exit status of `acp prompt` when teardown fails: it now logs rather than
+  failing the command, which was an undeclared change in the migration.
 
 ## Summary of what must be written
 

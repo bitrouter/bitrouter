@@ -147,15 +147,17 @@ Unchanged from `acp prompt` (self-describing update lines +
 under `--no-wait`). One addition: when routing is active, the first line is
 
 ```json
-{"type":"session","session_id":"…","agent_session_id":null,"controller_instance_id":"brc_…","agent":"codex-acp","via":"http://127.0.0.1:4356","launch_id":"brl_…"}
+{"type":"session","session_id":"…","agent_session_id":null,"agent":"codex-acp","via":"http://127.0.0.1:4356","launch_id":"brl_…"}
 ```
 
 so an orchestrator can correlate the session with the cost/metering it later
 queries, without parsing stderr. With `--direct`, `"via"` is `null`.
 
-`session_id` is the **harness's own** ACP session id and
-`controller_instance_id` this controller instance's — the two columns ACP
-metering is keyed on. The minted `record_id` alias this line originally carried
+`session_id` is the **harness's own** ACP session id, used by every ACP method
+and every later line. `launch_id` is the column that joins this session to
+spend: metering attributes ACP traffic by an *authenticated* controller
+credential, which only `acp serve` issues, so a spawned prompt's rows carry no
+controller instance. The minted `record_id` alias this line originally carried
 is gone from the wire (`ACP_CONTROLLER_AMENDMENT_1.md` §2): session identity is
 harness-native, so an alias would be a second name for something BitRouter does
 not own.

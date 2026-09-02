@@ -38,12 +38,21 @@ type AgentTransport =
 /// It carries the established child policy: stripped inherited markers,
 /// config-authored env precedence, stderr draining, process-group teardown,
 /// and prompt failure when the child dies.
-#[derive(Clone)]
 pub struct AgentProcess {
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
     strip_inherited_env: Vec<String>,
+    /// Fired once this child's process group is killed and the child reaped.
+    ///
+    /// Handed out by [`AgentProcess::reaped`] rather than only awaited inside
+    /// [`ConnectTo::connect_to`], because that tail does not run on the normal
+    /// path: when the connection closes, the SDK drops the transport task
+    /// mid-`select!`, so anything after the protocol future is skipped. The
+    /// group kill still happens — dropping `kill_tx` wakes the reaper — but
+    /// nothing waits for it, and an owner that drops its runtime in the same
+    /// breath can lose the wrapped grandchild. The owner awaits this instead.
+    reaped: Option<oneshot::Sender<()>>,
 }
 
 impl std::fmt::Debug for AgentProcess {
@@ -71,7 +80,20 @@ impl AgentProcess {
             args,
             env,
             strip_inherited_env: Vec::new(),
+            reaped: None,
         }
+    }
+
+    /// A signal that resolves once this process and its group are reaped.
+    ///
+    /// Take it before handing the process to a connection, and await it after
+    /// the connection is torn down but **before** dropping the runtime the
+    /// reaper lives on. Without that wait, teardown races the kill: `npx` is
+    /// reached by `kill_on_drop`, the `node` it spawned is not.
+    pub fn reaped(&mut self) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        self.reaped = Some(tx);
+        rx
     }
 
     /// Remove additional ambient variables before applying the configured
@@ -82,6 +104,10 @@ impl AgentProcess {
         self
     }
 }
+
+/// How long teardown waits for the reaper to confirm the child and its group
+/// are gone before reporting that it could not.
+pub const REAP_CONFIRM: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl ConnectTo<Client> for AgentProcess {
     async fn connect_to(
@@ -98,7 +124,7 @@ impl ConnectTo<Client> for AgentProcess {
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
         let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
         let (done_tx, done_rx) = oneshot::channel::<()>();
-        spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+        spawn_child_reaper(child, kill_rx, dead_tx, done_tx, self.reaped);
 
         let protocol = ConnectTo::<Client>::connect_to(transport, client);
         tokio::pin!(protocol);
@@ -109,11 +135,12 @@ impl ConnectTo<Client> for AgentProcess {
             )),
         };
         let _ = kill_tx.send(());
-        if tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
-            .await
-            .is_err()
-        {
-            tracing::warn!("agent child reaper did not confirm within 2s");
+        // Only reached when the protocol future resolves on its own. On the
+        // ordinary path the SDK drops this task the moment the connection
+        // closes, and everything from here down is skipped — which is why the
+        // owner holds its own signal (see [`AgentProcess::reaped`]).
+        if tokio::time::timeout(REAP_CONFIRM, done_rx).await.is_err() {
+            tracing::warn!("agent child reaper did not confirm within {REAP_CONFIRM:?}");
         }
         result
     }
@@ -275,6 +302,7 @@ fn spawn_child_reaper(
     kill_rx: oneshot::Receiver<()>,
     dead_tx: oneshot::Sender<()>,
     done_tx: oneshot::Sender<()>,
+    reaped: Option<oneshot::Sender<()>>,
 ) {
     tokio::spawn(async move {
         let pid = child.id();
@@ -294,6 +322,12 @@ fn spawn_child_reaper(
         }
         let _ = dead_tx.send(());
         let _ = done_tx.send(());
+        // The owner's copy. `done_tx` is awaited by `connect_to`'s tail, which
+        // the SDK skips whenever it drops the transport task; this one is held
+        // outside the connection and so survives that.
+        if let Some(reaped) = reaped {
+            let _ = reaped.send(());
+        }
     });
 }
 
@@ -319,8 +353,12 @@ impl UpstreamConnection {
         env: &HashMap<String, String>,
         strip_inherited_env: &[String],
     ) -> anyhow::Result<Self> {
-        let process = AgentProcess::new(command.to_string(), args.to_vec(), env.clone())
+        let mut process = AgentProcess::new(command.to_string(), args.to_vec(), env.clone())
             .strip_inherited_env(strip_inherited_env.to_vec());
+        // Taken before the process is handed over: the reaper lives on the
+        // runtime built below, and this thread must not drop that runtime
+        // until the child is gone. See [`AgentProcess::reaped`].
+        let reaped = process.reaped();
         // The deadline stays with `engine::Session` on this path; the shared
         // client enforces its own only where a caller asked for one.
         let (ready, driver) = AcpClient::wire(process, ClientOptions::default());
@@ -334,7 +372,21 @@ impl UpstreamConnection {
                     // Dropping `driver` unpolled closes the handshake channel,
                     // so `ready` below reports the failure rather than hanging.
                     Err(e) => tracing::error!(error = %e, "failed to start the ACP runtime"),
-                    Ok(rt) => rt.block_on(driver),
+                    Ok(rt) => {
+                        rt.block_on(driver);
+                        // The connection is down, which is not the same as the
+                        // child being gone: the SDK dropped the transport task
+                        // rather than letting it confirm. Wait here, on the
+                        // runtime the reaper is running on, before it goes.
+                        if rt
+                            .block_on(tokio::time::timeout(REAP_CONFIRM, reaped))
+                            .is_err()
+                        {
+                            tracing::warn!(
+                                "agent child not confirmed reaped within {REAP_CONFIRM:?};                                  a wrapped grandchild may have survived"
+                            );
+                        }
+                    }
                 }
             })?;
 
@@ -452,7 +504,8 @@ async fn health_check_inner(
     let (kill_tx, kill_rx) = oneshot::channel::<()>();
     let (dead_tx, _dead_rx) = oneshot::channel::<()>();
     let (done_tx, done_rx) = oneshot::channel::<()>();
-    spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+    // No owner signal: this path awaits `done_rx` itself, below.
+    spawn_child_reaper(child, kill_rx, dead_tx, done_tx, None);
 
     let (result_tx, result_rx) =
         futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
