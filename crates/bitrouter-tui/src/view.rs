@@ -56,7 +56,15 @@ pub struct View {
     /// than accumulated: it is about the last thing that happened, and the
     /// session log is where the history lives.
     notice: Vec<Line<'static>>,
-    /// A row owned by an open modal. Today only the provider picker.
+    /// The permission question waiting for an answer, if any.
+    ///
+    /// The view's rather than the journal's: `session/request_permission` is a
+    /// **request**, not an update, so it is not part of the projection of the
+    /// update stream that the journal is. Whoever owns the answer owns the
+    /// question, and that is the caller's loop — which sets it here and clears
+    /// it when the request is resolved.
+    permission: Option<crate::permission::Prompt>,
+    /// A row owned by an open modal. Today only the route picker.
     modal: Option<Line<'static>>,
     /// The line being typed. Raw mode means nothing is echoed unless the
     /// footer echoes it.
@@ -77,6 +85,7 @@ impl View {
             registry: Registry::default(),
             route,
             notice: Vec::new(),
+            permission: None,
             modal: None,
             input: String::new(),
         })
@@ -108,7 +117,12 @@ impl View {
         self.notice.clear();
     }
 
-    /// Give a modal its row. Today only the provider picker has one.
+    /// Show a permission question, or take it back down once it is answered.
+    pub fn set_permission(&mut self, prompt: Option<crate::permission::Prompt>) {
+        self.permission = prompt;
+    }
+
+    /// Give a modal its row. Today only the route picker has one.
     pub fn open_modal(&mut self, row: Line<'static>) {
         self.modal = Some(row);
     }
@@ -146,7 +160,7 @@ impl View {
         let mut rows = vec![Line::from(status)];
         rows.extend(self.notice.iter().cloned());
         // A question waiting on a person outranks anything else down here.
-        if let Some(prompt) = journal.pending_permission() {
+        if let Some(prompt) = &self.permission {
             rows.push(prompt.render());
         }
         if let Some(modal) = &self.modal {

@@ -21,6 +21,7 @@ use futures::StreamExt;
 
 use agent_client_protocol::schema::v1::SessionUpdate;
 use bitrouter_sdk::acp::client::{AcpClient, RouteError, RouteMethod};
+use bitrouter_tui::permission::Prompt as PermissionPrompt;
 
 /// This process's session log, once the subscriber has opened one.
 ///
@@ -305,7 +306,7 @@ pub(crate) async fn run(
                 deny(request);
             }
             session.client.deny_outstanding_permissions();
-            bitrouter_tui::view::lock(&shared).set_pending_permission(None);
+            view.set_permission(None);
             if let Err(e) = told {
                 tracing::warn!(error = %e, "cancelling the turn");
             }
@@ -369,35 +370,25 @@ pub(crate) async fn run(
     }
 }
 
-/// Answer a permission nobody is going to answer.
-///
-/// A turn can be cancelled with a question outstanding, and a cancelled turn
-/// must never resolve to consent. This is the same `Prompt::deny()` path an
-/// `Esc` at the prompt takes, so there is exactly one rule for "no answer" and
-/// it is the safe one.
-fn deny(request: bitrouter_sdk::acp::client::PendingPermission) {
-    let prompt = bitrouter_tui::permission::Prompt::new(
+/// The prompt a pending request is drawn and answered as.
+fn prompt_of(request: &bitrouter_sdk::acp::client::PendingPermission) -> PermissionPrompt {
+    PermissionPrompt::new(
+        request.request_id.clone(),
         request.tool_call.fields.title.clone(),
         request.tool_call.tool_call_id.0.to_string(),
         request.options.clone(),
-    );
-    request.resolve(unanswered(&prompt));
+    )
 }
 
-/// What an unanswered permission resolves to.
+/// Answer a permission nobody is going to answer.
 ///
-/// An explicit reject when the agent offered one, so it hears a decision it
-/// understands. Otherwise **cancelled** — never a selection, because the only
-/// options left would be ones that say yes.
-fn unanswered(
-    prompt: &bitrouter_tui::permission::Prompt,
-) -> agent_client_protocol::schema::v1::RequestPermissionOutcome {
-    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
-
-    match prompt.deny() {
-        Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-        None => RequestPermissionOutcome::Cancelled,
-    }
+/// A turn can be cancelled with a question outstanding, and a cancelled turn
+/// must never resolve to consent. This is the same `Prompt::unanswered()` path
+/// an `Esc` at the prompt takes, so there is exactly one rule for "no answer"
+/// and it is the safe one.
+fn deny(request: bitrouter_sdk::acp::client::PendingPermission) {
+    let outcome = prompt_of(&request).unanswered();
+    request.resolve(outcome);
 }
 
 /// The user's own prompt, as the update the agent would have sent for it.
@@ -444,7 +435,6 @@ pub(crate) async fn chat_plain(
 ) -> Result<()> {
     use std::io::Write as _;
 
-    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
     use futures::FutureExt as _;
     use tokio::io::AsyncBufReadExt as _;
 
@@ -489,17 +479,7 @@ pub(crate) async fn chat_plain(
                     journal.apply(update);
                 },
                 request = permissions.next() => if let Some(request) = request {
-                    let prompt = bitrouter_tui::permission::Prompt::new(
-                        request.tool_call.fields.title.clone(),
-                        request.tool_call.tool_call_id.0.to_string(),
-                        request.options.clone(),
-                    );
-                    request.resolve(match prompt.deny() {
-                        Some(id) => RequestPermissionOutcome::Selected(
-                            SelectedPermissionOutcome::new(id),
-                        ),
-                        None => RequestPermissionOutcome::Cancelled,
-                    });
+                    deny(request);
                     writeln!(out, "  permission denied: no terminal to ask on")
                         .context("writing the permission decision")?;
                 },
@@ -652,17 +632,13 @@ async fn answer_permission(
     use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
-    let prompt = bitrouter_tui::permission::Prompt::new(
-        request.tool_call.fields.title.clone(),
-        request.tool_call.tool_call_id.0.to_string(),
-        request.options.clone(),
-    );
-    // The journal holds the open question, so every frame drawn while it is
-    // open shows it — including one painted by something else entirely.
-    bitrouter_tui::view::lock(shared).set_pending_permission(Some(prompt.clone()));
+    let prompt = prompt_of(&request);
+    // The view holds the open question, so every frame drawn while it is open
+    // shows it — including one painted by something else entirely.
+    view.set_permission(Some(prompt.clone()));
     view.paint(shared).context("painting a frame")?;
 
-    let deny = || unanswered(&prompt);
+    let deny = || prompt.unanswered();
 
     // Keys come from the session's one stdin owner. It already holds raw mode
     // for the whole session, so there is no mode to take here and none to
@@ -700,79 +676,11 @@ async fn answer_permission(
     request.resolve(outcome);
     // Answered: the question stops being asked, and what was decided is said
     // once rather than left on screen as though it were still open.
-    bitrouter_tui::view::lock(shared).set_pending_permission(None);
+    view.set_permission(None);
     view.notice(if chosen {
         "permission answered"
     } else {
         "permission denied"
     });
     view.paint(shared).context("painting a frame")
-}
-
-#[cfg(test)]
-mod cancel_tests {
-    use agent_client_protocol::schema::v1::{
-        PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
-    };
-
-    use super::*;
-
-    fn prompt(options: Vec<PermissionOption>) -> bitrouter_tui::permission::Prompt {
-        bitrouter_tui::permission::Prompt::new(Some("Write src/main.rs".to_string()), "t1", options)
-    }
-
-    fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
-        PermissionOption::new(
-            PermissionOptionId::new(id.to_string()),
-            id.to_string(),
-            kind,
-        )
-    }
-
-    /// The rule a cancelled turn depends on: a question nobody answered
-    /// resolves to the agent's own reject option.
-    ///
-    /// Cancelling is not consenting. A turn can be cancelled with a permission
-    /// outstanding — `Esc` or Ctrl-C while the agent is asking — and the
-    /// cancel path answers it here rather than leaving it for whichever key
-    /// happens to arrive next.
-    #[test]
-    fn an_unanswered_permission_takes_the_reject_option() {
-        let offered = prompt(vec![
-            option("allow", PermissionOptionKind::AllowOnce),
-            option("allow-always", PermissionOptionKind::AllowAlways),
-            option("reject", PermissionOptionKind::RejectOnce),
-        ]);
-        let chosen = match unanswered(&offered) {
-            RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.0.to_string()),
-            // `Cancelled`, or a variant added after this build — either way,
-            // not a selection.
-            _ => None,
-        };
-        assert_eq!(
-            chosen.as_deref(),
-            Some("reject"),
-            "the reject option, not the first one offered"
-        );
-    }
-
-    /// And when the agent offered no way to say no, the answer is **cancelled**
-    /// — never one of the options, because every option left says yes.
-    #[test]
-    fn an_unanswered_permission_never_resolves_to_consent() {
-        let only_yes = prompt(vec![
-            option("allow", PermissionOptionKind::AllowOnce),
-            option("allow-always", PermissionOptionKind::AllowAlways),
-        ]);
-        assert!(
-            matches!(unanswered(&only_yes), RequestPermissionOutcome::Cancelled),
-            "an unanswerable question must not become an allow"
-        );
-
-        // Nor when the agent offered nothing at all.
-        assert!(matches!(
-            unanswered(&prompt(Vec::new())),
-            RequestPermissionOutcome::Cancelled
-        ));
-    }
 }
