@@ -30,7 +30,7 @@ Three facts made that untenable:
   `Journal::apply` is last-writer-wins, so the zeros the current dead code emits
   would erase the real occupancy. Cost cannot be sent on its own.
 - **The scope marker at §15.2 has no writer.** `measured_usage_update` builds a
-  correctly-scoped `UsageUpdate`, has four tests, and is unreachable — every
+  correctly-scoped `UsageUpdate`, has three tests, and is unreachable — every
   caller passes `None`. The marker's requirement stands; its implementation was
   orphaned when #849 removed the only injection point.
 
