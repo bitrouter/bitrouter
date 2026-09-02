@@ -1,6 +1,6 @@
 # ACP controller Phase 3 execution plan
 
-Status: **implementation complete; PR validation pending** · Date: 2026-09-02
+Status: **completed** · Date: 2026-09-02
 
 This plan is derived from [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md).
 It records the already-delivered Phase 2 baseline without pretending to be a
@@ -162,3 +162,6 @@ evidence, and successful CI, with hosted control and TUI work left explicit.
 - Final Critical/Important review found no remaining correctness, secret
   handling, compatibility, or scope findings. Hosted HTTP route control and
   the TUI remain Phase 4 and Phase 5 respectively.
+- Pull request [#853](https://github.com/bitrouter/bitrouter/pull/853) passed
+  Linux, macOS, Windows, clippy, rustdoc, MSRV, integration, repository,
+  packaging, and CodeQL validation.
