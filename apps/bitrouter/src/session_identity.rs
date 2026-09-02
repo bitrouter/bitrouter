@@ -1,4 +1,4 @@
-//! Authenticated ACP/native request-session normalization.
+//! ACP/native request-session normalization.
 
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use bitrouter_sdk::language_model::{ApiProtocol, HookDecision, PipelineContext, 
 use serde::Serialize;
 
 use crate::acp_runtime::AcpRuntime;
-use crate::auth::events::ControllerAuthenticated;
+use crate::auth::events::ApiPrincipalEstablished;
 use crate::workflow_state::extractors::{ExtractorInput, parse_compatibility_harness};
 use crate::workflow_state::ir::ProtocolKind;
 use crate::workflow_state::session::resolve_session_signal;
@@ -37,15 +37,15 @@ const EVIDENCE_HEADERS: &[&str] = &[
     "x-bitrouter-inbound-protocol",
 ];
 
-/// Whether request identity came from the legacy model API path or a
-/// credential-bound ACP controller.
+/// Whether request identity came from the legacy model API path or declared
+/// ACP harness correlation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestOrigin {
-    /// No authenticated controller credential was present.
+    /// No controller claim was present.
     PureModelApi,
-    /// The daemon authenticated a controller-scoped credential.
-    AuthenticatedAcpController,
+    /// The request declared an ACP controller namespace.
+    AcpHarnessRequest,
 }
 
 /// Source-independent native agent identity observed on the model request.
@@ -72,8 +72,8 @@ pub struct IdentityEvidence {
     pub field: String,
     /// Signal family (`bitrouter`, `claude_code`, `codex`, or `legacy`).
     pub source: String,
-    /// Whether this evidence may participate in authenticated lease lookup.
-    pub trusted_for_route: bool,
+    /// Whether this exact evidence value participated in route lookup.
+    pub used_for_route_match: bool,
     /// `raw`, `stable_digest`, or `presence_only`.
     pub value_representation: String,
     /// Value when the reviewed representation permits it.
@@ -111,13 +111,13 @@ pub struct RouteLeaseObservation {
 /// Full request-scoped normalized session context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RequestSessionContext {
-    /// Trust origin.
+    /// Attribution origin.
     pub origin: RequestOrigin,
-    /// Credential-bound controller identity.
-    pub authenticated_controller_instance_id: Option<String>,
-    /// Untrusted static controller header, retained separately.
+    /// Non-secret public API-key identity, or `local` under `skip_auth`.
+    pub api_principal_id: String,
+    /// Caller-declared static controller header.
     pub claimed_controller_instance_id: Option<String>,
-    /// Dynamic ACP session header only after a trusted controller binding.
+    /// Caller-declared dynamic ACP session header.
     pub acp_session_id: Option<String>,
     /// Native Claude/Codex identity.
     pub native: NativeSessionIdentity,
@@ -138,15 +138,15 @@ pub struct RequestSessionContext {
 pub struct SessionIdentityObserved {
     /// Router request id joining trace, route, and metering artifacts.
     pub router_request_id: String,
-    /// Trust origin.
+    /// Attribution origin.
     pub origin: RequestOrigin,
+    /// Non-secret public API-key identity, or `local` under `skip_auth`.
+    pub api_principal_id: String,
     /// Recognized harness.
     pub harness: Option<String>,
-    /// Credential-bound controller identity.
-    pub authenticated_controller_instance_id: Option<String>,
-    /// Untrusted claimed controller identity.
+    /// Caller-declared controller identity.
     pub claimed_controller_instance_id: Option<String>,
-    /// Trusted ACP session binding.
+    /// Caller-declared ACP session identity.
     pub acp_session_id: Option<String>,
     /// Native root session.
     pub native_root_session_id: Option<String>,
@@ -180,8 +180,8 @@ impl PipelineEvent for SessionIdentityObserved {
     }
 }
 
-/// Post-auth hook that normalizes identity and applies an authenticated route
-/// lease without changing legacy pure API behavior.
+/// Post-auth hook that normalizes identity and applies an API-principal-scoped
+/// route lease without changing legacy pure API behavior.
 pub struct SessionContextHook {
     runtime: Arc<AcpRuntime>,
 }
@@ -196,50 +196,23 @@ impl SessionContextHook {
 #[async_trait]
 impl PreRequestHook for SessionContextHook {
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
-        let authenticated_controller = ctx
-            .get_event::<ControllerAuthenticated>()
-            .map(|event| event.controller_instance_id.clone());
-        let origin = if authenticated_controller.is_some() {
-            RequestOrigin::AuthenticatedAcpController
+        let api_principal_id = ctx.caller().api_key_id().to_string();
+        let route_principal = if ctx.caller().is_local() {
+            "local".to_string()
+        } else {
+            ctx.get_event::<ApiPrincipalEstablished>()
+                .map(|event| event.route_scope_id.clone())
+                .unwrap_or_else(|| api_principal_id.clone())
+        };
+        let claimed_controller = header_value(ctx, "x-bitrouter-controller-id");
+        let origin = if claimed_controller.is_some() {
+            RequestOrigin::AcpHarnessRequest
         } else {
             RequestOrigin::PureModelApi
         };
-        let claimed_controller = header_value(ctx, "x-bitrouter-controller-id");
-        let dynamic_acp_session = header_value(ctx, "x-bitrouter-acp-session-id");
+        let acp_session_id = header_value(ctx, "x-bitrouter-acp-session-id");
         let mut conflicts = Vec::new();
-        let controller_claim_matches = match (
-            authenticated_controller.as_deref(),
-            claimed_controller.as_deref(),
-        ) {
-            (Some(authenticated), Some(claimed)) if authenticated == claimed => true,
-            (Some(authenticated), Some(claimed)) => {
-                conflicts.push(IdentityConflict {
-                    field: "header.x-bitrouter-controller-id".to_string(),
-                    expected: Some(authenticated.to_string()),
-                    observed: Some(claimed.to_string()),
-                    resolution: "credential_binding_wins".to_string(),
-                });
-                false
-            }
-            _ => false,
-        };
-        let acp_session_id = dynamic_acp_session
-            .clone()
-            .filter(|_| controller_claim_matches);
-        if dynamic_acp_session.is_some() && acp_session_id.is_none() {
-            conflicts.push(IdentityConflict {
-                field: "header.x-bitrouter-acp-session-id".to_string(),
-                expected: authenticated_controller.clone(),
-                observed: dynamic_acp_session.clone(),
-                resolution: "ignored_without_matching_controller_binding".to_string(),
-            });
-        }
-
-        let mut evidence = header_evidence(
-            ctx,
-            authenticated_controller.is_some(),
-            acp_session_id.is_some(),
-        );
+        let mut evidence = header_evidence(ctx);
         let raw_body = canonical_extra_body(ctx);
         let protocol_kind = protocol_kind(ctx.inbound_protocol());
         let harness_hint = header_value(ctx, "x-bitrouter-harness")
@@ -256,7 +229,7 @@ impl PreRequestHook for SessionContextHook {
                 transport: "derived".to_string(),
                 field: legacy_evidence.value,
                 source: "legacy".to_string(),
-                trusted_for_route: false,
+                used_for_route_match: false,
                 value_representation: "presence_only".to_string(),
                 value: None,
             });
@@ -273,13 +246,6 @@ impl PreRequestHook for SessionContextHook {
         }
 
         let mut native = extract_native(ctx, &mut evidence, &mut conflicts);
-        if authenticated_controller.is_none() {
-            // Native evidence remains observable for pure API callers, but no
-            // field can be promoted to controller route authority.
-            for item in &mut evidence {
-                item.trusted_for_route = false;
-            }
-        }
         if let (Some(dynamic), Some(root)) =
             (acp_session_id.as_deref(), native.root_session_id.as_deref())
             && dynamic != root
@@ -292,7 +258,7 @@ impl PreRequestHook for SessionContextHook {
             });
         }
 
-        let route_lease = authenticated_controller.as_deref().and_then(|controller| {
+        let route_lease = claimed_controller.as_deref().and_then(|controller| {
             let mut candidates = Vec::new();
             push_unique(&mut candidates, acp_session_id.as_deref());
             match native.harness.as_deref() {
@@ -305,9 +271,10 @@ impl PreRequestHook for SessionContextHook {
                 }
                 _ => {}
             }
+            mark_route_evidence(&mut evidence, &native, acp_session_id.as_deref());
             let candidate_refs = candidates.iter().map(String::as_str).collect::<Vec<_>>();
             self.runtime
-                .resolve_route(controller, &candidate_refs)
+                .resolve_route(&route_principal, controller, &candidate_refs)
                 .map(|lease| {
                     let (applied, reason) = if api_continuation_id.is_some() {
                         (false, "continuation_precedence")
@@ -329,7 +296,7 @@ impl PreRequestHook for SessionContextHook {
 
         let normalized = RequestSessionContext {
             origin,
-            authenticated_controller_instance_id: authenticated_controller,
+            api_principal_id,
             claimed_controller_instance_id: claimed_controller,
             acp_session_id,
             native: std::mem::take(&mut native),
@@ -358,8 +325,8 @@ fn event_from_context(
     SessionIdentityObserved {
         router_request_id: router_request_id.to_string(),
         origin: context.origin,
+        api_principal_id: context.api_principal_id.clone(),
         harness: context.native.harness.clone(),
-        authenticated_controller_instance_id: context.authenticated_controller_instance_id.clone(),
         claimed_controller_instance_id: context.claimed_controller_instance_id.clone(),
         acp_session_id: context.acp_session_id.clone(),
         native_root_session_id: context.native.root_session_id.clone(),
@@ -388,34 +355,66 @@ fn event_from_context(
     }
 }
 
-fn header_evidence(
-    ctx: &PipelineContext,
-    authenticated: bool,
-    dynamic_acp_trusted: bool,
-) -> Vec<IdentityEvidence> {
+fn header_evidence(ctx: &PipelineContext) -> Vec<IdentityEvidence> {
     EVIDENCE_HEADERS
         .iter()
         .filter_map(|name| {
             let value = header_value(ctx, name)?;
-            let (source, trusted_for_route) = match *name {
-                "x-bitrouter-acp-session-id" => ("bitrouter", dynamic_acp_trusted),
-                "x-claude-code-session-id" => ("claude_code", authenticated),
-                "session-id" | "thread-id" => ("codex", authenticated),
-                name if name.starts_with("x-claude-code-") => ("claude_code", false),
-                "x-codex-turn-metadata" => ("codex", false),
-                _ => ("bitrouter", false),
+            let source = match *name {
+                "x-bitrouter-acp-session-id" => "bitrouter",
+                "x-claude-code-session-id" => "claude_code",
+                "session-id" | "thread-id" => "codex",
+                name if name.starts_with("x-claude-code-") => "claude_code",
+                "x-codex-turn-metadata" => "codex",
+                _ => "bitrouter",
             };
             let compound = *name == "x-codex-turn-metadata";
             Some(IdentityEvidence {
                 transport: "header".to_string(),
                 field: (*name).to_string(),
                 source: source.to_string(),
-                trusted_for_route,
+                used_for_route_match: false,
                 value_representation: if compound { "presence_only" } else { "raw" }.to_string(),
                 value: (!compound).then_some(value),
             })
         })
         .collect()
+}
+
+fn mark_route_evidence(
+    evidence: &mut [IdentityEvidence],
+    native: &NativeSessionIdentity,
+    acp_session_id: Option<&str>,
+) {
+    for item in evidence {
+        let selected_native = match item.field.as_str() {
+            "x-claude-code-session-id" | "metadata.user_id.session_id"
+                if native.harness.as_deref() == Some("claude_code") =>
+            {
+                native.root_session_id.as_deref()
+            }
+            "session-id" | "client_metadata.session_id"
+                if native.harness.as_deref() == Some("codex") =>
+            {
+                native.root_session_id.as_deref()
+            }
+            "thread-id" | "client_metadata.thread_id"
+                if native.harness.as_deref() == Some("codex") =>
+            {
+                native.agent_thread_id.as_deref()
+            }
+            _ => None,
+        };
+        item.used_for_route_match = match item.field.as_str() {
+            "x-bitrouter-controller-id" => {
+                acp_session_id.is_some()
+                    || native.root_session_id.is_some()
+                    || native.agent_thread_id.is_some()
+            }
+            "x-bitrouter-acp-session-id" => item.value.as_deref() == acp_session_id,
+            _ => selected_native.is_some() && item.value.as_deref() == selected_native,
+        };
+    }
 }
 
 fn extract_native(
@@ -593,13 +592,13 @@ fn body_evidence(
     field: &str,
     source: &str,
     value: String,
-    trusted_for_route: bool,
+    used_for_route_match: bool,
 ) -> IdentityEvidence {
     IdentityEvidence {
         transport: "body".to_string(),
         field: field.to_string(),
         source: source.to_string(),
-        trusted_for_route,
+        used_for_route_match,
         value_representation: "raw".to_string(),
         value: Some(value),
     }
@@ -726,28 +725,26 @@ fn push_unique(values: &mut Vec<String>, candidate: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::sync::Arc;
-    use std::time::Duration;
-
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::language_model::{
         ApiProtocol, GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest,
         PreRequestHook, Prompt, Role,
     };
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     use super::{
         RequestOrigin, RequestSessionContext, SessionContextHook, SessionIdentityObserved,
     };
     use crate::acp_runtime::AcpRuntime;
-    use crate::auth::events::ControllerAuthenticated;
+    use crate::auth::events::ApiPrincipalEstablished;
 
     fn context(
         model: &str,
         protocol: ApiProtocol,
         headers: &[(&str, &str)],
         extra: serde_json::Map<String, serde_json::Value>,
-        authenticated_controller: Option<&str>,
+        route_principal: Option<&str>,
     ) -> PipelineContext {
         let prompt = Prompt {
             model: model.to_string(),
@@ -764,7 +761,12 @@ mod tests {
             tool_choice: None,
             stream: false,
         };
-        let mut request = PipelineRequest::new(model, CallerContext::local(), prompt);
+        let caller = if route_principal.is_some() {
+            CallerContext::new("test-key", "test-user")
+        } else {
+            CallerContext::local()
+        };
+        let mut request = PipelineRequest::new(model, caller, prompt);
         request.request_id = "router-request-1".to_string();
         request.inbound_protocol = Some(protocol);
         for (name, value) in headers {
@@ -774,10 +776,9 @@ mod tests {
             );
         }
         let mut context = PipelineContext::new(request);
-        if let Some(controller_instance_id) = authenticated_controller {
-            context.emit(ControllerAuthenticated {
-                controller_instance_id: controller_instance_id.to_string(),
-                expires_at: "2026-09-02T12:00:00Z".to_string(),
+        if let Some(route_principal) = route_principal {
+            context.emit(ApiPrincipalEstablished {
+                route_scope_id: route_principal.to_string(),
             });
         }
         context
@@ -820,19 +821,22 @@ mod tests {
             normalized.legacy_workflow_session_id.as_deref(),
             Some("legacy-session")
         );
-        assert!(normalized.authenticated_controller_instance_id.is_none());
+        assert_eq!(normalized.api_principal_id, "local");
+        assert!(normalized.claimed_controller_instance_id.is_none());
         assert!(normalized.acp_session_id.is_none());
         assert_eq!(context.model(), "gpt-5");
     }
 
     #[tokio::test]
-    async fn authenticated_claude_identity_applies_the_matching_session_lease() {
+    async fn declared_claude_identity_applies_the_matching_session_lease() {
         let runtime = Arc::new(AcpRuntime::new());
-        let _grant = runtime
-            .issue_controller("brc_claude", Duration::from_secs(60))
-            .expect("controller");
         runtime
-            .set_route("brc_claude", "claude-root", "anthropic:claude-opus")
+            .set_route(
+                "principal",
+                "brc_claude",
+                "claude-root",
+                "anthropic:claude-opus",
+            )
             .expect("route");
         let mut context = context(
             "claude-sonnet",
@@ -844,7 +848,7 @@ mod tests {
                 ("x-claude-code-parent-agent-id", "claude-parent"),
             ],
             serde_json::Map::new(),
-            Some("brc_claude"),
+            Some("principal"),
         );
 
         let normalized = observe(runtime, &mut context).await;
@@ -882,14 +886,11 @@ mod tests {
     #[tokio::test]
     async fn codex_exact_thread_lease_wins_before_root_fallback_and_parses_turn_lineage() {
         let runtime = Arc::new(AcpRuntime::new());
-        let _grant = runtime
-            .issue_controller("brc_codex", Duration::from_secs(60))
-            .expect("controller");
         runtime
-            .set_route("brc_codex", "codex-root", "openai:gpt-5")
+            .set_route("principal", "brc_codex", "codex-root", "openai:gpt-5")
             .expect("root route");
         runtime
-            .set_route("brc_codex", "codex-child", "openai:gpt-5.5")
+            .set_route("principal", "brc_codex", "codex-child", "openai:gpt-5.5")
             .expect("child route");
         let mut extra = serde_json::Map::new();
         extra.insert(
@@ -913,7 +914,7 @@ mod tests {
                 ),
             ],
             extra,
-            Some("brc_codex"),
+            Some("principal"),
         );
 
         let normalized = observe(runtime, &mut context).await;
@@ -936,49 +937,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mismatched_claimed_controller_cannot_authorize_dynamic_session_header() {
+    async fn a_distinct_api_principal_cannot_activate_the_same_declared_claims() {
         let runtime = Arc::new(AcpRuntime::new());
-        let _grant = runtime
-            .issue_controller("brc_real", Duration::from_secs(60))
-            .expect("controller");
         runtime
-            .set_route("brc_real", "forged-session", "attacker:model")
-            .expect("forged candidate route");
-        runtime
-            .set_route("brc_real", "native-session", "safe:model")
-            .expect("native route");
+            .set_route(
+                "principal-owner",
+                "brc_shared",
+                "shared-session",
+                "owner:model",
+            )
+            .expect("owner route");
         let mut context = context(
             "logical-model",
             ApiProtocol::Messages,
             &[
-                ("x-bitrouter-controller-id", "brc_other"),
-                ("x-bitrouter-acp-session-id", "forged-session"),
-                ("x-claude-code-session-id", "native-session"),
+                ("x-bitrouter-controller-id", "brc_shared"),
+                ("x-bitrouter-acp-session-id", "shared-session"),
             ],
             serde_json::Map::new(),
-            Some("brc_real"),
+            Some("principal-other"),
         );
 
         let normalized = observe(runtime, &mut context).await;
 
-        assert!(normalized.acp_session_id.is_none());
-        assert_eq!(context.model(), "safe:model");
-        assert!(
-            normalized
-                .conflicts
-                .iter()
-                .any(|conflict| { conflict.field == "header.x-bitrouter-controller-id" })
+        assert_eq!(normalized.origin, RequestOrigin::AcpHarnessRequest);
+        assert_eq!(normalized.acp_session_id.as_deref(), Some("shared-session"));
+        assert_eq!(context.model(), "logical-model");
+        assert!(normalized.route_lease.is_none());
+    }
+
+    #[tokio::test]
+    async fn skip_auth_uses_the_shared_local_route_principal() {
+        let runtime = Arc::new(AcpRuntime::new());
+        runtime
+            .set_route("local", "brc_local", "local-session", "local:model")
+            .expect("local route");
+        let mut context = context(
+            "logical-model",
+            ApiProtocol::Messages,
+            &[
+                ("x-bitrouter-controller-id", "brc_local"),
+                ("x-bitrouter-acp-session-id", "local-session"),
+            ],
+            serde_json::Map::new(),
+            None,
         );
+
+        let normalized = observe(runtime, &mut context).await;
+
+        assert_eq!(normalized.api_principal_id, "local");
+        assert_eq!(context.model(), "local:model");
+        assert_eq!(
+            normalized
+                .route_lease
+                .as_ref()
+                .map(|lease| lease.matched_session_id.as_str()),
+            Some("local-session")
+        );
+        for field in ["x-bitrouter-controller-id", "x-bitrouter-acp-session-id"] {
+            assert!(
+                normalized
+                    .evidence
+                    .iter()
+                    .any(|evidence| { evidence.field == field && evidence.used_for_route_match })
+            );
+        }
     }
 
     #[tokio::test]
     async fn explicit_caller_routes_and_continuations_are_stronger_than_a_lease() {
         let runtime = Arc::new(AcpRuntime::new());
-        let _grant = runtime
-            .issue_controller("brc_precedence", Duration::from_secs(60))
-            .expect("controller");
         runtime
-            .set_route("brc_precedence", "root", "lease:model")
+            .set_route("principal", "brc_precedence", "root", "lease:model")
             .expect("route");
 
         for model in ["explicit:model", "@careful", "bitrouter/auto"] {
@@ -990,7 +1020,7 @@ mod tests {
                     ("session-id", "root"),
                 ],
                 serde_json::Map::new(),
-                Some("brc_precedence"),
+                Some("principal"),
             );
             let normalized = observe(Arc::clone(&runtime), &mut context).await;
             assert_eq!(context.model(), model);
@@ -1023,7 +1053,7 @@ mod tests {
                 ("session-id", "root"),
             ],
             extra,
-            Some("brc_precedence"),
+            Some("principal"),
         );
         let normalized = observe(runtime, &mut continuation).await;
         assert_eq!(continuation.model(), "logical-model");
@@ -1076,6 +1106,10 @@ mod tests {
             "thread-id",
             "x-codex-turn-metadata",
             "x-session-id",
+            "anthropic-beta",
+            "user-agent",
+            "x-bitrouter-harness",
+            "x-bitrouter-inbound-protocol",
         ];
         let mut request_headers = expected
             .iter()

@@ -39,9 +39,9 @@ pub enum ReconciliationStatus {
 pub struct MeteringSessionIdentity {
     /// Recognized harness.
     pub agent_harness: Option<String>,
-    /// Credential-bound controller identity.
+    /// Caller-declared controller correlation.
     pub controller_instance_id: Option<String>,
-    /// Trusted ACP session binding.
+    /// Caller-declared ACP session correlation.
     pub acp_session_id: Option<String>,
     /// Native root session.
     pub native_root_session_id: Option<String>,

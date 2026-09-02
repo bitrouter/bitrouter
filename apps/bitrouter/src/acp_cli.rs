@@ -204,6 +204,9 @@ pub struct Routed {
     /// One controller process / harness connection correlation id. This is
     /// never an ACP session id and is absent for direct or legacy harnesses.
     pub controller_instance_id: Option<String>,
+    /// Opaque route namespace derived from the ordinary API credential, or
+    /// `local` under `skip_auth`. It is not a bearer credential.
+    pub api_principal: Option<String>,
     /// The one process-scoped endpoint plan used for both launch fallback and
     /// post-initialize ACP provider configuration.
     pub endpoint_plan: Option<crate::harness::HarnessEndpointPlan>,
@@ -225,35 +228,7 @@ pub async fn apply_routing(
     opts: &RoutingOptions,
 ) -> std::result::Result<Routed, RoutingError> {
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    apply_routing_with_cloud_credentials(
-        source,
-        config,
-        agent_id,
-        opts,
-        &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
-    )
-    .await
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoutingCredentialMode {
-    UserOrLaunch,
-    ControllerIssuedLocal,
-}
-
-fn user_key_required(
-    target_is_local: bool,
-    daemon_requires_key: bool,
-    uses_maintained_adapter: bool,
-    implicit_local_target: bool,
-    mode: RoutingCredentialMode,
-) -> bool {
-    daemon_requires_key
-        && !(target_is_local
-            && uses_maintained_adapter
-            && implicit_local_target
-            && mode == RoutingCredentialMode::ControllerIssuedLocal)
+    apply_routing_with_cloud_credentials(source, config, agent_id, opts, &cloud_credentials).await
 }
 
 async fn apply_routing_with_cloud_credentials(
@@ -262,7 +237,6 @@ async fn apply_routing_with_cloud_credentials(
     agent_id: &str,
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-    credential_mode: RoutingCredentialMode,
 ) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
@@ -357,13 +331,6 @@ async fn apply_routing_with_cloud_credentials(
     };
     // A remote daemon's `skip_auth` is unknowable here, so require a key.
     let require_key = !target_is_local || !config.server.skip_auth;
-    let require_user_key = user_key_required(
-        target_is_local,
-        require_key,
-        uses_maintained_adapter,
-        opts.base_url.is_none(),
-        credential_mode,
-    );
 
     // A harness whose credential isn't Bearer (gemini's `x-goog-api-key`) is
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
@@ -390,11 +357,16 @@ async fn apply_routing_with_cloud_credentials(
     // metering store has nothing to group by and cost can only be reported
     // daemon-wide.
     let supplied = explicit_key.or(stored_cloud_key);
-    if supplied.is_none() && require_user_key {
+    if supplied.is_none() && require_key {
         return Err(RoutingError::AuthRequired { via: base_url });
     }
     let auth = crate::spawn::resolve_launch_token(supplied, None);
     let launch_id = crate::spawn::is_launch_token(&auth).then(|| auth.clone());
+    let api_principal = if target_is_local && config.server.skip_auth {
+        "local".to_string()
+    } else {
+        crate::auth::keys::hash_key(&auth)
+    };
 
     // Daemon liveness: auto-start a local daemon, then probe. Fail fast if the
     // daemon is still unreachable (a routed sub-agent without one is
@@ -450,6 +422,7 @@ async fn apply_routing_with_cloud_credentials(
         via: Some(base_url),
         launch_id,
         controller_instance_id: endpoint_plan.as_ref().map(|_| controller_instance_id),
+        api_principal: endpoint_plan.as_ref().map(|_| api_principal),
         endpoint_plan,
     })
 }
@@ -718,13 +691,19 @@ fn controller_endpoint(
 
 struct DaemonRouteControl {
     socket_path: PathBuf,
+    api_principal: String,
     controller_instance_id: String,
 }
 
 impl DaemonRouteControl {
-    fn new(socket_path: PathBuf, controller_instance_id: impl Into<String>) -> Self {
+    fn new(
+        socket_path: PathBuf,
+        api_principal: impl Into<String>,
+        controller_instance_id: impl Into<String>,
+    ) -> Self {
         Self {
             socket_path,
+            api_principal: api_principal.into(),
             controller_instance_id: controller_instance_id.into(),
         }
     }
@@ -761,6 +740,7 @@ impl AcpRouteControl for DaemonRouteControl {
         session_id: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteList {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
         })
@@ -773,6 +753,7 @@ impl AcpRouteControl for DaemonRouteControl {
         route: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteSet {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
             route: route.to_string(),
@@ -785,6 +766,7 @@ impl AcpRouteControl for DaemonRouteControl {
         session_id: &str,
     ) -> std::result::Result<RouteControlState, RouteControlError> {
         self.route_state(crate::daemon::DaemonCommand::AcpRouteReset {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
         })
@@ -798,7 +780,8 @@ impl AcpRouteControl for DaemonRouteControl {
     async fn disconnected(&self) -> std::result::Result<(), RouteControlError> {
         match crate::daemon::send_command(
             &self.socket_path,
-            &crate::daemon::DaemonCommand::AcpControllerRevoke {
+            &crate::daemon::DaemonCommand::AcpControllerCleanup {
+                api_principal: self.api_principal.clone(),
                 controller_instance_id: self.controller_instance_id.clone(),
             },
         )
@@ -809,10 +792,10 @@ impl AcpRouteControl for DaemonRouteControl {
                 Err(RouteControlError::unavailable(message))
             }
             Ok(other) => Err(RouteControlError::unavailable(format!(
-                "daemon returned an unexpected revoke response: {other:?}"
+                "daemon returned an unexpected cleanup response: {other:?}"
             ))),
             Err(error) => Err(RouteControlError::unavailable(format!(
-                "daemon controller revoke is unavailable: {error}"
+                "daemon controller cleanup is unavailable: {error}"
             ))),
         }
     }
@@ -822,6 +805,7 @@ impl AcpRouteControl for DaemonRouteControl {
 /// this controller's own credential-bound traffic.
 struct DaemonSessionCost {
     socket_path: PathBuf,
+    api_principal: String,
     controller_instance_id: String,
 }
 
@@ -834,6 +818,7 @@ const SESSION_COST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 impl AcpSessionCost for DaemonSessionCost {
     async fn attributed_cost(&self, session_id: &str) -> Option<Cost> {
         let command = crate::daemon::DaemonCommand::AcpSessionSpend {
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
             session_id: session_id.to_string(),
         };
@@ -996,92 +981,58 @@ impl AcpSessionCost for CachedSessionCost {
 ///
 /// The credential is revoked on every exit through [`Self::revoke`]. It
 /// also carries a daemon-side TTL, which is what bounds a panic exit — the
-/// one path that runs no teardown.
+/// The trusted local binding both ACP bridges hang off.
+///
+/// Not a credential any more. `#853` replaced the minted `brac_` token with an
+/// `api_principal` the daemon derives itself, so there is nothing to issue and
+/// nothing to hand the harness — what remains is the principal/controller pair
+/// that names a lease namespace, and the socket to reach it on.
+///
+/// `None` when the session has no controller instance to bind (direct, or a
+/// harness without a maintained adapter), when the daemon supplied no
+/// principal, or when `explicit_base_url` names a daemon this process cannot
+/// vouch for. In every one of those the controller advertises no route control
+/// and no attributed cost, which is what makes their absence honest rather
+/// than a dead control.
 struct LocalControllerBinding {
     socket_path: PathBuf,
+    api_principal: String,
     controller_instance_id: String,
 }
 
 impl LocalControllerBinding {
-    /// Issue a controller credential for `routed`'s controller instance and
-    /// re-render the harness overlay so the child carries that credential
-    /// instead of the launch token.
-    ///
-    /// `None` when the session has no controller instance to bind (direct,
-    /// or a harness without a maintained adapter) or when `explicit_base_url`
-    /// names a daemon this process cannot vouch for. A credential issued and
-    /// then not installable is revoked before the error is returned.
-    async fn issue(
+    fn open(
         source: &ConfigSource,
-        config: &mut Config,
-        agent_id: &str,
-        routed: &mut Routed,
+        config: &Config,
+        routed: &Routed,
         explicit_base_url: bool,
-    ) -> Result<Option<Self>> {
-        let (Some(endpoint), Some(controller_instance_id)) = (
-            routed.endpoint_plan.clone(),
+    ) -> Option<Self> {
+        let (Some(_endpoint), Some(controller_instance_id), Some(api_principal)) = (
+            routed.endpoint_plan.as_ref(),
             routed.controller_instance_id.clone(),
+            routed.api_principal.clone(),
         ) else {
-            return Ok(None);
+            return None;
         };
         if explicit_base_url {
             eprintln!(
                 "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
-                 the remote model endpoint remains usable without trusted session leases"
+                 the remote model endpoint remains usable without session route control"
             );
-            return Ok(None);
+            return None;
         }
-        let socket_path = crate::daemon::socket_path_for(source, config);
-        let issued = crate::daemon::send_command(
-            &socket_path,
-            &crate::daemon::DaemonCommand::AcpControllerIssue {
-                controller_instance_id: controller_instance_id.clone(),
-            },
-        )
-        .await
-        .context("requesting a local ACP controller credential")?;
-        let credential = match issued {
-            crate::daemon::DaemonResponse::AcpControllerCredential {
-                controller_instance_id: confirmed,
-                credential,
-                ..
-            } if confirmed == controller_instance_id => credential,
-            crate::daemon::DaemonResponse::Error { message } => {
-                return Err(anyhow::anyhow!("ACP controller binding failed: {message}"));
-            }
-            other => {
-                return Err(anyhow::anyhow!(
-                    "daemon returned an unexpected ACP credential response: {other:?}"
-                ));
-            }
-        };
-        let binding = Self {
-            socket_path,
+        Some(Self {
+            socket_path: crate::daemon::socket_path_for(source, config),
+            api_principal,
             controller_instance_id,
-        };
-        let endpoint = endpoint.controller_credential(credential.as_str());
-        let overlay = match endpoint.fallback_overlay() {
-            Ok(overlay) => overlay,
-            Err(error) => {
-                binding.revoke().await;
-                return Err(error.context("rendering controller-authenticated fallback"));
-            }
-        };
-        if let Some(entry) = config.agents.get_mut(agent_id) {
-            let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
-            for (name, value) in overlay.env {
-                env.insert(name, value);
-            }
-            args.extend(overlay.args);
-        }
-        routed.endpoint_plan = Some(endpoint);
-        Ok(Some(binding))
+        })
     }
 
     /// The route bridge this binding makes trustworthy.
     fn route_control(&self) -> Arc<dyn AcpRouteControl> {
         Arc::new(DaemonRouteControl::new(
             self.socket_path.clone(),
+            self.api_principal.clone(),
             self.controller_instance_id.clone(),
         ))
     }
@@ -1091,29 +1042,29 @@ impl LocalControllerBinding {
     fn session_cost(&self) -> Arc<dyn AcpSessionCost> {
         Arc::new(CachedSessionCost::new(Arc::new(DaemonSessionCost {
             socket_path: self.socket_path.clone(),
+            api_principal: self.api_principal.clone(),
             controller_instance_id: self.controller_instance_id.clone(),
         })))
     }
 
-    /// Revoke the credential and every lease it owns. Idempotent on the
-    /// daemon side, so calling it after the controller's own disconnect
-    /// revoke costs one round trip and nothing else; a failure is logged,
-    /// because the caller is already on its way out.
+    /// Drop every lease in this namespace. Idempotent on the daemon side, so
+    /// calling it after the controller's own disconnect cleanup costs one
+    /// round trip and nothing else; a failure is logged, because the caller is
+    /// already on its way out.
     async fn revoke(&self) {
-        let revoked = crate::daemon::send_command(
+        let cleaned = crate::daemon::send_command(
             &self.socket_path,
-            &crate::daemon::DaemonCommand::AcpControllerRevoke {
+            &crate::daemon::DaemonCommand::AcpControllerCleanup {
+                api_principal: self.api_principal.clone(),
                 controller_instance_id: self.controller_instance_id.clone(),
             },
         )
         .await;
-        match revoked {
+        match cleaned {
             Ok(crate::daemon::DaemonResponse::Ok) => {}
-            Ok(other) => {
-                tracing::debug!(?other, "controller credential revoke was not acknowledged")
-            }
+            Ok(other) => tracing::debug!(?other, "controller lease cleanup was not acknowledged"),
             Err(error) => {
-                tracing::debug!(%error, "controller credential revoke did not reach the daemon")
+                tracing::debug!(%error, "controller lease cleanup did not reach the daemon")
             }
         }
     }
@@ -1141,13 +1092,12 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // Returned, not `exit(1)`: a caller that never sees a value cannot render
     // one, and the shutdown path below is skipped either way because nothing
     // has been launched yet. `run_acp` renders it to stderr.
-    let mut routed = apply_routing_with_cloud_credentials(
+    let routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -1157,17 +1107,11 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    // The trusted local binding both bridges share: the same gate that makes
-    // route leases safe makes the spend query attributable, and neither
+    // The trusted local binding both bridges share: the same principal that
+    // makes route leases safe makes the spend query attributable, and neither
     // exists without it.
-    let binding = LocalControllerBinding::issue(
-        source,
-        &mut config,
-        agent_id,
-        &mut routed,
-        routing.base_url.is_some(),
-    )
-    .await?;
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
     let agent = config
         .agents
         .get(agent_id)
@@ -1227,13 +1171,12 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // Controller-issued: the session's traffic meters under the controller
     // instance rather than a launch token, which is what makes both a route
     // lease and an attributable cost figure possible.
-    let mut routed = apply_routing_with_cloud_credentials(
+    let routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::ControllerIssuedLocal,
     )
     .await
     .map_err(anyhow::Error::new)?;
@@ -1242,14 +1185,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
         None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
     }
-    let binding = LocalControllerBinding::issue(
-        source,
-        &mut config,
-        agent_id,
-        &mut routed,
-        routing.base_url.is_some(),
-    )
-    .await?;
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
 
     // A pipe cannot be drawn on. Everything the terminal branch does — the
     // live row, the modals, raw mode — assumes a screen with a cursor on it,
@@ -1408,7 +1345,6 @@ where
         agent_id,
         &routing,
         &cloud_credentials,
-        RoutingCredentialMode::UserOrLaunch,
     )
     .await
     {
@@ -2104,10 +2040,7 @@ mod controller_tests {
     use agent_client_protocol::schema::v1::Cost;
     use bitrouter_sdk::acp::controller::SessionCost;
 
-    use super::{
-        CachedSessionCost, RoutingCredentialMode, attributed_cost, controller_identity,
-        user_key_required,
-    };
+    use super::{CachedSessionCost, attributed_cost, controller_identity};
 
     /// A daemon bridge that does not answer until released, and counts how
     /// often it was asked.
@@ -2231,52 +2164,6 @@ mod controller_tests {
     fn priced_evidence_becomes_a_usd_figure() {
         assert_eq!(attributed_cost(420_000, 2, 0), Some(Cost::new(0.42, "USD")));
         assert_eq!(attributed_cost(250_000, 3, 2), Some(Cost::new(0.25, "USD")));
-    }
-
-    #[test]
-    fn local_maintained_controller_bootstraps_without_a_user_key() {
-        assert!(!user_key_required(
-            true,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            false,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            false,
-            true,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            true,
-            false,
-            RoutingCredentialMode::ControllerIssuedLocal,
-        ));
-        assert!(user_key_required(
-            true,
-            true,
-            true,
-            true,
-            RoutingCredentialMode::UserOrLaunch,
-        ));
-        assert!(!user_key_required(
-            true,
-            false,
-            true,
-            true,
-            RoutingCredentialMode::UserOrLaunch,
-        ));
     }
 
     #[test]

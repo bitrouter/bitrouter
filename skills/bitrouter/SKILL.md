@@ -146,12 +146,15 @@ subtask *inside* the running session — if they cannot relaunch, say it exists
 and send them to `bitrouter mcp --help`.
 
 For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
-`bitrouter spawn codex-acp --serve`: stable ACP v1, transparently carrying
-multiple harness-native sessions on one connection, whose IDs, transcripts and
-storage BitRouter does not own. Route leases and session-attributed cost are
-capability-gated extensions that need a trusted local binding. Read
-`references/sessions.md` before reasoning about any of this surface — it is the
-one place the wire contract is written down.
+`bitrouter spawn codex-acp --serve`. The controller uses exact adapter pins
+(`@agentclientprotocol/claude-agent-acp@0.70.0` and
+`@agentclientprotocol/codex-acp@1.7.0`), initializes the harness with the
+manager's capabilities, and transparently carries multiple harness-native
+sessions on one connection. BitRouter does not own their IDs, transcripts, or
+storage. This is stable ACP v1. Route leases (`_bitrouter/route/list|set|reset`)
+and session-attributed cost are capability-gated extensions that need a trusted
+local binding; an explicit remote `--base-url` provides neither. Read
+`references/sessions.md` before reasoning about this surface.
 
 ### 6. Verify
 

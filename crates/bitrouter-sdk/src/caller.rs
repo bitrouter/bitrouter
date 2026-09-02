@@ -29,10 +29,6 @@ pub struct CallerContext {
     /// minted the credential it arrived with. See [`launch_tag`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     launch_id: Option<String>,
-    /// Private authorization/continuation scope when it must be narrower than
-    /// the low-cardinality user exposed to metering and aggregate telemetry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    security_scope_id: Option<String>,
 }
 
 /// Prefix of the opaque per-launch attribution token `bitrouter launch` mints
@@ -73,22 +69,6 @@ impl CallerContext {
             user_id: user_id.into(),
             local: false,
             launch_id: None,
-            security_scope_id: None,
-        }
-    }
-
-    /// Construct an authenticated caller with a private ownership scope.
-    pub fn new_scoped(
-        api_key_id: impl Into<String>,
-        user_id: impl Into<String>,
-        security_scope_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            api_key_id: api_key_id.into(),
-            user_id: user_id.into(),
-            local: false,
-            launch_id: None,
-            security_scope_id: Some(security_scope_id.into()),
         }
     }
 
@@ -99,7 +79,6 @@ impl CallerContext {
             user_id: "local".to_string(),
             local: true,
             launch_id: None,
-            security_scope_id: None,
         }
     }
 
@@ -128,7 +107,6 @@ impl CallerContext {
             user_id: "anonymous".to_string(),
             local: false,
             launch_id: None,
-            security_scope_id: None,
         }
     }
 
@@ -155,12 +133,6 @@ impl CallerContext {
     /// The `bitrouter launch` session this request belongs to, if any.
     pub fn launch_id(&self) -> Option<&str> {
         self.launch_id.as_deref()
-    }
-
-    /// Security ownership scope used by durable continuation state. Ordinary
-    /// callers retain their existing user-id scope.
-    pub fn security_scope_id(&self) -> &str {
-        self.security_scope_id.as_deref().unwrap_or(&self.user_id)
     }
 }
 
@@ -210,18 +182,5 @@ mod tests {
         assert!(tagged.is_local(), "still an unauthenticated local caller");
         assert_eq!(tagged.launch_id(), Some("brl_abc"));
         assert_eq!(plain.launch_id(), None);
-    }
-
-    #[test]
-    fn scoped_callers_keep_public_identity_separate_from_private_ownership() {
-        let caller = CallerContext::new_scoped("acp-controller", "acp-controller", "brc_one");
-
-        assert_eq!(caller.api_key_id(), "acp-controller");
-        assert_eq!(caller.user_id(), "acp-controller");
-        assert_eq!(caller.security_scope_id(), "brc_one");
-        assert_eq!(
-            CallerContext::new("key", "user").security_scope_id(),
-            "user"
-        );
     }
 }

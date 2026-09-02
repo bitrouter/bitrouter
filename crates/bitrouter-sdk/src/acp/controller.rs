@@ -17,10 +17,9 @@ use agent_client_protocol::{
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 
-// agent-client-protocol-schema 1.5 exposes the unstable provider payloads,
-// while agent-client-protocol 2.0 does not yet attach its JSON-RPC traits to
-// them. Transparent local wrappers supply only that missing method binding;
-// the request and response bodies remain the official typed schema values.
+// Provider configuration remains an unstable internal extension. Transparent
+// local wrappers supply its method binding; request and response bodies remain
+// the official typed schema values.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
 )]
@@ -184,7 +183,7 @@ pub struct RouteControlError {
 }
 
 impl RouteControlError {
-    /// The daemon or trusted controller binding is unavailable.
+    /// The configured route-control backend is unavailable.
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self {
             code: "route_control_unavailable",
@@ -229,7 +228,7 @@ pub trait RouteControl: Send + Sync {
     async fn reset(&self, session_id: &str) -> Result<RouteControlState, RouteControlError>;
     /// Remove route state after the harness accepted close/delete.
     async fn session_closed(&self, session_id: &str) -> Result<(), RouteControlError>;
-    /// Revoke controller-owned authority and leases after disconnect.
+    /// Remove this controller connection's route leases after disconnect.
     async fn disconnected(&self) -> Result<(), RouteControlError>;
 }
 
@@ -699,7 +698,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
 
 fn route_control_unavailable() -> agent_client_protocol::Error {
     agent_client_protocol::Error::method_not_found()
-        .data("BitRouter route control requires a trusted local daemon binding")
+        .data("BitRouter route control is unavailable on this controller connection")
 }
 
 fn initialization_incomplete() -> agent_client_protocol::Error {
@@ -955,26 +954,36 @@ fn with_attributed_cost(params: &serde_json::Value, cost: Cost) -> Option<serde_
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use agent_client_protocol::schema::ProtocolVersion;
     use agent_client_protocol::schema::v1::{
-        AgentCapabilities, CancelNotification, ClientCapabilities, CloseSessionRequest,
-        CloseSessionResponse, ContentBlock, ContentChunk, Cost, DeleteSessionRequest,
-        DeleteSessionResponse, FileSystemCapabilities, ForkSessionRequest, ForkSessionResponse,
-        Implementation, InitializeRequest, InitializeResponse, ListProvidersResponse,
-        ListSessionsRequest, ListSessionsResponse, LlmProtocol, LoadSessionRequest,
-        LoadSessionResponse, Meta, NewSessionRequest, NewSessionResponse, PermissionOption,
-        PermissionOptionKind, PromptRequest, PromptResponse, ProviderCurrentConfig, ProviderInfo,
-        ProvidersCapabilities, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-        RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-        ResumeSessionResponse, SelectedPermissionOutcome, SessionCapabilities,
-        SessionCloseCapabilities, SessionDeleteCapabilities, SessionForkCapabilities, SessionId,
-        SessionInfo, SessionListCapabilities, SessionNotification, SessionResumeCapabilities,
-        SessionUpdate, SetProviderRequest, SetProviderResponse, SetSessionConfigOptionRequest,
-        SetSessionConfigOptionResponse, StopReason, TextContent, ToolCallUpdate,
-        ToolCallUpdateFields, UsageUpdate,
+        AgentAuthCapabilities, AgentCapabilities, AuthCapabilities, AuthMethod, AuthMethodAgent,
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ClientCapabilities,
+        CloseSessionRequest, CloseSessionResponse, ContentBlock, ContentChunk, Cost,
+        CreateElicitationRequest, CreateElicitationResponse, CreateTerminalRequest,
+        CreateTerminalResponse, DeleteSessionRequest, DeleteSessionResponse, ElicitationAction,
+        ElicitationCapabilities, ElicitationFormCapabilities, ElicitationFormMode,
+        ElicitationSchema, ElicitationSessionScope, FileSystemCapabilities, ForkSessionRequest,
+        ForkSessionResponse, Implementation, InitializeRequest, InitializeResponse,
+        KillTerminalRequest, KillTerminalResponse, ListProvidersResponse, ListSessionsRequest,
+        ListSessionsResponse, LlmProtocol, LoadSessionRequest, LoadSessionResponse,
+        LogoutCapabilities, LogoutRequest, LogoutResponse, Meta, NewSessionRequest,
+        NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+        ProviderCurrentConfig, ProviderInfo, ProvidersCapabilities, ReadTextFileRequest,
+        ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+        ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome,
+        SessionCapabilities, SessionCloseCapabilities, SessionDeleteCapabilities,
+        SessionForkCapabilities, SessionId, SessionInfo, SessionListCapabilities,
+        SessionNotification, SessionResumeCapabilities, SessionUpdate, SetProviderRequest,
+        SetProviderResponse, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+        SetSessionModeRequest, SetSessionModeResponse, StopReason, TerminalExitStatus,
+        TerminalOutputRequest, TerminalOutputResponse, TextContent, ToolCallUpdate,
+        ToolCallUpdateFields, UsageUpdate, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
+        WriteTextFileRequest, WriteTextFileResponse,
     };
     use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcResponse};
     use tokio::io::duplex;
@@ -1202,6 +1211,9 @@ mod tests {
         initialize: Mutex<Option<InitializeRequest>>,
         permission_completed: AtomicBool,
         read_completed: AtomicBool,
+        write_completed: AtomicBool,
+        terminal_completed: AtomicBool,
+        elicitation_completed: AtomicBool,
         extension_completed: AtomicBool,
     }
 
@@ -1368,6 +1380,177 @@ mod tests {
                                 Ordering::SeqCst,
                             );
 
+                            let write = receive(
+                                connection.send_request(
+                                    WriteTextFileRequest::new(
+                                        request.session_id.clone(),
+                                        "/workspace/native.txt",
+                                        "harness-file",
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.write".to_string(),
+                                        serde_json::json!({"opaque": true}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let write = match write {
+                                Ok(write) => write,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.write_completed.store(
+                                write
+                                    .meta
+                                    .as_ref()
+                                    .is_some_and(|meta| meta.contains_key("manager.write")),
+                                Ordering::SeqCst,
+                            );
+
+                            let terminal = receive(
+                                connection.send_request(
+                                    CreateTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        "native-command",
+                                    )
+                                    .args(vec!["--opaque".to_string()])
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "create"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let terminal = match terminal {
+                                Ok(terminal) => terminal,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let terminal_id = terminal.terminal_id.clone();
+                            let create_preserved = terminal
+                                .meta
+                                .as_ref()
+                                .is_some_and(|meta| meta.contains_key("manager.terminal.create"));
+                            let output = receive(
+                                connection.send_request(
+                                    TerminalOutputRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "output"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let output = match output {
+                                Ok(output) => output,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let wait = receive(
+                                connection.send_request(
+                                    WaitForTerminalExitRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "wait"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let wait = match wait {
+                                Ok(wait) => wait,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let killed = receive(
+                                connection.send_request(
+                                    KillTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id.clone(),
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "kill"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let killed = match killed {
+                                Ok(killed) => killed,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            let released = receive(
+                                connection.send_request(
+                                    ReleaseTerminalRequest::new(
+                                        request.session_id.clone(),
+                                        terminal_id,
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.terminal".to_string(),
+                                        serde_json::json!({"phase": "release"}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let released = match released {
+                                Ok(released) => released,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.terminal_completed.store(
+                                create_preserved
+                                    && output.output == "manager-output"
+                                    && output
+                                        .exit_status
+                                        .as_ref()
+                                        .and_then(|status| status.exit_code)
+                                        == Some(0)
+                                    && output.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.output")
+                                    })
+                                    && wait.exit_status.exit_code == Some(0)
+                                    && wait.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.wait")
+                                    })
+                                    && killed.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.kill")
+                                    })
+                                    && released.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.terminal.release")
+                                    }),
+                                Ordering::SeqCst,
+                            );
+
+                            let elicitation = receive(
+                                connection.send_request(
+                                    CreateElicitationRequest::new(
+                                        ElicitationFormMode::new(
+                                            ElicitationSessionScope::new(
+                                                request.session_id.clone(),
+                                            ),
+                                            ElicitationSchema::new().string("answer", true),
+                                        ),
+                                        "Choose an answer",
+                                    )
+                                    .meta(Meta::from_iter([(
+                                        "harness.elicitation".to_string(),
+                                        serde_json::json!({"opaque": true}),
+                                    )])),
+                                ),
+                            )
+                            .await;
+                            let elicitation = match elicitation {
+                                Ok(elicitation) => elicitation,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
+                            state.elicitation_completed.store(
+                                matches!(elicitation.action, ElicitationAction::Decline)
+                                    && elicitation.meta.as_ref().is_some_and(|meta| {
+                                        meta.contains_key("manager.elicitation")
+                                    }),
+                                Ordering::SeqCst,
+                            );
+
                             let extension = receive(connection.send_request(
                                 HarnessExtensionRequest(serde_json::json!({
                                     "sessionId": request.session_id,
@@ -1421,39 +1604,85 @@ mod tests {
             let delete_state = Arc::clone(&self.state);
             let fork_state = Arc::clone(&self.state);
             let config_state = Arc::clone(&self.state);
+            let mode_state = Arc::clone(&self.state);
+            let auth_state = Arc::clone(&self.state);
+            let logout_state = Arc::clone(&self.state);
             Agent
                 .builder()
                 .name("transparent-agent")
                 .on_receive_request(
                     async move |request: InitializeRequest, responder, _connection| {
                         responder.respond(
-                            InitializeResponse::new(request.protocol_version).agent_capabilities(
-                                AgentCapabilities::new()
-                                    .load_session(true)
-                                    .session_capabilities(
-                                        SessionCapabilities::new()
-                                            .list(SessionListCapabilities::new())
-                                            .delete(SessionDeleteCapabilities::new())
-                                            .fork(SessionForkCapabilities::new())
-                                            .resume(SessionResumeCapabilities::new())
-                                            .close(SessionCloseCapabilities::new()),
+                            InitializeResponse::new(request.protocol_version)
+                                .agent_capabilities(
+                                    AgentCapabilities::new()
+                                        .load_session(true)
+                                        .auth(
+                                            AgentAuthCapabilities::new()
+                                                .logout(LogoutCapabilities::new()),
+                                        )
+                                        .session_capabilities(
+                                            SessionCapabilities::new()
+                                                .list(SessionListCapabilities::new())
+                                                .delete(SessionDeleteCapabilities::new())
+                                                .fork(SessionForkCapabilities::new())
+                                                .resume(SessionResumeCapabilities::new())
+                                                .close(SessionCloseCapabilities::new()),
+                                        ),
+                                )
+                                .auth_methods(vec![AuthMethod::Agent(
+                                    AuthMethodAgent::new("native-auth", "Native auth").meta(
+                                        Meta::from_iter([(
+                                            "harness.authMethod".to_string(),
+                                            serde_json::json!(true),
+                                        )]),
                                     ),
-                            ),
+                                )]),
                         )
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async move |_request: NewSessionRequest, responder, _connection| {
+                    async move |request: NewSessionRequest, responder, _connection| {
                         let index = new_state.next_session.fetch_add(1, Ordering::SeqCst);
                         let session_id = if index == 0 { "native-a" } else { "native-b" };
                         record(&new_state.requests, format!("new:{session_id}"));
+                        record(
+                            &new_state.requests,
+                            format!(
+                                "new-input:{}:{}",
+                                request.cwd.display(),
+                                request
+                                    .additional_directories
+                                    .iter()
+                                    .map(|path| path.display().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                        );
                         responder.respond(NewSessionResponse::new(session_id).meta(
                             Meta::from_iter([(
                                 "harness.response".to_string(),
                                 serde_json::json!(session_id),
                             )]),
                         ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: AuthenticateRequest, responder, _connection| {
+                        record(
+                            &auth_state.requests,
+                            format!("authenticate:{}", request.method_id.0),
+                        );
+                        responder.respond(AuthenticateResponse::new().meta(request.meta))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: LogoutRequest, responder, _connection| {
+                        record(&logout_state.requests, "logout".to_string());
+                        responder.respond(LogoutResponse::new().meta(request.meta))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1576,6 +1805,16 @@ mod tests {
                         responder.respond(
                             SetSessionConfigOptionResponse::new(Vec::new()).meta(request.meta),
                         )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionModeRequest, responder, _connection| {
+                        record(
+                            &mode_state.requests,
+                            format!("mode:{}:{}", request.session_id.0, request.mode_id.0),
+                        );
+                        responder.respond(SetSessionModeResponse::new().meta(request.meta))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1822,6 +2061,22 @@ mod tests {
                     )]);
                     let capabilities = ClientCapabilities::new()
                         .terminal(true)
+                        .auth(
+                            AuthCapabilities::new()
+                                .terminal(true)
+                                .meta(Meta::from_iter([(
+                                    "client.auth".to_string(),
+                                    serde_json::json!({"terminal": "opaque"}),
+                                )])),
+                        )
+                        .elicitation(
+                            ElicitationCapabilities::new()
+                                .form(ElicitationFormCapabilities::new())
+                                .meta(Meta::from_iter([(
+                                    "client.elicitation".to_string(),
+                                    serde_json::json!({"form": "opaque"}),
+                                )])),
+                        )
                         .meta(capability_meta.clone());
                     let response = receive(
                         connection.send_request(
@@ -1894,6 +2149,32 @@ mod tests {
         };
         assert_eq!(requests.len(), 1, "initialize must reach the harness once");
         assert!(requests[0].client_capabilities.terminal);
+        assert!(requests[0].client_capabilities.auth.terminal);
+        assert_eq!(
+            requests[0]
+                .client_capabilities
+                .auth
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("client.auth")),
+            Some(&serde_json::json!({"terminal": "opaque"}))
+        );
+        assert!(
+            requests[0]
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .is_some_and(ElicitationCapabilities::supports_form)
+        );
+        assert_eq!(
+            requests[0]
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .and_then(|elicitation| elicitation.meta.as_ref())
+                .and_then(|meta| meta.get("client.elicitation")),
+            Some(&serde_json::json!({"form": "opaque"}))
+        );
         assert_eq!(
             requests[0]
                 .client_capabilities
@@ -2268,11 +2549,39 @@ mod tests {
             .connect_with(
                 manager_transport,
                 async |connection: ConnectionTo<Agent>| {
-                    receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
-                        .await?;
-                    let native_a =
-                        receive(connection.send_request(NewSessionRequest::new("/workspace")))
-                            .await?;
+                    let initialized = receive(
+                        connection.send_request(InitializeRequest::new(ProtocolVersion::V1)),
+                    )
+                    .await?;
+                    assert_eq!(initialized.auth_methods.len(), 1);
+                    assert_eq!(initialized.auth_methods[0].id().0.as_ref(), "native-auth");
+                    assert!(
+                        initialized.auth_methods[0]
+                            .meta()
+                            .is_some_and(|meta| meta.contains_key("harness.authMethod"))
+                    );
+                    assert!(initialized.agent_capabilities.auth.logout.is_some());
+                    let auth_meta = Meta::from_iter([(
+                        "manager.auth".to_string(),
+                        serde_json::json!({"opaque": true}),
+                    )]);
+                    let authenticated = receive(connection.send_request(
+                        AuthenticateRequest::new("native-auth").meta(auth_meta.clone()),
+                    ))
+                    .await?;
+                    assert_eq!(authenticated.meta, Some(auth_meta.clone()));
+                    let logged_out = receive(
+                        connection.send_request(LogoutRequest::new().meta(auth_meta.clone())),
+                    )
+                    .await?;
+                    assert_eq!(logged_out.meta, Some(auth_meta));
+                    let native_a = receive(
+                        connection.send_request(
+                            NewSessionRequest::new("/workspace")
+                                .additional_directories(vec![PathBuf::from("/workspace-extra")]),
+                        ),
+                    )
+                    .await?;
                     let native_b =
                         receive(connection.send_request(NewSessionRequest::new("/workspace")))
                             .await?;
@@ -2381,7 +2690,15 @@ mod tests {
                         ),
                     )
                     .await?;
-                    assert_eq!(configured.meta, Some(request_meta));
+                    assert_eq!(configured.meta, Some(request_meta.clone()));
+                    let mode = receive(
+                        connection.send_request(
+                            SetSessionModeRequest::new("never-observed-mode", "review")
+                                .meta(request_meta.clone()),
+                        ),
+                    )
+                    .await?;
+                    assert_eq!(mode.meta, Some(request_meta));
 
                     let error =
                         receive(connection.send_request(DeleteSessionRequest::new("reject-me")))
@@ -2403,6 +2720,9 @@ mod tests {
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         for expected in [
+            "authenticate:native-auth",
+            "logout",
+            "new-input:/workspace:/workspace-extra",
             "prompt:native-a",
             "prompt:native-b",
             "list:harness-cursor",
@@ -2412,6 +2732,7 @@ mod tests {
             "delete:never-observed-delete",
             "fork:never-observed-fork",
             "config:never-observed-config",
+            "mode:never-observed-mode:review",
             "delete:reject-me",
         ] {
             assert!(requests.iter().any(|request| request == expected));
@@ -2517,6 +2838,147 @@ mod tests {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
+                async move |request: WriteTextFileRequest, responder, _connection| {
+                    if request.path.to_string_lossy() != "/workspace/native.txt"
+                        || request.content != "harness-file"
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.write"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("write request was changed")),
+                        );
+                    }
+                    responder.respond(WriteTextFileResponse::new().meta(Meta::from_iter([(
+                        "manager.write".to_string(),
+                        serde_json::json!(["preserved"]),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CreateTerminalRequest, responder, _connection| {
+                    if request.command != "native-command"
+                        || request.args != ["--opaque"]
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.terminal"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal create was changed")),
+                        );
+                    }
+                    responder.respond(CreateTerminalResponse::new("manager-terminal").meta(
+                        Meta::from_iter([(
+                            "manager.terminal.create".to_string(),
+                            serde_json::json!(true),
+                        )]),
+                    ))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: TerminalOutputRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal output id was changed")),
+                        );
+                    }
+                    responder.respond(
+                        TerminalOutputResponse::new("manager-output", false)
+                            .exit_status(TerminalExitStatus::new().exit_code(0))
+                            .meta(Meta::from_iter([(
+                                "manager.terminal.output".to_string(),
+                                serde_json::json!(true),
+                            )])),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: WaitForTerminalExitRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal wait id was changed")),
+                        );
+                    }
+                    responder.respond(
+                        WaitForTerminalExitResponse::new(TerminalExitStatus::new().exit_code(0))
+                            .meta(Meta::from_iter([(
+                                "manager.terminal.wait".to_string(),
+                                serde_json::json!(true),
+                            )])),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: KillTerminalRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal kill id was changed")),
+                        );
+                    }
+                    responder.respond(KillTerminalResponse::new().meta(Meta::from_iter([(
+                        "manager.terminal.kill".to_string(),
+                        serde_json::json!(true),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: ReleaseTerminalRequest, responder, _connection| {
+                    if request.terminal_id.0.as_ref() != "manager-terminal" {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("terminal release id was changed")),
+                        );
+                    }
+                    responder.respond(ReleaseTerminalResponse::new().meta(Meta::from_iter([(
+                        "manager.terminal.release".to_string(),
+                        serde_json::json!(true),
+                    )])))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CreateElicitationRequest, responder, _connection| {
+                    let schema_preserved = matches!(
+                        &request.mode,
+                        agent_client_protocol::schema::v1::ElicitationMode::Form(form)
+                            if form.requested_schema.properties.contains_key("answer")
+                    );
+                    if !schema_preserved
+                        || request.message != "Choose an answer"
+                        || request
+                            .meta
+                            .as_ref()
+                            .is_none_or(|meta| !meta.contains_key("harness.elicitation"))
+                    {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!("elicitation request was changed")),
+                        );
+                    }
+                    responder.respond(
+                        CreateElicitationResponse::new(ElicitationAction::Decline).meta(
+                            Meta::from_iter([(
+                                "manager.elicitation".to_string(),
+                                serde_json::json!(true),
+                            )]),
+                        ),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
                 async move |request: HarnessExtensionRequest, responder, _connection| {
                     responder.respond(HarnessExtensionResponse(serde_json::json!({
                         "managerEcho": request.0,
@@ -2533,8 +2995,14 @@ mod tests {
                         connection.send_request(
                             InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
                                 ClientCapabilities::new()
-                                    .fs(FileSystemCapabilities::new().read_text_file(true))
-                                    .terminal(true),
+                                    .fs(FileSystemCapabilities::new()
+                                        .read_text_file(true)
+                                        .write_text_file(true))
+                                    .terminal(true)
+                                    .elicitation(
+                                        ElicitationCapabilities::new()
+                                            .form(ElicitationFormCapabilities::new()),
+                                    ),
                             ),
                         ),
                     )
@@ -2586,9 +3054,20 @@ mod tests {
         }
         .ok_or_else(|| anyhow::anyhow!("harness did not receive initialize"))?;
         assert!(initialize.client_capabilities.fs.read_text_file);
+        assert!(initialize.client_capabilities.fs.write_text_file);
         assert!(initialize.client_capabilities.terminal);
+        assert!(
+            initialize
+                .client_capabilities
+                .elicitation
+                .as_ref()
+                .is_some_and(ElicitationCapabilities::supports_form)
+        );
         assert!(state.permission_completed.load(Ordering::SeqCst));
         assert!(state.read_completed.load(Ordering::SeqCst));
+        assert!(state.write_completed.load(Ordering::SeqCst));
+        assert!(state.terminal_completed.load(Ordering::SeqCst));
+        assert!(state.elicitation_completed.load(Ordering::SeqCst));
         assert!(state.extension_completed.load(Ordering::SeqCst));
         Ok(())
     }

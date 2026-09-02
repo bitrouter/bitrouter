@@ -18,9 +18,9 @@ pub struct Model {
     pub launch_id: Option<String>,
     /// Recognized agent harness for this request.
     pub agent_harness: Option<String>,
-    /// Credential-bound ACP controller identity.
+    /// Caller-declared ACP controller correlation.
     pub controller_instance_id: Option<String>,
-    /// Trusted ACP session binding.
+    /// Caller-declared ACP session correlation.
     pub acp_session_id: Option<String>,
     /// Native harness root-session identity.
     pub native_root_session_id: Option<String>,

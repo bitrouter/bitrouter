@@ -183,7 +183,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
 }
 
 #[tokio::test]
-async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
+async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
     let dir = tempdir("acp-route");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
@@ -204,36 +204,10 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
     ));
     wait_until_ready(&socket).await;
 
-    let issued = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpControllerIssue {
-            controller_instance_id: "brc_test".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    let credential = match issued {
-        DaemonResponse::AcpControllerCredential {
-            controller_instance_id,
-            credential,
-            ..
-        } => {
-            assert_eq!(controller_instance_id, "brc_test");
-            credential
-        }
-        other => panic!("expected ACP credential, got {other:?}"),
-    };
-    assert_eq!(
-        runtime
-            .authenticate(credential.as_str())
-            .unwrap()
-            .controller_instance_id(),
-        "brc_test"
-    );
-
     let set = daemon::send_command(
         &socket,
         &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
             controller_instance_id: "brc_test".to_string(),
             session_id: "native-session".to_string(),
             route: "gpt-5".to_string(),
@@ -257,6 +231,7 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
     let invalid = daemon::send_command(
         &socket,
         &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
             controller_instance_id: "brc_test".to_string(),
             session_id: "native-session".to_string(),
             route: "missing-model".to_string(),
@@ -267,7 +242,7 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
     assert!(matches!(invalid, DaemonResponse::Error { .. }));
     assert_eq!(
         runtime
-            .current_route("brc_test", "native-session")
+            .current_route("principal-a", "brc_test", "native-session")
             .unwrap()
             .route(),
         "gpt-5"
@@ -276,17 +251,26 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
     let other = daemon::send_command(
         &socket,
         &DaemonCommand::AcpRouteList {
-            controller_instance_id: "brc_other".to_string(),
+            api_principal: "principal-b".to_string(),
+            controller_instance_id: "brc_test".to_string(),
             session_id: "native-session".to_string(),
         },
     )
     .await
     .unwrap();
-    assert!(matches!(other, DaemonResponse::Error { .. }));
+    assert!(matches!(
+        other,
+        DaemonResponse::AcpRouteState {
+            current: None,
+            scope,
+            ..
+        } if scope == "default"
+    ));
 
     let reset = daemon::send_command(
         &socket,
         &DaemonCommand::AcpRouteReset {
+            api_principal: "principal-a".to_string(),
             controller_instance_id: "brc_test".to_string(),
             session_id: "native-session".to_string(),
         },
@@ -302,10 +286,34 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
         } if scope == "default"
     ));
 
+    let cleanup_target = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "cleanup-target".to_string(),
+            route: "gpt-5".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        cleanup_target,
+        DaemonResponse::AcpRouteState {
+            current: Some(_),
+            scope,
+            ..
+        } if scope == "session"
+    ));
+    runtime
+        .set_route("principal-a", "brc_other", "cleanup-target", "shared")
+        .unwrap();
+
     assert!(matches!(
         daemon::send_command(
             &socket,
-            &DaemonCommand::AcpControllerRevoke {
+            &DaemonCommand::AcpControllerCleanup {
+                api_principal: "principal-a".to_string(),
                 controller_instance_id: "brc_test".to_string(),
             },
         )
@@ -313,7 +321,18 @@ async fn authenticated_acp_route_state_roundtrips_over_the_control_socket() {
         .unwrap(),
         DaemonResponse::Ok
     ));
-    assert!(runtime.authenticate(credential.as_str()).is_none());
+    assert!(
+        runtime
+            .current_route("principal-a", "brc_test", "cleanup-target")
+            .is_none()
+    );
+    assert_eq!(
+        runtime
+            .current_route("principal-a", "brc_other", "cleanup-target")
+            .unwrap()
+            .route(),
+        "shared"
+    );
 
     let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
     server.await.unwrap().unwrap();
@@ -770,9 +789,9 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
     };
     settled.emit(SessionIdentityObserved {
         router_request_id: request_id,
-        origin: RequestOrigin::AuthenticatedAcpController,
+        origin: RequestOrigin::AcpHarnessRequest,
+        api_principal_id: "local".to_string(),
         harness: Some("claude_code".to_string()),
-        authenticated_controller_instance_id: Some(controller.to_string()),
         claimed_controller_instance_id: Some(controller.to_string()),
         acp_session_id: None,
         native_root_session_id: Some(root.to_string()),
@@ -816,29 +835,24 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
 
     settle_attributed_request(metering, "brc_spend", "native-session").await;
     let spend_of = |controller: &str, session: &str| DaemonCommand::AcpSessionSpend {
+        api_principal: "local".to_string(),
         controller_instance_id: controller.to_string(),
         session_id: session.to_string(),
     };
 
-    // Spend is readable only through a live controller binding — the same
-    // gate as route state — so the row alone buys nothing.
-    let unbound = daemon::send_command(&socket, &spend_of("brc_spend", "native-session"))
-        .await
-        .unwrap();
-    assert!(matches!(unbound, DaemonResponse::Error { .. }));
-
-    let issued = daemon::send_command(
+    // Spend is scoped by the principal that names the lease namespace — the
+    // same gate as route state — so an unnamed one buys nothing.
+    let unscoped = daemon::send_command(
         &socket,
-        &DaemonCommand::AcpControllerIssue {
+        &DaemonCommand::AcpSessionSpend {
+            api_principal: String::new(),
             controller_instance_id: "brc_spend".to_string(),
+            session_id: "native-session".to_string(),
         },
     )
     .await
     .unwrap();
-    assert!(matches!(
-        issued,
-        DaemonResponse::AcpControllerCredential { .. }
-    ));
+    assert!(matches!(unscoped, DaemonResponse::Error { .. }));
 
     let spend = daemon::send_command(&socket, &spend_of("brc_spend", "native-session"))
         .await

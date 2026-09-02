@@ -25,8 +25,6 @@
 //! virtual key. Multi-tenant operators set `skip_auth: false` (the SDK
 //! default) to get real validation.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
@@ -36,9 +34,8 @@ use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, P
 use bitrouter_sdk::{PluginId, Result};
 use http::HeaderMap;
 
-use crate::acp_runtime::AcpRuntime;
 use crate::auth::db::{self, ApiKeyRecord};
-use crate::auth::events::{Authenticated, ControllerAuthenticated};
+use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
 use crate::auth::keys;
 
 /// The auth module id, used as the `PipelineContext` metadata key. The
@@ -54,26 +51,13 @@ pub fn plugin_id() -> PluginId {
 /// establishes identity.
 pub struct AuthHook {
     db: DatabaseConnection,
-    acp_runtime: Option<Arc<AcpRuntime>>,
 }
 
 impl AuthHook {
     /// Build an `AuthHook` over a database connection. The database must
     /// already carry this module's tables (`crate::db::run_migrations`).
     pub fn new(db: DatabaseConnection) -> Self {
-        Self {
-            db,
-            acp_runtime: None,
-        }
-    }
-
-    /// Build an auth hook that also recognizes daemon-issued ACP controller
-    /// credentials before the local skip-auth compatibility branch.
-    pub fn with_acp_runtime(db: DatabaseConnection, acp_runtime: Arc<AcpRuntime>) -> Self {
-        Self {
-            db,
-            acp_runtime: Some(acp_runtime),
-        }
+        Self { db }
     }
 
     /// Extract a presented API-key credential from the request headers.
@@ -113,36 +97,6 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
         let credential = Self::extract_credential(ctx);
-        if let (Some(runtime), Some(credential)) = (&self.acp_runtime, credential.as_deref())
-            && let Some(principal) = runtime.authenticate(credential)
-        {
-            let controller_instance_id = principal.controller_instance_id().to_string();
-            ctx.set_caller(CallerContext::new_scoped(
-                "acp-controller",
-                "acp-controller",
-                controller_instance_id.clone(),
-            ));
-            ctx.set_metadata(
-                &plugin_id(),
-                serde_json::json!({
-                    "api_key_id": "acp-controller",
-                    "user_id": "acp-controller",
-                    "policy_id": null,
-                    "controller_instance_id": controller_instance_id,
-                }),
-            );
-            ctx.emit(Authenticated {
-                api_key_id: "acp-controller".to_string(),
-                user_id: "acp-controller".to_string(),
-                policy_id: None,
-            });
-            ctx.emit(ControllerAuthenticated {
-                controller_instance_id,
-                expires_at: principal.expires_at().to_rfc3339(),
-            });
-            return Ok(HookDecision::Allow);
-        }
-
         // `skip_auth=true` on the SDK side synthesises a local caller
         // for *every* inbound request — admit immediately regardless of
         // any presented header. Validating a stray `Authorization`
@@ -202,6 +156,9 @@ impl PreRequestHook for AuthHook {
             api_key_id: record.id,
             user_id: record.user_id,
             policy_id: record.policy_id,
+        });
+        ctx.emit(ApiPrincipalEstablished {
+            route_scope_id: hash,
         });
         Ok(HookDecision::Allow)
     }

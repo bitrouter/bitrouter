@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -23,11 +22,10 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::RoutingPrefs;
 
+use chrono::{DateTime, Utc};
+
 use crate::acp_runtime::AcpRuntime;
 use crate::metering::{MeteringStore, TimeWindow};
-
-const ACP_CONTROLLER_CREDENTIAL_TTL: std::time::Duration =
-    std::time::Duration::from_secs(12 * 60 * 60);
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -82,26 +80,27 @@ pub enum DaemonCommand {
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
     /// CLI pretty-prints for `bitrouter observe status`.
     ObserveStatus,
-    /// Mint a short-lived controller credential over the owner-only socket.
-    AcpControllerIssue {
-        /// Controller process identity that owns the credential and leases.
-        controller_instance_id: String,
-    },
-    /// Revoke one controller credential and every lease it owns.
-    AcpControllerRevoke {
-        /// Credential-bound controller process identity.
+    /// Remove every route lease in one principal/controller namespace.
+    AcpControllerCleanup {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
     },
     /// Query routes and exact lease state for one native session.
     AcpRouteList {
-        /// Credential-bound controller process identity.
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
     },
     /// Install or replace one native-session route lease.
     AcpRouteSet {
-        /// Credential-bound controller process identity.
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
@@ -109,37 +108,23 @@ pub enum DaemonCommand {
         route: String,
     },
     /// Remove one native-session route lease.
-    AcpRouteReset {
-        /// Credential-bound controller process identity.
-        controller_instance_id: String,
-        /// Harness-native ACP session identity.
-        session_id: String,
-    },
     /// Read the spend metered under one controller for one native session.
     AcpSessionSpend {
-        /// Credential-bound controller process identity.
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
     },
-}
-
-/// Controller bearer transported only over the owner-only local daemon IPC.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ControllerCredential(String);
-
-impl ControllerCredential {
-    /// Borrow the credential for harness endpoint configuration.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for ControllerCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("[REDACTED]")
-    }
+    AcpRouteReset {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
 }
 
 /// One resolved hop of a route chain.
@@ -177,15 +162,6 @@ pub enum DaemonResponse {
     ObserveStatus {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
-    },
-    /// Newly-issued controller credential and binding metadata.
-    AcpControllerCredential {
-        /// Credential-bound controller process identity.
-        controller_instance_id: String,
-        /// Redacted-on-debug bearer for the harness model endpoint.
-        credential: ControllerCredential,
-        /// RFC 3339 expiry timestamp.
-        expires_at: String,
     },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
@@ -451,17 +427,22 @@ pub async fn run_control_socket(
     .await
 }
 
+/// Run the control listener with the same ACP route runtime used by the model
+/// request pipeline.
 /// Authenticated ACP control state the control socket shares with the model
 /// request pipeline.
+///
+/// One value rather than two parameters: `dispatch` already carries seven, and
+/// an eighth trips `clippy::too_many_arguments`, which the house rules forbid
+/// silencing.
+#[derive(Clone)]
 pub struct AcpControlPlane {
-    /// In-memory controller credentials and route leases.
+    /// In-memory route leases, keyed by principal and controller.
     pub runtime: Arc<AcpRuntime>,
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
 }
 
-/// Run the control listener with the same authenticated ACP runtime used by
-/// the model request pipeline.
 pub async fn run_control_socket_with_acp_runtime(
     socket_path: PathBuf,
     app: Arc<App>,
@@ -578,135 +559,23 @@ async fn dispatch(
                 models,
             }
         }
-        DaemonCommand::AcpControllerIssue {
-            controller_instance_id,
-        } => match acp
-            .runtime
-            .issue_controller(&controller_instance_id, ACP_CONTROLLER_CREDENTIAL_TTL)
-        {
-            Ok(grant) => DaemonResponse::AcpControllerCredential {
-                controller_instance_id: grant.controller_instance_id().to_string(),
-                credential: ControllerCredential(grant.token().to_string()),
-                expires_at: grant.expires_at().to_rfc3339(),
-            },
-            Err(message) => DaemonResponse::Error { message },
-        },
-        DaemonCommand::AcpControllerRevoke {
-            controller_instance_id,
-        } => {
-            acp.runtime.revoke_controller(&controller_instance_id);
-            DaemonResponse::Ok
-        }
-        DaemonCommand::AcpRouteList {
-            controller_instance_id,
-            session_id,
-        } => {
-            if !acp.runtime.is_controller_active(&controller_instance_id) {
-                DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                }
-            } else if session_id.trim().is_empty() {
-                DaemonResponse::Error {
-                    message: "session id must not be empty".to_string(),
-                }
-            } else {
-                let current = acp
-                    .runtime
-                    .current_route(&controller_instance_id, &session_id)
-                    .map(|lease| lease.route().to_string());
-                DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    scope: if current.is_some() {
-                        "session"
-                    } else {
-                        "default"
-                    }
-                    .to_string(),
-                    current,
-                }
-            }
-        }
-        DaemonCommand::AcpRouteSet {
-            controller_instance_id,
-            session_id,
-            route,
-        } => {
-            let Some(pipeline) = app.language_model() else {
-                return DaemonResponse::Error {
-                    message: "no language_model pipeline configured".to_string(),
-                };
-            };
-            if !acp.runtime.is_controller_active(&controller_instance_id) {
-                return DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                };
-            }
-            if session_id.trim().is_empty() || route.trim().is_empty() {
-                return DaemonResponse::Error {
-                    message: "session id and route must not be empty".to_string(),
-                };
-            }
-            if let Err(error) = pipeline
-                .routing_table()
-                .route_chain(&route, &RoutingPrefs::default(), &CallerContext::local())
-                .await
-            {
-                return DaemonResponse::Error {
-                    message: format!("route is not available: {error}"),
-                };
-            }
-            match acp
-                .runtime
-                .set_route(&controller_instance_id, &session_id, &route)
-            {
-                Ok(lease) => DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    current: Some(lease.route().to_string()),
-                    scope: "session".to_string(),
-                },
-                Err(message) => DaemonResponse::Error { message },
-            }
-        }
-        DaemonCommand::AcpRouteReset {
-            controller_instance_id,
-            session_id,
-        } => {
-            if !acp.runtime.is_controller_active(&controller_instance_id) {
-                DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                }
-            } else if session_id.trim().is_empty() {
-                DaemonResponse::Error {
-                    message: "session id must not be empty".to_string(),
-                }
-            } else {
-                acp.runtime
-                    .reset_route(&controller_instance_id, &session_id);
-                DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    current: None,
-                    scope: "default".to_string(),
-                }
-            }
-        }
         DaemonCommand::AcpSessionSpend {
+            api_principal,
             controller_instance_id,
             session_id,
         } => {
-            if !acp.runtime.is_controller_active(&controller_instance_id) {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
                 return DaemonResponse::Error {
-                    message: "controller credential is not active".to_string(),
-                };
-            }
-            if session_id.trim().is_empty() {
-                return DaemonResponse::Error {
-                    message: "session id must not be empty".to_string(),
+                    message: "principal, controller and session must not be empty".to_string(),
                 };
             }
             // A controller id is minted per process, so "since the epoch" is
-            // "this controller's lifetime": no earlier row can carry it, and
-            // a session's cumulative figure must not reset at a month
-            // boundary the way the rolling windows do.
+            // "this controller's lifetime": no earlier row can carry it, and a
+            // session's cumulative figure must not reset at a month boundary
+            // the way the rolling windows do.
             let window = TimeWindow::Custom {
                 start: DateTime::<Utc>::UNIX_EPOCH,
                 end: Utc::now(),
@@ -724,6 +593,112 @@ async fn dispatch(
                 Err(error) => DaemonResponse::Error {
                     message: format!("session spend is unavailable: {error}"),
                 },
+            }
+        }
+        DaemonCommand::AcpControllerCleanup {
+            api_principal,
+            controller_instance_id,
+        } => {
+            acp.runtime
+                .remove_controller(&api_principal, &controller_instance_id);
+            DaemonResponse::Ok
+        }
+        DaemonCommand::AcpRouteList {
+            api_principal,
+            controller_instance_id,
+            session_id,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                DaemonResponse::Error {
+                    message: "API principal, controller id, and session id must not be empty"
+                        .to_string(),
+                }
+            } else {
+                let current = acp
+                    .runtime
+                    .current_route(&api_principal, &controller_instance_id, &session_id)
+                    .map(|lease| lease.route().to_string());
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    scope: if current.is_some() {
+                        "session"
+                    } else {
+                        "default"
+                    }
+                    .to_string(),
+                    current,
+                }
+            }
+        }
+        DaemonCommand::AcpRouteSet {
+            api_principal,
+            controller_instance_id,
+            session_id,
+            route,
+        } => {
+            let Some(pipeline) = app.language_model() else {
+                return DaemonResponse::Error {
+                    message: "no language_model pipeline configured".to_string(),
+                };
+            };
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+                || route.trim().is_empty()
+            {
+                return DaemonResponse::Error {
+                    message:
+                        "API principal, controller id, session id, and route must not be empty"
+                            .to_string(),
+                };
+            }
+            if let Err(error) = pipeline
+                .routing_table()
+                .route_chain(&route, &RoutingPrefs::default(), &CallerContext::local())
+                .await
+            {
+                return DaemonResponse::Error {
+                    message: format!("route is not available: {error}"),
+                };
+            }
+            match acp.runtime.set_route(
+                &api_principal,
+                &controller_instance_id,
+                &session_id,
+                &route,
+            ) {
+                Ok(lease) => DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: Some(lease.route().to_string()),
+                    scope: "session".to_string(),
+                },
+                Err(message) => DaemonResponse::Error { message },
+            }
+        }
+        DaemonCommand::AcpRouteReset {
+            api_principal,
+            controller_instance_id,
+            session_id,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                DaemonResponse::Error {
+                    message: "API principal, controller id, and session id must not be empty"
+                        .to_string(),
+                }
+            } else {
+                acp.runtime
+                    .reset_route(&api_principal, &controller_instance_id, &session_id);
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: None,
+                    scope: "default".to_string(),
+                }
             }
         }
         DaemonCommand::Route { model } => {
