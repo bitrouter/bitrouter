@@ -79,13 +79,18 @@ pub(crate) fn can_reroute(client: &AcpClient) -> bool {
 /// the controller advertises. From here down it is a journal, a writer, and
 /// stdin.
 ///
-/// # Teardown is the session's
+/// # Teardown is the session's, and there is exactly one of it
 ///
-/// Every exit — Ctrl-D or Ctrl-C at the prompt, stdin ending, a signal —
-/// leaves through `session.shutdown()`, which is what confirms the harness
-/// child was reaped and revokes the controller credential. The terminal is
-/// given back *after* that, so the log tail written for an abnormal end lands
-/// in a terminal that is the shell's again.
+/// Every exit — Ctrl-D or Ctrl-C at the prompt, stdin ending, a signal, and
+/// every `?` inside [`drive`] — leaves through `session.shutdown()`, which is
+/// what confirms the harness child was reaped and revokes the controller
+/// credential. That is why the loop lives in `drive` and its error is
+/// *carried* back here rather than returned: a `?` that walked out of this
+/// function would give the terminal back (`Stdin`'s drop does that) and leave
+/// the child unreaped.
+///
+/// The terminal is given back *after* teardown, so the log tail written for an
+/// abnormal end lands in a terminal that is the shell's again.
 pub(crate) async fn run(
     session: &mut crate::acp_cli::ControlledSession,
     session_id: &str,
@@ -93,15 +98,113 @@ pub(crate) async fn run(
     recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
     via: Option<String>,
 ) -> Result<()> {
-    // The view opens **before** the stdin owner: the writer reads the cursor
-    // once, here, and on a real terminal that is a DSR query whose answer a
-    // reader already sitting on stdin would take.
-    let mut view = bitrouter_tui::view::View::open(via).context("opening the view")?;
+    let (mut view, mut stdin) = match open_terminal(via) {
+        Ok(terminal) => terminal,
+        // Nothing was drawn, but the harness is already running and its
+        // credential is already issued. Both are still ours to give back.
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error);
+        }
+    };
 
+    let outcome = drive(
+        &mut view,
+        &mut stdin,
+        &session.client,
+        session_id,
+        agent_id,
+        recorder,
+    )
+    .await;
+
+    // A session whose agent could not be shut down cleanly ended abnormally
+    // too, and the log is where the reason is. This is also where the child is
+    // confirmed reaped and the controller credential revoked.
+    let clean = session.shutdown().await;
+    // Leave the cursor below the document, then give the terminal back — in
+    // that order, because the log tail below is written as ordinary output and
+    // must land in a terminal that is the shell's again.
+    let finished = view.finish().context("closing the view");
+    drop(stdin);
+    if !clean || matches!(outcome, Ok(true) | Err(_)) {
+        write_session_log_tail(&mut std::io::stdout())?;
+    }
+    // The drive's own failure is the most specific thing that went wrong, so
+    // it outranks both of the others.
+    outcome?;
+    finished?;
+    if clean {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "shutting down chat session: teardown did not confirm; see the session log"
+        ))
+    }
+}
+
+/// Take the screen, then the keyboard.
+///
+/// In that order: the writer reads the cursor once at construction, and on a
+/// real terminal that is a DSR query whose answer a reader already sitting on
+/// stdin would take.
+fn open_terminal(
+    via: Option<String>,
+) -> Result<(bitrouter_tui::view::View, crate::chat::input::Stdin)> {
+    let view = bitrouter_tui::view::View::open(via).context("opening the view")?;
     // Raw mode starts here, after the last plain `eprintln!` — a cooked
     // newline in a raw terminal does not return the carriage. From this point
     // the terminal echoes nothing and delivers no SIGINT: both are ours.
-    let mut stdin = crate::chat::input::Stdin::open().context("taking the terminal for input")?;
+    let stdin = crate::chat::input::Stdin::open().context("taking the terminal for input")?;
+    Ok((view, stdin))
+}
+
+/// Await the turn if there is one, and never resolve if there is not.
+///
+/// The same idiom [`crate::chat::signals::Shutdown`] uses for a missing signal
+/// registration, and for the same reason: an arm with nothing behind it must
+/// be *quiet*, and neither may reach for `.unwrap()` to say so.
+///
+/// `Pin<Box<dyn Future>>` is `Unpin`, so `&mut F` is itself a future, and
+/// dropping that borrow when the `select!` loses the race does **not** drop
+/// the boxed future. That is what makes the arm cancel-safe.
+async fn in_flight<F: std::future::Future + Unpin>(slot: &mut Option<F>) -> F::Output {
+    match slot {
+        Some(turn) => turn.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The one loop: one `select!`, one state machine, one exit.
+///
+/// Returns whether the session ended abnormally — a failed turn, which is what
+/// the session-log tail exists for. Everything it can fail at is a `?`, and
+/// every one of those is caught by [`run`] rather than escaping teardown.
+///
+/// # Why every arm is cancel-safe
+///
+/// A flat `select!` is only correct if all of them are, so: `shutdown.recv()`
+/// selects over `tokio::signal`'s own receivers, registered once at install;
+/// the three channel receives are `UnboundedReceiver::recv`, which is why
+/// stdin is a task-plus-channel rather than an inline `EventStream`;
+/// `in_flight` is covered above; and `Interval::tick` is documented
+/// cancel-safe. The select is deliberately **unbiased**: under a saturating
+/// update stream a biased one would starve every arm below the journal's,
+/// including the signal arm.
+async fn drive(
+    view: &mut bitrouter_tui::view::View,
+    stdin: &mut crate::chat::input::Stdin,
+    client: &AcpClient,
+    session_id: &str,
+    agent_id: &str,
+    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+) -> Result<bool> {
+    use agent_client_protocol::schema::v1::{
+        ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
+    };
+    use bitrouter_tui::machine::{Action, Effect, Notice, Routes, State, step};
+    use bitrouter_tui::writer::{Schedule, Trigger};
+
     // The three exits, all landing at `lifecycle::restore()`: `Stdin`'s drop
     // covers the normal one and every `?` on the way out, the panic hook
     // covers the second, and `Shutdown` is the third — a signal runs no Rust
@@ -109,10 +212,10 @@ pub(crate) async fn run(
     bitrouter_tui::lifecycle::install_panic_restore();
     let mut shutdown = crate::chat::signals::Shutdown::install();
 
-    // Permission requests block the turn until a person answers. They are the
-    // journal's, but they arrive on their own channel rather than as updates.
+    // Permission requests block the turn until a person answers. They arrive
+    // on their own channel rather than as updates, because they are requests.
     let (permission_tx, mut permission_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut pending = session.client.subscribe_permissions();
+    let mut pending = client.subscribe_permissions();
     let permissions = tokio::spawn(async move {
         while let Some(request) = pending.next().await {
             if permission_tx.send(request).is_err() {
@@ -124,7 +227,7 @@ pub(crate) async fn run(
     // The **raw** ACP stream, not the translated one: the journal is a
     // protocol client, and translating first would lose exactly the fidelity
     // it exists to retain.
-    let mut updates = session.client.subscribe_raw_updates();
+    let mut updates = client.subscribe_raw_updates();
     let shared = std::sync::Arc::new(std::sync::Mutex::new(
         bitrouter_tui::journal::Journal::default(),
     ));
@@ -141,233 +244,186 @@ pub(crate) async fn run(
         }
     });
 
-    // Every prompt gets its own id so two in a row cannot merge into one run —
-    // which they otherwise would, if the agent answered the first with
-    // nothing at all.
-    let mut prompts = 0_usize;
+    let mut state = State::new(can_reroute(client));
+    let mut schedule = Schedule::default();
+    // One ticker for the session rather than one per turn. The tick arm is
+    // gated on `state.streaming()`, so `tokio` never polls it at an idle
+    // prompt and the timer is never armed; `Delay` then makes the first tick
+    // of a new turn immediate, which is what is wanted.
+    let mut ticker = tokio::time::interval(Schedule::INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Requests shown and not yet answered, keyed the way the machine routes
+    // answers. Entries are **removed** when answered: a retained entry holds a
+    // strong handle on the resolver, and the client's ledger holds a weak one
+    // on purpose so that a dropped request still denies itself.
+    let mut outstanding: std::collections::HashMap<
+        String,
+        bitrouter_sdk::acp::client::PendingPermission,
+    > = std::collections::HashMap::new();
+    // The turn in flight, if any. It cannot live in `State`: that is plain
+    // data the machine mutates through `&mut`, and a future polled across
+    // iterations cannot go there.
+    let mut turn: Option<
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<PromptResponse>> + '_>>,
+    > = None;
+    let mut started = std::time::Instant::now();
+    // Answers produced by an effect that awaited inline, dispatched before the
+    // select is entered again.
+    let mut queued: std::collections::VecDeque<Action> = std::collections::VecDeque::new();
     let mut abnormal = false;
+    let mut exit = false;
 
-    'session: loop {
-        view.set_input("");
-        view.paint(&shared).context("painting a frame")?;
-        let read = tokio::select! {
-            // Raw mode means nothing is echoed unless the footer echoes it.
-            read = stdin.read_line(|echo| match echo {
-                crate::chat::input::Echo::Changed(typed) => {
-                    view.set_input(typed);
-                    view.paint(&shared).map_err(Into::into)
-                }
-                crate::chat::input::Echo::Redraw(typed) => {
-                    view.set_input(typed);
-                    view.redraw(&shared).map_err(Into::into)
-                }
-            }) => read?,
-            // A signal at an idle prompt ends the session the same way Ctrl-D
-            // does — through teardown, not around it.
-            () = shutdown.recv() => break 'session,
-        };
-        let line = match read {
-            crate::chat::input::Prompt::Line(line) => line,
-            crate::chat::input::Prompt::End => break,
-        };
-        view.set_input("");
-        // The last turn's word stands until this one starts, so a stop reason
-        // is readable for as long as the reader is deciding what to say next
-        // rather than for the one frame between them.
-        view.clear_notice();
-        // A line of exactly `/commands` lists what the agent itself offers.
-        // Ours are hardcoded; the agent's arrive on `AvailableCommandsUpdate`
-        // and were invisible until now.
-        if line.trim() == "/commands" {
-            view.notice_lines(bitrouter_tui::render::session::commands(
-                bitrouter_tui::view::lock(&shared).commands(),
-            ));
-            view.paint(&shared).context("painting a frame")?;
-            continue;
-        }
-        // A line of exactly `/route` opens the picker. Only offered when the
-        // controller advertised route control — see `can_reroute`.
-        if line.trim() == "/route" {
-            if can_reroute(&session.client) {
-                pick_route(&mut view, &shared, &mut stdin, &session.client, session_id).await?;
-            } else {
-                view.notice(
-                    "this session cannot be rerouted (the controller advertises no route \
-                     control: running direct, or without a trusted local daemon binding)",
-                );
-                view.paint(&shared).context("painting a frame")?;
-            }
-            continue;
-        }
-        // The prompt joins the document in the user's own voice, so it scrolls
-        // with the answer it asked for.
-        prompts = prompts.saturating_add(1);
-        bitrouter_tui::view::lock(&shared).apply(SessionUpdate::UserMessageChunk(prompt_chunk(
-            &line, prompts,
-        )));
-        view.paint(&shared).context("painting a frame")?;
+    // The first frame: an empty prompt, before any key.
+    view.set_input("");
+    view.paint(&shared).context("painting a frame")?;
 
-        let started = std::time::Instant::now();
-        let turn = session.client.prompt(session_id, &line);
-        tokio::pin!(turn);
-        // The tick is the streaming frame budget. It lives here rather than at
-        // the prompt because streaming is the only thing that needs
-        // coalescing: a keystroke and a permission paint immediately.
-        let mut ticker = tokio::time::interval(bitrouter_tui::writer::Schedule::INTERVAL);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut schedule = bitrouter_tui::writer::Schedule::default();
-        // Both are handled *after* the `select!` rather than inside a branch:
-        // the branch bodies run while the arms' futures are still borrowed,
-        // and one of those arms holds `stdin` — which is exactly what
-        // answering a permission needs.
-        let mut requested = None;
-        let mut cancelled = false;
-        let mut redraw = false;
-        let outcome = loop {
-            let mut paint = false;
-            tokio::select! {
-                update = dirty_rx.recv() => match update {
-                    // Already in the journal; the tick decides when it is seen.
-                    Some(()) => {
-                        schedule.wake(
-                            bitrouter_tui::writer::Trigger::Update,
-                            std::time::Instant::now(),
-                        );
-                    }
-                    None => continue,
-                },
-                _ = ticker.tick() => {
-                    paint = schedule.wake(
-                        bitrouter_tui::writer::Trigger::Tick,
-                        std::time::Instant::now(),
-                    );
-                },
-                request = permission_rx.recv() => match request {
-                    Some(request) => requested = Some(request),
-                    None => continue,
-                },
+    while !exit {
+        let action = match queued.pop_front() {
+            Some(action) => action,
+            None => tokio::select! {
+                // A signal leaves by the front door from every phase: the
+                // agent is shut down and the terminal restored on the way out.
+                () = shutdown.recv() => Action::Signal,
                 event = stdin.next_event() => match event {
-                    // Ctrl-C and `Esc` during a turn are a cancel, not an
-                    // exit: the session survives it and the next prompt is
-                    // drawn. No modal can be open here — one would own the key
-                    // stream while it ran — so `Esc` has nothing else to close.
-                    Some(event) => {
-                        cancelled = bitrouter_tui::editor::is_cancel(&event);
-                        redraw = bitrouter_tui::editor::is_redraw(&event);
-                    }
-                    // The terminal went away. Nothing can answer the rest of
-                    // this turn, so stop waiting on it.
-                    None => cancelled = true,
+                    Some(event) => Action::Key(event),
+                    None => Action::InputClosed,
                 },
-                result = &mut turn => break Some(result),
-                // Mid-turn, a signal still leaves by the front door: the agent
-                // is shut down and the terminal restored on the way out.
-                () = shutdown.recv() => break 'session,
-            }
-            if std::mem::take(&mut redraw) {
-                view.redraw(&shared).context("repainting")?;
-                schedule.wake(
-                    bitrouter_tui::writer::Trigger::Key,
-                    std::time::Instant::now(),
-                );
-            } else if paint {
-                view.paint(&shared).context("painting a frame")?;
-            }
-            if let Some(request) = requested.take() {
-                if cancelled {
-                    // Cancelling with a question outstanding answers it — the
-                    // one thing it must never do is leave it to be answered by
-                    // a keystroke meant for something else.
-                    deny(request);
-                } else {
-                    answer_permission(&mut view, &shared, &mut stdin, request).await?;
-                    schedule.wake(
-                        bitrouter_tui::writer::Trigger::Permission,
-                        std::time::Instant::now(),
-                    );
+                // Already in the journal; the machine and the schedule decide
+                // when it is seen.
+                Some(()) = dirty_rx.recv() => Action::Dirty,
+                Some(request) = permission_rx.recv() => {
+                    let prompt = prompt_of(&request);
+                    outstanding.insert(request.request_id.clone(), request);
+                    Action::Permission(prompt)
                 }
-            }
-            if cancelled {
-                break None;
-            }
+                result = in_flight(&mut turn) => match result {
+                    Ok(response) => {
+                        // The same record `prompt` and the piped path report,
+                        // from the same round-trip.
+                        crate::acp_cli::report_turn(
+                            client,
+                            agent_id,
+                            recorder.as_ref(),
+                            &response,
+                            started.elapsed(),
+                        );
+                        Action::TurnEnded(Ok(response.stop_reason))
+                    }
+                    // A failed turn is the abnormal exit the log tail exists
+                    // for; it is written after teardown, when the terminal is
+                    // the shell's again.
+                    Err(error) => {
+                        abnormal = true;
+                        Action::TurnEnded(Err(format!("{error}")))
+                    }
+                },
+                _ = ticker.tick(), if state.streaming() => Action::Tick,
+            },
         };
-        if outcome.is_none() {
-            // Tell the agent, not merely ourselves: dropping the turn future
-            // stops this side waiting and leaves the agent working.
-            let told = session.client.cancel(session_id).await;
-            // And leave no question hanging. A permission the agent asked
-            // after the cancel has nobody to answer it, and an unanswered
-            // question must resolve to deny — never to consent, and never by
-            // sitting there until a later keystroke picks an option. The
-            // channel is drained first; the client's ledger then answers
-            // anything it emitted that never reached the channel — while the
-            // connection is still live, rather than at teardown.
-            while let Ok(request) = permission_rx.try_recv() {
-                deny(request);
-            }
-            session.client.deny_outstanding_permissions();
-            view.set_permission(None);
-            if let Err(e) = told {
-                tracing::warn!(error = %e, "cancelling the turn");
+        // Cleared here rather than in the arm above: an arm's body runs while
+        // the futures the `select!` polled are still borrowed, and one of them
+        // is holding `&mut turn`.
+        if matches!(action, Action::TurnEnded(_)) {
+            turn = None;
+        }
+
+        for effect in step(&mut state, action) {
+            match effect {
+                Effect::Paint(trigger) => {
+                    if schedule.wake(trigger, std::time::Instant::now()) {
+                        view.paint(&shared).context("painting a frame")?;
+                    }
+                }
+                Effect::Redraw => {
+                    view.redraw(&shared).context("repainting")?;
+                    schedule.wake(Trigger::Key, std::time::Instant::now());
+                }
+                // Raw mode means nothing is echoed unless the footer echoes it.
+                Effect::Echo => view.set_input(state.editor.line()),
+                Effect::Notice(Notice::Say(text)) => view.notice(text),
+                // Rendered here rather than in the machine, because it is the
+                // journal that holds the agent's own command list and the
+                // machine never reads the journal.
+                Effect::Notice(Notice::Commands) => {
+                    view.notice_lines(bitrouter_tui::render::session::commands(
+                        bitrouter_tui::view::lock(&shared).commands(),
+                    ));
+                }
+                Effect::ClearNotice => view.clear_notice(),
+                Effect::Modal(Some(row)) => view.open_modal(row),
+                Effect::Modal(None) => view.close_modal(),
+                Effect::ShowPermission(prompt) => view.set_permission(prompt),
+                Effect::Resolve { id, outcome } => {
+                    if let Some(request) = outstanding.remove(&id) {
+                        request.resolve(outcome);
+                    }
+                }
+                Effect::Prompt { line, nth } => {
+                    // The prompt joins the document in the user's own voice, so
+                    // it scrolls with the answer it asked for.
+                    bitrouter_tui::view::lock(&shared)
+                        .apply(SessionUpdate::UserMessageChunk(prompt_chunk(&line, nth)));
+                    started = std::time::Instant::now();
+                    // The typed form rather than the text convenience: this
+                    // one takes the request by value, so the future it returns
+                    // borrows the client and nothing else — which is what lets
+                    // it outlive the effect that started it.
+                    turn = Some(Box::pin(client.prompt_typed(PromptRequest::new(
+                        SessionId::new(session_id),
+                        vec![ContentBlock::Text(TextContent::new(line))],
+                    ))));
+                }
+                Effect::Cancel => {
+                    // Tell the agent, not merely ourselves: dropping the turn
+                    // future stops this side waiting and leaves the agent
+                    // working.
+                    turn = None;
+                    let told = client.cancel(session_id).await;
+                    // And leave no question hanging. The machine has already
+                    // answered whatever it was holding; this answers anything
+                    // the client emitted that never reached it — while the
+                    // connection is still live, rather than at teardown.
+                    outstanding.clear();
+                    client.deny_outstanding_permissions();
+                    if let Err(error) = told {
+                        tracing::warn!(%error, "cancelling the turn");
+                    }
+                }
+                // Awaited inline, exactly as the picker's own loop awaited it:
+                // both are reachable only from an idle prompt, where no turn
+                // is streaming and nothing else needs the loop.
+                Effect::ListRoutes => {
+                    queued.push_back(Action::Routes(match client.route_list(session_id).await {
+                        Ok(listed) => Ok(Routes {
+                            available: listed.available,
+                            current: listed.current,
+                        }),
+                        Err(error) => Err(format!("{error}")),
+                    }))
+                }
+                // Typed by the client, so a refused route and a vanished
+                // binding read differently without parsing text.
+                Effect::SetRoute(route) => queued.push_back(Action::Routed(
+                    match client.route_set(session_id, &route).await {
+                        Ok(in_force) => Ok(in_force),
+                        Err(RouteError::InvalidRoute(message)) => {
+                            Err(format!("route unchanged: {message}"))
+                        }
+                        Err(RouteError::Unavailable(message)) => Err(format!(
+                            "route unchanged: route control is unavailable ({message})"
+                        )),
+                        Err(RouteError::Other(error)) => Err(format!("route unchanged: {error:#}")),
+                    },
+                )),
+                Effect::RouteInForce(route) => view.set_route(route),
+                Effect::Exit => exit = true,
             }
         }
-        // Whatever the pump applied between its last signal and the turn
-        // resolving is already in the journal; draining the signals is what
-        // makes the frame below include it.
-        while dirty_rx.try_recv().is_ok() {}
-        view.notice(match outcome {
-            None => "[turn cancelled]".to_string(),
-            Some(Ok(response)) => {
-                // The same record `prompt` and the piped path report, from the
-                // same round-trip.
-                crate::acp_cli::report_turn(
-                    &session.client,
-                    agent_id,
-                    recorder.as_ref(),
-                    &response,
-                    started.elapsed(),
-                );
-                format!("[{:?}]", response.stop_reason)
-            }
-            Some(Err(e)) => {
-                // A failed turn is the abnormal exit the log tail exists for;
-                // it is written after teardown, when the terminal is the
-                // shell's again.
-                abnormal = true;
-                format!("turn failed: {e}")
-            }
-        });
-        // A settled turn is immediate: it is the moment the reader is waiting
-        // for, not streaming noise.
-        schedule.wake(
-            bitrouter_tui::writer::Trigger::TurnSettled,
-            std::time::Instant::now(),
-        );
-        view.paint(&shared).context("painting a frame")?;
     }
 
     pump.abort();
     permissions.abort();
-    // A session whose agent could not be shut down cleanly ended abnormally
-    // too, and the log is where the reason is. This is also where the child
-    // is confirmed reaped and the controller credential revoked.
-    let clean = session.shutdown().await;
-    abnormal = abnormal || !clean;
-    // Leave the cursor below the document, then give the terminal back —
-    // in that order, because the log tail below is written as ordinary
-    // output and must land in a terminal that is the shell's again.
-    view.finish().context("closing the view")?;
-    drop(stdin);
-    if abnormal {
-        write_session_log_tail(&mut std::io::stdout())?;
-    }
-    if clean {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "shutting down chat session: teardown did not confirm; see the session log"
-        ))
-    }
+    Ok(abnormal)
 }
 
 /// The prompt a pending request is drawn and answered as.
@@ -515,172 +571,4 @@ pub(crate) async fn chat_plain(
             }
         }
     }
-}
-
-/// Draw the route picker and, on a selection, actually change the route.
-///
-/// The order matters: `_bitrouter/route/set` is issued first and what it
-/// *confirms* is what the user sees, so the footer names the route the daemon
-/// is serving rather than the one they asked for. A `set` that fails leaves
-/// the old route marked, and says why — typed by the client, so a refused
-/// route and a vanished binding read differently without parsing text.
-async fn pick_route(
-    view: &mut bitrouter_tui::view::View,
-    shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
-    stdin: &mut crate::chat::input::Stdin,
-    client: &AcpClient,
-    session_id: &str,
-) -> Result<()> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-
-    let listed = match client.route_list(session_id).await {
-        Ok(state) => state,
-        Err(error) => {
-            view.notice(format!("route unchanged: {error}"));
-            view.paint(shared).context("painting a frame")?;
-            return Ok(());
-        }
-    };
-    // `available` is the gate, asked again here so there is no way to draw a
-    // picker without answering it.
-    let Some(picker) = bitrouter_tui::picker::Picker::open(
-        can_reroute(client),
-        &listed.available,
-        listed.current.as_deref(),
-    ) else {
-        view.notice("no routes to choose between");
-        view.paint(shared).context("painting a frame")?;
-        return Ok(());
-    };
-    // The picker is a footer row for as long as it is open, repainted in
-    // place like everything else down there.
-    view.open_modal(picker.render());
-    view.paint(shared).context("painting a frame")?;
-
-    // Keys come from the session's one stdin owner, which already holds raw
-    // mode: a modal that took and dropped it would be a second owner, and the
-    // window between them is where a keystroke gets lost.
-    let chosen = loop {
-        match stdin.next_event().await {
-            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                // A control chord is never a choice — Ctrl-C closes the
-                // picker instead of selecting whatever `c` happens to be.
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    break None;
-                }
-                match key.code {
-                    KeyCode::Char(c) => {
-                        if let Some(route) = picker.choose(c) {
-                            break Some(route);
-                        }
-                    }
-                    KeyCode::Esc => break None,
-                    _ => {}
-                }
-            }
-            // The terminal went away mid-question; the route is unchanged.
-            None => break None,
-            Some(_) => {}
-        }
-    };
-
-    view.close_modal();
-    let Some(route) = chosen else {
-        view.notice("route unchanged");
-        view.paint(shared).context("painting a frame")?;
-        return Ok(());
-    };
-
-    // Attempt it, then report what the daemon confirmed — never what was
-    // asked for. `set` can legitimately refuse.
-    match client.route_set(session_id, &route).await {
-        Ok(in_force) => {
-            view.notice(format!("route: {in_force}"));
-            // The footer names the route for the rest of the session, not just
-            // for this frame.
-            view.set_route(Some(in_force));
-        }
-        Err(RouteError::InvalidRoute(message)) => {
-            view.notice(format!("route unchanged: {message}"));
-        }
-        Err(RouteError::Unavailable(message)) => {
-            view.notice(format!(
-                "route unchanged: route control is unavailable ({message})"
-            ));
-        }
-        Err(RouteError::Other(error)) => {
-            view.notice(format!("route unchanged: {error:#}"));
-        }
-    }
-    view.paint(shared).context("painting a frame")
-}
-
-/// Draw a permission request and block on the user's answer.
-///
-/// Reads keys directly rather than through the line-based stdin loop: a
-/// permission answer is one keystroke, and requiring enter would make the
-/// fast path — deny — slower than the dangerous one.
-///
-/// Every path that is not an explicit choice resolves to deny or cancel.
-/// A prompt that resolved ambiguity as consent would be worse than no prompt.
-async fn answer_permission(
-    view: &mut bitrouter_tui::view::View,
-    shared: &std::sync::Mutex<bitrouter_tui::journal::Journal>,
-    stdin: &mut crate::chat::input::Stdin,
-    request: bitrouter_sdk::acp::client::PendingPermission,
-) -> Result<()> {
-    use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-
-    let prompt = prompt_of(&request);
-    // The view holds the open question, so every frame drawn while it is open
-    // shows it — including one painted by something else entirely.
-    view.set_permission(Some(prompt.clone()));
-    view.paint(shared).context("painting a frame")?;
-
-    let deny = || prompt.unanswered();
-
-    // Keys come from the session's one stdin owner. It already holds raw mode
-    // for the whole session, so there is no mode to take here and none to
-    // leave behind if this future is dropped.
-    let outcome = loop {
-        match stdin.next_event().await {
-            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                // Ctrl-C answers the question the only way an interrupt can be
-                // read: no. Passing the chord's letter to `choose` could
-                // select an option, which is the one outcome a cancel must
-                // never produce.
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    break deny();
-                }
-                match key.code {
-                    KeyCode::Char(c) => {
-                        if let Some(id) = prompt.choose(c) {
-                            break RequestPermissionOutcome::Selected(
-                                SelectedPermissionOutcome::new(id),
-                            );
-                        }
-                    }
-                    KeyCode::Esc => break deny(),
-                    _ => {}
-                }
-            }
-            // The terminal went away mid-question. Deny — an unanswerable
-            // prompt must not become an allow.
-            None => break deny(),
-            Some(_) => {}
-        }
-    };
-
-    let chosen = matches!(outcome, RequestPermissionOutcome::Selected(_));
-    request.resolve(outcome);
-    // Answered: the question stops being asked, and what was decided is said
-    // once rather than left on screen as though it were still open.
-    view.set_permission(None);
-    view.notice(if chosen {
-        "permission answered"
-    } else {
-        "permission denied"
-    });
-    view.paint(shared).context("painting a frame")
 }

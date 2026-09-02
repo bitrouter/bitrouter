@@ -27,11 +27,12 @@ merged implementation and its "pinned after" column names a passing test.
 **Status.** Phase 2.5 step 4 (the shared client in `bitrouter-sdk::acp::client`,
 with `acp prompt` migrated onto it and an in-process controller) re-homed
 I1, I2, I4, I6, I7, I8 and I11. Step 6 moved interactive `chat` onto the same
-client and controller, so nothing runs on `engine::Session` any more: I5 is
-enforced by `chat`'s cancel path against the client's ledger, I8 is the
+client and controller, so nothing runs on `engine::Session` any more: I8 is the
 client's on every path, and I10's strong side (`ControlledSession::shutdown`
-awaiting the reap) is the only side left. The rows below record where each
-lives now.
+awaiting the reap) is the only side left. Step 9 flattened `chat`'s five nested
+loops into one `select!` over a reducer, which re-homed I5 onto that reducer and
+made I10 hold for every exit rather than most of them. The rows below record
+where each lives now.
 
 ## The one that had no equivalent
 
@@ -66,7 +67,7 @@ The class where a mistake grants consent that nobody gave.
 | **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs` `sanitize_selection_preserves_exact_known_id`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
 | **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs` `sanitize_selection` | `translate.rs` `sanitize_selection_cancelled_passes_through` `sanitize_selection_cancelled_passes_through` | shared client | existing |
 | **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
-| **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `chat/session.rs` cancel path — drain `permission_rx` and `deny` each, then `AcpClient::deny_outstanding_permissions` **while the connection is live** (the ledger answers anything the client emitted that never reached the channel), then clear pending | `chat/session.rs` `an_unanswered_permission_takes_the_reject_option`, `an_unanswered_permission_never_resolves_to_consent` (the rule); the ledger half by `client.rs` `teardown_denies_an_outstanding_permission` | state machine reducer (step 9) | CHAT_MACHINE_SPEC T2 + T3 |
+| **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `bitrouter-tui` `machine::abandon` — every path out of `Phase::Answering` that is not a choice emits `Effect::Resolve` with `Prompt::unanswered()` **first**, queued questions included; the driver's `Effect::Cancel` then calls `AcpClient::deny_outstanding_permissions` **while the connection is live**, for anything the client emitted that never reached the machine | `permission.rs` `an_unanswered_permission_takes_the_reject_option`, `an_unanswered_permission_never_resolves_to_consent` (the rule); `machine.rs` `every_way_out_of_a_question_denies_it_first` (T2), `declining_a_question_leaves_the_turn_running` (T3), `leaving_a_question_never_leaves_it_unanswered` (T7); the ledger half by `client.rs` `teardown_denies_an_outstanding_permission` | state machine reducer — **landed** | T2, T3, T7 |
 | **I6** | A **headless** path denies rather than hanging the harness | `acp_cli.rs` `prompt` — the deny pump over `AcpClient::subscribe_permissions`; `chat_plain` denies inline | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` | NDJSON + pipe presentations — **landed** | existing, unchanged |
 | **I7** | A permission outstanding at **session teardown** is denied | `client.rs` `AcpClient::shutdown` denies, then waits (bounded) for the parked handlers to answer before the transport goes; the command loop and the driver tail repeat it for the drop path | `client.rs` `teardown_denies_an_outstanding_permission` | shared client teardown — **landed** | `client.rs` `teardown_denies_an_outstanding_permission` |
 
@@ -86,11 +87,12 @@ The class where a mistake grants consent that nobody gave.
 | **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn::TurnController` — **deleted** with the engine | its queue tests went with it | **none — not load-bearing** | n/a |
 
 I9 is safe to drop: every production caller sends one prompt at a time —
-`chat` (`session.rs` (the turn loop`, next read only after the outcome), `chat_plain`,
-and `prompt`'s `run_turn` (at most two *sequential* turns via the repair
-re-prompt). The only path that could have issued concurrent prompts on one
-session was `down.rs`'s `SessionAgent`, now unreachable. **Say so in the
-commit rather than letting it disappear.**
+`chat` (a turn is started only from `Phase::Idle`, and the phase does not
+return to `Idle` until the turn has settled or been cancelled, so the machine
+cannot express two), `chat_plain`, and `prompt`'s `run_turn` (at most two
+*sequential* turns via the repair re-prompt). The only path that could have
+issued concurrent prompts on one session was `down.rs`'s `SessionAgent`, now
+unreachable. **Say so in the commit rather than letting it disappear.**
 
 I8 is **not** safe to drop. `--turn-timeout` is a documented flag on `chat`,
 `acp prompt`, `acp serve`, and `spawn`, and `skills/bitrouter/references/cli.md`
@@ -104,7 +106,7 @@ manager on a transparent path.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I10** | The harness child **and its process group** are killed on teardown, on child exit, and on reaper-handle drop — and teardown **waits for it** | `up.rs` `spawn_child_reaper` → `kill_process_group`; the confirmation is handed to the owner by `AgentProcess::reaped`, and every command's owner is now `ControlledSession::shutdown` — `chat`'s three exits all route through it before the terminal is given back | `up.rs` `shutdown_kills_wrapper_chain_process_group` | `AgentProcess` + `ControlledSession::shutdown` (the one owner left) | existing, plus the owner's wait |
+| **I10** | The harness child **and its process group** are killed on teardown, on child exit, and on reaper-handle drop — and teardown **waits for it** | `up.rs` `spawn_child_reaper` → `kill_process_group`; the confirmation is handed to the owner by `AgentProcess::reaped`, and every command's owner is now `ControlledSession::shutdown` — `chat`'s exits all route through it before the terminal is given back, **including every `?`**: the loop is `chat/session.rs::drive` and its error is carried back to `run`, which tears down unconditionally before returning it | `up.rs` `shutdown_kills_wrapper_chain_process_group`; `machine.rs` `every_phase_exits_through_the_same_effect` pins that every phase leaves by one effect rather than by a `break` of its own | `AgentProcess` + `ControlledSession::shutdown` (the one owner left) | existing, plus the owner's wait |
 | **I11** | A harness that dies mid-prompt **fails the turn** instead of hanging it | `AgentProcess::connect_to` — `select!` on `dead_rx`, "agent process exited while the ACP controller was connected" | `tests/acp.rs` `prompt_fails_fast_when_the_harness_dies_mid_turn`; `up.rs` `agent_crash_fails_pending_commands_fast` | unchanged — **now the only child-owning path** | those two |
 
 **History, because the shape of this one moved twice.** The group kill runs in
@@ -140,11 +142,18 @@ step 7. **Nothing pins the strong side yet** — see the unpinned list below.
 
 | # | Invariant | Enforced today | Pinned today | Owner after | Pinned after |
 |---|---|---|---|---|---|
-| **I12** | Raw mode is released on **all three exits** — normal (and every `?`), panic, and signal | `Stdin::drop` → `lifecycle::restore`; `lifecycle::install_panic_restore`; `signals::Shutdown` as a `select!` arm | `lifecycle.rs` `the_panic_hook_restores_and_still_reports` `the_panic_hook_restores_and_still_reports`; `signals.rs` arm test; the terminal itself by the documented manual checks in `chat/mod.rs` | TUI presentation — unchanged | existing |
+| **I12** | Raw mode is released on **all three exits** — normal (and every `?`), panic, and signal | `Stdin::drop` → `lifecycle::restore`; `lifecycle::install_panic_restore`; `signals::Shutdown` as the one `select!` arm in the flat loop | `lifecycle.rs` `the_panic_hook_restores_and_still_reports`; `signals.rs` arm test; the terminal itself by the documented manual checks in `chat/mod.rs` | TUI presentation — unchanged | existing |
 
 Unaffected by the controller migration, but listed because the state-machine
 work touches the loop that owns all three, and because I10's weakness
 interacts with the panic path.
+
+**What step 9 changed, and what it did not.** The `Stdin` the loop holds is now
+dropped by `chat/session.rs::run` *after* `ControlledSession::shutdown`, rather
+than by falling out of the function that owned the loop. The ordering the
+manual checks depend on is unchanged — the terminal is still the shell's again
+before the session-log tail is written — and `Drop` is still the backstop for
+every path nobody wrote an exit for, including a `?` out of `run` itself.
 
 ---
 
@@ -183,6 +192,14 @@ bridge staying off the forward path (`acp_cli.rs`
 loop, the key table, and the three exits remain checked by the manual steps in
 `chat/mod.rs`; with no integration coverage there, the first regression signal
 is still a person at a terminal.
+
+**Step 9 narrowed that gap without closing it.** The key table and the phase
+transitions are now a pure reducer (`bitrouter-tui` `machine::step`) with
+fifteen unit tests, so what a key means in each phase, what a cancelled turn
+does to an open question, and which effect ends the session are all pinned
+without a pty. What is still only checked by hand is everything the *driver*
+does with an `Effect`: painting, raw mode, the `select!`'s cancel-safety, and
+teardown ordering.
 
 **Consequence for sequencing (as applied):** `prompt` went first. It is
 headless, it has byte-level NDJSON assertions, and it exercises I1, I2, I6, I8

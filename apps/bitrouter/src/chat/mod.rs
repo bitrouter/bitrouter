@@ -12,9 +12,16 @@
 //!
 //! | exit | route |
 //! |---|---|
-//! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `Stdin`'s `Drop`, which also covers every `?` out of `chat` |
+//! | normal — Ctrl-C or Ctrl-D at an idle prompt, or stdin ending | `session::run` drops `Stdin` after teardown; `Stdin`'s `Drop` also covers every `?` out of `chat` |
 //! | panic | `bitrouter_tui::lifecycle::install_panic_restore`, chained in front of the existing hook |
-//! | INT / TERM / HUP | [`signals::Shutdown`] as a `select!` arm, in both the prompt and the turn loop |
+//! | INT / TERM / HUP | [`signals::Shutdown`] as the one `select!` arm in [`session::run`]'s single loop |
+//!
+//! Giving the terminal back is only half of an exit. The other half is the
+//! harness child and the controller credential, and those are
+//! `ControlledSession::shutdown`'s — which is why the loop lives in a function
+//! whose errors [`session::run`] *carries* rather than returns. A `?` that
+//! escaped would restore the terminal (`Drop` sees to that) and leave the child
+//! unreaped.
 //!
 //! ## Checking it by hand
 //!

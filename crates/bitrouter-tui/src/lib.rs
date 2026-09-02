@@ -58,6 +58,7 @@ pub mod editor;
 pub mod journal;
 pub mod lifecycle;
 pub mod log_tail;
+pub mod machine;
 pub mod permission;
 pub mod picker;
 pub mod plain;
