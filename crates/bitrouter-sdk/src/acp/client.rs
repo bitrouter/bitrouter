@@ -74,11 +74,11 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AuthCapabilities, AuthMethod, CancelNotification, ClientCapabilities, ContentBlock,
-    InitializeRequest, InitializeResponse, McpServer, NewSessionRequest, PermissionOption,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, SessionUpdate, TextContent,
-    ToolCallUpdate,
+    AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification,
+    ClientCapabilities, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
+    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
+    SessionUpdate, TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcRequest, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -544,6 +544,11 @@ enum Command {
         req: Box<PromptRequest>,
         reply: oneshot::Sender<anyhow::Result<PromptResponse>>,
     },
+    /// Answer the agent's `authenticate` for one advertised method.
+    Authenticate {
+        method_id: AuthMethodId,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
     /// Send a `session/cancel` notification for `session_id`.
     Cancel { session_id: String },
     /// Exit the command loop, tearing the connection down. `done` fires once
@@ -687,6 +692,28 @@ impl AcpClient {
     /// consumer should say so rather than draw a control that cannot act.
     pub fn auth_methods(&self) -> &[AuthMethod] {
         &self.auth_methods
+    }
+
+    /// `authenticate`: ask the agent to authenticate with one advertised
+    /// method, and wait for it to finish.
+    ///
+    /// **Only for methods the agent performs itself.** A `terminal` method is
+    /// not one of them: ACP is explicit that a client must not pass it here,
+    /// because the interactive process is not the ACP connection. Its login
+    /// runs out of band and the caller reconnects afterwards.
+    ///
+    /// Returning `Ok` means the agent reported the method succeeded. It is not
+    /// evidence that a later request will be served — an agent may validate
+    /// credentials lazily — so the caller retries the operation rather than
+    /// assuming it will now work.
+    pub async fn authenticate(&self, method_id: AuthMethodId) -> anyhow::Result<()> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(Command::Authenticate { method_id, reply })
+            .map_err(|_| anyhow::anyhow!("acp command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the agent dropped the authenticate reply"))?
     }
 
     /// `_bitrouter/route/list`: the routes the daemon suggests for
@@ -1130,6 +1157,19 @@ async fn drive(
                                         .and_then(|v| v.as_str())
                                         .map(str::to_string),
                                 })
+                                .map_err(anyhow::Error::from);
+                            let _ = reply.send(result);
+                            Ok(())
+                        })?;
+                    }
+                    Command::Authenticate { method_id, reply } => {
+                        let auth_connection = connection.clone();
+                        connection.spawn(async move {
+                            let result = auth_connection
+                                .send_request(AuthenticateRequest::new(method_id))
+                                .block_task()
+                                .await
+                                .map(|_| ())
                                 .map_err(anyhow::Error::from);
                             let _ = reply.send(result);
                             Ok(())
