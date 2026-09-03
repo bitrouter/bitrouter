@@ -2129,6 +2129,7 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,

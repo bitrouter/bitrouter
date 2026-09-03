@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::eval::types::{RouteDecisionMeasurement, validate_route_measurement};
+
 pub const TRAJECTORY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,9 +28,9 @@ pub enum TrajectoryEventKind {
 
 /// Content-free, bounded evidence attached to one immutable ledger event.
 ///
-/// The ledger accepts only structural counts, categorical state, and already
-/// computed digests. It deliberately has no prompt, message, response, tool,
-/// or arbitrary JSON field.
+/// The ledger accepts structural counts, categorical state, already computed
+/// digests, and a bounded typed route-measurement object. It deliberately has
+/// no prompt, message, response, tool, or arbitrary JSON field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryEvidence {
@@ -38,6 +40,8 @@ pub struct TrajectoryEvidence {
     pub categorical: BTreeMap<String, String>,
     #[serde(default)]
     pub digests: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_measurement: Option<RouteDecisionMeasurement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +311,11 @@ pub fn validate_event(event: &TrajectoryEvent) -> Result<()> {
     chrono::DateTime::parse_from_rfc3339(&event.captured_at)
         .context("captured_at must be RFC3339")?;
     validate_evidence(&event.evidence)?;
+    if event.evidence.route_measurement.is_some()
+        && event.kind != TrajectoryEventKind::RouteIntentRecorded
+    {
+        anyhow::bail!("route measurement is only valid on route-intent events")
+    }
     validate_digest(&event.content_digest, "content_digest")?;
     if event.semantic_digest()? != event.content_digest {
         anyhow::bail!("trajectory event content_digest does not match its canonical content")
@@ -325,7 +334,11 @@ fn validate_evidence(evidence: &TrajectoryEvidence) -> Result<()> {
         &evidence.categorical,
         &evidence.digests,
         "trajectory evidence",
-    )
+    )?;
+    if let Some(measurement) = &evidence.route_measurement {
+        validate_route_measurement(measurement)?;
+    }
+    Ok(())
 }
 
 pub fn validate_outbox_payload(payload: &OutboxPayload) -> Result<()> {
@@ -476,6 +489,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::eval::types::{RouteActionCandidate, RouteDecisionMeasurement};
 
     #[test]
     fn event_validation_rejects_invalid_wire_values_and_tampering() {
@@ -628,6 +642,31 @@ mod tests {
         assert!(validate_evidence(&evidence).is_err());
     }
 
+    #[test]
+    fn route_measurement_is_rejected_outside_route_intent_events() {
+        let mut event = event_fixture();
+        event.evidence.route_measurement = Some(
+            RouteDecisionMeasurement::new(
+                "economy",
+                "vendor/economy",
+                None,
+                vec![RouteActionCandidate {
+                    tier: "economy".into(),
+                    model: "vendor/economy".into(),
+                    effort: None,
+                    logging_probability_ppm: 1_000_000,
+                }],
+            )
+            .unwrap(),
+        );
+        event.content_digest = event.semantic_digest().unwrap_or_default();
+        assert!(validate_event(&event).is_err());
+
+        event.kind = TrajectoryEventKind::RouteIntentRecorded;
+        event.content_digest = event.semantic_digest().unwrap_or_default();
+        assert!(validate_event(&event).is_ok());
+    }
+
     fn event_fixture() -> TrajectoryEvent {
         let evidence = TrajectoryEvidence {
             structural: BTreeMap::from([("request.input_count".into(), 1)]),
@@ -636,6 +675,7 @@ mod tests {
                 "request.input".into(),
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             )]),
+            route_measurement: None,
         };
         let mut event = TrajectoryEvent {
             schema_version: TRAJECTORY_SCHEMA_VERSION,

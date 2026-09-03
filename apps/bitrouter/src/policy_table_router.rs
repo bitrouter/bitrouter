@@ -35,7 +35,9 @@ use crate::continuation::ContinuationAdjustment;
 use crate::eval::settlement::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
-use crate::eval::types::{EvalExperimentRef, ExperimentArm};
+use crate::eval::types::{
+    EvalExperimentRef, ExperimentArm, RouteActionCandidate, RouteDecisionMeasurement,
+};
 use crate::optimization::exploration::RouteExploration;
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
@@ -79,6 +81,7 @@ impl fmt::Display for PolicyDecisionReason {
 
 #[derive(Debug, Clone)]
 pub struct PolicyDecision {
+    policy_snapshot: PolicySnapshot,
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
     pub route_projection: String,
@@ -121,6 +124,24 @@ pub struct PolicyDecision {
     pub progress_candidate_tier: Option<String>,
     pub progress_clause_ids: Vec<String>,
     pub experiment: Option<EvalExperimentRef>,
+    pub route_measurement: Option<RouteDecisionMeasurement>,
+}
+
+#[derive(Clone)]
+struct PolicySnapshot(Arc<PolicyTable>);
+
+impl std::fmt::Debug for PolicySnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PolicySnapshot(<opaque>)")
+    }
+}
+
+impl std::ops::Deref for PolicySnapshot {
+    type Target = PolicyTable;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl PolicyDecision {
@@ -134,6 +155,38 @@ impl PolicyDecision {
     /// established Rust field while exposing the canonical terminology.
     pub fn trace_identity(&self) -> &WorkflowIdentity {
         &self.workflow_identity
+    }
+
+    pub(crate) fn tool_use_tier(&self) -> Option<String> {
+        self.policy_snapshot.tool_use_tier.clone()
+    }
+
+    pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
+        self.policy_snapshot
+            .tool_safe_tiers
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn effective_tier_efforts(
+        &self,
+        inherited: Option<ReasoningEffort>,
+    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
+        self.policy_snapshot
+            .tiers
+            .iter()
+            .filter_map(|(tier, target)| {
+                target
+                    .effort()
+                    .or(inherited)
+                    .map(|effort| (tier.clone(), effort))
+            })
+            .collect()
+    }
+
+    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
+        self.policy_snapshot.effort_of_tier(tier)
     }
 }
 
@@ -248,6 +301,48 @@ impl PolicyTable {
                     })
                     .min()
             })
+    }
+
+    fn route_measurement(
+        &self,
+        logging_action_tier: &str,
+        input_effort: Option<ReasoningEffort>,
+        exploration: Option<&RouteExploration>,
+        assignment: Option<&EvalExperimentRef>,
+    ) -> anyhow::Result<RouteDecisionMeasurement> {
+        let randomized = exploration.zip(assignment);
+        let candidates = self
+            .tiers
+            .iter()
+            .map(|(tier, target)| {
+                let logging_probability_ppm = match randomized {
+                    Some((exploration, _)) if tier == &exploration.champion_tier => {
+                        1_000_000_u32.saturating_sub(exploration.challenger_exposure_ppm)
+                    }
+                    Some((exploration, _)) if tier == &exploration.challenger_tier => {
+                        exploration.challenger_exposure_ppm
+                    }
+                    Some(_) => 0,
+                    None if tier == logging_action_tier => 1_000_000,
+                    None => 0,
+                };
+                RouteActionCandidate {
+                    tier: tier.clone(),
+                    model: target.model().to_owned(),
+                    effort: target.effort().or(input_effort),
+                    logging_probability_ppm,
+                }
+            })
+            .collect();
+        let target = self.target_of_tier(logging_action_tier).ok_or_else(|| {
+            anyhow::anyhow!("logging action tier is absent from the policy snapshot")
+        })?;
+        RouteDecisionMeasurement::new(
+            logging_action_tier,
+            target.model(),
+            target.effort().or(input_effort),
+            candidates,
+        )
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -456,36 +551,6 @@ impl PolicyTableRouter {
             .or_else(|| decision.static_tier.clone())
     }
 
-    /// Returns an owned value rather than a borrow: the table it reads is
-    /// swappable, so nothing inside it can outlive the call.
-    pub(crate) fn tool_use_tier(&self) -> Option<String> {
-        self.table().tool_use_tier.clone()
-    }
-
-    pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.table().tool_safe_tiers.iter().cloned().collect()
-    }
-
-    pub(crate) fn effective_tier_efforts(
-        &self,
-        inherited: Option<ReasoningEffort>,
-    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
-        self.table()
-            .tiers
-            .iter()
-            .filter_map(|(tier, target)| {
-                target
-                    .effort()
-                    .or(inherited)
-                    .map(|effort| (tier.clone(), effort))
-            })
-            .collect()
-    }
-
-    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
-        self.table().effort_of_tier(tier)
-    }
-
     fn ledger_key(&self, request_key: &str) -> String {
         self.state_namespace.as_ref().map_or_else(
             || request_key.to_string(),
@@ -514,6 +579,10 @@ impl PolicyTableRouter {
         use_shared_identity_tracker: bool,
         apply_tool_floor: bool,
     ) -> PolicyDecision {
+        // Keep this exact immutable table alive through guards, recording, and
+        // final target materialization, even if a concurrent reload swaps the
+        // router's active table.
+        let table = self.table();
         let online = if use_shared_identity_tracker {
             OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker)
         } else {
@@ -524,6 +593,7 @@ impl PolicyTableRouter {
         let baseline_request_key = online.baseline_routing_key();
         let observed_route_projection = online.observed_routing_key().to_string();
         let mut decision = PolicyDecision {
+            policy_snapshot: PolicySnapshot(Arc::clone(&table)),
             key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key: primary_request_key.clone(),
             route_projection: primary_request_key.clone(),
@@ -576,6 +646,7 @@ impl PolicyTableRouter {
             progress_candidate_tier: None,
             progress_clause_ids: Vec::new(),
             experiment: None,
+            route_measurement: None,
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -587,7 +658,6 @@ impl PolicyTableRouter {
         // One snapshot for the whole decision: a reload landing mid-decision
         // must not let the tier and the model it maps to come from different
         // tables.
-        let table = self.table();
         let Some((raw_static_tier, matched_request_key)) =
             table.tier_for_workflow(&primary_request_key, baseline_request_key)
         else {
@@ -601,11 +671,11 @@ impl PolicyTableRouter {
         decision.static_effort = table
             .effort_of_tier(raw_static_tier)
             .or(decision.input_effort);
-        let (assigned_tier, experiment) = match self
+        let matching_exploration = self
             .exploration
             .as_ref()
-            .filter(|exploration| exploration.target_request_key == decision.route_projection)
-        {
+            .filter(|exploration| exploration.target_request_key == decision.route_projection);
+        let (assigned_tier, experiment) = match matching_exploration {
             Some(exploration) => match exploration
                 .assignment(&decision.workflow_identity)
                 .ok()
@@ -621,6 +691,18 @@ impl PolicyTableRouter {
                 None => (exploration.champion_tier.as_str(), None),
             },
             None => (raw_static_tier, None),
+        };
+        decision.route_measurement = match table.route_measurement(
+            assigned_tier,
+            decision.input_effort,
+            matching_exploration,
+            experiment.as_ref(),
+        ) {
+            Ok(measurement) => Some(measurement),
+            Err(error) => {
+                tracing::warn!(%error, "route measurement evidence unavailable");
+                None
+            }
         };
         decision.experiment = experiment;
         let (selected_tier, static_clamped) = if apply_tool_floor {
@@ -692,7 +774,7 @@ impl PolicyTableRouter {
         tool_floor_applied: bool,
     ) {
         decision.selected_tier = selected_tier.map(ToOwned::to_owned);
-        let table = self.table();
+        let table = &decision.policy_snapshot;
         decision.selected_model = selected_tier
             .and_then(|tier| table.model_of_tier(tier))
             .map(ToOwned::to_owned);
@@ -730,7 +812,7 @@ impl PolicyTableRouter {
                 // Through the snapshot, like every other lookup: a reload
                 // landing here must not answer from a table the rest of this
                 // decision never saw.
-                let table = self.table();
+                let table = &decision.policy_snapshot;
                 let selected_tier = table
                     .stable_tier_of_target(effective_model, pinned_effort)
                     .ok_or_else(|| {
@@ -786,7 +868,7 @@ impl PolicyTableRouter {
         let baseline_tier = self.eval_baseline_tier(&decision);
         let baseline_effort = baseline_tier
             .as_deref()
-            .and_then(|tier| self.table().effort_of_tier(tier))
+            .and_then(|tier| decision.policy_snapshot.effort_of_tier(tier))
             .or(input_effort);
         let ingress_request_id = headers
             .get("x-bitrouter-request-id")
@@ -855,6 +937,7 @@ impl PolicyTableRouter {
                     baseline_tier: baseline_tier.clone(),
                     baseline_effort,
                     experiment: decision.experiment.clone(),
+                    route_measurement: decision.route_measurement.clone(),
                     preset: Some(observer.policy.clone()),
                     holdout: false,
                     continuation_proposed_tier: bounded_continuation_label(
@@ -928,6 +1011,8 @@ impl PolicyTableRouter {
                 prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
                 prediction_reason_codes: decision.prediction_reason_codes.clone(),
                 task_family_reason_codes: decision.task_family_reason_codes.clone(),
+                experiment: decision.experiment.clone(),
+                route_measurement: decision.route_measurement.clone(),
                 observed_route_projection: Some(decision.observed_route_projection.clone()),
                 trajectory_episode_id: decision.trajectory_episode_id.clone(),
                 trajectory_sequence: decision.trajectory_sequence,
@@ -957,8 +1042,8 @@ impl PolicyTableRouter {
         }
         let selected_model = decision.selected_model.as_deref()?;
         let selected_tier = decision.selected_tier.as_deref()?;
-        let configured = self
-            .table()
+        let configured = decision
+            .policy_snapshot
             .target_of_tier(selected_tier)
             .filter(|target| target.model() == selected_model)
             .cloned()?;
@@ -1097,6 +1182,7 @@ mod tests {
     use crate::eval::store::EvalStore;
     use crate::eval::types::{
         EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
+        ExperimentAssignmentUnit,
     };
     use crate::metering::PricingTable;
     use crate::optimization::exploration::{OptimizationGate, RouteExploration};
@@ -1459,6 +1545,54 @@ mod tests {
             clamped.experiment.as_ref().map(|experiment| experiment.arm),
             Some(ExperimentArm::Challenger)
         );
+        let measurement = clamped
+            .route_measurement
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("exploration decision must carry measurement"))?;
+        assert_eq!(measurement.logging_action_tier, "economy");
+        assert_eq!(measurement.logging_action_probability_ppm, 1_000_000);
+        assert_eq!(measurement.candidates.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn route_measurement_preserves_non_degenerate_two_arm_propensities() -> anyhow::Result<()> {
+        let table = PolicyTable::from_config(&comparator_config())
+            .ok_or_else(|| anyhow::anyhow!("configured policy table missing"))?;
+        let exploration = RouteExploration {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            target_request_key: "agent_route/v1|unknown|implement|normal".into(),
+            champion_tier: "strong".into(),
+            challenger_tier: "economy".into(),
+            challenger_exposure_ppm: 100_000,
+            gate: OptimizationGate {
+                minimum_tasks_per_arm: 3,
+                maximum_challenger_tasks: 20,
+                minimum_pass_rate_ppm: 900_000,
+                evaluator_config_digest: None,
+            },
+        };
+        for (arm, tier, expected) in [
+            (ExperimentArm::Control, "strong", 900_000),
+            (ExperimentArm::Challenger, "economy", 100_000),
+        ] {
+            let assignment = EvalExperimentRef {
+                experiment_id: exploration.experiment_id.clone(),
+                arm,
+                assignment_unit: ExperimentAssignmentUnit::Task,
+                assignment_id_digest:
+                    "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+                challenger_propensity_ppm: 100_000,
+            };
+            let measurement =
+                table.route_measurement(tier, None, Some(&exploration), Some(&assignment))?;
+            assert_eq!(measurement.logging_action_probability_ppm, expected);
+            crate::eval::types::validate_route_measurement_for_experiment(
+                &measurement,
+                Some(&assignment),
+            )?;
+        }
         Ok(())
     }
 
@@ -1541,6 +1675,20 @@ mod tests {
         let decision = router.decision_for(&prompt("inbound"), &HeaderMap::new());
         assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
         assert_eq!(decision.experiment, None);
+        let measurement = decision
+            .route_measurement
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("champion fallback must carry measurement"))?;
+        assert_eq!(measurement.logging_action_tier, "strong");
+        assert_eq!(measurement.logging_action_probability_ppm, 1_000_000);
+        assert_eq!(
+            measurement
+                .candidates
+                .iter()
+                .find(|candidate| candidate.tier == "economy")
+                .map(|candidate| candidate.logging_probability_ppm),
+            Some(0)
+        );
         Ok(())
     }
 
@@ -1584,6 +1732,13 @@ mod tests {
                 .as_ref()
                 .map(|experiment| experiment.arm),
             Some(ExperimentArm::Challenger)
+        );
+        assert_eq!(
+            decision
+                .route_measurement
+                .as_ref()
+                .map(|measurement| measurement.logging_action_tier.as_str()),
+            Some("economy")
         );
         Ok(())
     }
@@ -1875,6 +2030,13 @@ mod tests {
             .expect("pending eval decision");
         assert_eq!(decision.policy, "auto:cost");
         assert_eq!(decision.selected_tier, "economy");
+        assert_eq!(
+            decision
+                .route_measurement
+                .as_ref()
+                .map(|measurement| measurement.logging_action_probability_ppm),
+            Some(1_000_000)
+        );
         assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
         assert_eq!(
             decision.request_key,
@@ -1955,6 +2117,13 @@ mod tests {
         assert_eq!(records[0].static_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].selected_tier.as_deref(), Some("economy"));
         assert_eq!(records[0].baseline_tier.as_deref(), Some("reference"));
+        assert_eq!(
+            records[0]
+                .route_measurement
+                .as_ref()
+                .map(|measurement| measurement.candidates.len()),
+            Some(3)
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -1962,6 +2131,30 @@ mod tests {
     #[test]
     fn from_config_is_none_when_no_tiers() {
         assert!(PolicyTableRouter::from_config(&PolicyTableConfig::default()).is_none());
+    }
+
+    #[test]
+    fn decision_keeps_one_policy_snapshot_through_reload_and_recording() {
+        let table = PolicyTable::from_config(&config()).expect("configured");
+        let router = PolicyTableRouter::new(table);
+        let routed = prompt("inbound");
+        let mut decision = router.decision_for(&routed, &HeaderMap::new());
+        assert!(router.replace_table(PolicyTable::inert()));
+
+        router.apply_guarded_route(&mut decision, Some("cheap"), true, false);
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
+        let selected = router.record_decision(
+            routed.model,
+            routed.params.reasoning_effort,
+            decision,
+            &HeaderMap::new(),
+            None,
+            None,
+        );
+        assert_eq!(
+            selected.as_ref().map(PolicyModelTarget::model),
+            Some("vendor/cheap")
+        );
     }
 
     #[test]
@@ -2902,6 +3095,13 @@ mod tests {
         assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
         assert_eq!(decision.continuation_adjustment.as_deref(), Some("pin"));
         assert_eq!(decision.reason, PolicyDecisionReason::ContinuationPin);
+        assert_eq!(
+            decision
+                .route_measurement
+                .as_ref()
+                .map(|measurement| measurement.logging_action_tier.as_str()),
+            Some("cheap")
+        );
         assert!(decision.pinned);
     }
 

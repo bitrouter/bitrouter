@@ -19,7 +19,7 @@ use super::types::{
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
-use crate::eval::types::EvalExperimentRef;
+use crate::eval::types::{EvalExperimentRef, RouteDecisionMeasurement};
 use crate::workflow_state::ir::RouteProjection;
 
 mod episode_entity {
@@ -211,6 +211,7 @@ pub(crate) struct GuardedRouteInput {
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
     pub experiment: Option<EvalExperimentRef>,
+    pub route_measurement: Option<RouteDecisionMeasurement>,
     pub policy: ProgressGuardPolicy,
     pub carries_tools: bool,
     pub tool_use_tier: Option<String>,
@@ -517,6 +518,7 @@ impl TrajectoryStore {
                         )])
                     })
                     .unwrap_or_default(),
+                route_measurement: None,
             },
             captured_at: captured_at.clone(),
             content_digest: String::new(),
@@ -2317,6 +2319,7 @@ fn build_guarded_route_batch(
                     evaluation.intent.policy_digest.clone(),
                 ),
             ]),
+            route_measurement: input.route_measurement.clone(),
         },
         captured_at: start.captured_at.clone(),
         content_digest: String::new(),
@@ -2360,6 +2363,7 @@ fn build_guarded_route_batch(
                         evaluation.intent.policy_digest.clone(),
                     ),
                 ]),
+                route_measurement: None,
             },
             captured_at: start.captured_at.clone(),
             content_digest: String::new(),
@@ -5681,6 +5685,7 @@ mod tests {
                 structural: BTreeMap::from([("request.input_count".into(), 1)]),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),
+                route_measurement: None,
             },
             captured_at: "2026-08-01T00:00:00Z".into(),
             content_digest: String::new(),
@@ -5705,6 +5710,7 @@ mod tests {
             candidate_tier: Some("economy".into()),
             policy_digest: POLICY_DIGEST.into(),
             experiment: None,
+            route_measurement: None,
             policy: ProgressGuardPolicy {
                 escalation_tier: "strong".into(),
                 protected_tiers: BTreeSet::from(["strong".into()]),

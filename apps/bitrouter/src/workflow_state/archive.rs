@@ -15,6 +15,7 @@ use crate::workflow_state::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
 };
 use crate::workflow_state::fixture::WorkflowTraceFixture;
+use crate::workflow_state::measurement::RoutingBaselineReport;
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
 use crate::workflow_state::reward::{
@@ -110,6 +111,7 @@ pub struct WorkflowRunArtifact {
     pub replay: ReplaySummary,
     pub shadow_policy: ShadowPolicySummary,
     pub policy_decisions: PolicyDecisionSummary,
+    pub routing_baselines: RoutingBaselineReport,
     pub cost: CloudUsageSummary,
     pub cost_join: CostJoinSummary,
     pub reward_join: RewardJoinSummary,
@@ -656,6 +658,10 @@ impl WorkflowRunArtifact {
         let replay = ReplayEvaluator.run(&fixtures);
         let shadow_policy = ShadowPolicyEvaluator.run(&fixtures);
         let policy_decisions = PolicyDecisionSummary::from_records(decisions);
+        let routing_baselines =
+            RoutingBaselineReport::from_records(decisions).map_err(|error| {
+                BitrouterError::internal(format!("building routing baselines: {error}"))
+            })?;
         let cost = CloudUsageSummary::from_records(usage);
         let cost_join = CostJoinSummary::from_traces_and_usage(traces, usage);
         let reward_join = TraceArchive::join_outcomes(traces, outcomes);
@@ -676,6 +682,7 @@ impl WorkflowRunArtifact {
             replay,
             shadow_policy,
             policy_decisions,
+            routing_baselines,
             cost,
             cost_join,
             reward_join: reward_join.summary,
@@ -748,6 +755,11 @@ impl WorkflowRunArtifact {
             output_dir.join("shadow-policy.json"),
             &artifact.shadow_policy,
             "workflow shadow policy",
+        )?;
+        write_pretty_json(
+            output_dir.join("routing-baselines.json"),
+            &artifact.routing_baselines,
+            "workflow routing baselines",
         )?;
         Ok(artifact)
     }
