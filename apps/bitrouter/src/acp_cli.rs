@@ -1150,6 +1150,18 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 // ── chat ──────────────────────────────────────────────────────────────────────
 
+/// Pass a `chat` startup failure through, having shown the session log first.
+///
+/// Only the two `chat` paths use it, and only before their session exists.
+/// Every other ACP verb logs to stderr as well as the file, so its child's
+/// account of a failed launch is already on screen; `chat` suppresses stderr
+/// because its renderer owns the terminal, which is exactly what leaves a
+/// pre-session failure with nothing to show but a closed transport.
+fn show_session_log(error: anyhow::Error) -> anyhow::Error {
+    crate::chat::session::report_failed_launch();
+    error
+}
+
 /// Launch a session for `agent_id` and hand it to the interactive renderer.
 ///
 /// This half is the composition root: it resolves routing, binds the
@@ -1214,12 +1226,15 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let mcp_servers = options.mcp_servers.clone();
     let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
         .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+        .map_err(show_session_log)?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(show_session_log(
+                error.context("opening the harness session"),
+            ));
         }
     };
     let observability =
@@ -1270,12 +1285,15 @@ async fn chat_piped(
     let mcp_servers = options.mcp_servers.clone();
     let mut session = launch_controlled(config, agent_id, routed, options, binding)
         .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+        .map_err(show_session_log)?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(show_session_log(
+                error.context("opening the harness session"),
+            ));
         }
     };
     let observability =
