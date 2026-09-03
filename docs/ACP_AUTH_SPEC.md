@@ -224,6 +224,11 @@ authentication may be written in BitRouter. Every one comes from an
 `AuthMethodTerminal` descriptor, or the flow is not offered. A harness that
 declares nothing gets a pointer to its own documentation, never a guess.
 
+**Scoped to axis A.** This governs agent authentication. It does *not* reach
+`providers login <id>`, where a provider's vendor CLI (`claude`, `codex`,
+`grok`, `agy`) is the credential's actual source and naming it is unavoidable —
+see §8.3.
+
 ### 6.2 A control that cannot act is absent, not dead
 
 `auth.terminal` is advertised **only** where BitRouter can both reproduce the
@@ -331,11 +336,25 @@ advertises no authentication methods" when there are none — the same shape as
 
 ### 8.3 `providers login claude-code`
 
-The hardcoded `claude auth login` spawn in
-[`commands.rs:699`](../apps/bitrouter/src/commands.rs) is deleted. The harness
-login path becomes: connect, read `authMethods`, run §7. Until Phase 3 lands,
-the existing path stays but frames its handoff explicitly and, on failure,
-names the step that failed rather than relaying an exit code.
+**The `claude auth login` spawn stays.** An earlier draft had it deleted and
+routed through §7. That was wrong, on two counts:
+
+- **It is not this axis.** `claude-code` here is a *provider*, and the `claude`
+  CLI is its vendor tool — the same relationship `import_cli_for` already has
+  with the Codex, Grok, and Antigravity CLIs. The credential it acquires serves
+  the daemon's routing, not any ACP session.
+- **It would couple provider login to ACP.** Reaching the descriptor means
+  launching an adapter — `npx`, a download, a controller — to learn a command,
+  in order to acquire a credential that has nothing to do with ACP. A user with
+  no adapter installed could no longer log in to a provider.
+
+Doing it would also re-conflate the two axes §6.4 exists to separate.
+
+What *was* wrong is the seam, and that is fixed on its own terms: the handoff
+is announced before it happens and ruled off at both ends, so a person can see
+that the prompts belong to another program; and a failure states that the
+sign-in did not complete, notes the browser-code step, and names
+`claude auth status` — rather than relaying an exit code.
 
 The provider-credential meaning of `providers login <id>` is untouched.
 
@@ -378,8 +397,30 @@ The provider-credential meaning of `providers login <id>` is untouched.
 | Phase | Content | Independently useful? |
 |---|---|---|
 | 1 — **shipped** | Wire `auth.terminal` as a caller parameter (sent `false`, per §6.2); retain `authMethods`; `is_auth_required` predicate; report auth state in a sentence naming the harness and its methods | Yes — kills the raw-error failure mode with no new UI |
-| 2 | The picker, `/login`, the terminal handoff, reconnect-and-retry; flip `terminal_auth` to `true` on the controlled paths | Yes — completes axis A |
-| 3 | Delete the hardcoded harness login; `providers login claude-code` routes through §7 | Yes — removes the duplicated knowledge |
+| 2 — **shipped** | The method prompt, the terminal handoff, reconnect-and-retry; `terminal_auth` opted into by interactive `chat` | Yes — completes axis A |
+| 3 — **shipped, revised** | Fix the `providers login claude-code` handoff seam. *Not* the original "delete the hardcoded login and route through §7", which §8.3 explains was wrong | Yes — fixes the reported UX failure |
+
+### 10.1 What phase 2 proved
+
+`claude-agent-acp@0.70.0`, probed directly, advertises exactly one method:
+
+```json
+{ "id": "claude-login", "name": "Log in with Claude",
+  "description": "Run `claude /login` in the terminal",
+  "type": "terminal", "args": ["--cli"] }
+```
+
+…**and only when the client advertised `auth.terminal`**. Probed without it,
+`authMethods` is `[]`. Two things follow, and both are load-bearing:
+
+- The capability gate in §6.2 is enforced by real adapters, not just specified.
+  A client that declines the capability is told nothing at all, which is why
+  phase 1 alone would have reported "advertises no authentication method" for
+  every Claude session.
+- The terminal flow is not speculative. The one harness this repo configures by
+  default uses it, and `agentCapabilities.providers` on that same response is
+  `null` — so claude-acp is routed by env injection only, and
+  `configure_provider` never fires for it.
 
 Phase 1 is worth landing alone: most of the observed pain in §5.3 is a missing
 sentence, not a missing flow.

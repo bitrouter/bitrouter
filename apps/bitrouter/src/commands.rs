@@ -653,6 +653,22 @@ fn choose_auth_method(
 /// can't refresh-rotate each other out (RFC 6749 §6). `login_provider` stores
 /// this marker under the `provider_id` it was invoked with, so
 /// `bitrouter providers login claude-code` lands it under `claude-code`.
+///
+/// # Why this names a login command, when the ACP path may not
+///
+/// `docs/ACP_AUTH_SPEC.md` §6.1 forbids writing a harness's login command in
+/// BitRouter — the harness declares it, or it is not offered. That rule governs
+/// the **agent-authentication** axis, and the ACP paths obey it: they read
+/// `authMethods` and run what the harness declared.
+///
+/// This is the other axis. `claude-code` here is a *provider*, and the `claude`
+/// CLI is its vendor tool, exactly as the Codex, Grok, and Antigravity CLIs are
+/// their providers' (see `import_cli_for`). Routing this through an ACP harness
+/// to avoid naming the command would make provider login depend on an ACP
+/// adapter being installed — `npx`, a download, a controller — to acquire a
+/// credential that has nothing to do with ACP, and would re-conflate the two
+/// axes §6.4 exists to keep apart. So the command is named here deliberately.
+/// What can be improved is the *seam*, which is what the framing below does.
 async fn run_claude_code_session()
 -> Result<bitrouter_providers::oauth::credential_store::Credential> {
     use std::io::IsTerminal;
@@ -696,7 +712,20 @@ async fn run_claude_code_session()
         .await
         .context("locating the claude CLI to sign you in")?;
 
-    eprintln!("  You're not signed in to Claude Code yet — launching `claude auth login`.");
+    // The handoff is stated before it happens, and marked at both ends.
+    //
+    // What follows is a *different program's* interactive flow, printing into
+    // the same terminal with nothing to distinguish it from bitrouter's own
+    // output. Its prompt reads "Paste code here if prompted", which is the
+    // `claude` CLI hedging across its flows — in the browser-code flow the
+    // paste is required, and a reader who takes "if" at face value closes the
+    // window and gets a bare 403. Naming the boundary is what this can fix; the
+    // child's own wording is not ours to change.
+    eprintln!("  You're not signed in to Claude Code yet.");
+    eprintln!("  Handing over to `claude auth login` — it is a separate program.");
+    eprintln!("  It opens a browser, and may then ask you to paste a code back here.");
+    eprintln!("  Complete both steps; this command resumes when it exits.");
+    eprintln!("  ─────────────────────────────────────────────────────────────");
     let status = tokio::process::Command::new(&claude)
         .arg("auth")
         .arg("login")
@@ -704,9 +733,15 @@ async fn run_claude_code_session()
         .status()
         .await
         .context("running `claude auth login`")?;
+    eprintln!("  ─────────────────────────────────────────────────────────────");
     if !status.success() {
+        // Which step failed is the child's to know, so this says what is true
+        // — it ended without signing in — and names the command that reports
+        // the state, rather than guessing at a cause.
         anyhow::bail!(
-            "`claude auth login` didn't complete — sign in, then re-run \
+            "`claude auth login` exited without completing the sign-in ({status}). \
+             If a browser opened, the flow may still need the code from it pasted \
+             into that prompt. Check with `claude auth status`, then re-run \
              `bitrouter providers login claude-code`."
         );
     }
