@@ -1459,12 +1459,16 @@ async fn run_terminal_login(
     Ok(())
 }
 
-/// What to say when a harness answered `auth_required`.
+/// What to say when a harness answered `auth_required` and no login ran.
 ///
 /// Names the harness and what it advertised, because those are the two things
-/// the reader needs and the two things only the protocol knows. This reports
-/// the state; it does not drive a login — BitRouter cannot yet (ACP_AUTH_SPEC
-/// §10, phase 2), and saying so beats implying a control that does not exist.
+/// the reader needs and the two things only the protocol knows.
+///
+/// The advice depends on **why** no login ran, and getting that wrong is worse
+/// than saying less: telling someone who just cancelled to "sign in with the
+/// harness's own tooling" hides the offer they are one keystroke from taking,
+/// and telling a piped caller to choose from a prompt it will never see is a
+/// control that cannot act.
 ///
 /// Deliberately says nothing about providers, routes, or `providers login`:
 /// this is the harness's own authentication, not the daemon's upstream
@@ -1473,6 +1477,8 @@ fn unauthenticated_message(
     agent_id: &str,
     methods: &[agent_client_protocol::schema::v1::AuthMethod],
 ) -> String {
+    use std::io::IsTerminal as _;
+
     if methods.is_empty() {
         return format!(
             "'{agent_id}' is not authenticated, and advertises no authentication method. \
@@ -1487,10 +1493,20 @@ fn unauthenticated_message(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    format!(
-        "'{agent_id}' is not authenticated. It offers: {offered}. BitRouter cannot run that \
-         login yet — sign in with the harness's own tooling, then run this again"
-    )
+    // A method was offered and declined — either by a person choosing cancel,
+    // or by there being no person to ask.
+    if std::io::stdin().is_terminal() {
+        format!(
+            "'{agent_id}' is not authenticated and the sign-in was cancelled. \
+             It offers: {offered}"
+        )
+    } else {
+        format!(
+            "'{agent_id}' is not authenticated. It offers: {offered}. \
+             Run `bitrouter chat {agent_id}` in a terminal to sign in, or use the \
+             harness's own tooling"
+        )
+    }
 }
 
 async fn chat_piped(
@@ -2399,9 +2415,12 @@ mod auth_report_tests {
             unauthenticated_message("claude-acp", &methods),
             unauthenticated_message("claude-acp", &[]),
         ] {
+            // The product's own name contains "route"; strip it before looking
+            // for the routing *concept*, or the check fails on "bitrouter".
+            let prose = message.replace("bitrouter", "");
             for forbidden in ["providers login", "provider", "route", "--direct"] {
                 assert!(
-                    !message.contains(forbidden),
+                    !prose.contains(forbidden),
                     "an agent-auth message must not name the routing axis \
                      ({forbidden:?}): {message}"
                 );
