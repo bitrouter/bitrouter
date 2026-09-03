@@ -1218,8 +1218,16 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
+            // A harness that is merely unauthenticated is not a broken one, and
+            // relaying its JSON-RPC error would leave the reader to guess which
+            // of the two it is. The protocol already said which; say it.
+            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+                unauthenticated_message(agent_id, session.client.auth_methods())
+            } else {
+                "opening the harness session".to_string()
+            };
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(error.context(context));
         }
     };
     let observability =
@@ -1258,6 +1266,40 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 /// differs from `prompt` is only the consumer — a journal rendered per turn
 /// rather than an NDJSON stream — which is why the loop itself lives beside
 /// the renderers in [`crate::chat::session`].
+/// What to say when a harness answered `auth_required`.
+///
+/// Names the harness and what it advertised, because those are the two things
+/// the reader needs and the two things only the protocol knows. This reports
+/// the state; it does not drive a login — BitRouter cannot yet (ACP_AUTH_SPEC
+/// §10, phase 2), and saying so beats implying a control that does not exist.
+///
+/// Deliberately says nothing about providers, routes, or `providers login`:
+/// this is the harness's own authentication, not the daemon's upstream
+/// credential, and conflating the two sends the reader to the wrong fix.
+fn unauthenticated_message(
+    agent_id: &str,
+    methods: &[agent_client_protocol::schema::v1::AuthMethod],
+) -> String {
+    if methods.is_empty() {
+        return format!(
+            "'{agent_id}' is not authenticated, and advertises no authentication method. \
+             Sign in with the harness's own tooling, then run this again"
+        );
+    }
+    let offered = methods
+        .iter()
+        .map(|method| match method.description() {
+            Some(description) => format!("{} ({description})", method.name()),
+            None => method.name().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "'{agent_id}' is not authenticated. It offers: {offered}. BitRouter cannot run that \
+         login yet — sign in with the harness's own tooling, then run this again"
+    )
+}
+
 async fn chat_piped(
     config: &Config,
     agent_id: &str,
@@ -1274,8 +1316,16 @@ async fn chat_piped(
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
+            // A harness that is merely unauthenticated is not a broken one, and
+            // relaying its JSON-RPC error would leave the reader to guess which
+            // of the two it is. The protocol already said which; say it.
+            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+                unauthenticated_message(agent_id, session.client.auth_methods())
+            } else {
+                "opening the harness session".to_string()
+            };
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(error.context(context));
         }
     };
     let observability =
@@ -1368,8 +1418,16 @@ where
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
+            // A harness that is merely unauthenticated is not a broken one, and
+            // relaying its JSON-RPC error would leave the reader to guess which
+            // of the two it is. The protocol already said which; say it.
+            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+                unauthenticated_message(agent_id, session.client.auth_methods())
+            } else {
+                "opening the harness session".to_string()
+            };
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(error.context(context));
         }
     };
     let observability =
@@ -1607,6 +1665,16 @@ async fn launch_controlled(
         manager_side,
         ClientOptions {
             turn_timeout: options.turn_timeout,
+            // False until the terminal-auth flow exists (ACP_AUTH_SPEC §7.3).
+            //
+            // This path *could* honestly claim it: the harness is always a
+            // local child of this process (`AcpTransport::Stdio` is the only
+            // transport), so its invocation is always reproducible. But the
+            // capability is a promise to *run* the login, and an agent may
+            // offer a `terminal` method only when the client advertised it.
+            // Claiming it now would surface a method nothing can execute —
+            // the dead control this codebase refuses. Phase 2 flips it.
+            terminal_auth: false,
         },
     )
     .await
@@ -2032,6 +2100,57 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     LaunchOptions {
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod auth_report_tests {
+    use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent};
+
+    use super::unauthenticated_message;
+
+    /// The reader is told which harness, and what it actually advertised.
+    #[test]
+    fn the_message_names_the_harness_and_what_it_offers() {
+        let methods = vec![AuthMethod::Agent(
+            AuthMethodAgent::new("oauth", "Sign in with Anthropic")
+                .description("opens a browser".to_string()),
+        )];
+        let message = unauthenticated_message("claude-acp", &methods);
+        assert!(message.contains("'claude-acp'"), "{message}");
+        assert!(message.contains("Sign in with Anthropic"), "{message}");
+        assert!(message.contains("opens a browser"), "{message}");
+    }
+
+    /// A harness advertising nothing says so, rather than naming an empty list
+    /// or implying a control that is not there.
+    #[test]
+    fn advertising_nothing_is_reported_as_nothing() {
+        let message = unauthenticated_message("pi-acp", &[]);
+        assert!(
+            message.contains("advertises no authentication method"),
+            "{message}"
+        );
+    }
+
+    /// **The two axes are never conflated** (ACP_AUTH_SPEC §6.4). This message
+    /// is about the harness's own authentication; sending the reader to
+    /// `providers login` or a route would be the wrong fix for it.
+    #[test]
+    fn the_message_never_mentions_the_routing_axis() {
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("t", "Terminal"))];
+        for message in [
+            unauthenticated_message("claude-acp", &methods),
+            unauthenticated_message("claude-acp", &[]),
+        ] {
+            for forbidden in ["providers login", "provider", "route", "--direct"] {
+                assert!(
+                    !message.contains(forbidden),
+                    "an agent-auth message must not name the routing axis \
+                     ({forbidden:?}): {message}"
+                );
+            }
+        }
     }
 }
 
