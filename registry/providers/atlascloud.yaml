@@ -1,4 +1,4 @@
-# Verified 2026-08-01 against the public
+# Verified 2026-09-05 against the public
 # `GET https://api.atlascloud.ai/v1/models` catalog and Atlas Cloud docs.
 # Atlas exposes an OpenAI-compatible LLM endpoint; catalog pricing is per token,
 # converted below to USD per 1M tokens. `openai/gpt-oss-120b` was removed because
@@ -50,6 +50,14 @@ models:
         cache_read: 0.13
       output_tokens:
         text: 3.38
+  - id: deepseek/deepseek-v4-pro-0813
+    provider_model_id: deepseek-ai/deepseek-v4-pro-0813
+    pricing:
+      input_tokens:
+        no_cache: 1.32
+        cache_read: 0.132
+      output_tokens:
+        text: 3.96
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek-ai/deepseek-v4-flash
     pricing:
@@ -63,10 +71,10 @@ models:
     provider_model_id: deepseek-ai/deepseek-v4-flash-0731
     pricing:
       input_tokens:
-        no_cache: 0.14
+        no_cache: 0.44
         cache_read: 0.028
       output_tokens:
-        text: 0.28
+        text: 1.32
   - id: deepseek/deepseek-v3.2
     provider_model_id: deepseek-ai/deepseek-v3.2
     pricing:
