@@ -248,7 +248,7 @@ fn resolve(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
 
 /// Answer a question the way a headless policy says to.
 ///
-/// The pipe's counterpart of [`answering_key`]: a person's keystroke and a
+/// The pipe's counterpart of `answering_key`: a person's keystroke and a
 /// policy's rule both end as the same [`Effect::Resolve`], carried by the same
 /// id, run by the same driver — which is what makes a headless run answer the
 /// agent exactly as the terminal would have. The decision returned is the one

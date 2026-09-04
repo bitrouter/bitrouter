@@ -6,7 +6,7 @@
 //! interactive loop, the piped loop, and the headless `acp prompt` loop used
 //! to each hand-roll the wire half — three copies of "remove the request,
 //! resolve it", three of "cancel, then deny what is outstanding" — and the
-//! headless one had drifted: it could only ever deny. [`Wire`] is that half,
+//! headless one had drifted: it could only ever deny. `Wire` is that half,
 //! written once, so a permission answered by a keystroke and one answered by a
 //! headless policy reach the agent through the same code.
 //!
