@@ -9,11 +9,23 @@ use super::{
     ModelsEnvelope, StatusInfo, Usage,
 };
 
+/// Wire shape for `GET /v1/billing/balance`.
+///
+/// Field-for-field the same shape as the CLI's
+/// `bitrouter::cloud::management::billing::BalanceResponse`. It is re-declared
+/// here only because this crate must not depend on `apps/bitrouter` (that edge
+/// would be a cycle); the two must stay identical, so `currency` is carried and
+/// surfaced rather than silently dropped.
 #[derive(Debug, serde::Deserialize)]
 struct BillingBalanceResponse {
-    available_micro_usd: i64,
+    /// Raw balance from the credit account (before pending debits).
     balance_micro_usd: i64,
+    /// Sum of pending debits not yet drained into the credit account.
     pending_debits_micro_usd: i64,
+    /// `max(balance - pending, 0)` — what the next inference call will see.
+    available_micro_usd: i64,
+    /// Currency code (today: `"USD"`).
+    currency: String,
 }
 
 /// How a [`CloudBackend`] authenticates upstream.
@@ -174,6 +186,7 @@ impl Backend for CloudBackend {
             available_micro_usd: b.available_micro_usd,
             balance_micro_usd: b.balance_micro_usd,
             pending_micro_usd: b.pending_debits_micro_usd,
+            currency: b.currency,
         })
     }
 }
@@ -189,11 +202,13 @@ mod tests {
         let response: BillingBalanceResponse = serde_json::from_value(serde_json::json!({
             "available_micro_usd": 11,
             "balance_micro_usd": 17,
-            "pending_debits_micro_usd": 6
+            "pending_debits_micro_usd": 6,
+            "currency": "USD"
         }))?;
         assert_eq!(response.available_micro_usd, 11);
         assert_eq!(response.balance_micro_usd, 17);
         assert_eq!(response.pending_debits_micro_usd, 6);
+        assert_eq!(response.currency, "USD");
         Ok(())
     }
 
@@ -222,10 +237,12 @@ mod tests {
                 available_micro_usd,
                 balance_micro_usd,
                 pending_micro_usd,
+                currency,
             } => {
                 assert_eq!(available_micro_usd, 4_231_000);
                 assert_eq!(balance_micro_usd, 5_000_000);
                 assert_eq!(pending_micro_usd, 769_000);
+                assert_eq!(currency, "USD");
             }
             other => panic!("expected Cloud, got {other:?}"),
         }

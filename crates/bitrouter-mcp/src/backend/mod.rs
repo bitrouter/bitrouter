@@ -58,6 +58,10 @@ pub enum StatusInfo {
         available_micro_usd: i64,
         balance_micro_usd: i64,
         pending_micro_usd: i64,
+        /// Currency code (today: `"USD"`) — carried so this payload does not
+        /// diverge from the CLI's `BalanceResponse`, which is the same wire
+        /// shape read through the management client.
+        currency: String,
     },
 }
 

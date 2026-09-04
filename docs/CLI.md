@@ -295,6 +295,74 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 ---
 
+## Origin MCP server
+
+`bitrouter mcp serve` runs BitRouter itself as an **origin** MCP server, so an
+MCP-capable client (Claude Code, Claude Desktop, Cursor, …) can call BitRouter's
+own capabilities as tools. This is the inverse of `bitrouter tools` and the
+`mcp_servers:` config block, where BitRouter is the MCP *client* proxying
+upstream servers.
+
+### `bitrouter mcp serve`
+
+```
+bitrouter mcp serve [--transport stdio|http] [--backend local|cloud|skills]
+                    [--local-url URL] [--cloud-url URL] [--token TOKEN]
+                    [--bind ADDR]
+```
+
+Long-running: its stdout is the JSON-RPC wire, not a result envelope.
+
+**Transports**
+
+| `--transport` | Wire | Default bind |
+|---|---|---|
+| `stdio` (default) | newline-delimited JSON-RPC over stdin/stdout — what an MCP client launches as a subprocess | — |
+| `http` | streamable HTTP, mounted at `/mcp-control` | `127.0.0.1:4357` |
+
+**Backends**
+
+| `--backend` | Routes to | Notes |
+|---|---|---|
+| `local` (stdio default) | the local BYOK daemon at `--local-url` (default `http://127.0.0.1:4356`) | unauthenticated, so an `http` transport on this backend refuses a non-loopback `--bind` |
+| `cloud` (http default) | BitRouter Cloud at `--cloud-url` (default `https://api.bitrouter.ai`) | stdio uses `--token` / `BITROUTER_TOKEN`; http is multi-tenant and forwards each client's own `Authorization: Bearer`, so `--token` is ignored there and a missing bearer is a `401` |
+| `skills` | the installed-skills tree under the current directory | stdio only — it serves the launching process's own skill library |
+
+**Tools**
+
+| Tool | Wired on | What it answers |
+|---|---|---|
+| `complete` | every profile | Route a completion through BitRouter and return the full result |
+| `list_models` | every profile | List models routable through BitRouter |
+| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, control socket) and, on the cloud profile, the credit balance |
+| `route_preview` | stdio + local | How a model/prompt *would* route — provider chain, policy decision, cost estimate — without sending anything upstream |
+| `skills_search` | `--backend skills` | Search installed skills by name/description |
+| `skills_get` | `--backend skills` | Fetch one skill's frontmatter + body |
+
+Only wired capabilities register their tools, so the two profiles are disjoint
+by construction: an HTTP client never sees `route_preview` or the skills tools
+(both read the serving machine's own routing table and skill library, which has
+no meaning on a multi-tenant transport), and `--backend skills` carries only the
+skills pair.
+
+`--backend skills` additionally serves SEP-2640's `skills/list` / `skills/get`
+JSON-RPC methods plus `resources/list` / `resources/read` over the skill files,
+for hosts that consume the extension rather than the tool pair.
+
+On stdio + local, successful `complete` and `status` results carry a second
+content item with today's spend, read from the local metering database.
+
+### `bitrouter mcp install`
+
+```
+bitrouter mcp install --client claude|cursor [--config PATH]
+```
+
+Renders the client config block that launches `bitrouter mcp serve` over stdio.
+With `--config`, merges it into that file; without, prints it to stdout.
+
+---
+
 ## MCP registry discovery
 
 Discovery over the official MCP Registry (`https://registry.modelcontextprotocol.io`, unauthenticated v0.1 REST API) — the find-and-enable surface for `mcp_servers:`, mirroring `bitrouter agents list --remote` / `install` for the ACP registry. Only `active`, latest-version entries are surfaced; fetches carry a 10s timeout and cache for 24h under `$XDG_CACHE_HOME/bitrouter/mcp-registry/` (stale fallback when the registry is unreachable). `mcp_servers:` in `bitrouter.yaml` remains the sole source of truth for what can launch — nothing here writes config.

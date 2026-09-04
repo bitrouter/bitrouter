@@ -1000,6 +1000,7 @@ mod tests {
                 available_micro_usd: 1,
                 balance_micro_usd: 1,
                 pending_micro_usd: 0,
+                currency: "USD".into(),
             })
         }
     }

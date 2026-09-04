@@ -28,7 +28,7 @@ multi-tenant HTTP transport.
 |------|----------|-------------|
 | `complete` | all | Route a completion through BitRouter and return the full result |
 | `list_models` | all | List models routable through BitRouter |
-| `status` | all | Report BitRouter status (local: liveness/models/providers; cloud: credit balance) |
+| `status` | all | Report BitRouter status (local: liveness/models/providers; cloud: credit balance + currency) |
 | `route_preview` | stdio + local | Preview how a model/prompt would route (provider chain, policy decision, cost) |
 | `skills_search` | stdio + skills | Search installed BitRouter skills by name/description |
 | `skills_get` | stdio + skills | Fetch a skill's frontmatter + body |
@@ -91,6 +91,7 @@ mcp/
 
 ## More
 
-The `/bitrouter` Agent Skill is the source of truth for operating the server:
-see [`../skills/bitrouter/references/mcp-server.md`](../skills/bitrouter/references/mcp-server.md)
-for the full reference (tools, transports, backends, auth, roadmap).
+The CLI reference carries the full flag/transport/backend/tool reference:
+see [`docs/CLI.md` → *Origin MCP server*](../../docs/CLI.md#origin-mcp-server).
+The `/bitrouter` Agent Skill (`skills/bitrouter/references/cli.md`) is the
+agent-facing summary of the same surface.
