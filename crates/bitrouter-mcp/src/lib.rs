@@ -94,6 +94,13 @@ pub struct ServeOptions {
     /// such fallback: only the embedding binary can read the control socket and
     /// the metering database.
     pub status: Option<std::sync::Arc<dyn actions::status::StatusQuery>>,
+    /// Optional `list_models` port. When unset, the backend's own
+    /// [`models_port`](backend::Backend::models_port) is used — a
+    /// `GET /v1/models` against the daemon or the cloud account. The local
+    /// profile injects a better one: it reads the daemon's live routing table
+    /// over the control socket and falls back to static config, so
+    /// `list_models` answers with **no daemon running**.
+    pub models: Option<std::sync::Arc<dyn actions::models::ModelsQuery>>,
 }
 
 /// Run the MCP server to completion: the router profile (completion, plus
@@ -114,6 +121,9 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
             // The injected port wins: on the local profile it is the control
             // socket, which knows the pid and the socket path the backend's
             // `/v1/*` client never could.
+            if let Some(models) = opts.models.or_else(|| backend.clone().models_port()) {
+                builder = builder.models(models);
+            }
             if let Some(status) = opts.status.or_else(|| backend.status_port()) {
                 builder = builder.status(status);
             }

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
 use bitrouter_mcp::backend::CallerAuth;
+use bitrouter_mcp::backend::local::LocalBackend;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
@@ -245,8 +246,13 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // One `LocalBackend`, wired as both the completion backend and the
+    // `list_models` port — the shape the shipping stdio profile has, minus the
+    // control-socket models port the CLI injects on top.
+    let backend = Arc::new(LocalBackend::new("http://127.0.0.1:4356"));
     let server = BitrouterMcp::builder()
-        .completion_local("http://127.0.0.1:4356")
+        .completion(backend.clone())
+        .models(backend)
         .status(Arc::new(FixtureStatus))
         .build();
     bitrouter_mcp::server::serve_stdio(server, None).await

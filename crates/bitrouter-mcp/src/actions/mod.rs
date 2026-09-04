@@ -17,6 +17,7 @@
 //! must advertise the row's schema. Only actions with more than one surface
 //! belong here — the CLI's ~100 other leaves keep their own report types.
 
+pub mod models;
 pub mod status;
 
 /// One action, and the surfaces that answer it.
@@ -71,7 +72,11 @@ pub const ACTIONS: &[ActionSpec] = &[
         id: "list_models",
         cli_leaf: Some("models"),
         mcp_tool: Some("list_models"),
-        output_schema: None,
+        output_schema: Some(|| {
+            rmcp::handler::server::tool::schema_for_output::<models::ModelsReport>()
+                .as_ref()
+                .clone()
+        }),
     },
     ActionSpec {
         id: "route",

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::{
-    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
-    ModelsEnvelope, Usage,
+    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelsEnvelope, Usage,
 };
+use crate::actions::models::{ModelsQuery, ModelsReport};
 use crate::actions::status::{Spend, SpendLimit, StatusQuery, StatusReport};
 use crate::error::ToolError;
 
@@ -71,35 +71,6 @@ impl CloudBackend {
 
 #[async_trait]
 impl Backend for CloudBackend {
-    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
-        let bearer = self.resolve_bearer(caller)?;
-        let url = format!("{}/v1/models", self.base_url);
-        let resp = self
-            .authed(bearer, self.http.get(&url))
-            .send()
-            .await
-            .map_err(|e| BackendError::Transport(e.to_string()))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(BackendError::Upstream {
-                status: status.as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            });
-        }
-        let env: ModelsEnvelope = resp
-            .json()
-            .await
-            .map_err(|e| BackendError::Decode(e.to_string()))?;
-        Ok(env
-            .data
-            .into_iter()
-            .map(|m| ModelInfo {
-                provider: m.providers.first().cloned().unwrap_or_default(),
-                id: m.id,
-            })
-            .collect())
-    }
-
     async fn complete(
         &self,
         caller: &CallerAuth,
@@ -172,6 +143,50 @@ impl Backend for CloudBackend {
     fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
         Some(self)
     }
+
+    /// Likewise for the catalog: a metered account's routable models are
+    /// `GET /v1/models` with the caller's own bearer, and nothing local can
+    /// stand in for somebody else's deployment.
+    fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl ModelsQuery for CloudBackend {
+    /// `GET /v1/models` with the **caller's** bearer, so a multi-tenant HTTP
+    /// deployment lists each client's own catalog.
+    ///
+    /// The account answered, so this is a
+    /// [`ModelsSource::Live`](crate::actions::models::ModelsSource::Live) view:
+    /// there is no static config here to fall back to. Every provider per model
+    /// is kept — this path used to keep only the first.
+    async fn list_models(&self, caller: &CallerAuth) -> Result<ModelsReport, ToolError> {
+        let bearer = self
+            .resolve_bearer(caller)
+            .map_err(|e| ToolError::new(e.to_string()))?;
+        let url = format!("{}/v1/models", self.base_url);
+        let resp = self
+            .authed(bearer, self.http.get(&url))
+            .send()
+            .await
+            .map_err(|e| ToolError::new(BackendError::Transport(e.to_string()).to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(ToolError::new(
+                BackendError::Upstream {
+                    status: status.as_u16(),
+                    body: resp.text().await.unwrap_or_default(),
+                }
+                .to_string(),
+            ));
+        }
+        let env: ModelsEnvelope = resp
+            .json()
+            .await
+            .map_err(|e| ToolError::new(BackendError::Decode(e.to_string()).to_string()))?;
+        Ok(ModelsReport::live(env.into_models()))
+    }
 }
 
 #[async_trait]
@@ -226,6 +241,7 @@ impl StatusQuery for CloudBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_sdk::language_model::routing::ModelInfo;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -290,6 +306,18 @@ mod tests {
         assert!(Backend::status_port(backend).is_some());
     }
 
+    /// The HTTP profile is built from an `Arc<dyn Backend>` and nothing else,
+    /// so `list_models` survives there only because the backend hands its own
+    /// port over.
+    #[tokio::test]
+    async fn models_port_is_the_backend_itself() {
+        let backend = Arc::new(CloudBackend::new(
+            "https://api.bitrouter.ai",
+            CloudAuth::PerCaller,
+        ));
+        assert!(Backend::models_port(backend).is_some());
+    }
+
     #[tokio::test]
     async fn list_models_maps_non_2xx_to_upstream_error() {
         let server = MockServer::start().await;
@@ -299,10 +327,10 @@ mod tests {
             .mount(&server)
             .await;
         let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_bad".into()));
-        match backend.list_models(&CallerAuth::default()).await {
-            Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 401),
-            other => panic!("expected Upstream 401, got {other:?}"),
-        }
+        let err = ModelsQuery::list_models(&backend, &CallerAuth::default())
+            .await
+            .expect_err("a 401 must surface, not read as an empty catalog");
+        assert!(err.to_string().contains("401"), "{err}");
     }
 
     #[tokio::test]
@@ -313,33 +341,37 @@ mod tests {
             .and(header("authorization", "Bearer brk_test"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "object": "list",
-                "data": [ { "id": "openai/gpt-4o", "providers": ["openai"] } ]
+                "data": [ { "id": "openai/gpt-4o", "providers": ["openai", "azure"] } ]
             })))
             .mount(&server)
             .await;
 
         let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_test".into()));
-        let models = backend
-            .list_models(&CallerAuth::default())
+        let report = ModelsQuery::list_models(&backend, &CallerAuth::default())
             .await
             .expect("models");
+        // Both providers survive: a metered account's fallback chain is as much
+        // a fact as a local one's, and this path used to keep only the first.
         assert_eq!(
-            models,
-            vec![ModelInfo {
+            report,
+            ModelsReport::live(vec![ModelInfo {
                 id: "openai/gpt-4o".into(),
-                provider: "openai".into(),
-            }]
+                providers: vec!["openai".into(), "azure".into()],
+            }])
         );
     }
 
     #[tokio::test]
     async fn per_caller_without_bearer_errors() {
         let backend = CloudBackend::new("https://api.bitrouter.ai", CloudAuth::PerCaller);
-        let err = backend
-            .list_models(&CallerAuth::default())
+        let err = ModelsQuery::list_models(&backend, &CallerAuth::default())
             .await
             .expect_err("should error");
-        assert!(matches!(err, BackendError::MissingCredential));
+        assert!(
+            err.to_string()
+                .contains(&BackendError::MissingCredential.to_string()),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -357,6 +389,8 @@ mod tests {
         let caller = CallerAuth {
             bearer: Some("caller-tok".into()),
         };
-        backend.list_models(&caller).await.expect("list_models");
+        ModelsQuery::list_models(&backend, &caller)
+            .await
+            .expect("list_models");
     }
 }

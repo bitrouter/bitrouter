@@ -2,15 +2,18 @@
 //! types the tools and both backends share. Implementations are thin reqwest
 //! clients — no routing logic lives here.
 //!
-//! `status` is **not** here: it is an [action](crate::actions), answered
-//! through [`StatusQuery`](crate::actions::status::StatusQuery) by whichever
-//! side actually knows. A backend that can answer it hands its port over via
-//! [`Backend::status_port`].
+//! `status` and `list_models` are **not** here: they are
+//! [actions](crate::actions), answered through
+//! [`StatusQuery`](crate::actions::status::StatusQuery) and
+//! [`ModelsQuery`](crate::actions::models::ModelsQuery) by whichever side
+//! actually knows. A backend that can answer one hands its port over via
+//! [`Backend::status_port`] / [`Backend::models_port`].
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::actions::models::ModelsQuery;
 use crate::actions::status::StatusQuery;
 
 pub mod cloud;
@@ -47,17 +50,27 @@ pub struct CompleteResponse {
     pub finish_reason: String,
 }
 
-/// One routable model.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub struct ModelInfo {
-    pub id: String,
-    pub provider: String,
-}
-
 /// Envelope returned by `/v1/models` on both backends.
 #[derive(serde::Deserialize)]
 pub(super) struct ModelsEnvelope {
     pub(super) data: Vec<ModelEntry>,
+}
+
+impl ModelsEnvelope {
+    /// The envelope as the shared action's element type, keeping **every**
+    /// provider per model — the fallback chain the wire has always carried and
+    /// this crate used to throw away.
+    pub(super) fn into_models(self) -> Vec<bitrouter_sdk::language_model::routing::ModelInfo> {
+        self.data
+            .into_iter()
+            .map(
+                |m| bitrouter_sdk::language_model::routing::ModelInfo {
+                    id: m.id,
+                    providers: m.providers,
+                },
+            )
+            .collect()
+    }
 }
 
 /// One entry in the models list envelope.
@@ -98,7 +111,6 @@ pub trait Backend: Send + Sync {
         caller: &CallerAuth,
         req: CompleteRequest,
     ) -> Result<CompleteResponse, BackendError>;
-    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError>;
 
     /// The `status` port this backend can answer with, or `None`.
     ///
@@ -110,4 +122,19 @@ pub trait Backend: Send + Sync {
     /// `LocalBackend` returns `None` and the embedding binary injects the real
     /// port instead.
     fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>;
+
+    /// The `list_models` port this backend can answer with, or `None`.
+    ///
+    /// Wiring on the same terms as [`Self::status_port`], and for the same
+    /// reason: the HTTP profile is assembled from an `Arc<dyn Backend>` and
+    /// nothing else, so a backend that can list a catalog has to hand its port
+    /// over rather than have one injected. Both backends can: `GET /v1/models`
+    /// is exactly this question, and the response has always carried every
+    /// provider per model.
+    ///
+    /// The embedding binary injects a better port where it has one — on
+    /// stdio + local it reads the daemon's live routing table over the control
+    /// socket and falls back to static config, so `list_models` answers with no
+    /// daemon running at all.
+    fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>>;
 }
