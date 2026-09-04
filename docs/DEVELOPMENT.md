@@ -10,7 +10,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
-| `crates/bitrouter-mcp`           | crate   | The action contract plus its MCP binding — shared report types + ports in `actions/` (`status`, `list_models`), exposed over stdio + streamable HTTP alongside `complete`, with its billing wire type kept local |
+| `crates/bitrouter-mcp`           | crate   | The action contract plus its MCP binding — shared report types + ports in `actions/` (`status`, `list_models`, `route`), exposed over stdio + streamable HTTP alongside `complete`, with its billing wire type kept local |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
 | `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |

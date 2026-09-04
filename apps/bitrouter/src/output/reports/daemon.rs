@@ -104,7 +104,7 @@ impl CliReport for DaemonActionReport {
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
-/// [`bitrouter_mcp::actions::status::StatusReport`](StatusReport): the `status`
+/// [`bitrouter_mcp::actions::status::StatusReport`]: the `status`
 /// tool returns the same type, so `bitrouter status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
@@ -191,10 +191,12 @@ fn render_spend(
 /// vocabulary out of the crate.
 impl CliReport for RouteReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        // The wire words, so the human view and `--json` name the path the
+        // same way.
         let via = match self.resolved_via {
-            ResolvedVia::LiveDaemon => "live daemon",
+            ResolvedVia::Live => "live",
             ResolvedVia::Config => "config",
-            ResolvedVia::ZeroConfig => "zero-config",
+            ResolvedVia::ZeroConfig => "zero_config",
         };
         h.line(&format!(
             "model: {}  (resolved via: {via})",
@@ -435,14 +437,19 @@ mod tests {
     /// is what the `route_preview` tool returns, so the tool's structured
     /// content deserializes straight back into the report the CLI emitted —
     /// including the enum wire values, which a rename would silently break.
+    ///
+    /// The wire values are pinned literally too: `resolved_via` is
+    /// `live` / `config` / `zero_config`, the same words `bitrouter models`
+    /// uses for the same fact, so an agent never sees `live` from one report
+    /// and `live daemon` from the other.
     #[test]
     fn route_json_round_trips_through_the_shared_type() {
         use bitrouter_mcp::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
         use bitrouter_sdk::language_model::types::ReasoningEffort;
-        for via in [
-            ResolvedVia::LiveDaemon,
-            ResolvedVia::Config,
-            ResolvedVia::ZeroConfig,
+        for (via, wire) in [
+            (ResolvedVia::Live, "live"),
+            (ResolvedVia::Config, "config"),
+            (ResolvedVia::ZeroConfig, "zero_config"),
         ] {
             let r = RouteReport {
                 requested_model: "small".into(),
@@ -466,6 +473,7 @@ mod tests {
                 )),
             };
             let emitted = json(&r);
+            assert_eq!(emitted["resolved_via"], wire, "{via:?}");
             let back: RouteReport = serde_json::from_value(emitted.clone()).expect("round trip");
             assert_eq!(serde_json::to_value(&back).unwrap(), emitted);
             // The context tiers survive the trip: dropping them would report a

@@ -10,9 +10,12 @@
 //! **Daemon-first, config as the fallback** — the order `route_preview` and
 //! `bitrouter route` already use, and for the same reason. The live routing
 //! table is what a request will actually be routed against: it reflects
-//! `reload`s and providers whose credential is resolved at daemon start-up
-//! rather than declared in `bitrouter.yaml` (the `claude-code` and `google-ai`
-//! subscription providers), which a static projection marks inactive and drops.
+//! `reload`s, the daemon's own start-up resolution, and a config that has not
+//! been edited since — a static projection is what the file says *now*. (The
+//! projection does re-activate providers whose credential lives in the OAuth
+//! store rather than the config — the `claude-code` and `google-ai`
+//! subscription providers — the way the daemon does at start-up; see
+//! `commands::resolve_static`.)
 //! It matters more here than for `route_preview`, because `complete` on the
 //! same MCP server goes to that daemon: a catalog that disagreed with it would
 //! be telling an agent it can route something the next call refuses.

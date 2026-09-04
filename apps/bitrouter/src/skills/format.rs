@@ -5,7 +5,7 @@
 //! *package manager* (`add` / `remove` / `find` / `update`) was cut. What
 //! remains is format support, and its only consumers are in this binary: the
 //! SEP-2640 catalog ([`crate::skills_catalog`]), the `skills_search` /
-//! `skills_get` tools ([`crate::skills_query`]), and the `skills list` /
+//! `skills_get` tools ([`crate::actions::skills`]), and the `skills list` /
 //! `skills init` CLI verbs.
 //!
 //! A `SKILL.md` opens with a YAML frontmatter block fenced by `---` lines:
@@ -75,7 +75,7 @@ fn extract_frontmatter_block(content: &str) -> Option<&str> {
 /// superset beats a lost body, and a skill whose frontmatter did not parse is
 /// exactly the one whose text a reader most wants to see.
 ///
-/// This lives beside [`extract_frontmatter_block`] on purpose: the split is one
+/// This lives beside `extract_frontmatter_block` on purpose: the split is one
 /// rule, and the `skills_get` adapter used to carry a second, hand-rolled copy
 /// of it that disagreed about `\r\n` and about `----`.
 pub fn skill_body(content: &str) -> &str {

@@ -4,8 +4,8 @@
 //!
 //! `status` and `list_models` are **not** here: they are
 //! [actions](crate::actions), answered through
-//! [`StatusQuery`](crate::actions::status::StatusQuery) and
-//! [`ModelsQuery`](crate::actions::models::ModelsQuery) by whichever side
+//! [`crate::actions::status::StatusQuery`] and
+//! [`crate::actions::models::ModelsQuery`] by whichever side
 //! actually knows. A backend that can answer one hands its port over via
 //! [`Backend::status_port`] / [`Backend::models_port`].
 

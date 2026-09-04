@@ -8,7 +8,7 @@
 //! `skills_search` / `skills_get` port over the *same* roots and the *same*
 //! discovery. Both are served; see `bitrouter_mcp::capabilities::skill_catalog`
 //! for why. What differs between them is only what they do with an invalid
-//! skill: the tools mark it, this catalog omits it (see [`Self::collect`]).
+//! skill: the tools mark it, this catalog omits it (see `collect`).
 //!
 //! ## URI derivation
 //!

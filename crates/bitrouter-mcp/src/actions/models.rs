@@ -28,14 +28,15 @@ use crate::error::ToolError;
 #[serde(rename_all = "snake_case")]
 pub enum ModelsSource {
     /// A running router answered: the local daemon's live routing table, or a
-    /// metered account's catalog. Reflects `reload`s and any provider whose
-    /// credential is resolved at start-up rather than declared in the config.
+    /// metered account's catalog. Reflects `reload`s and the state the router
+    /// actually resolved at start-up.
     Live,
     /// No router was reachable, so the catalog was projected from static
-    /// configuration. Honest but weaker: a provider that only becomes routable
-    /// once a daemon resolves its credential is missing here, and a config
-    /// edited since a daemon started would be listed even though that daemon
-    /// would refuse it.
+    /// configuration, resolved the way a daemon would resolve it at start-up
+    /// (built-in defaults, stored credentials). Honest but weaker: it is what
+    /// the config says *now*, so a file edited since a daemon started would be
+    /// listed even though that daemon would refuse it, and nothing a running
+    /// daemon learned after start-up is reflected.
     Config,
 }
 

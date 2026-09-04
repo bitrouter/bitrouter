@@ -392,6 +392,17 @@ decision:
   - Config resolution happens **per call**, not at `mcp serve` start, so the
     stale-snapshot bug phase 3 has to fix for `route_preview` is not reproduced
     here.
+  - **[corrected at review, 2026-09-04]** The fallback now runs the
+    stored-credential activation too (`commands::resolve_static`: built-in
+    defaults, then `activate_stored_credential_providers`, the same two steps
+    `assemble.rs` runs). As merged it applied only the defaults, so with no
+    daemon running a subscription-backed provider was invisible — the "2
+    models versus 10" measurement above was partly the fallback's own
+    omission, not only the daemon's advantage. The same helper feeds
+    `route`'s config fallback and `spawn`'s Codex preflight, so all three
+    standalone answers resolve the config the way the daemon does. What the
+    live table still has over the projection is `reload`s and the start-up
+    state of the daemon that is actually serving `complete`.
 - **The report needed `resolved_via`.** `ModelsReport { models }` alone cannot
   say which of two materially different views answered, and "what a running
   router will accept" versus "what this config would accept" is exactly the
@@ -445,6 +456,30 @@ and two deletions it did not mention:
   nothing required breaking a third key on top of the two D1 sanctions. The
   value is now a typed enum (`ResolvedVia`) rather than a free string, so the
   three cases are in the schema instead of in a comment.
+  - **[corrected at review, 2026-09-04]** The values are `live` / `config` /
+    `zero_config` after all. Phase 2 had independently given `ModelsReport` a
+    `resolved_via` of `live` / `config`, so the merged tree answered the same
+    fact with `live` on one report and `live daemon` on the other — and
+    `zero-config` hyphenated where its sibling did not. Almost-aligned is
+    worse than plainly different; `ResolvedVia` now uses
+    `rename_all = "snake_case"` to match `ModelsSource`. It rides the D1 break
+    (the shape is already changing in this release) rather than being a third.
+- **[corrected at review, 2026-09-04] The live path does not apply policy —
+  on either surface, before or after this phase.** The bullet above ("the
+  daemon applied policy upstream, no static decision to show") repeats a claim
+  the old `route_preview` comment made and which is false:
+  `DaemonCommand::Route` calls `routing_table().route_chain(model)` directly,
+  while the daemon's `PolicyTableRouter` is a `PromptTransform` on the
+  *request* pipeline (`assemble.rs`) that the control-socket verb never runs.
+  So a `live` answer reports `effective_model == requested_model`, no
+  `policy_decision`, and ignores `prompt`. The two surfaces agree (they share
+  the code), which is what this phase set out to guarantee — but "neither
+  surface can name a model the daemon would never pick" holds only on the
+  config paths. The docs now say so instead of the opposite. The fix that
+  closes it is daemon-side and deferred: extend the `route` verb to take the
+  prompt and run the daemon's own live policy router, which is the only place
+  pins, locks and trials are known — a static replay from config in the
+  action would report a decision the daemon might not make.
 - **The CLI needed `--prompt`.** The shared input is `{ model, prompt }`, but
   §6 said nothing about how the CLI expresses the second half — and without it
   the two surfaces still answer different questions, because the policy table

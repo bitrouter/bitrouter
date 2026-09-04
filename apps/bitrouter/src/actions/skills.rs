@@ -44,7 +44,7 @@ impl InstalledSkills {
     /// Every skill under the configured roots, valid or not.
     ///
     /// Blocking filesystem work — call it from a blocking context, or through
-    /// [`Self::report_off_thread`].
+    /// `report_off_thread`.
     pub fn report(&self) -> SkillsReport {
         let mut skills = Vec::new();
         let mut seen: BTreeSet<std::path::PathBuf> = BTreeSet::new();

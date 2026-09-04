@@ -6,8 +6,14 @@
 //! `route_preview` tool calls it through the [`RouteQuery`] port. Both get the
 //! same [`RouteReport`], so the CLI's `--json` and the tool's structured
 //! content cannot drift — and, more to the point, they cannot *disagree*: the
-//! config fallback runs the policy table on both, so neither surface can name a
-//! model the daemon would never pick.
+//! config fallback runs the policy table on both, so neither surface names a
+//! model the daemon would never pick where the other would not.
+//!
+//! The live-daemon path is the honest exception, on both surfaces alike: the
+//! daemon's `route` verb resolves the requested model as given, because its
+//! policy table runs on real requests rather than on this preview. That path
+//! reports `effective_model == requested_model` and no `policy_decision`, and
+//! says so through `resolved_via`.
 //!
 //! Read-only throughout. Routing is replayed, never performed: nothing is sent
 //! upstream, and the resolved targets' secrets (api keys) never enter the
@@ -100,9 +106,11 @@ impl RouteAction {
                 model,
                 model,
                 None,
-                ResolvedVia::LiveDaemon,
-                // The daemon applied its own policy table to produce this
-                // chain, so there is no separate *static* decision to surface.
+                ResolvedVia::Live,
+                // The daemon's `route` verb resolves the model as given — its
+                // policy table runs on real requests, not here — so there is
+                // no decision to surface, and the effective model is the
+                // requested one. `ResolvedVia::Live` documents this.
                 None,
                 &chain,
                 &self.pricing().await,
@@ -172,12 +180,13 @@ impl RouteAction {
         ))
     }
 
-    /// This call's config, with the built-in provider defaults applied so a
-    /// zero-config built-in still resolves.
+    /// This call's config, resolved the way the daemon resolves its own at
+    /// start-up (built-in defaults, then stored-credential activation), so a
+    /// zero-config built-in and a subscription-backed provider both resolve.
     async fn resolved_config(&self) -> Result<Config> {
-        let mut resolved = crate::paths::load_config(&self.source).await?;
-        bitrouter_providers::apply_builtin_defaults(&mut resolved);
-        Ok(resolved)
+        Ok(crate::commands::resolve_static(
+            crate::paths::load_config(&self.source).await?,
+        ))
     }
 
     /// The pricing table for the daemon path, which otherwise needs no config.

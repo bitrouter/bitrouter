@@ -200,18 +200,35 @@ pub async fn key_sign(
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
-    let mut resolved = config.clone();
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
+    let mut resolved = resolve_static(config.clone());
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     Ok(ConfigRoutingTable::from_config(resolved).list_models())
+}
+
+/// A config as the daemon sees it at start-up, minus network discovery: the
+/// built-in provider defaults applied, then every provider with a credential
+/// in the OAuth store re-activated.
+///
+/// The second step is what a plain `apply_builtin_defaults` pass misses. A
+/// subscription / "use your Claude Code session" login stores its credential in
+/// the store, not the config, so the defaults pass marks that provider inactive
+/// for want of an api key and the routing table drops it — and a standalone
+/// answer (`bitrouter models` / `route` with no daemon, `spawn`'s preflight)
+/// would then be missing exactly the providers the daemon routes to. Mirrors
+/// `assemble.rs`; best-effort, an unreadable store is a no-op.
+pub fn resolve_static(mut config: Config) -> Config {
+    bitrouter_providers::apply_builtin_defaults(&mut config);
+    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    {
+        bitrouter_providers::activate_stored_credential_providers(&mut config, &store);
+    }
+    config
 }
 
 /// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
-    let mut resolved = config.clone();
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
-    let table = ConfigRoutingTable::from_config(resolved);
+    let table = ConfigRoutingTable::from_config(resolve_static(config.clone()));
     let chain = table
         .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
         .await
