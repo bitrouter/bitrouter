@@ -422,27 +422,30 @@ policy_table:
     async fn an_edited_config_is_visible_to_the_next_call() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = config_source(dir.path(), ONE_MODEL);
-        // Built once and kept, like a server's wiring — not rebuilt per call.
-        let action = RouteAction::new(source, None);
+        // Built once and kept behind the port, exactly as `mcp serve` holds it
+        // for the life of the process — not rebuilt per call.
+        let served: std::sync::Arc<dyn RouteQuery> =
+            std::sync::Arc::new(RouteAction::new(source, None));
         let ask = || RouteInput {
             model: "demo-model".to_string(),
             prompt: None,
         };
 
-        let before = action.report(ask()).await.expect("resolves");
+        let before = served.route(ask()).await.expect("resolves");
         assert_eq!(before.effective_model, "demo-model");
         assert!(before.policy_decision.is_none(), "no policy table yet");
 
         // The user edits the file the server was started against.
         config_source(dir.path(), POLICY_REDIRECTS);
 
-        let after = action
-            .report(ask())
+        let after = served
+            .route(ask())
             .await
             .expect("resolves against the edited config");
         assert_eq!(
             after.effective_model, "demo-model-big",
-            "the same long-lived action must see the edited config, not a snapshot"
+            "the same long-lived server must see the edited config, not a \
+             snapshot taken at `mcp serve` start"
         );
     }
 

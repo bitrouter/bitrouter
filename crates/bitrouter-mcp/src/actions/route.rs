@@ -16,7 +16,7 @@ use crate::error::ToolError;
 
 /// Arguments to the `route` action (the `route_preview` tool's parameters, and
 /// what `bitrouter route` builds from its own flags).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct RouteInput {
     /// The model selector to resolve (as you'd pass to `complete`).
     pub model: String,
