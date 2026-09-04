@@ -442,6 +442,22 @@ and two deletions it did not mention:
     worse than plainly different; `ResolvedVia` now uses
     `rename_all = "snake_case"` to match `ModelsSource`. It rides the D1 break
     (the shape is already changing in this release) rather than being a third.
+- **[corrected at review, 2026-09-04] The live path does not apply policy —
+  on either surface, before or after this phase.** The bullet above ("the
+  daemon applied policy upstream, no static decision to show") repeats a claim
+  the old `route_preview` comment made and which is false:
+  `DaemonCommand::Route` calls `routing_table().route_chain(model)` directly,
+  while the daemon's `PolicyTableRouter` is a `PromptTransform` on the
+  *request* pipeline (`assemble.rs`) that the control-socket verb never runs.
+  So a `live` answer reports `effective_model == requested_model`, no
+  `policy_decision`, and ignores `prompt`. The two surfaces agree (they share
+  the code), which is what this phase set out to guarantee — but "neither
+  surface can name a model the daemon would never pick" holds only on the
+  config paths. The docs now say so instead of the opposite. The fix that
+  closes it is daemon-side and deferred: extend the `route` verb to take the
+  prompt and run the daemon's own live policy router, which is the only place
+  pins, locks and trials are known — a static replay from config in the
+  action would report a decision the daemon might not make.
 - **The CLI needed `--prompt`.** The shared input is `{ model, prompt }`, but
   §6 said nothing about how the CLI expresses the second half — and without it
   the two surfaces still answer different questions, because the policy table

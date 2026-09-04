@@ -49,7 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Two behaviour fixes ride along. `bitrouter route` now runs the **policy
   table** in its config fallback, as `route_preview` always did — it could
   previously name a model the daemon would never pick, which is why
-  `effective_model` is a separate field from `requested_model`. And
+  `effective_model` is a separate field from `requested_model`. (The
+  live-daemon path is unchanged on both surfaces: the daemon's `route` verb
+  resolves the model as given, so a `live` answer reports
+  `effective_model == requested_model` and no `policy_decision`.) And
   `route_preview` now resolves config **per call** instead of snapshotting it at
   `bitrouter mcp serve` start, so an edited `bitrouter.yaml` is visible to a
   long-lived MCP server, as it always was to the CLI.

@@ -264,9 +264,9 @@ route selection. An empty or omitted schedule preserves the existing behavior.
 bitrouter route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
-Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable; falls back to a local config parse — **policy table included**, so what it prints is what would actually run.
+Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable — its `route` verb resolves the model exactly as given, since the daemon's policy table runs on real requests rather than on this preview — and otherwise falls back to a local config parse, **policy table included**, so `effective_model` there is what would actually run.
 
-`--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution.
+`--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution. It is consulted on the config path only; a `live` answer is the same with or without it.
 
 The report is the shared `route` action's, so `bitrouter route --json` is byte-identical to the MCP `route_preview` tool's structured content:
 
@@ -276,7 +276,7 @@ The report is the shared `route` action's, so `bitrouter route --json` is byte-i
 | `effective_model` | what would actually run — differs when the policy table selects another model |
 | `effective_effort` | the reasoning effort policy selected, when it selected one |
 | `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bitrouter models` uses |
-| `policy_decision` | the static decision behind `effective_model`. Absent on `live` — the daemon applied policy upstream, so there is no separate static decision to show |
+| `policy_decision` | the static decision behind `effective_model`. Absent on `live`: the daemon's `route` verb does not replay policy, so there is no decision to show and `effective_model` equals `requested_model` there |
 | `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
 | `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
 
