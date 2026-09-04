@@ -1,6 +1,7 @@
 # Spec: one actions table — stopping CLI, MCP, and TUI from drifting apart
 
-Status: **phases 0–1 implemented; 2–5 proposed** · Author: Claude (with Spikel)
+Status: **phases 0–1 and 3 implemented; 2, 4–5 proposed** · Author: Claude (with
+Spikel)
 · Date: 2026-09-04
 · Issue: [#868](https://github.com/bitrouter/bitrouter/issues/868)
 · Refs: [#863](https://github.com/bitrouter/bitrouter/issues/863) (open),
@@ -15,6 +16,16 @@ above each. The corrections: the guard test cannot live in the crate (§5),
 `output_schema` must be optional and every tool needs a row from day one (§3,
 §6 phase 1), `providers[]` needed a producer (§6 phase 1), and phase 0's interim
 `currency` fix does not survive phase 1 (§6 phase 0).
+
+**Phase 3 (2026-09-04), `claude/actions-table-phase03`.** `route` is unified;
+[D1](#d1--does-bitrouter-route---json-get-to-change-shape) was **decided by the
+human as option (a)** — break the shape, changelog it — and is no longer an open
+question. Building it corrected §6 phase 3 in three places, all marked
+**[corrected post-implementation]** below: the `daemon` label was not adopted,
+the CLI needed a `--prompt` flag to be a real peer of the tool, and "`--config`
+becomes a constructor parameter" meant the config *source*, not a new
+`mcp serve --config` flag. Two things the phase deleted are recorded there too.
+Phase 2 (`list_models`) is being built in parallel on its own branch.
 
 **Follow-up (2026-09-04), same branch.** [D2](#d2--the-cloud-profile) was
 implemented on its recommendation, reviewed, and **decided differently**:
@@ -339,6 +350,48 @@ decisions, not just plumbing:
   stops being a CLI-only capability by becoming a constructor parameter both
   surfaces set.
 
+**[corrected post-implementation]** Three things this phase got slightly wrong,
+and two deletions it did not mention:
+
+- **`resolved_via` keeps `live daemon`, not `daemon`.** The prose above names
+  the live path `daemon`; both surfaces already emitted `live daemon` and
+  nothing required breaking a third key on top of the two D1 sanctions. The
+  value is now a typed enum (`ResolvedVia`) rather than a free string, so the
+  three cases are in the schema instead of in a comment.
+- **The CLI needed `--prompt`.** The shared input is `{ model, prompt }`, but
+  §6 said nothing about how the CLI expresses the second half — and without it
+  the two surfaces still answer different questions, because the policy table
+  keys on the agent-loop step the *prompt* implies. `bitrouter route` gains
+  `--prompt <text>`; it is additive, so it is not part of the D1 break.
+- **`--config` was never about a new flag.** "`--config` stops being a CLI-only
+  capability" reads like `mcp serve --config <path>`; what it means, and what
+  was built, is that the resolved [`ConfigSource`] is the constructor parameter
+  — the CLI's from `-c`, `mcp serve`'s from the default resolution. A
+  `mcp serve --config` flag would be new surface nothing asked for (CLAUDE.md
+  4). Per-call freshness is what the bug needed, and that is independent of
+  where the source came from.
+- **`RoutingQuery` had to move, not just change.** §6 says the report type is
+  shared; it does not say the *port* relocates. It does: the port and the type
+  it returns belong in one file, so `capabilities::routing` is deleted and
+  `actions::route` replaces it. `capabilities/` is now only the ports whose
+  action has not been unified — which is the migration backlog made visible in
+  the module tree, matching `output_schema: None` in the table.
+- **`route_preview` also gained a rate card on the daemon path.** The old
+  daemon branch built its report from the same `report()` helper, so it already
+  priced the top hop from a config snapshot. Resolving config per call meant
+  the daemon path had to read config *for pricing alone*; it does, best-effort,
+  and an unreadable config costs `estimated_cost` rather than the report. The
+  daemon answered the routing question; a preview with no rate card is still
+  the right answer to it.
+
+One thing the phase deliberately did **not** unify: `commands::resolve_route`
+survives, because `bitrouter spawn`'s Codex preflight
+(`apps/bitrouter/src/spawn.rs`) still calls it. That check asks a different
+question — "does this model resolve at all" — and pulling it into the `route`
+action would make a preflight depend on the policy table. Noted rather than
+left silent: it is the one remaining place that resolves a chain without the
+policy table.
+
 ### Phase 4 — skills: one discovery, one root, one shape
 
 The largest user-visible win in the issue: a skill with broken YAML is listed by
@@ -428,12 +481,26 @@ its own note.
 
 ### D1 — does `bitrouter route --json` get to change shape?
 
+> **Decided (human sign-off, 2026-09-04): option (a) — break it, changelog it.**
+> No longer a recommendation. The reasoning below stood; it was chosen, not
+> merely proposed.
+
 Phase 3 renames `model` → `requested_model` and `chain[].protocol` →
 `provider_chain[].api_protocol`, and adds `estimated_cost`. That is a breaking
 change to an agent-readable surface. Options: (a) break it, changelog it — the
 CLI is pre-1.0 and the richer shape is the right one; (b) keep both keys for one
 release with the old ones marked deprecated. **Recommendation: (a).** Duplicated
 keys are exactly the drift this spec exists to remove.
+
+**As implemented.** The break is one changelog entry showing both shapes, under
+the existing `- **Breaking (CLI):** …` convention, plus a
+`- **Breaking (Rust API):** …` entry for the port
+(`RoutingQuery::preview → serde_json::Value` becoming
+`RouteQuery::route → RouteReport`). The report grew three further fields beyond
+what D1 anticipated — `effective_model`, `effective_effort` and
+`policy_decision` — which are *additive* to `route_preview`'s vocabulary and
+therefore not part of the break; they are what the policy half of phase 3
+produces, and `effective_model` is the field a reader should actually act on.
 
 ### D2 — the cloud profile
 
@@ -542,7 +609,12 @@ routing-table generation only if it shows up.**
   were provoked and observed.)*
 - For every row with both surfaces: `bitrouter <leaf> --json` and the MCP tool's
   structured content deserialize into the **same** Rust type in a test that runs
-  both.
+  both. *(Met for `status` at phase 1 and `route` at phase 3 —
+  `both_surfaces_produce_the_same_report` runs the leaf's path and the port and
+  compares the serialized bytes; `both_surfaces_apply_the_policy_table` does the
+  same over a config where the policy table selects a different effective model
+  than the one requested, which is the case the two surfaces used to disagree
+  on.)*
 - `bitrouter models` and `list_models` return the same models with the same
   provider lists, with no daemon running.
 - `status` over MCP with the daemon stopped returns `running: false` and is not

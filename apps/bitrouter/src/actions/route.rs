@@ -74,12 +74,12 @@ impl RouteAction {
             .socket
             .as_ref()
             .filter(|s| crate::daemon::endpoint_in_use(s));
-        if let Some(socket) = live {
-            if let Some(report) = self.from_daemon(socket, &input.model).await? {
-                return Ok(report);
-            }
+        if let Some(socket) = live
+            && let Some(report) = self.via_daemon(socket, &input.model).await?
+        {
+            return Ok(report);
         }
-        self.from_config(input).await
+        self.via_config(input).await
     }
 
     /// Ask the running daemon to resolve the model.
@@ -87,7 +87,7 @@ impl RouteAction {
     /// `Ok(None)` means "ask the config instead": the socket file exists but
     /// this process could not get an answer out of it. Only the daemon
     /// *refusing* the model is a real error — it resolved, and said no.
-    async fn from_daemon(&self, socket: &Path, model: &str) -> Result<Option<RouteReport>> {
+    async fn via_daemon(&self, socket: &Path, model: &str) -> Result<Option<RouteReport>> {
         match crate::daemon::send_command(
             socket,
             &DaemonCommand::Route {
@@ -96,7 +96,7 @@ impl RouteAction {
         )
         .await
         {
-            Ok(DaemonResponse::Route { chain }) => Ok(Some(self.assemble(
+            Ok(DaemonResponse::Route { chain }) => Ok(Some(assemble(
                 model,
                 model,
                 None,
@@ -127,7 +127,7 @@ impl RouteAction {
     /// how it could name a model the daemon would never pick. It runs here for
     /// both surfaces: the effective model is what the table selects, and the
     /// chain is resolved for *that*, not for what was asked.
-    async fn from_config(&self, input: RouteInput) -> Result<RouteReport> {
+    async fn via_config(&self, input: RouteInput) -> Result<RouteReport> {
         let resolved = self.resolved_config().await?;
         let pricing = crate::assemble::build_pricing_table(&resolved);
         let policy = PolicyTableRouter::from_config(&resolved.policy_table);
@@ -155,7 +155,7 @@ impl RouteAction {
                 api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
             })
             .collect();
-        Ok(self.assemble(
+        Ok(assemble(
             &input.model,
             &effective_model,
             effective_effort,
@@ -194,39 +194,43 @@ impl RouteAction {
             }
         }
     }
+}
 
-    /// Assemble the report from a resolved hop chain, pricing the top hop.
-    fn assemble(
-        &self,
-        requested_model: &str,
-        effective_model: &str,
-        effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-        resolved_via: ResolvedVia,
-        decision: Option<&PolicyDecision>,
-        chain: &[RouteHop],
-        pricing: &PricingTable,
-    ) -> RouteReport {
-        let estimated_cost = chain
-            .first()
-            .and_then(|h| pricing.resolve(&h.provider, &h.service_id))
-            .filter(|p| !p.is_unconfigured())
-            .map(|p| estimated_cost(&p));
-        RouteReport {
-            requested_model: requested_model.to_string(),
-            effective_model: effective_model.to_string(),
-            effective_effort,
-            resolved_via,
-            policy_decision: decision.map(policy_selection),
-            provider_chain: chain
-                .iter()
-                .map(|h| ProviderHop {
-                    provider: h.provider.clone(),
-                    service_id: h.service_id.clone(),
-                    api_protocol: h.api_protocol.clone(),
-                })
-                .collect(),
-            estimated_cost,
-        }
+/// Assemble the report from a resolved hop chain, pricing the top hop.
+///
+/// A free function, not a method: it reads nothing from the action's own state,
+/// and both resolution paths hand it everything explicitly — which is what makes
+/// the daemon path's "no static decision" a visible argument rather than a
+/// silent default.
+fn assemble(
+    requested_model: &str,
+    effective_model: &str,
+    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    resolved_via: ResolvedVia,
+    decision: Option<&PolicyDecision>,
+    chain: &[RouteHop],
+    pricing: &PricingTable,
+) -> RouteReport {
+    let estimated_cost = chain
+        .first()
+        .and_then(|h| pricing.resolve(&h.provider, &h.service_id))
+        .filter(|p| !p.is_unconfigured())
+        .map(|p| estimated_cost(&p));
+    RouteReport {
+        requested_model: requested_model.to_string(),
+        effective_model: effective_model.to_string(),
+        effective_effort,
+        resolved_via,
+        policy_decision: decision.map(policy_selection),
+        provider_chain: chain
+            .iter()
+            .map(|h| ProviderHop {
+                provider: h.provider.clone(),
+                service_id: h.service_id.clone(),
+                api_protocol: h.api_protocol.clone(),
+            })
+            .collect(),
+        estimated_cost,
     }
 }
 
