@@ -100,7 +100,7 @@ impl RouteAction {
                 model,
                 model,
                 None,
-                ResolvedVia::LiveDaemon,
+                ResolvedVia::Live,
                 // The daemon applied its own policy table to produce this
                 // chain, so there is no separate *static* decision to surface.
                 None,

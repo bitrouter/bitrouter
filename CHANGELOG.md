@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     "requested_model": "gpt-5",          // was `model`
     "effective_model": "gpt-5-codex",    // new: what the policy table selects
     "effective_effort": "high",          // new, omitted when policy selects none
-    "resolved_via": "config",            // unchanged: live daemon | config | zero-config
+    "resolved_via": "config",            // now live | config | zero_config
+                                         // (was live daemon | config | zero-config)
     "policy_decision": { … },            // new, omitted on the live-daemon path
     "provider_chain": [                  // was `chain`
       { "provider": "openai", "service_id": "gpt-5-codex", "api_protocol": "openai" }
@@ -39,7 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Migration is mechanical: `.model` → `.requested_model` (read
   `.effective_model` if you want what would actually run), `.chain` →
-  `.provider_chain`, `.chain[].protocol` → `.provider_chain[].api_protocol`.
+  `.provider_chain`, `.chain[].protocol` → `.provider_chain[].api_protocol`,
+  and `.resolved_via == "live daemon"` → `"live"` / `"zero-config"` →
+  `"zero_config"`. The `resolved_via` values are now the same words
+  `bitrouter models --json` uses for the same fact (`live` / `config`), instead
+  of two spellings that almost matched.
 
   Two behaviour fixes ride along. `bitrouter route` now runs the **policy
   table** in its config fallback, as `route_preview` always did — it could

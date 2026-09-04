@@ -434,6 +434,14 @@ and two deletions it did not mention:
   nothing required breaking a third key on top of the two D1 sanctions. The
   value is now a typed enum (`ResolvedVia`) rather than a free string, so the
   three cases are in the schema instead of in a comment.
+  - **[corrected at review, 2026-09-04]** The values are `live` / `config` /
+    `zero_config` after all. Phase 2 had independently given `ModelsReport` a
+    `resolved_via` of `live` / `config`, so the merged tree answered the same
+    fact with `live` on one report and `live daemon` on the other — and
+    `zero-config` hyphenated where its sibling did not. Almost-aligned is
+    worse than plainly different; `ResolvedVia` now uses
+    `rename_all = "snake_case"` to match `ModelsSource`. It rides the D1 break
+    (the shape is already changing in this release) rather than being a third.
 - **The CLI needed `--prompt`.** The shared input is `{ model, prompt }`, but
   §6 said nothing about how the CLI expresses the second half — and without it
   the two surfaces still answer different questions, because the policy table

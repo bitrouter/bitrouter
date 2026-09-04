@@ -33,20 +33,24 @@ pub struct RouteInput {
 /// its own policy table upstream and returns only the resulting chain, so a
 /// live-daemon answer has no separate *static* decision to show — the absence
 /// of a decision there means "already applied", not "no policy configured".
+///
+/// Wire values are `snake_case` — `live` / `config` / `zero_config` — the same
+/// vocabulary as the `list_models` report's `resolved_via`
+/// ([`ModelsSource`](crate::actions::models::ModelsSource)), so an agent reads
+/// one word for "a running router answered" across both actions.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
+#[serde(rename_all = "snake_case")]
 pub enum ResolvedVia {
     /// The running daemon resolved it, so the chain reflects `reload`s and
     /// subscription-backed providers that static config alone cannot resolve.
-    #[serde(rename = "live daemon")]
-    LiveDaemon,
+    /// Serialized as `live`.
+    Live,
     /// Resolved from a `bitrouter.yaml` on disk, policy table included.
-    #[serde(rename = "config")]
     Config,
     /// Resolved from the built-in zero-config defaults — no config file was
-    /// found.
-    #[serde(rename = "zero-config")]
+    /// found. Serialized as `zero_config`.
     ZeroConfig,
 }
 
@@ -204,7 +208,7 @@ pub struct RouteReport {
     /// Which path resolved the chain.
     pub resolved_via: ResolvedVia,
     /// The static policy decision behind [`Self::effective_model`]. `None` on
-    /// [`ResolvedVia::LiveDaemon`] (the daemon applied policy upstream) and
+    /// [`ResolvedVia::Live`] (the daemon applied policy upstream) and
     /// wherever no policy table is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_decision: Option<PolicySelection>,

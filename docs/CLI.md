@@ -275,8 +275,8 @@ The report is the shared `route` action's, so `bitrouter route --json` is byte-i
 | `requested_model` | what you asked about |
 | `effective_model` | what would actually run — differs when the policy table selects another model |
 | `effective_effort` | the reasoning effort policy selected, when it selected one |
-| `resolved_via` | `live daemon` \| `config` \| `zero-config` |
-| `policy_decision` | the static decision behind `effective_model`. Absent on `live daemon` — the daemon applied policy upstream, so there is no separate static decision to show |
+| `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bitrouter models` uses |
+| `policy_decision` | the static decision behind `effective_model`. Absent on `live` — the daemon applied policy upstream, so there is no separate static decision to show |
 | `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
 | `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
 
