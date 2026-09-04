@@ -1349,7 +1349,6 @@ fn choose_auth_method(
     agent_id: &str,
     methods: &[agent_client_protocol::schema::v1::AuthMethod],
 ) -> Result<AuthChoice> {
-    use agent_client_protocol::schema::v1::AuthMethod;
     use std::io::{BufRead, IsTerminal as _};
 
     if methods.is_empty() || !std::io::stdin().is_terminal() {
@@ -1381,33 +1380,51 @@ fn choose_auth_method(
             eprintln!();
             return Ok(AuthChoice::Declined);
         }
-        let trimmed = line.trim();
-        let index = if trimmed.is_empty() {
-            1
-        } else {
-            match trimmed.parse::<usize>() {
-                Ok(0) => return Ok(AuthChoice::Declined),
-                Ok(n) if (1..=methods.len()).contains(&n) => n,
-                Ok(n) => {
-                    eprintln!(
-                        "    choice must be between 0 and {}, got {n}",
-                        methods.len()
-                    );
-                    continue;
-                }
-                Err(_) => {
-                    eprintln!("    '{trimmed}' is not a number");
-                    continue;
-                }
-            }
-        };
-        return Ok(match &methods[index - 1] {
-            // ACP is explicit that a terminal method is never passed to
-            // `authenticate`: the interactive process is not the connection.
-            AuthMethod::Terminal(terminal) => AuthChoice::Terminal(Box::new(terminal.clone())),
-            other => AuthChoice::Agent(other.id().clone()),
-        });
+        match classify_choice(&line, methods) {
+            Some(choice) => return Ok(choice),
+            // Not a selection: say why, then ask again.
+            None => match line.trim().parse::<usize>() {
+                Ok(n) => eprintln!(
+                    "    choice must be between 0 and {}, got {n}",
+                    methods.len()
+                ),
+                Err(_) => eprintln!("    '{}' is not a number", line.trim()),
+            },
+        }
     }
+}
+
+/// Classify one typed line against the offered methods.
+///
+/// Pure, so the interesting half of the picker is testable without a terminal:
+/// `choose_auth_method` owns stdin and the menu, this owns what the answer
+/// means. The same split `Editor::apply` and `machine::step` already use.
+///
+/// `0` cancels, an empty line takes the `[1]` default, and `1..=methods.len()`
+/// selects. Anything else is `None` — not a selection, ask again. Out-of-range
+/// never wraps onto a method that was not offered.
+fn classify_choice(
+    input: &str,
+    methods: &[agent_client_protocol::schema::v1::AuthMethod],
+) -> Option<AuthChoice> {
+    use agent_client_protocol::schema::v1::AuthMethod;
+
+    let trimmed = input.trim();
+    let index = if trimmed.is_empty() {
+        1
+    } else {
+        match trimmed.parse::<usize>() {
+            Ok(0) => return Some(AuthChoice::Declined),
+            Ok(n) if (1..=methods.len()).contains(&n) => n,
+            Ok(_) | Err(_) => return None,
+        }
+    };
+    Some(match methods.get(index - 1)? {
+        // ACP is explicit that a terminal method is never passed to
+        // `authenticate`: the interactive process is not the connection.
+        AuthMethod::Terminal(terminal) => AuthChoice::Terminal(Box::new(terminal.clone())),
+        other => AuthChoice::Agent(other.id().clone()),
+    })
 }
 
 /// Run a `terminal` method's login: the harness's **own** program, relaunched
@@ -2322,7 +2339,17 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
 mod auth_report_tests {
     use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent, AuthMethodTerminal};
 
-    use super::{AuthChoice, LaunchOptions, choose_auth_method, unauthenticated_message};
+    use super::{
+        AuthChoice, LaunchOptions, choose_auth_method, classify_choice, unauthenticated_message,
+    };
+
+    /// Two `agent` methods, in the order the picker numbers them.
+    fn two_methods() -> Vec<AuthMethod> {
+        vec![
+            AuthMethod::Agent(AuthMethodAgent::new("oauth", "Sign in with Anthropic")),
+            AuthMethod::Agent(AuthMethodAgent::new("api-key", "Paste an API key")),
+        ]
+    }
 
     /// **A control that cannot act is absent** (ACP_AUTH_SPEC §6.2). Only the
     /// interactive caller may claim it can run a terminal login; every other
@@ -2352,23 +2379,74 @@ mod auth_report_tests {
         );
     }
 
+    /// **Cancelling never authenticates** (ACP_AUTH_SPEC §6.3). The typed
+    /// decline is its own branch, distinct from the EOF one that returns the
+    /// same answer — this is the branch a live terminal was needed to reach.
+    #[test]
+    fn a_typed_zero_declines() {
+        assert!(
+            matches!(
+                classify_choice("0", &two_methods()),
+                Some(AuthChoice::Declined)
+            ),
+            "'0' is the cancel entry the menu prints"
+        );
+    }
+
+    /// A bare enter takes the `[1]` the prompt shows as the default — the
+    /// offer on screen and the answer must not disagree.
+    #[test]
+    fn a_bare_enter_takes_the_advertised_default() {
+        let Some(AuthChoice::Agent(id)) = classify_choice("\n", &two_methods()) else {
+            panic!("an empty line selects the first method")
+        };
+        assert_eq!(
+            id.to_string(),
+            "oauth",
+            "the default is the '[1]' on screen"
+        );
+    }
+
+    /// The numbering is the menu's, one-based.
+    #[test]
+    fn a_digit_selects_that_numbered_method() {
+        let Some(AuthChoice::Agent(id)) = classify_choice("2", &two_methods()) else {
+            panic!("'2' selects the second method")
+        };
+        assert_eq!(id.to_string(), "api-key", "numbering starts at one");
+    }
+
+    /// Out of range is not a selection. Nothing wraps onto an index the
+    /// harness never offered — the alternative is authenticating with a method
+    /// nobody was shown.
+    #[test]
+    fn an_unoffered_index_is_not_a_selection() {
+        assert!(
+            classify_choice("9", &two_methods()).is_none(),
+            "'9' against two methods must re-prompt, not wrap"
+        );
+    }
+
+    /// Anything that is not a number re-prompts rather than resolving.
+    #[test]
+    fn a_non_number_is_not_a_selection() {
+        assert!(
+            classify_choice("x", &two_methods()).is_none(),
+            "'x' must re-prompt"
+        );
+    }
+
     /// A `terminal` method is routed to the out-of-band flow, never to
     /// `authenticate` — ACP forbids passing it there because the interactive
     /// process is not the ACP connection.
     #[test]
     fn a_terminal_method_never_becomes_an_authenticate_call() {
-        let terminal = AuthMethod::Terminal(
+        let methods = vec![AuthMethod::Terminal(
             AuthMethodTerminal::new("login", "Log in from the terminal")
                 .args(vec!["--login".to_string()]),
-        );
-        // Classification is the branch `choose_auth_method` takes on a chosen
-        // method; assert on the shape it must produce.
-        assert!(
-            matches!(&terminal, AuthMethod::Terminal(_)),
-            "the fixture is the terminal variant"
-        );
-        let AuthMethod::Terminal(descriptor) = &terminal else {
-            unreachable!("matched above")
+        )];
+        let Some(AuthChoice::Terminal(descriptor)) = classify_choice("1", &methods) else {
+            panic!("a terminal method classifies to the out-of-band branch")
         };
         assert_eq!(
             descriptor.args,

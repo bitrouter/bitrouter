@@ -448,15 +448,37 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
         if n_bytes == 0 {
             anyhow::bail!("stdin closed before a choice was made");
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(options[0]);
+        match classify_method_choice(&line, options) {
+            Some(method) => return Ok(method),
+            // Not a selection: say why, then ask again.
+            None => match line.trim().parse::<usize>() {
+                Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
+                Err(_) => eprintln!("  '{}' is not a number", line.trim()),
+            },
         }
-        match trimmed.parse::<usize>() {
-            Ok(n) if (1..=options.len()).contains(&n) => return Ok(options[n - 1]),
-            Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
-            Err(_) => eprintln!("  '{trimmed}' is not a number"),
-        }
+    }
+}
+
+/// Classify one typed line against the offered methods.
+///
+/// Pure, so the interesting half of the picker is testable without a terminal:
+/// `prompt_method_choice` owns stdin and the menu, this owns what the answer
+/// means. The same split `classify_choice` gives the ACP picker, and the one
+/// `Editor::apply` and `machine::step` are built on.
+///
+/// An empty line takes the `[1]` default and `1..=options.len()` selects.
+/// Anything else is `None` — not a selection, ask again. Out-of-range never
+/// wraps onto a method that was not offered, and this menu has no cancel entry,
+/// so `0` is out of range like any other unoffered index. Callers offer at
+/// least one method; an empty slice selects nothing.
+fn classify_method_choice(input: &str, options: &[AuthMethod]) -> Option<AuthMethod> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return options.first().copied();
+    }
+    match trimmed.parse::<usize>() {
+        Ok(n) if (1..=options.len()).contains(&n) => options.get(n - 1).copied(),
+        Ok(_) | Err(_) => None,
     }
 }
 
@@ -1274,6 +1296,63 @@ mod tests {
         assert!(methods.contains(&AuthMethod::ImportFromCli));
         assert!(methods.contains(&AuthMethod::PkceSubscription));
         assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
+    }
+
+    /// The picker's two offered methods, in the order it numbers them.
+    fn two_methods() -> Vec<AuthMethod> {
+        vec![AuthMethod::ImportFromCli, AuthMethod::PkceSubscription]
+    }
+
+    /// A bare enter takes the `[1]` the prompt shows as the default — the offer
+    /// on screen and the answer must not disagree.
+    #[test]
+    fn a_bare_enter_takes_the_advertised_default() {
+        assert_eq!(
+            classify_method_choice("\n", &two_methods()),
+            Some(AuthMethod::ImportFromCli),
+            "the default is the '[1]' on screen"
+        );
+    }
+
+    /// The numbering is the menu's, one-based.
+    #[test]
+    fn a_digit_selects_that_numbered_method() {
+        assert_eq!(
+            classify_method_choice("2", &two_methods()),
+            Some(AuthMethod::PkceSubscription),
+            "numbering starts at one"
+        );
+    }
+
+    /// Out of range is not a selection. Nothing wraps onto an index the
+    /// provider never offered — the alternative is running a login flow nobody
+    /// was shown.
+    #[test]
+    fn an_unoffered_index_is_not_a_selection() {
+        assert!(
+            classify_method_choice("9", &two_methods()).is_none(),
+            "'9' against two methods must re-prompt, not wrap"
+        );
+    }
+
+    /// Unlike the ACP auth picker, this menu prints no `0) cancel` entry, so
+    /// zero is an unoffered index like any other and re-prompts. Aborting here
+    /// is Ctrl-C, not a hidden entry.
+    #[test]
+    fn zero_is_out_of_range_because_this_menu_offers_no_cancel() {
+        assert!(
+            classify_method_choice("0", &two_methods()).is_none(),
+            "'0' selects nothing on a menu that starts at one"
+        );
+    }
+
+    /// Anything that is not a number re-prompts rather than resolving.
+    #[test]
+    fn a_non_number_is_not_a_selection() {
+        assert!(
+            classify_method_choice("x", &two_methods()).is_none(),
+            "'x' must re-prompt"
+        );
     }
 
     #[test]
