@@ -155,13 +155,28 @@ bitrouter status --requests          # what the router has actually done
 bitrouter status --requests --human  # the same, as a table
 ```
 
-Prints pid, listen address, number of routable models, the distinct providers behind them, and the control socket path. Exits cleanly with "stopped" when no daemon is reachable.
+Prints pid, listen address, number of routable models, the distinct providers behind them, the control socket path, and the **spend position**. Exits cleanly with "stopped" when no daemon is reachable.
 
 The same report the origin MCP server's `status` tool returns — one shared type, so `bitrouter status --json` and that tool's structured content are the same bytes.
 
+**`spend` — what has gone, and what is left.** Two independent facts, each present only where the deployment can answer it:
+
+| Key | Filled by | Means |
+|---|---|---|
+| `spend.spent` | any deployment (the local metering database) | Money already gone: `estimated_micro_usd` over `window` (today, since 00:00 UTC), `requests`, and `unpriced` |
+| `spend.limit` | a deployment with a cap (today: a metered cloud account's prepaid credit) | Money still available: `balance_micro_usd`, `pending_micro_usd`, `remaining_micro_usd` |
+
+`spent` is an **estimate and a floor**, not a total. It is priced from BitRouter's own registry at settle time, and requests with no charge evidence are excluded rather than summed as zero — summing them would report a floor as a price. `unpriced` counts exactly those, so a non-zero value means the figure understates by an unknown amount; the human view marks it `floor, not a total`. A `spend.limit` is the opposite kind of number: an authoritative ledger the account is settled against. Read `unpriced` before treating the two as comparable.
+
+The read is best-effort and never fails the command: no config, no database file, or an unreadable one gives no `spend` key at all — which is a different answer from `estimated_micro_usd: 0` over `0` requests, meaning "nothing spent today". It also works with **no daemon running**, so a `stopped` report still carries spend: what a past daemon spent is on disk and does not stop being true when it exits.
+
+The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `--requests` reports. Per-session spend is `bitrouter chat`'s cost line.
+
+`bitrouter status --json` gained `spend` additively; every pre-existing key is unchanged.
+
 `--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
 
-Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Bare `bitrouter status` is unchanged.
+Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Its per-row detail is what bare `bitrouter status` does not carry: `spend` there is the one rollup, not the rows behind it.
 
 The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter chat`'s cost line is the per-session figure.
 
@@ -336,7 +351,7 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 |---|---|---|
 | `complete` | every profile | Route a completion through BitRouter and return the full result |
 | `list_models` | every profile | List models routable through BitRouter |
-| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) and, on the cloud profile, the credit balance. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
+| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
 | `route_preview` | stdio + local | How a model/prompt *would* route — provider chain, policy decision, cost estimate — without sending anything upstream |
 | `skills_search` | `--backend skills` | Search installed skills by name/description |
 | `skills_get` | `--backend skills` | Fetch one skill's frontmatter + body |
@@ -352,9 +367,11 @@ JSON-RPC methods plus `resources/list` / `resources/read` over the skill files,
 for hosts that consume the extension rather than the tool pair.
 
 On stdio + local, successful `complete` results carry a second content item
-with today's spend, read from the local metering database. `status` no longer
-carries one: it returns structured content typed by the shared report, which
-leaves no room for a free-text footer.
+with today's spend, read from the local metering database. `status` carries no
+such footer and needs none: it returns the same spend as **typed structured
+content** under `spend`, which is strictly richer — `unpriced` and a remaining
+cap have no room in a one-line footer. Both read the same metering database, so
+the two tools cannot disagree about what has been spent.
 
 ### `bitrouter mcp install`
 

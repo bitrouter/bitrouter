@@ -33,7 +33,7 @@ held there by a guard test in `apps/bitrouter`. See
 |------|----------|-------------|
 | `complete` | all | Route a completion through BitRouter and return the full result |
 | `list_models` | all | List models routable through BitRouter |
-| `status` | stdio + local, any cloud | Report BitRouter status: liveness (pid, listen, models, providers, control socket) and, on a metered deployment, the credit balance. Returns the shared `actions::status::StatusReport`, so the tool advertises an `output_schema` and a stopped daemon is `running: false` rather than a tool error |
+| `status` | stdio + local, any cloud | Report BitRouter status: liveness (pid, listen, models, providers, control socket) plus the spend position — `spend.spent` (money gone, a locally metered estimate whose `unpriced` count says how partial it is) on any deployment, `spend.limit` (money left) where a cap exists. Returns the shared `actions::status::StatusReport`, so the tool advertises an `output_schema` and a stopped daemon is `running: false` rather than a tool error |
 | `route_preview` | stdio + local | Preview how a model/prompt would route (provider chain, policy decision, cost) |
 | `skills_search` | stdio + skills | Search installed BitRouter skills by name/description |
 | `skills_get` | stdio + skills | Fetch a skill's frontmatter + body |

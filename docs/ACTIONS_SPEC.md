@@ -15,8 +15,14 @@ above each. The corrections: the guard test cannot live in the crate (§5),
 `output_schema` must be optional and every tool needs a row from day one (§3,
 §6 phase 1), `providers[]` needed a producer (§6 phase 1), and phase 0's interim
 `currency` fix does not survive phase 1 (§6 phase 0).
-[D2](#d2--the-cloud-profile) was implemented on its recommendation but is **not
-signed off**.
+
+**Follow-up (2026-09-04), same branch.** [D2](#d2--the-cloud-profile) was
+implemented on its recommendation, reviewed, and **decided differently**:
+`credits: Option<Credits>` is replaced by a universal `spend` position that
+every deployment fills. That resolves the cost-footer regression as a side
+effect — the footer's content returns as typed data rather than a prose line —
+and closes the surface disagreement where only the cloud profile ever populated
+the field. D2 and §6 phase 1 are rewritten below.
 
 BitRouter answers the same five questions — *what models can I route? how would
 this route? is it up? what skills do I have? run this completion* — through two
@@ -250,7 +256,7 @@ The row with *zero* overlapping fields is the cheapest place to prove the
 mechanism.
 
 - `actions/status.rs` in the crate: `StatusReport { running, pid?, listen?,
-  models?, providers[], socket?, credits? }` + `StatusQuery` port.
+  models?, providers[], socket?, spend? }` + `StatusQuery` port.
 - App-side `actions::status` implements it over the control socket — the CLI's
   existing logic, moved, not rewritten.
 - MCP `status` returns `Json<StatusReport>`; a stopped daemon is
@@ -260,7 +266,7 @@ mechanism.
 - Deletes: `Backend::status`, `StatusInfo`, `ProviderStatus`, and the
   `/v1/models`-as-health-check.
 
-`credits` is where the cloud profile's balance goes; see [D2](#d2--the-cloud-profile).
+`spend` is where the money question goes; see [D2](#d2--the-cloud-profile).
 
 **[corrected post-implementation]** Three things this phase got wrong, and two
 consequences it did not predict:
@@ -280,16 +286,21 @@ consequences it did not predict:
   `serve_http_on(Arc<dyn Backend>, …)` is pinned by `multitenant_http.rs`, so
   nothing outside the backend can reach the builder there.
   `Backend::status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>` bridges
-  it — wiring, not logic: `CloudBackend` hands itself over (credits, caller's
+  it — wiring, not logic: `CloudBackend` hands itself over (the remaining
+  credit, read with the caller's
   bearer), `LocalBackend` returns `None`. This leaves `impl StatusQuery for
   CloudBackend` crate-side, a real deviation from rule 2 of §3. It is consistent
   with `complete`/`list_models` still being reqwest there, and it closes when
   `complete` is port-ified.
-- **Regression: `status` loses the cost footer.** `Json<T>` produces structured
-  content with no room for a second free-text block, so the spend line no longer
-  rides along (`complete` keeps its). Recovering it means an explicit
-  `#[tool(output_schema = …)]` with a hand-built `CallToolResult`. Documented in
-  `docs/CLI.md`, the skill, and the code rather than left silent.
+- **~~Regression: `status` loses the cost footer.~~ Resolved by the spend
+  reshape.** `Json<T>` produces structured content with no room for a second
+  free-text block, so the prose spend line stopped riding along (`complete`
+  keeps its). The follow-up makes that a non-issue rather than something to
+  recover: the footer's *content* is now `StatusReport::spend`, typed instead of
+  prose, and strictly richer — `unpriced` and a remaining cap have no room in a
+  one-sentence footer. No `#[tool(output_schema = …)]` with a hand-built
+  `CallToolResult` is needed. `docs/CLI.md`, the skill, and the code comment all
+  say this now.
 - **Regression: HTTP + local loses `status` entirely.** That path *was* the fake
   `/v1/models` check; nothing can replace it from a `--local-url` client, which
   has no control socket. Documented in the same three places.
@@ -412,6 +423,9 @@ multi-tenant HTTP.
 
 ## 9. Open decisions
 
+D1, D3 and D4 carry recommendations and await sign-off. **D2 is decided** — see
+its own note.
+
 ### D1 — does `bitrouter route --json` get to change shape?
 
 Phase 3 renames `model` → `requested_model` and `chain[].protocol` →
@@ -423,6 +437,11 @@ keys are exactly the drift this spec exists to remove.
 
 ### D2 — the cloud profile
 
+> **Decided (human sign-off, 2026-09-04): a universal spend position.** No
+> longer a recommendation. The original reasoning is kept below; the decision
+> that overrode it follows it. The anchor keeps its name so the links above
+> still resolve.
+
 `StatusInfo::Cloud` returns a credit balance, and #863 §22 has already flagged
 "should the HTTP/cloud profile live in OSS at all" as open. Phase 1 needs an
 answer only to the narrow question: does `StatusReport` carry an optional
@@ -430,6 +449,75 @@ answer only to the narrow question: does `StatusReport` carry an optional
 one report with `credits: Option<Credits>`** — an agent asking "am I OK to spend"
 should not need to know which deployment it is talking to. If #863 moves the
 cloud profile out, the field goes with it.
+
+**[corrected post-implementation] — decided: one report with a universal spend
+position.** Not `credits: Option<Credits>`. The recommendation above got the
+*shape* right (one report, not two actions) and the *content* wrong, in a way
+only visible once built.
+
+`Credits` was field-for-field `GET /v1/billing/balance`. That models one
+deployment's billing flavour instead of the fact underneath it, and it fails the
+question it was named for twice over:
+
+- **A BYOK deployment could not answer it at all.** `credits` is prepaid cloud
+  balance; a local install pays its providers directly and has none. Yet
+  BitRouter *does* know that deployment's spend — `metering::store`'s
+  `spend_summary(TimeWindow)` is the same read `LocalCostFooter` already made.
+  "Am I OK to spend?" had a real local answer the report simply did not carry.
+- **The two surfaces disagreed.** `bitrouter status` never populated `credits`;
+  only the MCP tool's cloud profile did. That is exactly the drift this spec
+  exists to stop, and it slipped past the guard test — the guard pins the
+  *schema* both surfaces advertise, not which fields each one fills. Worth
+  stating plainly as a limit of the mechanism: a shared type stops the shapes
+  diverging, not the contents.
+
+The replacement is `spend: Option<Spend>` with two **independent** halves, each
+separately optional:
+
+```rust
+Spend  { currency, spent: Option<Spent>, limit: Option<SpendLimit> }
+Spent  { window, estimated_micro_usd, requests, unpriced }
+SpendLimit { balance_micro_usd, pending_micro_usd, remaining_micro_usd }
+```
+
+- `spent` is money already gone — universal, from the metering store.
+- `limit` is money left before a cap — only where a cap exists.
+
+The split is what lets both deployments be honest. The local store knows spend
+and no cap; the cloud balance endpoint knows the cap and *not* spend-to-date. A
+single flat block would have forced one of them to invent the half it cannot
+see. Local fills `spent`; cloud fills `limit`; neither fabricates the other.
+
+Three constraints the shape has to hold, all of them about not costing the user
+money:
+
+- **`unpriced` stays visible.** `SpendSummary` excludes rows without charge
+  evidence, because summing them would report a floor as a price. The local
+  figure is therefore a partial estimate — hence `estimated_micro_usd`, named so
+  the reader cannot miss it — and `unpriced` says how much of the window it does
+  not cover. A `SpendLimit` is an authoritative ledger. Both are carried
+  verbatim: nothing is averaged, rounded away, or hidden.
+- **Best-effort, never fatal.** `metering::reader::open_readonly` already returns
+  `Option`; an absent or unreadable database is `spend: None`, never a failed
+  `status`. `spend` also rides a *stopped* daemon, since what a past daemon spent
+  is on disk and stays true after it exits.
+- **`spend`, not `cost`.** `cost` is taken: `route_preview` returns
+  `estimated_cost`, the prospective per-token rate of a request not yet made.
+  `spend` is money already gone, and is the existing vocabulary in `metering/`.
+
+Two things this does **not** do. `spend` is *machine-wide* on the local path —
+`spend_summary` rolls up every caller, and `CallerAuth` is ignored there.
+Scoped reads exist in the store (`get_spend` per key,
+`spend_summary_for_launch`, `spend_summary_for_acp_session`), so closing it is
+attribution plumbing, not a new measurement; it is documented at the ignore site
+and deliberately deferred, because today's only local `status` surfaces (the CLI
+and stdio `mcp serve`) are single-tenant by construction. And a locally issued
+API key's `spend_limit_micro_usd` is a *second* kind of cap that would fit
+`SpendLimit`, but nothing reaches it from `status` today, so it is left
+unmodelled (CLAUDE.md 4) with the extension point noted in the type's doc.
+
+If #863 moves the cloud profile out, `limit` goes with it and `spent` stays —
+which is the point: the universal half does not depend on the deployment.
 
 ### D3 — invalid skills: marked, or hidden?
 

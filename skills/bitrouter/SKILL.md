@@ -38,7 +38,7 @@ before, most of these steps are already done.
 
 ```bash
 bitrouter --version          # not found -> step 2
-bitrouter status             # prints `running: no` when no daemon is reachable
+bitrouter status             # liveness + `spend`; `running: false` when nothing is reachable
 bitrouter providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
