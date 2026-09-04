@@ -107,8 +107,9 @@ struct Caps {
     backend: Option<Arc<dyn Backend>>,
     /// The `status` action's port. Separate from `backend` because the two
     /// answer different questions from different places: a local daemon's
-    /// liveness comes off the control socket (injected app-side), a metered
-    /// account's credits off the cloud backend itself.
+    /// liveness comes off the control socket and its spend off the local
+    /// metering database (both injected app-side), a metered account's
+    /// remaining credit off the cloud backend itself.
     status_query: Option<Arc<dyn StatusQuery>>,
     routing: Option<Arc<dyn RoutingQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
@@ -150,8 +151,8 @@ const CAPABILITIES: &[CapSpec] = &[
         router: BitrouterMcp::status_router,
         instructions: |_| {
             "`status` reports whether BitRouter is running (pid, listen address, \
-             routable models, providers, control socket) and, on a metered \
-             deployment, the credit balance."
+             routable models, providers, control socket) and the spend position: \
+             what has been spent, and what is left where a cap exists."
                 .to_string()
         },
     },
@@ -261,9 +262,11 @@ impl BitrouterMcp {
 impl BitrouterMcp {
     #[tool(
         description = "Report BitRouter status: whether it is running (pid, listen address, \
-                       routable models, providers, control socket) and, on a metered \
-                       deployment, the credit balance. A stopped daemon is `running: false`, \
-                       not an error.",
+                       routable models, providers, control socket) and the spend position \
+                       — `spend.spent` is what has already gone (a locally metered estimate; \
+                       read `spend.spent.unpriced` for the requests it could not price), and \
+                       `spend.limit` is what is left where a cap exists. A stopped daemon is \
+                       `running: false`, not an error.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -278,10 +281,13 @@ impl BitrouterMcp {
         let caller = caller_from_extensions(&ctx.extensions);
         // Deliberately *not* a `CallToolResult`: returning `Json<StatusReport>`
         // is what makes rmcp derive the tool's `output_schema` from the shared
-        // report type, which is the agreement `actions::ACTIONS` asserts. It
-        // also costs the spend footer — a second content block has nowhere to
-        // go beside structured content — so `complete` is now the only tool
-        // that carries one.
+        // report type, which is the agreement `actions::ACTIONS` asserts.
+        //
+        // Structured content leaves no room beside it for the free-text spend
+        // footer `complete` carries, and it does not need one: the footer's
+        // content is `StatusReport::spend`, typed rather than prose, and it is
+        // richer there — `unpriced` and the remaining cap have no line in a
+        // one-sentence footer.
         self.status_query()?
             .status(&caller)
             .await
@@ -797,7 +803,8 @@ fn build_http_router(
 /// The whole HTTP tool surface, in one function so a test can assert it.
 ///
 /// Completion, plus `status` only when the backend itself can answer it (the
-/// cloud account's credits, read with the caller's own bearer). Nothing else:
+/// cloud account's remaining credit, read with the caller's own bearer).
+/// Nothing else:
 /// the host-bound tools stay off this transport, per the invariant above.
 fn http_profile(backend: Arc<dyn Backend>) -> BitrouterMcp {
     let mut builder = BitrouterMcp::builder().completion(backend.clone());
@@ -886,8 +893,9 @@ fn malformed_inline_opener(
 }
 
 /// Serve `server` over stdio until the client disconnects. `cost_footer`, when
-/// given, annotates successful `complete` / `status` results with one spend
-/// line (the HTTP transport is multi-tenant and gets no footer).
+/// given, annotates successful `complete` results with one spend line (the
+/// HTTP transport is multi-tenant and gets no footer). `status` needs no
+/// footer: it reports the same spend as typed structured content.
 pub async fn serve_stdio(
     server: BitrouterMcp,
     cost_footer: Option<Arc<dyn CostFooter>>,
@@ -996,7 +1004,7 @@ pub fn build_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::status::Credits;
+    use crate::actions::status::{Spend, SpendLimit};
     use crate::backend::{BackendError, CallerAuth, CompleteResponse, ModelInfo, Usage};
 
     #[test]
@@ -1082,11 +1090,14 @@ mod tests {
     #[async_trait::async_trait]
     impl StatusQuery for StubBackend {
         async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
-            Ok(StatusReport::credited(Credits {
-                balance_micro_usd: 1,
-                pending_debits_micro_usd: 0,
-                available_micro_usd: 1,
+            Ok(StatusReport::metered(Spend {
                 currency: "USD".into(),
+                spent: None,
+                limit: Some(SpendLimit {
+                    balance_micro_usd: 1,
+                    pending_micro_usd: 0,
+                    remaining_micro_usd: 1,
+                }),
             }))
         }
     }
@@ -1274,7 +1285,7 @@ mod tests {
         #[async_trait::async_trait]
         impl StatusQuery for StoppedStatus {
             async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
-                Ok(StatusReport::stopped("/x.sock".into()))
+                Ok(StatusReport::stopped("/x.sock".into(), None))
             }
         }
         let report = StoppedStatus.status(&CallerAuth::default()).await;

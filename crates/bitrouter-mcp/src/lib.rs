@@ -90,8 +90,9 @@ pub struct ServeOptions {
     pub routing: Option<std::sync::Arc<dyn capabilities::routing::RoutingQuery>>,
     /// Optional `status` port. When unset, the backend's own
     /// [`status_port`](backend::Backend::status_port) is used — which is how
-    /// the cloud profile reports credits. The local profile has no such
-    /// fallback: only the embedding binary can read the control socket.
+    /// the cloud profile reports its remaining credit. The local profile has no
+    /// such fallback: only the embedding binary can read the control socket and
+    /// the metering database.
     pub status: Option<std::sync::Arc<dyn actions::status::StatusQuery>>,
 }
 

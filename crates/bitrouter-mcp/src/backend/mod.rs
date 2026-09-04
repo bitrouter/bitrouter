@@ -105,8 +105,9 @@ pub trait Backend: Send + Sync {
     /// This is wiring, not logic: it exists so the HTTP profile — which is
     /// assembled from an `Arc<dyn Backend>` and nothing else — can still serve
     /// `status` for the deployment whose status the backend genuinely knows
-    /// (the cloud account's credits). A local daemon's liveness is a
-    /// control-socket question, so `LocalBackend` returns `None` and the
-    /// embedding binary injects the real port instead.
+    /// (the cloud account's remaining credit). A local daemon's liveness is a
+    /// control-socket question and its spend a metering-database one, so
+    /// `LocalBackend` returns `None` and the embedding binary injects the real
+    /// port instead.
     fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>;
 }

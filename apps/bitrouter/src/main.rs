@@ -1476,7 +1476,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             if requests {
                 output.emit(&request_table(config.as_deref(), &socket).await?)?;
             } else {
-                output.emit(&status(&socket).await?)?;
+                output.emit(&status(config.as_deref(), &socket).await?)?;
             }
             Ok(())
         }
@@ -2251,10 +2251,10 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             // tool, never a failed `mcp serve`.
             let routing: Option<
                 std::sync::Arc<dyn bitrouter_mcp::capabilities::routing::RoutingQuery>,
-            > = match source {
-                Some(source) => match bitrouter::paths::load_config(&source).await {
+            > = match &source {
+                Some(source) => match bitrouter::paths::load_config(source).await {
                     Ok(cfg) => {
-                        let socket = resolve_client_socket_from(&source, None).await.ok();
+                        let socket = resolve_client_socket_from(source, None).await.ok();
                         Some(std::sync::Arc::new(
                             bitrouter::routing_preview::RoutingPreview::new(&cfg, socket),
                         ))
@@ -2265,13 +2265,18 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             };
             // `status` over the control socket, for the same stdio → local
             // pairing: only this process can read the socket, and only the
-            // socket knows the pid, the models count and the provider set. On
-            // any other profile the port stays unset and the backend's own
-            // `status_port` answers (the cloud account's credits).
+            // socket knows the pid, the models count and the provider set. It
+            // takes the same config source as the spend footer, so the tool
+            // reports the *same* metering database the footer reads — the
+            // whole point of putting spend in the report. On any other profile
+            // the port stays unset and the backend's own `status_port` answers
+            // (the cloud account's remaining credit).
             let status: Option<std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>> =
                 match local_stdio {
                     true => resolve_client_socket(None, None).await.ok().map(|socket| {
-                        std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(socket))
+                        std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
+                            socket, source,
+                        ))
                             as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
                     }),
                     false => None,
@@ -3254,15 +3259,20 @@ async fn reload(socket: &Path) -> Result<DaemonActionReport> {
 ///
 /// The probe itself is the shared `status` action
 /// ([`bitrouter::actions::status`]), so this leaf and the origin MCP server's
-/// `status` tool return the same report from the same code.
-async fn status(socket: &Path) -> Result<StatusReport> {
-    let report = bitrouter::actions::status::DaemonStatus::new(socket)
+/// `status` tool return the same report from the same code — including the
+/// `spend` block, which both surfaces fill from the same metering database.
+async fn status(config: Option<&Path>, socket: &Path) -> Result<StatusReport> {
+    // Best-effort: an unresolvable config costs the `spend` block, not the
+    // command. `--config` is honoured so `status -c other.yaml` reads the
+    // metering database that config points at, not the default home's.
+    let source = bitrouter::paths::resolve_config(config).ok();
+    let report = bitrouter::actions::status::DaemonStatus::new(socket, source.clone())
         .report()
         .await?;
     // #607 self-update nudge — emitted to stderr so stdout stays a pure JSON
     // result (`status 2>/dev/null | jq` must not see the nudge). CLI-only:
     // it is a prompt for the human at the terminal, not part of the answer.
-    if let Ok(source) = bitrouter::paths::resolve_config(None) {
+    if let Some(source) = source {
         bitrouter::update::maybe_nudge(source.home(), &bitrouter::style::Palette::for_stderr())
             .await;
     }
@@ -5764,7 +5774,7 @@ mod tests {
         #[async_trait::async_trait]
         impl StatusQuery for Stub {
             async fn status(&self, _: &CallerAuth) -> std::result::Result<StatusReport, ToolError> {
-                Ok(StatusReport::stopped("/stub.sock".into()))
+                Ok(StatusReport::stopped("/stub.sock".into(), None))
             }
         }
 

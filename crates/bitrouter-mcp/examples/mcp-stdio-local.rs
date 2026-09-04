@@ -25,7 +25,10 @@ struct FixtureStatus;
 #[async_trait::async_trait]
 impl StatusQuery for FixtureStatus {
     async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
-        Ok(StatusReport::stopped("/tmp/bitrouter.sock".into()))
+        // No spend either: a fixture has no metering database to read one
+        // from, and inventing a figure is the one thing a spend report may
+        // not do.
+        Ok(StatusReport::stopped("/tmp/bitrouter.sock".into(), None))
     }
 }
 

@@ -10,16 +10,15 @@ use super::{
     Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
     ModelsEnvelope, Usage,
 };
-use crate::actions::status::{Credits, StatusQuery, StatusReport};
+use crate::actions::status::{Spend, SpendLimit, StatusQuery, StatusReport};
 use crate::error::ToolError;
 
 /// Wire shape for `GET /v1/billing/balance`.
 ///
 /// Field-for-field the same shape as the CLI's
-/// `bitrouter::cloud::management::billing::BalanceResponse`, and as the
-/// [`Credits`] block of the shared status report. It is re-declared here only
-/// because this crate must not depend on `apps/bitrouter` (that edge would be
-/// a cycle).
+/// `bitrouter::cloud::management::billing::BalanceResponse`. It is re-declared
+/// here only because this crate must not depend on `apps/bitrouter` (that edge
+/// would be a cycle).
 #[derive(Debug, serde::Deserialize)]
 struct BillingBalanceResponse {
     /// Raw balance from the credit account (before pending debits).
@@ -183,6 +182,11 @@ impl StatusQuery for CloudBackend {
     /// There is no process, listen address or control socket to report — the
     /// deployment is somebody else's — so reaching the account at all is the
     /// liveness answer.
+    ///
+    /// Fills only the [`SpendLimit`] half of the spend position. The balance
+    /// endpoint is a ledger of what remains; it does not report spend-to-date,
+    /// and this crate has no metering database of its own to read one from, so
+    /// `spent` stays `None` rather than being invented.
     async fn status(&self, caller: &CallerAuth) -> Result<StatusReport, ToolError> {
         let bearer = self
             .resolve_bearer(caller)
@@ -207,11 +211,14 @@ impl StatusQuery for CloudBackend {
             .json()
             .await
             .map_err(|e| ToolError::new(BackendError::Decode(e.to_string()).to_string()))?;
-        Ok(StatusReport::credited(Credits {
-            balance_micro_usd: b.balance_micro_usd,
-            pending_debits_micro_usd: b.pending_debits_micro_usd,
-            available_micro_usd: b.available_micro_usd,
+        Ok(StatusReport::metered(Spend {
             currency: b.currency,
+            spent: None,
+            limit: Some(SpendLimit {
+                balance_micro_usd: b.balance_micro_usd,
+                pending_micro_usd: b.pending_debits_micro_usd,
+                remaining_micro_usd: b.available_micro_usd,
+            }),
         }))
     }
 }
@@ -258,12 +265,18 @@ mod tests {
             .expect("status");
         assert!(report.running);
         assert_eq!(
-            report.credits,
-            Some(Credits {
-                balance_micro_usd: 5_000_000,
-                pending_debits_micro_usd: 769_000,
-                available_micro_usd: 4_231_000,
+            report.spend,
+            Some(Spend {
                 currency: "USD".into(),
+                // A balance endpoint is a ledger of what remains; it knows
+                // nothing of spend-to-date, and the cloud path must not
+                // invent a figure for the half it cannot see.
+                spent: None,
+                limit: Some(SpendLimit {
+                    balance_micro_usd: 5_000_000,
+                    pending_micro_usd: 769_000,
+                    remaining_micro_usd: 4_231_000,
+                }),
             })
         );
     }

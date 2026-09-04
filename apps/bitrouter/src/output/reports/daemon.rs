@@ -114,6 +114,9 @@ impl CliReport for StatusReport {
             if let Some(socket) = &self.socket {
                 h.field("socket", socket)?;
             }
+            // Spend outlives the daemon: what a past daemon spent is on disk
+            // and stays true after it exits, so it is shown here too.
+            render_spend(self.spend.as_ref(), h)?;
             return h.note("Run `bitrouter start` to launch the daemon.");
         }
         h.status_block(Health::Up, "bitrouter is running")?;
@@ -132,21 +135,52 @@ impl CliReport for StatusReport {
         if let Some(socket) = &self.socket {
             h.field("socket", socket)?;
         }
-        if let Some(credits) = &self.credits {
-            // Not `metering::fmt_usd`: that takes an unsigned amount and hard-
-            // codes a `$`, neither of which holds for a signed balance in a
-            // currency the account declares.
-            h.field(
-                "credits",
-                format!(
-                    "{:.2} {} available",
-                    credits.available_micro_usd as f64 / 1_000_000.0,
-                    credits.currency
-                ),
-            )?;
-        }
-        Ok(())
+        render_spend(self.spend.as_ref(), h)
     }
+}
+
+/// The `spend` block of [`StatusReport`], in the human view.
+///
+/// Two lines at most, because they are two independent facts: `spend` is money
+/// already gone, `credits` is what a capped deployment will still let you
+/// spend. A deployment that answers only one prints only one.
+///
+/// `unpriced` is never rounded away or averaged in. When some requests in the
+/// window carried no charge evidence the total is labelled a **floor** and the
+/// count is shown, because the one place being wrong about this costs the
+/// reader money is exactly here.
+fn render_spend(
+    spend: Option<&bitrouter_mcp::actions::status::Spend>,
+    h: &mut Human<'_>,
+) -> std::io::Result<()> {
+    let Some(spend) = spend else {
+        return Ok(());
+    };
+    if let Some(spent) = &spend.spent {
+        let amount = crate::metering::fmt_usd(spent.estimated_micro_usd);
+        let line = match spent.unpriced {
+            0 => format!("{amount} {} ({} requests)", spent.window, spent.requests),
+            unpriced => format!(
+                "{amount}+ {} ({} requests, {unpriced} unpriced — floor, not a total)",
+                spent.window, spent.requests
+            ),
+        };
+        h.field("spend", line)?;
+    }
+    if let Some(limit) = &spend.limit {
+        // Not `metering::fmt_usd`: that takes an unsigned amount and hard-
+        // codes a `$`, neither of which holds for a signed balance in a
+        // currency the account declares.
+        h.field(
+            "credits",
+            format!(
+                "{:.2} {} remaining",
+                limit.remaining_micro_usd as f64 / 1_000_000.0,
+                spend.currency
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 /// One hop of a resolved route chain: provider → upstream service id → protocol.
@@ -197,6 +231,22 @@ mod tests {
         serde_json::from_slice(&Output::new(Format::Json).render_to_vec(r)).unwrap()
     }
 
+    use bitrouter_mcp::actions::status::{Spend, SpendLimit, Spent};
+
+    /// What the local path builds: the `spent` half only.
+    fn local_spend(estimated_micro_usd: u64, requests: u64, unpriced: u64) -> Spend {
+        Spend {
+            currency: "USD".into(),
+            spent: Some(Spent {
+                window: "today".into(),
+                estimated_micro_usd,
+                requests,
+                unpriced,
+            }),
+            limit: None,
+        }
+    }
+
     #[test]
     fn status_running_json_and_human() {
         let r = StatusReport::running(
@@ -205,27 +255,97 @@ mod tests {
             42,
             vec!["anthropic".into(), "openai".into()],
             "/x.sock".into(),
+            Some(local_spend(1_230_000, 9, 0)),
         );
         assert_eq!(
             json(&r),
             serde_json::json!({
                 "running": true, "pid": 7, "listen": "127.0.0.1:4356", "models": 42,
-                "providers": ["anthropic", "openai"], "socket": "/x.sock"
+                "providers": ["anthropic", "openai"], "socket": "/x.sock",
+                "spend": {
+                    "currency": "USD",
+                    "spent": {
+                        "window": "today", "estimated_micro_usd": 1_230_000,
+                        "requests": 9, "unpriced": 0
+                    }
+                }
             })
         );
         let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
         assert!(h.contains("● bitrouter is running"), "{h:?}");
         assert!(h.contains("  models    42 routable"), "{h:?}");
         assert!(h.contains("anthropic, openai"), "{h:?}");
+        assert!(h.contains("$1.23 today (9 requests)"), "{h:?}");
+    }
+
+    /// The invariant that costs money to get wrong: a partial figure must
+    /// never read like a total. `unpriced` reaches JSON verbatim and the human
+    /// view marks the number a floor.
+    #[test]
+    fn status_spend_never_hides_unpriced_requests() {
+        let r = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            1,
+            vec!["openai".into()],
+            "/x.sock".into(),
+            Some(local_spend(500_000, 10, 4)),
+        );
+        assert_eq!(json(&r)["spend"]["spent"]["unpriced"], 4);
+        let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
+        assert!(h.contains("4 unpriced"), "{h:?}");
+        assert!(h.contains("floor, not a total"), "{h:?}");
+    }
+
+    /// Spend is not a liveness fact. The metering database records what a past
+    /// daemon spent and reads fine with nothing listening, so a stopped report
+    /// still answers "am I OK to spend?".
+    #[test]
+    fn status_stopped_still_reports_spend() {
+        let r = StatusReport::stopped("/x.sock".into(), Some(local_spend(0, 0, 0)));
+        assert_eq!(
+            json(&r),
+            serde_json::json!({
+                "running": false, "providers": [], "socket": "/x.sock",
+                "spend": {
+                    "currency": "USD",
+                    "spent": {
+                        "window": "today", "estimated_micro_usd": 0,
+                        "requests": 0, "unpriced": 0
+                    }
+                }
+            })
+        );
+        let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
+        assert!(h.contains("○ bitrouter is stopped"), "{h:?}");
+        assert!(h.contains("$0.00 today (0 requests)"), "{h:?}");
     }
 
     #[test]
     fn status_stopped_omits_optional_fields() {
-        let r = StatusReport::stopped("/x.sock".into());
+        let r = StatusReport::stopped("/x.sock".into(), None);
         assert_eq!(
             json(&r),
             serde_json::json!({"running": false, "providers": [], "socket": "/x.sock"})
         );
+    }
+
+    /// The cloud half: a cap with no spend-to-date. The two halves render
+    /// independently, so a report carrying only `limit` prints only `credits`.
+    #[test]
+    fn status_renders_a_limit_without_a_spent_figure() {
+        let r = StatusReport::metered(Spend {
+            currency: "USD".into(),
+            spent: None,
+            limit: Some(SpendLimit {
+                balance_micro_usd: 5_000_000,
+                pending_micro_usd: 769_000,
+                remaining_micro_usd: 4_231_000,
+            }),
+        });
+        let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
+        assert!(h.contains("credits   4.23 USD remaining"), "{h:?}");
+        assert!(!h.contains("spend"), "{h:?}");
     }
 
     /// The whole point of the shared type: what the CLI prints is what the MCP
@@ -239,6 +359,7 @@ mod tests {
             42,
             vec!["openai".into()],
             "/x.sock".into(),
+            Some(local_spend(42, 1, 1)),
         );
         let back: StatusReport = serde_json::from_value(json(&r)).expect("round trip");
         assert_eq!(serde_json::to_value(&back).unwrap(), json(&r));
