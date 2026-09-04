@@ -180,12 +180,13 @@ impl RouteAction {
         ))
     }
 
-    /// This call's config, with the built-in provider defaults applied so a
-    /// zero-config built-in still resolves.
+    /// This call's config, resolved the way the daemon resolves its own at
+    /// start-up (built-in defaults, then stored-credential activation), so a
+    /// zero-config built-in and a subscription-backed provider both resolve.
     async fn resolved_config(&self) -> Result<Config> {
-        let mut resolved = crate::paths::load_config(&self.source).await?;
-        bitrouter_providers::apply_builtin_defaults(&mut resolved);
-        Ok(resolved)
+        Ok(crate::commands::resolve_static(
+            crate::paths::load_config(&self.source).await?,
+        ))
     }
 
     /// The pricing table for the daemon path, which otherwise needs no config.

@@ -381,6 +381,17 @@ decision:
   - Config resolution happens **per call**, not at `mcp serve` start, so the
     stale-snapshot bug phase 3 has to fix for `route_preview` is not reproduced
     here.
+  - **[corrected at review, 2026-09-04]** The fallback now runs the
+    stored-credential activation too (`commands::resolve_static`: built-in
+    defaults, then `activate_stored_credential_providers`, the same two steps
+    `assemble.rs` runs). As merged it applied only the defaults, so with no
+    daemon running a subscription-backed provider was invisible — the "2
+    models versus 10" measurement above was partly the fallback's own
+    omission, not only the daemon's advantage. The same helper feeds
+    `route`'s config fallback and `spawn`'s Codex preflight, so all three
+    standalone answers resolve the config the way the daemon does. What the
+    live table still has over the projection is `reload`s and the start-up
+    state of the daemon that is actually serving `complete`.
 - **The report needed `resolved_via`.** `ModelsReport { models }` alone cannot
   say which of two materially different views answered, and "what a running
   router will accept" versus "what this config would accept" is exactly the

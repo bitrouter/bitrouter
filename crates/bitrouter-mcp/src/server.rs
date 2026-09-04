@@ -260,9 +260,9 @@ impl BitrouterMcp {
                        that can serve it, in fallback order — not just the first — so `providers` \
                        is the chain a request would walk. `resolved_via` is `live` when a running \
                        router answered and `config` when the list was projected from static \
-                       configuration (a provider whose credential is only resolved at daemon \
-                       start-up is missing from a `config` answer). Pass `provider` to list only \
-                       what one provider declares.",
+                       configuration (what the file says now, resolved the way a daemon would \
+                       at start-up — a running daemon's `reload`s are not reflected). Pass \
+                       `provider` to list only what one provider declares.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

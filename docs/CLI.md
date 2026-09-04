@@ -293,11 +293,13 @@ fallback chain, in order. Filter to one provider with `--provider`.
 
 Queries the running daemon if reachable and falls back to a local config parse,
 the same order `bitrouter route` uses: the live routing table reflects `reload`s
-and providers whose credential is resolved at daemon start-up (`claude-code`,
-`google-ai`) rather than declared in the config, which a static parse marks
-inactive and drops. `--json` reports which view answered as
-`resolved_via: "live" | "config"`, and the human view annotates a `config`
-listing.
+and what the daemon actually resolved at start-up, where a static parse is what
+the file says now. The parse is resolved the way the daemon resolves its own —
+built-in defaults, then providers whose credential lives in the OAuth store
+rather than the config (`claude-code`, `google-ai`) re-activated — so a
+subscription-backed provider is listed with no daemon running. `--json` reports
+which view answered as `resolved_via: "live" | "config"`, and the human view
+annotates a `config` listing.
 
 The config fallback probes each `auto_discover: true` provider's `/models`
 endpoint (bounded: 2s connect, 5s per request; failures leave that provider with
