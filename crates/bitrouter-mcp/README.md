@@ -27,10 +27,11 @@ that genuinely knows the answer for its own deployment hands its port over
 (`Backend::status_port` / `Backend::models_port`), which is how the HTTP profile
 keeps them.
 
-`status` and `list_models` are **actions**: one report type each
-(`actions::status::StatusReport`, `actions::models::ModelsReport`) shared by the
-MCP tool and the CLI leaf, listed in `actions::ACTIONS` and held there by a
-guard test in `apps/bitrouter`. See
+`status`, `list_models` and `route_preview` are **actions**: one report type
+each (`actions::status::StatusReport`, `actions::models::ModelsReport`,
+`actions::route::RouteReport`) shared by the MCP tool and the CLI leaf
+(`bitrouter status` / `models` / `route`), listed in `actions::ACTIONS` and
+held there by a guard test in `apps/bitrouter`. See
 [`docs/ACTIONS_SPEC.md`](../../docs/ACTIONS_SPEC.md).
 
 | Tool | Wired on | Description |

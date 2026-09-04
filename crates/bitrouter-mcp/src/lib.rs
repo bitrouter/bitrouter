@@ -1,6 +1,6 @@
 //! BitRouter's action contract, plus its MCP binding — exposing BitRouter's
-//! own tools (`complete` / `list_models` / `status`) over stdio and streamable
-//! HTTP.
+//! own tools (`complete` / `list_models` / `status` / `route_preview`, plus
+//! the skills pair) over stdio and streamable HTTP.
 //!
 //! Distinct from the MCP *gateway* in `bitrouter-sdk::mcp`, which proxies
 //! *upstream* MCP servers. This crate is the *origin* server for BitRouter's

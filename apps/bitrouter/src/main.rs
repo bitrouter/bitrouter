@@ -2251,68 +2251,58 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                     std::sync::Arc::new(LocalCostFooter { source })
                         as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
                 });
-            // `route_preview` reads this machine's routing table, so it rides
-            // the same pairing as the spend footer: stdio → local daemon. It
-            // prefers the live daemon's view (subscription providers, reloads)
-            // and falls back to static config when the control socket is
-            // unreachable — the same order, and now the same code, as
-            // `bitrouter route`.
+            // The three app-injected action ports below all ride the same
+            // pairing as the spend footer — stdio → local daemon — and all
+            // read the same control socket, resolved once here. Lenient on
+            // purpose (`resolve_client_socket`, not `_from`): a config file
+            // that fails to parse still yields the default socket path, so a
+            // daemon that is up keeps answering while the file on disk is
+            // broken. On any other profile every port stays unset and the
+            // backend's own `status_port` / `models_port` answer.
+            let socket = match local_stdio {
+                true => resolve_client_socket(None, None).await.ok(),
+                false => None,
+            };
+            // `route_preview` prefers the live daemon's view (subscription
+            // providers, reloads) and falls back to static config when the
+            // control socket is unreachable — the same order, and now the same
+            // code, as `bitrouter route`.
             //
             // The *source* is wired, not a parsed config: the action loads the
             // file on every call, so a long-lived server answers from whatever
             // `bitrouter.yaml` says now. Snapshotting it here is what used to
             // make the tool and the CLI disagree after an edit.
-            let routing: Option<std::sync::Arc<dyn bitrouter_mcp::actions::route::RouteQuery>> =
-                match &source {
-                    Some(source) => {
-                        let socket = resolve_client_socket_from(source, None).await.ok();
-                        Some(std::sync::Arc::new(
-                            bitrouter::actions::route::RouteAction::new(source.clone(), socket),
-                        ))
-                    }
-                    None => None,
-                };
-            // `list_models` on the same stdio → local pairing, and for a
-            // sharper reason than the others: the backend's own answer is a
-            // `GET /v1/models` that *needs the daemon up*, so an agent on a
-            // machine with a stopped daemon could not so much as ask what was
-            // routable. This port reads the daemon's live routing table over
-            // the control socket when one is there and projects the config
-            // when it is not, so the tool always answers — and the report says
-            // which view it is. On any other profile the port stays unset and
-            // the backend's own `models_port` answers.
-            let models: Option<std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>> =
-                match &source {
-                    Some(source) if local_stdio => {
-                        let socket = resolve_client_socket_from(source, None).await.ok();
-                        Some(
-                            std::sync::Arc::new(bitrouter::actions::models::RoutableModels::new(
-                                source.clone(),
-                                socket,
-                            ))
-                                as std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>,
-                        )
-                    }
-                    _ => None,
-                };
-            // `status` over the control socket, for the same stdio → local
-            // pairing: only this process can read the socket, and only the
-            // socket knows the pid, the models count and the provider set. It
-            // takes the same config source as the spend footer, so the tool
-            // reports the *same* metering database the footer reads — the
-            // whole point of putting spend in the report. On any other profile
-            // the port stays unset and the backend's own `status_port` answers
-            // (the cloud account's remaining credit).
-            let status: Option<std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>> =
-                match local_stdio {
-                    true => resolve_client_socket(None, None).await.ok().map(|socket| {
-                        std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
-                            socket, source,
-                        ))
-                            as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
-                    }),
-                    false => None,
-                };
+            let routing = source.as_ref().map(|source| {
+                std::sync::Arc::new(bitrouter::actions::route::RouteAction::new(
+                    source.clone(),
+                    socket.clone(),
+                )) as std::sync::Arc<dyn bitrouter_mcp::actions::route::RouteQuery>
+            });
+            // `list_models`, for a sharper reason than the others: the
+            // backend's own answer is a `GET /v1/models` that *needs the daemon
+            // up*, so an agent on a machine with a stopped daemon could not so
+            // much as ask what was routable. This port reads the daemon's live
+            // routing table over the control socket when one is there and
+            // projects the config when it is not, so the tool always answers —
+            // and the report says which view it is.
+            let models = source.as_ref().map(|source| {
+                std::sync::Arc::new(bitrouter::actions::models::RoutableModels::new(
+                    source.clone(),
+                    socket.clone(),
+                ))
+                    as std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>
+            });
+            // `status` over the control socket: only this process can read
+            // it, and only it knows the pid, the models count and the provider
+            // set. It takes the same config source as the spend footer, so the
+            // tool reports the *same* metering database the footer reads — the
+            // whole point of putting spend in the report.
+            let status = socket.map(|socket| {
+                std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
+                    socket, source,
+                ))
+                    as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
+            });
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -5871,10 +5861,13 @@ mod tests {
 
     /// The agreement itself: the tool advertises the row's schema, so a client
     /// reading `output_schema` and a `--json` consumer see one type. Rows with
-    /// no schema yet (the unmigrated actions) have no agreement to check.
+    /// no schema yet (the unmigrated actions) have no agreement to check —
+    /// but the test says how many it did check, so a table that had silently
+    /// lost every schema could not pass by skipping everything.
     #[test]
     fn every_actions_row_matches_its_tools_output_schema() {
         let tools = every_tool().tools();
+        let mut checked = Vec::new();
         for action in bitrouter_mcp::actions::ACTIONS {
             let Some(name) = action.mcp_tool else {
                 continue;
@@ -5891,7 +5884,12 @@ mod tests {
                 Some(&schema()),
                 "tool `{name}` does not advertise the schema its `ACTIONS` row claims"
             );
+            checked.push(name);
         }
+        assert!(
+            !checked.is_empty(),
+            "no `ACTIONS` row carries an output_schema, so this guard checked nothing"
+        );
     }
 
     #[test]

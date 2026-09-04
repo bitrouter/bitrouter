@@ -280,7 +280,8 @@ impl BitrouterMcp {
         // makes rmcp derive the tool's `output_schema` from the shared report
         // type, which is the agreement `actions::ACTIONS` asserts. No spend
         // footer either — listing models is not a spend event, unlike
-        // `complete`/`status` (intentional asymmetry).
+        // `complete` (intentional asymmetry; `status` carries spend as typed
+        // data instead).
         self.models_query()?
             .list_models(&caller)
             .await
@@ -1364,7 +1365,9 @@ mod tests {
         assert!(report.filtered(Some("nobody")).models.is_empty());
     }
 
-    /// Invariant: the HTTP profile is completion plus, at most, `status`. It
+    /// Invariant: the HTTP profile is completion plus, at most, `list_models`
+    /// and `status` — only what the backend itself can answer for its own
+    /// deployment. It
     /// must never carry the host-bound tools — `route_preview` resolves against
     /// the serving machine's own config and control socket, and the skills
     /// tools read its installed-skills root, so neither means anything to a
