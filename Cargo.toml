@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.27"
+version = "1.0.0-alpha.28"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,10 +30,10 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", default-features = false }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
-bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
-bitrouter-observe = { path = "crates/bitrouter-observe", version = "1.0.0-alpha.27", default-features = false }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.28", default-features = false }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.28" }
+bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.28" }
+bitrouter-observe = { path = "crates/bitrouter-observe", version = "1.0.0-alpha.28", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
