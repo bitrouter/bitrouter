@@ -21,7 +21,7 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
-bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.27" }
+bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.28" }
 chrono.workspace = true
 sha2.workspace = true
 hmac.workspace = true
@@ -57,7 +57,7 @@ semver = "1"
 # Everything drawn by this binary. There is deliberately no `ratatui` here:
 # the app may touch the terminal but may not draw on it, and the absence of the
 # dependency is what makes that a compile error rather than a convention.
-bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.27" }
+bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.28" }
 # Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
 # reading key events for `bitrouter chat`. Not drawing — see above.
 crossterm.workspace = true
