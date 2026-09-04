@@ -33,7 +33,9 @@ pub struct RouteInput {
 /// its own policy table upstream and returns only the resulting chain, so a
 /// live-daemon answer has no separate *static* decision to show — the absence
 /// of a decision there means "already applied", not "no policy configured".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub enum ResolvedVia {
     /// The running daemon resolved it, so the chain reflects `reload`s and
     /// subscription-backed providers that static config alone cannot resolve.
@@ -54,7 +56,9 @@ pub enum ResolvedVia {
 /// Deliberately three fields and no more. The resolved routing target also
 /// carries the provider's credential; naming only the routable identity is what
 /// keeps this report safe to hand to an agent.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ProviderHop {
     /// The configured provider id, e.g. `"openai"`.
     pub provider: String,
@@ -76,7 +80,9 @@ pub struct ProviderHop {
 /// The informative, secret-free subset of the router's own decision: enough for
 /// a reader to see *why* the effective model differs from the requested one,
 /// without the snapshot internals that carry no meaning outside the router.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct PolicySelection {
     /// The key the policy table matched the request on.
     pub request_key: String,
@@ -114,7 +120,9 @@ pub struct PolicySelection {
 /// A step function, not graduated margins: once a request's input token count
 /// exceeds [`Self::above_input_tokens`], this bracket's rates apply to the
 /// **whole** request.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ContextTierRates {
     /// Exclusive lower bound on input tokens. A request strictly above this
     /// enters the bracket.

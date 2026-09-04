@@ -431,6 +431,52 @@ mod tests {
         assert!(h.contains("policy → big"), "{h}");
     }
 
+    /// The whole point of the shared type: what `bitrouter route --json` prints
+    /// is what the `route_preview` tool returns, so the tool's structured
+    /// content deserializes straight back into the report the CLI emitted —
+    /// including the enum wire values, which a rename would silently break.
+    #[test]
+    fn route_json_round_trips_through_the_shared_type() {
+        use bitrouter_mcp::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
+        use bitrouter_sdk::language_model::types::ReasoningEffort;
+        for via in [
+            ResolvedVia::LiveDaemon,
+            ResolvedVia::Config,
+            ResolvedVia::ZeroConfig,
+        ] {
+            let r = RouteReport {
+                requested_model: "small".into(),
+                effective_model: "big".into(),
+                effective_effort: Some(ReasoningEffort::High),
+                resolved_via: via,
+                policy_decision: None,
+                provider_chain: vec![ProviderHop {
+                    provider: "demo".into(),
+                    service_id: "big".into(),
+                    api_protocol: "openai".into(),
+                }],
+                estimated_cost: Some(EstimatedCost::new(
+                    Some(1.0),
+                    Some(2.0),
+                    vec![ContextTierRates {
+                        above_input_tokens: 200_000,
+                        input_micro_usd_per_token: Some(2.0),
+                        output_micro_usd_per_token: Some(4.0),
+                    }],
+                )),
+            };
+            let emitted = json(&r);
+            let back: RouteReport = serde_json::from_value(emitted.clone()).expect("round trip");
+            assert_eq!(serde_json::to_value(&back).unwrap(), emitted);
+            // The context tiers survive the trip: dropping them would report a
+            // long-context model at its cheapest bracket.
+            assert_eq!(
+                emitted["estimated_cost"]["context_tiers"][0]["above_input_tokens"],
+                200_000
+            );
+        }
+    }
+
     #[test]
     fn daemon_action_simple_one_liner() {
         let r = DaemonActionReport::simple("stop", "stopped");

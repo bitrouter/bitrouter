@@ -158,7 +158,7 @@ wire contract are there — before reasoning about this surface.
 ### 6. Verify
 
 ```bash
-bitrouter route claude-sonnet-4-6   # resolve a model through the routing table
+bitrouter route claude-sonnet-4-6   # what would actually run: read `effective_model`
 bitrouter models                    # everything routable
 bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
 ```

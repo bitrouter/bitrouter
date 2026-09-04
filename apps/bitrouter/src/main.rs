@@ -2265,10 +2265,9 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 match &source {
                     Some(source) => {
                         let socket = resolve_client_socket_from(source, None).await.ok();
-                        Some(std::sync::Arc::new(bitrouter::actions::route::RouteAction::new(
-                            source.clone(),
-                            socket,
-                        )))
+                        Some(std::sync::Arc::new(
+                            bitrouter::actions::route::RouteAction::new(source.clone(), socket),
+                        ))
                     }
                     None => None,
                 };
@@ -5713,11 +5712,11 @@ mod tests {
     /// only when its port is `Some`, so a server built from any real wiring
     /// would hide exactly the tools a missing row would hide.
     fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
+        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
         use bitrouter_mcp::backend::{
             Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
         };
-        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
         use bitrouter_mcp::capabilities::skills::SkillsQuery;
         use bitrouter_mcp::error::ToolError;
 
