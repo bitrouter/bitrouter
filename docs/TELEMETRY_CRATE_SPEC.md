@@ -836,14 +836,20 @@ process-global, so a sibling test touching the callsite with no subscriber
 installed makes a "nothing was logged" assertion pass vacuously. The test's own
 doc now says exactly this.
 
-**One design objection is not resolved and is left open**, because it is a
-judgement call rather than a defect: `observe::schema`'s `span_def_for`,
-`value_type_matches` and `render_json` have no non-test callers anywhere —
-their only users are conformance tests in `bitrouter-telemetry` and the
-artifact staleness test here. Ungating them was justified by "a check a second
-renderer cannot call is not a contract", which collides with this document's
-own position that a second renderer is undecided. The alternative is a
-`testing` feature. Recorded so the next reader can take it up deliberately.
+**One design objection was left open and has since been resolved.** It said
+`observe::schema`'s `span_def_for`, `value_type_matches` and `render_json` have
+no non-test callers anywhere — their only users are conformance tests in
+`bitrouter-telemetry` and the artifact staleness test here — so ungating them
+on the grounds that "a check a second renderer cannot call is not a contract"
+collided with this document's own position that a second renderer is undecided.
+The `testing` feature it named as the alternative is what shipped: default-off,
+carrying no dependency (the module's only dep, `serde`, is unconditional), with
+the three functions and the private `literal_prefix` behind
+`#[cfg(any(test, feature = "testing"))]` and `bitrouter-telemetry` enabling it
+under `[dev-dependencies]`. The declaration itself stays ungated — that is the
+contract, and it is what a second renderer reads. `sdk-public-api` needed no
+change: it runs `--all-features`, so the gated items are still in the listing,
+and its sentinel `is_reserved_attribute_key` is ungated either way.
 
 ### Measured
 
@@ -852,7 +858,7 @@ own position that a second renderer is undecided. The alternative is a
 | `public-api-deps.txt` delta | **−`tracing_core`, −`tracing_subscriber`** — confirmed again after merging `main`. `+agent_client_protocol` is `main`'s, not this change's; see above. |
 | `cargo tree -p bitrouter-sdk --all-features -i opentelemetry` | fails — absent, as do the other six OTel names |
 | Lines moved / stayed | 5,594 / 1,275 (raw, ~42% `#[cfg(test)]`) |
-| Tests | 2,893 passed, 0 failed, 11 skipped after merging `main` and applying the review fixes |
+| Tests | 2,927 passed, 0 failed, 11 skipped after merging `main` and applying both rounds of review fixes |
 | Guard, live | A config carrying `bitrouter-policy` (read), `bitrouter-guardrail` (typo) and `bitrouter-telemetry.otlp_endpoint` (dead sub-key) reports exactly the latter two, and `bitrouter-policy` is no longer falsely flagged |
 | `dist-helper` | reaches neither `axum` nor `opentelemetry`, and is back in `feature-isolation`'s main consumer loop. `acp` still links `axum` through the conductor — a known wart, see *As built*. |
 | `dist/schema/…json` | now key-sorted by construction, and **byte-identical with and without** the `serde_json/preserve_order`-bearing chain — verified by re-adding `acp` to `dist-helper` and regenerating. Previously its byte order was a function of unrelated crates' feature unification: dropping one feature reordered all 3,234 lines without changing a value. |

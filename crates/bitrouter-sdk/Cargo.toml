@@ -104,6 +104,16 @@ acp = [
     "tokio-util/compat",
 ]
 
+# Conformance helpers for renderers' test suites: `span_def_for`,
+# `value_type_matches` and `render_json`, which resolve an exported span to its
+# declaration, check an emitted value's type against the declared one, and
+# render the committed artifact. They have no production callers — a renderer
+# emits against the schema, it does not read it back — so they are gated rather
+# than shipped as public API nobody calls (CLAUDE.md rule 4). Carries no
+# dependency: `serde` is already unconditional. A renderer enables it under
+# `[dev-dependencies]`; `bitrouter-telemetry` is the one in this workspace.
+testing = []
+
 # NOTE: `acp` pulls `agent-client-protocol-conductor`, which reaches `axum`
 # non-optionally through `agent-client-protocol-trace-viewer`. So enabling
 # `acp` links an HTTP server, which a consumer wanting ACP routing should not

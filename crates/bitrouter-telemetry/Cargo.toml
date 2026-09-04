@@ -115,6 +115,12 @@ __otel-core = [
 ]
 
 [dev-dependencies]
+# The schema's conformance helpers (`span_def_for`, `value_type_matches`,
+# `render_json`) are behind the SDK's default-off `testing` feature: they have
+# no production callers, here or anywhere. This crate's conformance tests are
+# the beneficiary, so the feature is enabled here and nowhere else. It carries
+# no dependency of its own.
+bitrouter-sdk = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = [
     "sync",
     "rt",
