@@ -29,8 +29,6 @@ pub mod cli;
 pub mod format;
 pub mod root;
 
-pub(crate) use root::home_dir;
-
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

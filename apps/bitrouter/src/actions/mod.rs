@@ -10,4 +10,5 @@
 
 pub mod models;
 pub mod route;
+pub mod skills;
 pub mod status;

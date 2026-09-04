@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (MCP wire, SEP-2640):** the skills extension's `resources` field
+  now matches the specification the MCP Core Maintainers **accepted on
+  2026-09-03**. BitRouter previously implemented an earlier draft and emitted
+  entries a conforming host must refuse. Three changes:
+
+  ```jsonc
+  // before — a skill entry BitRouter published
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…" }
+    ]
+  }
+
+  // after
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…",
+        "size": 5120 }                 // new, REQUIRED on every entry
+    ]
+  }
+  ```
+
+  1. **`size` is required** on every `resources` entry — the file's raw byte
+     length. It lets a host budget a skill from the listing alone, and a read
+     whose length differs from `size` is now a verification failure *equivalent
+     to a digest mismatch*, whether or not the digest is computed.
+  2. **`resources` is required, and "dynamic" is a string marker.** The draft
+     let the key be omitted to mean "generated dynamically"; the accepted
+     specification requires the key and takes either the complete array or the
+     literal string `"dynamic"`. An entry with neither "is invalid, and hosts
+     MUST NOT load it". The gateway therefore no longer republishes an upstream
+     entry that omits `resources`; it skips it, as it already skipped other
+     malformed entries.
+  3. **Per-skill limits are fixed**: 512 `resources` entries and 16 MiB
+     (16,777,216 bytes) summed over `size`. BitRouter will not serve or
+     re-publish a skill exceeding either.
+
+  **Breaking (Rust API):** `bitrouter_sdk::mcp::skills::SkillResource` gains
+  `size: u64`, and `SkillEntry::resources` changes from
+  `Option<Vec<SkillResource>>` to the new `SkillResources` enum
+  (`Enumerated(Vec<SkillResource>)` | `Dynamic`).
+
+- **Breaking (CLI):** `bitrouter skills list --json` changes shape, and the
+  command sees more skills than it used to. `bitrouter skills list` and the MCP
+  `skills_search` tool are now one action over one report type.
+
+  ```jsonc
+  // before
+  { "skills": [{ "name": "alpha", "path": "/p/.claude/skills/alpha" }] }
+
+  // after
+  { "skills": [{
+      "name": "alpha",
+      "description": "What alpha does",          // new
+      "dir": "/p/.claude/skills/alpha",          // was `path`
+      "skill_md": "/p/.claude/skills/alpha/SKILL.md",  // new
+      "valid": true,                             // new
+      "problem": "…"                             // new, omitted when valid
+  }] }
+  ```
+
+  `path` meant the skill *directory* to the CLI and the *`SKILL.md` file* to the
+  MCP tool. Neither was wrong; sharing one key for both was, so both surfaces
+  now carry `dir` and `skill_md`.
+
+  Three behaviour fixes ride along, all from collapsing three discovery rules
+  over two roots into one:
+
+  - **All three conventional layouts are listed.** `bitrouter skills list` read
+    only `<root>/.claude/skills`, so a `./skills/foo` skill was invisible to it
+    while the agent could see it.
+  - **A skill that cannot be loaded is listed and explained**, with
+    `valid: false` and a `problem`, instead of being listed unmarked by the CLI
+    and dropped silently by the agent's surface. SEP-2640's `skills/list` still
+    publishes only the loadable ones, which the specification requires.
+  - **The MCP surfaces read the user-global root**, which only `-g` used to
+    reach. An agent no longer misses a skill because of where it was installed.
+
+- **Fixed (MCP):** a `bitrouter mcp install`-ed client now sees the skills
+  tools. `mcp install` writes `["mcp", "serve"]`, but the skills and SEP-2640
+  surfaces were wired only under `mcp serve --backend skills`, so an installed
+  client never saw a skill. Every **stdio** profile now carries them — the
+  identity argument that makes `--backend skills` stdio-only (the server is a
+  subprocess of the caller whose machine it is) holds identically for stdio
+  `mcp serve`. The multi-tenant HTTP profile is unchanged and still carries
+  neither.
+
 - **Breaking (CLI):** `bitrouter route --json` changes shape. `bitrouter route`
   and the MCP `route_preview` tool are now one action over one report type, and
   the report keeps `route_preview`'s richer vocabulary — it was the superset,

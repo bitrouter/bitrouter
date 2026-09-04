@@ -11,7 +11,8 @@ use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use crate::auth::{NewApiKey, db as auth_db, generate};
 use crate::daemon::RouteHop;
-use crate::output::reports::skills::{SkillEntry, SkillInitReport, SkillsListReport};
+use crate::output::reports::skills::SkillInitReport;
+use bitrouter_mcp::actions::skills::SkillsReport;
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Mirrors
 /// the zero-config in-memory default so a user who runs `init` and
@@ -1012,27 +1013,17 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
 // reads the installed-skills directory and scaffolds a `SKILL.md`. See
 // `crate::skills` for the reasoning.
 
-/// Which `.claude/skills` directory a command reads.
-fn skills_root(global: bool) -> Result<crate::skills::root::SkillsRoot> {
-    use crate::skills::root::SkillsRoot;
-    if global {
-        Ok(SkillsRoot::Global)
-    } else {
-        let cwd = std::env::current_dir().context("resolving the current directory")?;
-        Ok(SkillsRoot::Project { project_root: cwd })
-    }
-}
-
-/// `bitrouter skills list` — installed skills under the chosen root.
-pub fn skills_list(global: bool) -> Result<SkillsListReport> {
-    let skills = crate::skills::root::list_installed(&skills_root(global)?)?
-        .into_iter()
-        .map(|(name, path)| SkillEntry {
-            name,
-            path: path.display().to_string(),
-        })
-        .collect();
-    Ok(SkillsListReport { skills })
+/// `bitrouter skills list` — the skills under the chosen root.
+///
+/// One [action](crate::actions::skills), so this leaf and the origin MCP
+/// server's `skills_search` tool return the same report from the same walk. It
+/// gains two things the old single `read_dir` could not do: the `./skills/foo`
+/// and root-level layouts, and a `problem` on any skill that cannot actually be
+/// loaded.
+pub fn skills_list(global: bool) -> Result<SkillsReport> {
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    let roots = crate::skills::root::SkillsRoot::cli_scope(global, cwd)?;
+    Ok(crate::actions::skills::InstalledSkills::new(roots).report())
 }
 
 /// `bitrouter skills init` — scaffold a SKILL.md.

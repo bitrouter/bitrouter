@@ -1235,10 +1235,11 @@ mod tests {
                 "uri": uri,
                 "frontmatter": {"name": name, "description": "d"},
                 "resources": [
-                    {"uri": uri, "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                    {"uri": uri, "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 3871},
                     {"uri": format!("{}/examples/email.md",
                         uri.strip_suffix("/SKILL.md").unwrap_or(uri)),
-                     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+                     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                     "size": 962}
                 ]
             }]
         })
@@ -1369,7 +1370,7 @@ mod tests {
             serde_json::json!({"skill": {
                 "uri": "skill://refunds/SKILL.md",
                 "frontmatter": {"name": "refunds", "description": "d"},
-                "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+                "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 3871}]
             }}),
         );
         let exec = AggregatingExecutor::new(Arc::new(inner));

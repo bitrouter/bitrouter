@@ -385,18 +385,29 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 | `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bitrouter models --provider` does. Returns the same report type as `bitrouter models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
 | `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
 | `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bitrouter route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
-| `skills_search` | `--backend skills` | Search installed skills by name/description |
-| `skills_get` | `--backend skills` | Fetch one skill's frontmatter + body |
+| `skills_search` | every **stdio** profile | Every skill on this machine, optionally narrowed by `query`. Returns the same report type as `bitrouter skills list`, advertised as the tool's `output_schema`. Reads the project *and* user-global roots, and marks any skill it found but cannot serve with `valid: false` plus a `problem` |
+| `skills_get` | every **stdio** profile | One skill's frontmatter metadata and `SKILL.md` body |
 
-Only wired capabilities register their tools, so the two profiles are disjoint
-by construction: an HTTP client never sees `route_preview` or the skills tools
+Only wired capabilities register their tools, so the profiles stay disjoint by
+construction: an HTTP client never sees `route_preview` or the skills tools
 (both read the serving machine's own routing table and skill library, which has
-no meaning on a multi-tenant transport), and `--backend skills` carries only the
-skills pair.
+no meaning on a multi-tenant transport).
 
-`--backend skills` additionally serves SEP-2640's `skills/list` / `skills/get`
-JSON-RPC methods plus `resources/list` / `resources/read` over the skill files,
-for hosts that consume the extension rather than the tool pair.
+The skills tools ride the **transport**, not the backend: a stdio server is a
+subprocess of the caller whose machine it is, which is the same argument that
+makes `--backend skills` stdio-only. So a `bitrouter mcp install`-ed client —
+which launches `bitrouter mcp serve` — sees skills too; before, only
+`--backend skills` did, and an installed client never saw one.
+`--backend skills` survives as the narrow gateway-subprocess profile that
+carries *nothing else*.
+
+Every stdio profile also serves SEP-2640's `skills/list` / `skills/get` JSON-RPC
+methods plus `resources/list` / `resources/read` over the skill files, for hosts
+that consume the extension rather than the tool pair. `skills/list` publishes
+only the skills that are actually loadable; `skills_search` and
+`bitrouter skills list` show the rest, marked, so an author can see why a skill
+on disk is unusable. Each published entry carries a complete `resources`
+manifest with a `digest` and a byte `size` per file.
 
 On stdio + local, successful `complete` results carry a second content item
 with today's spend, read from the local metering database. `status` carries no
@@ -1113,7 +1124,8 @@ Claude Code / Codex plugin marketplaces. BitRouter is a skills *server* and
 *gateway*, not an installer: see `docs/SKILLS_MCP_SPEC.md` §2.
 
 The `add`, `remove`, `find`, and `update` verbs were removed for that reason.
-To serve installed skills over MCP, see `bitrouter mcp serve --backend skills`.
+To serve installed skills over MCP, see `bitrouter mcp serve` (every stdio
+profile carries them) or the narrower `--backend skills`.
 
 ### `bitrouter skills list`
 
@@ -1121,8 +1133,23 @@ To serve installed skills over MCP, see `bitrouter mcp serve --backend skills`.
 bitrouter skills list [-g|--global]
 ```
 
-Prints installed skills (name + path) from `./.claude/skills/`, or
-`~/.claude/skills/` with `-g`.
+Prints the skills under the project root, or under `~/.claude/` with `-g`. Each
+row carries the skill's `name`, `description`, its directory (`dir`) and its
+`skill_md`, plus `valid` and — when it is not — a `problem` saying why.
+
+Discovery covers all three conventional layouts of the chosen root:
+`<root>/SKILL.md`, `<root>/skills/<name>/`, and `<root>/.claude/skills/<name>/`.
+It used to read only the last, so a `./skills/foo` skill was invisible here while
+the agent could see it.
+
+A skill whose frontmatter does not parse, whose directory name does not match
+`frontmatter.name`, or whose name/description falls outside the Agent Skills
+bounds is listed with `valid: false` and the reason. It is *not* served over
+SEP-2640's `skills/list`, which requires an entry a host can verify — so this
+listing is where you find out why a skill you wrote is not loading.
+
+This is the same report the `skills_search` MCP tool returns, so
+`--json` here and that tool's structured content are the same bytes.
 
 ### `bitrouter skills init <name>`
 
