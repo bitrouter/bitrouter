@@ -58,7 +58,7 @@ impl DaemonStatus {
     /// able to tell "down" from "broken". Everything else (permission denied, a
     /// malformed response, a daemon answering something other than `Status`) is
     /// a real failure and propagates. The spend read never propagates anything:
-    /// see [`local_spend`].
+    /// see `local_spend`.
     pub async fn report(&self) -> anyhow::Result<StatusReport> {
         report_over(&self.socket, self.source.as_ref()).await
     }
@@ -142,7 +142,7 @@ impl StatusQuery for DaemonStatus {
     /// `caller` is ignored, and that is a documented limitation rather than an
     /// oversight: the control socket is a single-machine channel that reaches
     /// no upstream, and the local spend rollup is machine-wide (see
-    /// [`local_spend`]). The parameter stays on the port because the cloud
+    /// `local_spend`). The parameter stays on the port because the cloud
     /// implementation of the same action does forward it, and because per-
     /// caller local attribution is where this implementation goes next.
     async fn status(&self, _caller: &CallerAuth) -> Result<StatusReport, ToolError> {

@@ -104,7 +104,7 @@ impl CliReport for DaemonActionReport {
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
-/// [`bitrouter_mcp::actions::status::StatusReport`](StatusReport): the `status`
+/// [`bitrouter_mcp::actions::status::StatusReport`]: the `status`
 /// tool returns the same type, so `bitrouter status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
