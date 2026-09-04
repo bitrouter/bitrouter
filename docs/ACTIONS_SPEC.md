@@ -1,9 +1,22 @@
 # Spec: one actions table — stopping CLI, MCP, and TUI from drifting apart
 
-Status: **proposed, for review** · Author: Claude (with Spikel) · Date: 2026-09-04
+Status: **phases 0–1 implemented; 2–5 proposed** · Author: Claude (with Spikel)
+· Date: 2026-09-04
 · Issue: [#868](https://github.com/bitrouter/bitrouter/issues/868)
 · Refs: [#863](https://github.com/bitrouter/bitrouter/issues/863) (open),
 [#866](https://github.com/bitrouter/bitrouter/pull/866) (open)
+
+**Implementation note (2026-09-04).** Phases 0 and 1 landed on
+`claude/actions-table-phase01` (`023e219d`, `b72787a5`). Building them corrected
+four things this spec had wrong and surfaced two regressions it had not
+anticipated. All six are folded in below, marked
+**[corrected post-implementation]**, with the original reasoning left readable
+above each. The corrections: the guard test cannot live in the crate (§5),
+`output_schema` must be optional and every tool needs a row from day one (§3,
+§6 phase 1), `providers[]` needed a producer (§6 phase 1), and phase 0's interim
+`currency` fix does not survive phase 1 (§6 phase 0).
+[D2](#d2--the-cloud-profile) was implemented on its recommendation but is **not
+signed off**.
 
 BitRouter answers the same five questions — *what models can I route? how would
 this route? is it up? what skills do I have? run this completion* — through two
@@ -131,8 +144,9 @@ pub struct ActionSpec {
     pub cli_leaf: Option<&'static str>,
     /// The MCP tool that answers it, or None.
     pub mcp_tool: Option<&'static str>,
-    /// The shared report's JSON Schema — the thing that must not drift.
-    pub output_schema: fn() -> rmcp::model::JsonObject,
+    /// The shared report's JSON Schema — the thing that must not drift — or
+    /// `None` while the action has not been migrated onto a shared type yet.
+    pub output_schema: Option<fn() -> rmcp::model::JsonObject>,
 }
 ```
 
@@ -141,6 +155,16 @@ rather than documentary: the guard test compares the MCP tool's advertised
 `output_schema` against `(row.output_schema)()`, and a CLI golden test validates
 emitted JSON against the same schema. A row cannot claim agreement it does not
 have.
+
+**[corrected post-implementation]** `output_schema` is `Option`, not a bare
+function pointer. The original shape assumed a row appears only as its action is
+unified — but §5 requires *every tool* to have a row, so on day one the table
+must already list `complete`, `list_models`, `route_preview`, `skills_search`
+and `skills_get`, none of which has a shared type yet. `None` is the migration
+backlog, not an exemption: the row still has to exist, which is what stops a
+remotable action going uninventoried, but until a shared report replaces the two
+hand-written shapes there is no schema to hold the surfaces to. Each `None` is
+one of the phases below.
 
 ## 4. Where the shared types live
 
@@ -183,8 +207,18 @@ The asserted containments are:
 
 The wired-builder requirement is real work: `CAPABILITIES` registers routers
 only for wired capabilities, so the test needs a builder with every port filled
-by a stub. Doing that in `crates/bitrouter-mcp/tests/` also gives the crate its
-first test that reasons about the tool surface as a whole.
+by a stub.
+
+**[corrected post-implementation]** The guard **cannot** live in
+`crates/bitrouter-mcp/tests/`, as this section originally proposed. The
+clap-resolution assertion needs `Cli`, which is defined in
+`apps/bitrouter/src/main.rs` and is unreachable from another crate — or even
+from `apps/bitrouter/tests/`, since an integration test sees only the library.
+The guard therefore lives in `main.rs`'s own test module, and the crate exposes
+`BitrouterMcp::tools()` (public, documented as existing for this guard) so the
+app can enumerate the tool surface. The containments are unchanged; only their
+home moved. The HTTP-profile assertion (invariant 2) stays crate-side in
+`server.rs`, where it needs no clap.
 
 ## 6. Phases
 
@@ -199,6 +233,10 @@ report type"* **is** the framework, so it moves to phase 3.
   `bitrouter_sdk`-shaped fields or the app's `BalanceResponse` once phase 4
   makes it reachable. Interim: drop the duplicate struct's divergence by adding
   `currency`.
+  - **[corrected post-implementation]** That interim fix survives only as far as
+    phase 1, which deletes the struct outright. Both were done in one PR: phase 0
+    stays independently shippable, and adding `currency` made the field live (it
+    surfaced on `StatusInfo::Cloud`) rather than dead code.
 - Fix [`README.md:95`](../crates/bitrouter-mcp/README.md:95): point at
   `docs/CLI.md`'s new origin-server section, not a file that never existed.
 - Add a `bitrouter mcp serve` section to `docs/CLI.md`: transports, backends,
@@ -223,6 +261,38 @@ mechanism.
   `/v1/models`-as-health-check.
 
 `credits` is where the cloud profile's balance goes; see [D2](#d2--the-cloud-profile).
+
+**[corrected post-implementation]** Three things this phase got wrong, and two
+consequences it did not predict:
+
+- **Not "one row" — a row per tool, one *with a schema*.** "`ACTIONS` … with one
+  row" contradicts §5's "every MCP tool has a row": with a single row the guard
+  fails immediately against the five other registered tools. All six rows land
+  here; only `status` carries a schema (see §3).
+- **`providers[]` had no producer.** Deleting the `/v1/models` health check —
+  this phase's own instruction — removes the only thing that ever built a
+  provider list, so the field would have been permanently empty: exactly the dead
+  surface invariant 5 forbids. `DaemonResponse::Status` was extended with
+  `providers` (`#[serde(default)]`, so the control-socket wire stays compatible),
+  derived from the `ModelInfo { id, providers }` list the daemon already walks to
+  count models. `bitrouter status` gains a real provider list as a side effect.
+- **The HTTP profile needed a way to keep `status`.**
+  `serve_http_on(Arc<dyn Backend>, …)` is pinned by `multitenant_http.rs`, so
+  nothing outside the backend can reach the builder there.
+  `Backend::status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>` bridges
+  it — wiring, not logic: `CloudBackend` hands itself over (credits, caller's
+  bearer), `LocalBackend` returns `None`. This leaves `impl StatusQuery for
+  CloudBackend` crate-side, a real deviation from rule 2 of §3. It is consistent
+  with `complete`/`list_models` still being reqwest there, and it closes when
+  `complete` is port-ified.
+- **Regression: `status` loses the cost footer.** `Json<T>` produces structured
+  content with no room for a second free-text block, so the spend line no longer
+  rides along (`complete` keeps its). Recovering it means an explicit
+  `#[tool(output_schema = …)]` with a hand-built `CallToolResult`. Documented in
+  `docs/CLI.md`, the skill, and the code rather than left silent.
+- **Regression: HTTP + local loses `status` entirely.** That path *was* the fake
+  `/v1/models` check; nothing can replace it from a `--local-url` client, which
+  has no control socket. Documented in the same three places.
 
 ### Phase 2 — `list_models`
 
@@ -377,9 +447,11 @@ routing-table generation only if it shows up.**
 
 ## 10. Acceptance
 
-- `ACTIONS` exists with a row per shared action; the guard test fails when a tool
-  is added without one, when a row's leaf is renamed, and when a tool's
-  `output_schema` diverges from its row's.
+- `ACTIONS` exists with a row per MCP tool; the guard test fails when a tool is
+  added without one, when a row's leaf is renamed, and when a tool's
+  `output_schema` diverges from its row's. Rows carrying `output_schema: None`
+  are the remaining phases' backlog. *(Met at phase 1; all three failure modes
+  were provoked and observed.)*
 - For every row with both surfaces: `bitrouter <leaf> --json` and the MCP tool's
   structured content deserialize into the **same** Rust type in a test that runs
   both.
