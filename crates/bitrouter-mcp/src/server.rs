@@ -249,7 +249,6 @@ impl BitrouterMcp {
         };
         Ok(serialize_tool_result(result, footer))
     }
-
 }
 
 // ── the `list_models` action (guarded on `self.caps.models_query`) ──
@@ -1041,8 +1040,8 @@ pub fn build_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::status::{Spend, SpendLimit};
     use crate::actions::models::ModelsSource;
+    use crate::actions::status::{Spend, SpendLimit};
     use crate::backend::{BackendError, CallerAuth, CompleteResponse, Usage};
     use bitrouter_sdk::language_model::routing::ModelInfo;
 

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::language_model::routing::ModelInfo;
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use crate::auth::{NewApiKey, db as auth_db, generate};
@@ -184,30 +185,24 @@ pub async fn key_sign(
     })
 }
 
-/// `bitrouter models [--provider <id>]` — list routable models, optionally
-/// filtered to those a given provider declares.
-pub async fn list_models(
-    config: &Config,
-    provider_filter: Option<&str>,
-) -> Result<Vec<(String, Vec<String>)>> {
+/// The routable catalog a config alone can describe — the fallback the
+/// `list_models` action uses when no daemon answers.
+///
+/// Unfiltered by design: `bitrouter models --provider` and the MCP tool's
+/// `provider` argument are one filter applied to the shared report
+/// (`ModelsReport::filtered`), so neither surface can narrow it its own way.
+///
+/// **Does network I/O.** `discover_models` probes each `auto_discover: true`
+/// provider's `/models` endpoint, which is what turns a zero-config install
+/// from "empty" into a useful catalog. Per-request timeouts bound it (2s
+/// connect, 5s total) and failures leave the provider with no models rather
+/// than bubbling an error, but a caller on a hot path should prefer the
+/// daemon: see `crate::actions::models`.
+pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
     let mut resolved = config.clone();
     bitrouter_providers::apply_builtin_defaults(&mut resolved);
-    // Best-effort `/models` discovery for any provider with
-    // `auto_discover: true`. Zero-config built-ins set the flag, so
-    // this turns `bitrouter models` from "empty" into a useful catalog
-    // when the user has the API key set. Failures log and leave the
-    // provider with no models — no error bubbles to the user.
     bitrouter_sdk::config::discover_models(&mut resolved).await;
-    let table = ConfigRoutingTable::from_config(resolved);
-    Ok(table
-        .list_models()
-        .into_iter()
-        .filter(|m| match provider_filter {
-            Some(p) => m.providers.iter().any(|x| x == p),
-            None => true,
-        })
-        .map(|m| (m.id, m.providers))
-        .collect())
+    Ok(ConfigRoutingTable::from_config(resolved).list_models())
 }
 
 /// `bitrouter route <model>` — resolve a model name through the routing table,
@@ -1466,16 +1461,20 @@ providers:
         bitrouter_sdk::config::parse_with(yaml, |_| None).unwrap()
     }
 
+    /// The config projection is unfiltered and keeps every provider of every
+    /// model — `shared` is declared by both, and both must survive. Filtering
+    /// is the shared report's job (`ModelsReport::filtered`), so that one
+    /// filter serves `bitrouter models --provider` and the MCP tool alike.
     #[tokio::test]
-    async fn list_models_filters_by_provider() {
+    async fn list_models_keeps_every_provider_of_a_model() {
         let cfg = sample_config();
-        let all = list_models(&cfg, None).await.unwrap();
+        let all = list_models(&cfg).await.unwrap();
         assert_eq!(all.len(), 2); // gpt-5, shared
-        let openai_only = list_models(&cfg, Some("openai")).await.unwrap();
-        assert_eq!(openai_only.len(), 2); // gpt-5 + shared (openai declares both)
-        let anthropic_only = list_models(&cfg, Some("anthropic")).await.unwrap();
-        assert_eq!(anthropic_only.len(), 1); // only `shared`
-        assert_eq!(anthropic_only[0].0, "shared");
+        let shared = all.iter().find(|m| m.id == "shared").expect("shared");
+        assert_eq!(
+            shared.providers,
+            vec!["anthropic".to_string(), "openai".to_string()]
+        );
     }
 
     #[tokio::test]

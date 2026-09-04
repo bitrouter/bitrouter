@@ -40,7 +40,9 @@ pub enum ModelsSource {
 }
 
 /// Every model BitRouter can route, each with the providers that can serve it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ModelsReport {
     /// The routable models. Each carries **every** provider that declares it,
     /// in fallback order — not just the first.
@@ -75,7 +77,8 @@ impl ModelsReport {
     /// the drift this action exists to remove.
     pub fn filtered(mut self, provider: Option<&str>) -> Self {
         if let Some(provider) = provider {
-            self.models.retain(|m| m.providers.iter().any(|p| p == provider));
+            self.models
+                .retain(|m| m.providers.iter().any(|p| p == provider));
         }
         self
     }

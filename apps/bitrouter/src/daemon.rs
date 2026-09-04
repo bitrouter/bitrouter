@@ -70,6 +70,15 @@ pub enum DaemonCommand {
     },
     /// Report daemon status.
     Status,
+    /// List every model the live routing table can route, each with the
+    /// providers that can serve it.
+    ///
+    /// Distinct from [`Self::Status`], which reports only the *count* and the
+    /// distinct provider set: this is the catalog itself, and it is what lets
+    /// `bitrouter models` and the MCP `list_models` tool answer with the
+    /// daemon's real view — subscription-backed providers and post-`reload`
+    /// state included — instead of a static config projection.
+    Models,
     /// Resolve a model name through the live routing table.
     Route {
         /// The model name to resolve.
@@ -159,6 +168,11 @@ pub enum DaemonResponse {
         /// failing the whole exchange.
         #[serde(default)]
         providers: Vec<String>,
+    },
+    /// The live routing table's catalog.
+    Models {
+        /// Every routable model, each with all the providers declaring it.
+        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
     },
     /// A resolved route chain.
     Route {
@@ -578,6 +592,15 @@ async fn dispatch(
                 providers,
             }
         }
+        DaemonCommand::Models => DaemonResponse::Models {
+            // The same read `Status` counts, returned whole. A daemon with no
+            // language-model pipeline routes nothing, which is an empty
+            // catalog rather than an error.
+            models: app
+                .language_model()
+                .map(|p| p.routing_table().list_models())
+                .unwrap_or_default(),
+        },
         DaemonCommand::AcpSessionSpend {
             api_principal,
             controller_instance_id,

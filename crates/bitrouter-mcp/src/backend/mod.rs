@@ -63,12 +63,10 @@ impl ModelsEnvelope {
     pub(super) fn into_models(self) -> Vec<bitrouter_sdk::language_model::routing::ModelInfo> {
         self.data
             .into_iter()
-            .map(
-                |m| bitrouter_sdk::language_model::routing::ModelInfo {
-                    id: m.id,
-                    providers: m.providers,
-                },
-            )
+            .map(|m| bitrouter_sdk::language_model::routing::ModelInfo {
+                id: m.id,
+                providers: m.providers,
+            })
             .collect()
     }
 }

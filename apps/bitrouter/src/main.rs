@@ -39,7 +39,7 @@ use bitrouter::output::reports::optimization::{
 };
 use bitrouter::output::reports::policy::PolicyReport;
 use bitrouter::output::reports::requests::{DaemonView, RequestsReport};
-use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
+use bitrouter::output::reports::routing::{ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
     ToolsStatusReport,
@@ -49,6 +49,7 @@ use bitrouter::output::reports::trajectory::{
     replay_report as trajectory_replay_report,
 };
 use bitrouter::output::{CliReport, Output};
+use bitrouter_mcp::actions::models::ModelsReport;
 use bitrouter_mcp::actions::status::StatusReport;
 use bitrouter_sdk::config;
 
@@ -2263,6 +2264,29 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 },
                 None => None,
             };
+            // `list_models` on the same stdio → local pairing, and for a
+            // sharper reason than the others: the backend's own answer is a
+            // `GET /v1/models` that *needs the daemon up*, so an agent on a
+            // machine with a stopped daemon could not so much as ask what was
+            // routable. This port reads the daemon's live routing table over
+            // the control socket when one is there and projects the config
+            // when it is not, so the tool always answers — and the report says
+            // which view it is. On any other profile the port stays unset and
+            // the backend's own `models_port` answers.
+            let models: Option<std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>> =
+                match &source {
+                    Some(source) if local_stdio => {
+                        let socket = resolve_client_socket_from(source, None).await.ok();
+                        Some(
+                            std::sync::Arc::new(bitrouter::actions::models::RoutableModels::new(
+                                source.clone(),
+                                socket,
+                            ))
+                                as std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>,
+                        )
+                    }
+                    _ => None,
+                };
             // `status` over the control socket, for the same stdio → local
             // pairing: only this process can read the socket, and only the
             // socket knows the pid, the models count and the provider set. It
@@ -2291,6 +2315,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 cost_footer,
                 routing,
                 status,
+                models,
             })
             .await
         }
@@ -3436,18 +3461,21 @@ async fn key(action: KeyAction) -> Result<KeySignReport> {
     }
 }
 
+/// `bitrouter models` — the CLI surface of the `list_models`
+/// [action](bitrouter::actions::models), so this leaf and the origin MCP
+/// server's `list_models` tool return the same report.
+///
+/// `--provider` narrows the shared report rather than the query, which is what
+/// keeps it the same filter the tool's `provider` argument applies.
 async fn models(
     source: &bitrouter::paths::ConfigSource,
     provider: Option<&str>,
 ) -> Result<ModelsReport> {
-    let cfg = bitrouter::paths::load_config(source).await?;
-    let models = commands::list_models(&cfg, provider).await?;
-    Ok(ModelsReport {
-        models: models
-            .into_iter()
-            .map(|(id, providers)| ModelRow { id, providers })
-            .collect(),
-    })
+    let socket = resolve_client_socket_from(source, None).await.ok();
+    let report = bitrouter::actions::models::RoutableModels::new(source.clone(), socket)
+        .report()
+        .await?;
+    Ok(report.filtered(provider))
 }
 
 async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
@@ -5741,9 +5769,10 @@ mod tests {
     /// only when its port is `Some`, so a server built from any real wiring
     /// would hide exactly the tools a missing row would hide.
     fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
+        use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
         use bitrouter_mcp::backend::{
-            Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
+            Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse,
         };
         use bitrouter_mcp::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
         use bitrouter_mcp::capabilities::skills::SkillsQuery;
@@ -5760,14 +5789,21 @@ mod tests {
             ) -> std::result::Result<CompleteResponse, BackendError> {
                 Err(BackendError::Transport("stub".into()))
             }
+            fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+                None
+            }
+            fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>> {
+                None
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ModelsQuery for Stub {
             async fn list_models(
                 &self,
                 _: &CallerAuth,
-            ) -> std::result::Result<Vec<ModelInfo>, BackendError> {
-                Ok(Vec::new())
-            }
-            fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
-                None
+            ) -> std::result::Result<ModelsReport, ToolError> {
+                Ok(ModelsReport::live(Vec::new()))
             }
         }
 
@@ -5800,6 +5836,7 @@ mod tests {
 
         bitrouter_mcp::server::BitrouterMcp::builder()
             .completion(Arc::new(Stub))
+            .models(Arc::new(Stub))
             .status(Arc::new(Stub))
             .routing(Arc::new(Stub))
             .skills(Arc::new(Stub))
