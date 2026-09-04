@@ -12,6 +12,6 @@
     "state_kind": "opening",
     "baseline_fingerprint": "opening",
     "confidence_min": 0.7,
-    "prediction": {"next_step_role": "orchestrate", "next_action_class": "reason_or_plan", "route_risk": "normal"}
+    "prediction": {"next_step_role": "orchestrate", "next_action_class": "reason_or_plan", "route_risk": "normal", "task_family": "agent_multi_step_planning", "progress_state": "opening"}
   }
 }

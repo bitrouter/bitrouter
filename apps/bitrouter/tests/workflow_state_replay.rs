@@ -18,6 +18,7 @@ use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
+use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
 use bitrouter::workflow_state::classifier_baseline::ClassifierBaselineManifest;
 use bitrouter::workflow_state::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
@@ -82,10 +83,33 @@ fn classifier_research_slices_have_a_frozen_manifest() {
     }
     assert_eq!(
         manifest.dataset_digest,
-        "sha256:73f79630e9d092d05c57fc9545001ca43a05626d8422b1148b28f1d9c30907c6"
+        "sha256:258286f7ff692a8d2eb4c661d7b136a0c710ae11eb475d3779240fdcf597c737"
     );
-    assert_eq!(manifest.current_predictor_exact_count, 6);
-    assert_eq!(manifest.current_predictor_mismatch_count, 4);
+    assert_eq!(manifest.current_predictor_exact_count, 1);
+    assert_eq!(manifest.current_predictor_mismatch_count, 9);
+}
+
+#[test]
+fn classifier_bakeoff_rejects_an_empty_research_set() {
+    let error = ClassifierBaselineManifest::from_fixtures(&[]).unwrap_err();
+    assert!(error.to_string().contains("at least one research fixture"));
+}
+
+#[test]
+fn classifier_bakeoff_emits_an_uncalibrated_scorecard_baseline() {
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let first = ClassifierBakeoffArtifact::build(&fixtures, None).unwrap();
+    let second = ClassifierBakeoffArtifact::build(&fixtures, None).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.report.total_count, 10);
+    assert_eq!(first.report.accepted_count, 1);
+    assert_eq!(first.report.task_family.exact_count, 2);
+    assert_eq!(first.report.next_step_role.exact_count, 6);
+    assert_eq!(first.report.progress_state.exact_count, 6);
+    assert_eq!(first.report.route_risk.exact_count, 9);
+    assert_eq!(first.report.all_heads_exact_count, 1);
+    assert!(first.report.calibration.is_none());
+    assert!(first.report.ood_detection.is_none());
 }
 
 #[test]
@@ -95,9 +119,12 @@ fn classifier_manifest_commits_every_wire_input_and_ignores_derived_prompt() {
         .into_iter()
         .find(|fixture| !fixture.research_slices.is_empty())
         .unwrap();
-    let original = ClassifierBaselineManifest::from_fixtures(std::slice::from_ref(&base))
-        .unwrap()
-        .dataset_digest;
+    let original_manifest =
+        ClassifierBaselineManifest::from_fixtures(std::slice::from_ref(&base)).unwrap();
+    let original = original_manifest.dataset_digest;
+    let original_input = original_manifest.evaluation_cases[0]
+        .input_projection_digest
+        .clone();
     let mut variants = Vec::new();
 
     let mut harness = base.clone();
@@ -119,24 +146,32 @@ fn classifier_manifest_commits_every_wire_input_and_ignores_derived_prompt() {
     variants.push(canonical_prompt);
     let mut derived_prompt = base.clone();
     derived_prompt.prompt.model.push_str("-changed");
+    let derived_manifest = ClassifierBaselineManifest::from_fixtures(&[derived_prompt]).unwrap();
+    assert_eq!(derived_manifest.dataset_digest, original);
     assert_eq!(
-        ClassifierBaselineManifest::from_fixtures(&[derived_prompt])
-            .unwrap()
-            .dataset_digest,
-        original
+        derived_manifest.evaluation_cases[0].input_projection_digest,
+        original_input
     );
     let mut expected = base.clone();
     expected.expected.baseline_fingerprint.push_str("-changed");
-    variants.push(expected);
-    let mut slices = base;
+    let mut slices = base.clone();
     slices.research_slices.insert("changed".into());
-    variants.push(slices);
 
     for variant in variants {
-        let changed = ClassifierBaselineManifest::from_fixtures(&[variant])
-            .unwrap()
-            .dataset_digest;
-        assert_ne!(changed, original);
+        let changed = ClassifierBaselineManifest::from_fixtures(&[variant]).unwrap();
+        assert_ne!(changed.dataset_digest, original);
+        assert_ne!(
+            changed.evaluation_cases[0].input_projection_digest,
+            original_input
+        );
+    }
+    for label_only_variant in [expected, slices] {
+        let changed = ClassifierBaselineManifest::from_fixtures(&[label_only_variant]).unwrap();
+        assert_ne!(changed.dataset_digest, original);
+        assert_eq!(
+            changed.evaluation_cases[0].input_projection_digest,
+            original_input
+        );
     }
 }
 
