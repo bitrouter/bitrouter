@@ -1088,6 +1088,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         options,
         routing,
     } = ctx;
+    // `serve` never builds an `App` and never reaches `build_observability`,
+    // so it gets the ignored-config warnings from neither. Emitted here, on
+    // the config as read — before `apply_routing_with_cloud_credentials`
+    // rewrites it — and safe to emit at once because `main` installs this
+    // path's subscriber before dispatching (`init_session_log_tracing_
+    // subscriber` for `bitrouter acp serve`, `init_basic_tracing_subscriber`
+    // for `bitrouter spawn --serve`). Both write to stderr, so the JSON-RPC
+    // stream on stdout stays pristine.
+    for message in crate::assemble::ignored_config_warnings(&config) {
+        tracing::warn!("{message}");
+    }
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Route the sub-agent's LLM traffic through the daemon (default) unless
     // opted out. Fail fast — before speaking any ACP — so a manager handles
@@ -1829,12 +1840,14 @@ async fn build_observability(
     conversation_id: &str,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Observability {
-    // This surface never builds an `App`, so it does not get the daemon's
-    // ignored-config warnings for free — and it reads the same telemetry
+    // These surfaces never build an `App`, so they do not get the daemon's
+    // ignored-config warnings for free — and they read the same telemetry
     // config, which is exactly what the skill documents. Without this, a stale
-    // `plugins.bitrouter-observe` block is silent here while being loud on
-    // `serve`. The subscriber is already installed on this path, so unlike the
-    // daemon these can be emitted in place.
+    // `plugins.bitrouter-observe` block is silent on `chat` and `acp prompt`
+    // while being loud on `bitrouter serve`. `acp_cli::serve` emits the same
+    // set itself, since it never reaches this function. The subscriber is
+    // already installed on all of these paths, so unlike the daemon these can
+    // be emitted in place.
     for message in crate::assemble::ignored_config_warnings(config) {
         tracing::warn!("{message}");
     }

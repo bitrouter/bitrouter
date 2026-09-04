@@ -296,12 +296,9 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bitrouter acp serve|prompt` never builds an `App`: it takes
-/// its exporter straight from
-/// `build_otel_exporter_standalone_with_credentials`, which reads the same
-/// config. A guard covering only the daemon would leave that surface exactly
-/// as silent as before, on a path the skill documents as honouring the same
-/// telemetry configuration.
+/// Public because `bitrouter config validate` reports the same set from a
+/// file it may never run against — see [`ignored_config_warnings`] for why the
+/// environment half is split off.
 pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
     let known = KNOWN_PLUGIN_IDS.join(", ");
     unknown_plugin_ids(config)
@@ -325,6 +322,14 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
+///
+/// Public because `bitrouter acp serve|prompt|chat` never builds an `App`: it
+/// takes its exporter straight from
+/// `build_otel_exporter_standalone_with_credentials`, which reads the same
+/// config. A guard covering only the daemon would leave those surfaces exactly
+/// as silent as before, on paths the skill documents as honouring the same
+/// telemetry configuration. `acp_cli::serve` calls it directly; the other
+/// three reach it through `acp_cli::build_observability`.
 pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
     ignored_config_file_warnings(config)
         .into_iter()
