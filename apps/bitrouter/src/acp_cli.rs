@@ -1154,6 +1154,18 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 // ── chat ──────────────────────────────────────────────────────────────────────
 
+/// Pass a `chat` startup failure through, having shown the session log first.
+///
+/// Only the two `chat` paths use it, and only before their session exists.
+/// Every other ACP verb logs to stderr as well as the file, so its child's
+/// account of a failed launch is already on screen; `chat` suppresses stderr
+/// because its renderer owns the terminal, which is exactly what leaves a
+/// pre-session failure with nothing to show but a closed transport.
+fn show_session_log(error: anyhow::Error) -> anyhow::Error {
+    crate::chat::session::report_failed_launch();
+    error
+}
+
 /// Launch a session for `agent_id` and hand it to the interactive renderer.
 ///
 /// This half is the composition root: it resolves routing, binds the
@@ -1225,7 +1237,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     let mut session =
         launch_controlled(&config, agent_id, &routed, options.clone(), binding.clone())
             .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+            .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+            .map_err(show_session_log)?;
 
     // At most one authentication round. A second `auth_required` after a login
     // the agent reported as successful is the agent disagreeing with itself,
@@ -1245,7 +1258,9 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 // which; say it — and offer what it advertised.
                 if !bitrouter_sdk::acp::client::is_auth_required(&error) {
                     session.shutdown().await;
-                    return Err(error.context("opening the harness session"));
+                    return Err(show_session_log(
+                        error.context("opening the harness session"),
+                    ));
                 }
                 let choice = if authenticated {
                     AuthChoice::Declined
@@ -1253,6 +1268,10 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     choose_auth_method(agent_id, session.client.auth_methods())?
                 };
                 match choice {
+                    // No log tail: unlike a launch that died with its reason on
+                    // the child's stderr, this failure is already fully
+                    // explained, and a tail would bury the sentence that
+                    // explains it.
                     AuthChoice::Declined => {
                         let context =
                             unauthenticated_message(agent_id, session.client.auth_methods());
@@ -1262,8 +1281,10 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     AuthChoice::Agent(method_id) => {
                         if let Err(failed) = session.client.authenticate(method_id).await {
                             session.shutdown().await;
-                            return Err(failed
-                                .context(format!("authenticating '{agent_id}' with the agent")));
+                            return Err(show_session_log(
+                                failed
+                                    .context(format!("authenticating '{agent_id}' with the agent")),
+                            ));
                         }
                     }
                     // Out of band: the harness's own program owns the terminal
@@ -1271,6 +1292,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                     // rebuilt after — which is also what reinitializes it.
                     AuthChoice::Terminal(method) => {
                         session.shutdown().await;
+                        // Its stdio was inherited, so whatever went wrong was
+                        // on screen as it happened; no tail to add.
                         run_terminal_login(&config, agent_id, &method).await?;
                         session = launch_controlled(
                             &config,
@@ -1280,7 +1303,8 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                             binding.clone(),
                         )
                         .await
-                        .with_context(|| format!("relaunching '{agent_id}' after its login"))?;
+                        .with_context(|| format!("relaunching '{agent_id}' after its login"))
+                        .map_err(show_session_log)?;
                     }
                 }
                 authenticated = true;
@@ -1521,20 +1545,31 @@ async fn chat_piped(
     let mcp_servers = options.mcp_servers.clone();
     let mut session = launch_controlled(config, agent_id, routed, options, binding)
         .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+        .map_err(show_session_log)?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
             // A harness that is merely unauthenticated is not a broken one, and
             // relaying its JSON-RPC error would leave the reader to guess which
             // of the two it is. The protocol already said which; say it.
-            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+            let unauthenticated = bitrouter_sdk::acp::client::is_auth_required(&error);
+            let context = if unauthenticated {
                 unauthenticated_message(agent_id, session.client.auth_methods())
             } else {
                 "opening the harness session".to_string()
             };
             session.shutdown().await;
-            return Err(error.context(context));
+            let failure = error.context(context);
+            // The log tail is for a launch that died with its reason on the
+            // child's stderr. An unauthenticated harness already carries its
+            // own explanation, and a tail would bury the sentence that gives
+            // it.
+            return Err(if unauthenticated {
+                failure
+            } else {
+                show_session_log(failure)
+            });
         }
     };
     let observability =

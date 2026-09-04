@@ -60,6 +60,23 @@ fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()> {
     .context("writing the session log tail")
 }
 
+/// Show the end of the session log on **stderr**, for a failure that happened
+/// before there was a view to draw it in.
+///
+/// [`run`] writes the tail to stdout at the end of a session it drew. A launch
+/// that dies during the handshake never gets that far: it returns an error
+/// that `main` renders as this command's stdout envelope, and the reason —
+/// the harness child's own stderr, which `chat` sends to the session file and
+/// nowhere else, because it draws on this terminal — goes unmentioned in a
+/// file the user has no way to guess the name of. Hence stderr: it sits beside
+/// the failure rather than inside the JSON describing it.
+///
+/// The launch error outranks this, so a tail that cannot be written is
+/// dropped rather than replacing the reason the launch failed.
+pub(crate) fn report_failed_launch() {
+    let _ = write_session_log_tail(&mut std::io::stderr());
+}
+
 /// Whether this session's route can be changed from the picker.
 ///
 /// The contract's three-condition gate, asked of what the controller

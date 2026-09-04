@@ -368,6 +368,16 @@ stderr into one per-session file so nothing else writes to this terminal. A
 writer owning more rows makes that more important. **Ctrl-L** forces a full
 redraw for when something writes anyway.
 
+**Before the writer exists, the file is the only record — so a failed launch
+prints its tail.** The rule above is about a terminal the writer owns; a launch
+that dies during the ACP handshake never reaches one. Its error is rendered by
+`main` as the command's stdout envelope, and it names a closed transport — the
+symptom — while the cause is the harness child's own stderr, which by this rule
+went to a file whose name the user has no way to guess. So both `chat` paths
+write the log's tail to **stderr** before returning such a failure, the same
+tail `run` writes to stdout when a session it *did* draw ends badly. No writer
+is drawing at that point, so nothing is scrolled out from under it.
+
 ## 5. Decision 3 — render scheduling
 
 `apply` returning `()` removes the old answer to *who renders, when*. Streamed
