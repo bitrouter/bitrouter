@@ -49,11 +49,11 @@ use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggrega
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
 use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
-use bitrouter_observe::OTEL_ENABLED;
-use bitrouter_observe::otel::{
+use bitrouter_sdk::MetricsRenderer;
+use bitrouter_telemetry::OTEL_ENABLED;
+use bitrouter_telemetry::otel::{
     ContentCaptureMode, MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook,
 };
-use bitrouter_sdk::MetricsRenderer;
 
 use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
@@ -128,6 +128,14 @@ pub struct Assembled {
     /// the subscriber on the `serve` path, so logging directly here
     /// would be dropped.
     pub otel_init_error: Option<String>,
+    /// Configuration this binary read but will not act on — an unrecognised
+    /// `plugins.<id>` block, or an environment variable that has been renamed.
+    ///
+    /// Carried out rather than logged in place, for the same reason as
+    /// [`Self::otel_init_error`]: on the `serve` path assembly runs *before*
+    /// the tracing subscriber is installed, so a `tracing::warn!` here reaches
+    /// nobody. Emitted by the binary once the subscriber is up.
+    pub ignored_config: Vec<String>,
 }
 
 pub(crate) fn resolved_upstream_timeouts(
@@ -194,6 +202,162 @@ impl ObserveStatusProvider for OtelExporterStatus {
     }
 }
 
+/// Every `plugins.<id>` key this binary reads.
+///
+/// `Config::plugins` is an unvalidated `HashMap<String, Value>` and
+/// `dist/schema/bitrouter.config.schema.json` declares it
+/// `additionalProperties: true`, so **an unrecognised id is silently
+/// ignored** — neither the parser nor the schema will say a word. A typo like
+/// `plugins.bitrouter-guardrail` (singular) drops the operator's declared
+/// block / redact patterns and the process starts anyway. This list is what
+/// [`unknown_plugin_ids`] reports against, and it is the only thing standing
+/// between that class of typo and a silent misconfiguration.
+///
+/// This list is derived from the call sites by
+/// `known_plugin_ids_cover_every_reader`, which scans this file's own source.
+/// Adding a reader without adding it here fails that test — the list cannot
+/// silently drift, which matters because a *missing* id is worse than no guard
+/// at all: the daemon would warn, on every start, about a plugin it reads.
+///
+/// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
+/// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
+/// a single-line grep did not see. Hence the scan.
+pub const KNOWN_PLUGIN_IDS: &[&str] = &[
+    "bitrouter-guardrails",
+    "bitrouter-policy",
+    "bitrouter-telemetry",
+];
+
+/// Sub-keys that were removed, and the block they sat under. Reported for the
+/// same reason as [`RENAMED_ENV_VARS`]: the guard below is id-level, so a
+/// migration that renames the *block* correctly and carries a dead sub-key
+/// with it would otherwise be silent — and that is the natural migration, since
+/// the id-level warning tells an operator to rename and nothing more.
+const REMOVED_PLUGIN_SUBKEYS: &[(&str, &str, &str)] = &[(
+    "bitrouter-telemetry",
+    "otlp_endpoint",
+    "removed with the `plugins.bitrouter-observe` rename; use `otel: { endpoint: … }`",
+)];
+
+/// `BITROUTER_*` environment variables that were renamed, and what to.
+///
+/// A migration aid, not a general guard: env has no schema and no validation
+/// hook, and a config may legitimately reference any `${BITROUTER_...}` name
+/// through `${VAR}` substitution, so a blanket "unrecognised `BITROUTER_*`"
+/// scan would fire on the operator's own variables. Naming the renames
+/// exactly is precise, has no false positives, and is what an operator hitting
+/// this actually needs to be told.
+///
+/// **These do not universally fail closed, and an earlier version of this
+/// comment claimed they did.** They do when the environment is the *only*
+/// source: `ContentCaptureMode` defaults to `Off` and the cap to 128 KiB, so a
+/// stale name leaves less content exported, not more.
+///
+/// They fail *open* when the environment was overriding YAML downward.
+/// `with_env_overrides` assigns unconditionally, so an operator whose config
+/// sets `content_capture: full` (directly, or via `telemetry.level: full`) and
+/// who pinned `BITROUTER_OBSERVE_CONTENT_CAPTURE=off` in a service unit as a
+/// kill-switch gets the opposite of what they pinned: the stale name is
+/// ignored, YAML wins, and prompt and response bodies start leaving the
+/// process. Same shape for a cap the environment lowered.
+///
+/// That is why this is a warning rather than a footnote, and why it names the
+/// new variable rather than only reporting the old one as unrecognised.
+const RENAMED_ENV_VARS: &[(&str, &str)] = &[
+    (
+        "BITROUTER_OBSERVE_CONTENT_CAPTURE",
+        "BITROUTER_TELEMETRY_CONTENT_CAPTURE",
+    ),
+    (
+        "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+        "BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES",
+    ),
+];
+
+/// The `plugins.*` keys in `config` that this binary does not read, sorted.
+///
+/// Pure so `bitrouter config validate` can report the same set the daemon
+/// warns about, without building an `App`.
+pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
+    let mut unknown: Vec<String> = config
+        .plugins
+        .keys()
+        .filter(|id| !KNOWN_PLUGIN_IDS.contains(&id.as_str()))
+        .cloned()
+        .collect();
+    unknown.sort();
+    unknown
+}
+
+/// Everything this binary read but will not act on, as operator-facing lines.
+///
+/// Collected in [`build_app_with_path`] so it covers every daemon start rather
+/// than only `bitrouter config validate` — validation is opt-in and the daemon
+/// always runs, which is the wrong way round for a failure this quiet. The
+/// caller emits them; see [`Assembled::ignored_config`] for why.
+///
+/// Public because `bitrouter config validate` reports the same set from a
+/// file it may never run against — see [`ignored_config_warnings`] for why the
+/// environment half is split off.
+pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
+    let known = KNOWN_PLUGIN_IDS.join(", ");
+    unknown_plugin_ids(config)
+        .into_iter()
+        .map(|id| {
+            format!("plugins.{id} is not read by this binary and is ignored; known ids: {known}")
+        })
+        .chain(REMOVED_PLUGIN_SUBKEYS.iter().filter_map(|(id, key, note)| {
+            config
+                .plugins
+                .get(*id)
+                .and_then(|block| block.get(*key))
+                .map(|_| format!("plugins.{id}.{key} is ignored — {note}"))
+        }))
+        .collect()
+}
+
+/// [`ignored_config_file_warnings`] plus the environment ones.
+///
+/// The split is what `bitrouter config validate` needs: it validates a *file*,
+/// possibly one belonging to another machine, so reporting this process's
+/// environment there would be noise at best and misleading at worst. Every
+/// runtime surface wants both.
+///
+/// Public because `bitrouter acp serve|prompt|chat` never builds an `App`: it
+/// takes its exporter straight from
+/// `build_otel_exporter_standalone_with_credentials`, which reads the same
+/// config. A guard covering only the daemon would leave those surfaces exactly
+/// as silent as before, on paths the skill documents as honouring the same
+/// telemetry configuration. `acp_cli::serve` calls it directly; the other
+/// three reach it through `acp_cli::build_observability`.
+pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
+    ignored_config_file_warnings(config)
+        .into_iter()
+        .chain(renamed_env_warnings(|name| {
+            std::env::var_os(name).is_some()
+        }))
+        .collect()
+}
+
+/// One message per [`RENAMED_ENV_VARS`] entry whose **old** name is set and
+/// whose new name is not.
+///
+/// Takes the presence check as a closure rather than reading the environment,
+/// so it is unit-testable without touching process-global state that would
+/// make it order-dependent inside a shared test binary — the same reason
+/// `telemetry_bearer_plan` below is pure.
+///
+/// Setting the new name suppresses the warning even when the old one is also
+/// present: the operator has migrated and left a stale export behind, which is
+/// not worth a line on every start.
+fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
+    RENAMED_ENV_VARS
+        .iter()
+        .filter(|(old, new)| is_set(old) && !is_set(new))
+        .map(|(old, new)| format!("{old} was renamed to {new}; the old name is ignored"))
+        .collect()
+}
+
 /// Assemble an [`App`] from a parsed config: connect the database, run every
 /// plugin's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
@@ -207,6 +371,7 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    let ignored_config = ignored_config_warnings(config);
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
     // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
@@ -360,7 +525,7 @@ pub async fn build_app_with_path(
                 // exporter path) is `StaticOnly` and never reads the credential
                 // store. Best-effort: a `None` source means the export proceeds
                 // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> =
+                let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> =
                     match plan.bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
                             let source = crate::cloud::cloud_bearer_source(
@@ -764,6 +929,7 @@ pub async fn build_app_with_path(
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,
+        ignored_config,
     })
 }
 
@@ -1229,7 +1395,7 @@ struct EmptyMetricsRenderer;
 impl MetricsRenderer for EmptyMetricsRenderer {
     fn render(&self) -> String {
         "# Prometheus metrics have been removed in favor of OpenTelemetry.\n".to_string()
-            + "# Configure OTLP export via plugins.bitrouter-observe.otel\n"
+            + "# Configure OTLP export via plugins.bitrouter-telemetry.otel\n"
     }
 }
 
@@ -1253,15 +1419,10 @@ enum BearerPlan {
 }
 
 /// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
-/// serve|prompt`). Same config resolution as the daemon path (telemetry
-/// opt-in / `otel:` block / legacy shim / env vars), including the live
-/// account-bearer plan. Returns `None` when nothing opts telemetry in;
-/// telemetry failures are surfaced as warnings, never as session failures.
-pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
-    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    build_otel_exporter_standalone_with_credentials(config, &cloud_credentials).await
-}
-
+/// serve|prompt`). Same config resolution as the daemon path (the telemetry
+/// opt-in, the `otel:` block, env vars), including the live account-bearer
+/// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
+/// surfaced as warnings, never as session failures.
 pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     config: &Config,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
@@ -1274,7 +1435,8 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             return None;
         }
     };
-    let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
+    let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> = match plan.bearer_plan
+    {
         BearerPlan::LiveSource { warn_if_unmet } => {
             let source = cloud_credentials
                 .telemetry_bearer(&plan.config.endpoint)
@@ -1310,30 +1472,35 @@ struct OtelConfigPlan {
 /// Build OpenTelemetry configuration from the app config. Returns `None` when
 /// neither YAML nor env vars opt the exporter in.
 ///
-/// Precedence: env vars > `plugins.bitrouter-observe.otel` > the legacy flat
-/// `plugins.bitrouter-observe.otlp_endpoint` shim (v0 carry-over; will be
-/// removed in v1.1).
+/// Precedence: env vars > `plugins.bitrouter-telemetry.telemetry` (the
+/// first-party opt-in) > `plugins.bitrouter-telemetry.otel` > an
+/// `OTEL_EXPORTER_OTLP_ENDPOINT`-only opt-in.
 ///
 /// This stays pure (no credential-store / network I/O): the account bearer is no
 /// longer snapshotted here — it is resolved live per export by a bearer source
 /// the async call site builds according to the returned [`BearerPlan`].
 fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
-    let observe = config.plugins.get("bitrouter-observe");
+    // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
+    // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
+    // the rename is safe to have made because `ignored_config_warnings` reports an
+    // unread `plugins.<id>` block on every daemon start, so a stale key is
+    // loud rather than silent. See `docs/TELEMETRY_CRATE_SPEC.md` D6.
+    let telemetry = config.plugins.get("bitrouter-telemetry");
 
     // Env-var overrides are *not* applied here — `OtelExporter::new` runs
     // `with_env_overrides` on whatever config it is handed, so the
     // env > YAML precedence holds for every path below without this
     // function having to re-apply it.
 
-    // 0. First-party telemetry opt-in. `plugins.bitrouter-observe.telemetry`
+    // 0. First-party telemetry opt-in. `plugins.bitrouter-telemetry.telemetry`
     //    is a convenience wrapper over the `otel` block: when `enabled`, it
     //    points the exporter at BitRouter's first-party telemetry endpoint and
     //    selects the capture level. OFF by default — an absent or
     //    `enabled: false` block leaves telemetry disabled. A malformed block is
     //    a hard error (the operator explicitly opted in).
-    if let Some(tel_value) = observe.and_then(|c| c.get("telemetry")) {
+    if let Some(tel_value) = telemetry.and_then(|c| c.get("telemetry")) {
         let opt_in = serde_json::from_value::<TelemetryOptIn>(tel_value.clone())
-            .context("plugins.bitrouter-observe.telemetry failed to parse")?;
+            .context("plugins.bitrouter-telemetry.telemetry failed to parse")?;
         if opt_in.enabled {
             // Best-effort install id: a missing home just means anonymous
             // attribution downstream, never a failure to export.
@@ -1361,35 +1528,22 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     //    the operator explicitly opted in, so silently falling back to the
     //    legacy shim / env-only path would hide their mistake and start the
     //    exporter with a config they never asked for.
-    if let Some(otel_value) = observe.and_then(|c| c.get("otel")) {
+    if let Some(otel_value) = telemetry.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
-            .context("plugins.bitrouter-observe.otel failed to parse")?;
+            .context("plugins.bitrouter-telemetry.otel failed to parse")?;
         return Ok(Some(OtelConfigPlan {
             config: cfg,
             bearer_plan: BearerPlan::StaticOnly,
         }));
     }
 
-    // 2. Legacy flat `otlp_endpoint` shim — drops the cardinality / sampler /
-    //    batch knobs, but lets a v0 YAML keep working until v1.1.
-    if let Some(endpoint) = observe
-        .and_then(|c| c.get("otlp_endpoint"))
-        .and_then(|v| v.as_str())
-    {
-        let cfg = OtelConfig {
-            endpoint: endpoint.to_string(),
-            ..OtelConfig::default()
-        };
-        tracing::warn!(
-            "plugins.bitrouter-observe.otlp_endpoint is deprecated; switch to plugins.bitrouter-observe.otel",
-        );
-        return Ok(Some(OtelConfigPlan {
-            config: cfg,
-            bearer_plan: BearerPlan::StaticOnly,
-        }));
-    }
-
-    // 3. Env-var-only opt-in.
+    // 2. Env-var-only opt-in.
+    //
+    // The v0 flat `otlp_endpoint` shim used to sit here, marked for removal in
+    // v1.1. It went with the key rename instead, and not to save a release:
+    // keeping it would have meant carrying a **v0** compatibility path under a
+    // key name v0 never had. `plugins.bitrouter-telemetry.otlp_endpoint` has
+    // never existed in a released config, so there was nothing to preserve.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
         return Ok(Some(OtelConfigPlan {
             config: OtelConfig::default(),
@@ -1458,7 +1612,7 @@ enum TelemetryAttribution {
     Anonymous,
 }
 
-/// The `plugins.bitrouter-observe.telemetry` opt-in block — a thin wrapper over
+/// The `plugins.bitrouter-telemetry.telemetry` opt-in block — a thin wrapper over
 /// [`OtelConfig`] that defaults the endpoint and selects a capture level. Off
 /// by default; nothing is exported unless `enabled` is `true`.
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -1504,7 +1658,7 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
 /// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a [`bitrouter_observe::otel::TelemetryBearer`]
+/// resolved live per export by a [`bitrouter_telemetry::otel::TelemetryBearer`]
 /// source the async call site builds (refresh-aware), so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
@@ -1844,15 +1998,15 @@ mod sqlite_path_tests {
 mod otel_config_tests {
     use super::{BearerPlan, Config, build_otel_config};
 
-    /// Build a `Config` carrying a single `bitrouter-observe` plugin value.
+    /// Build a `Config` carrying a single `bitrouter-telemetry` plugin value.
     /// Constructed directly (no YAML round-trip) so the test never touches
     /// the process environment that `build_otel_config`'s env-only path
     /// would read.
-    fn config_with_observe(observe: serde_json::Value) -> Config {
+    fn config_with_telemetry(telemetry: serde_json::Value) -> Config {
         let mut config = Config::default();
         config
             .plugins
-            .insert("bitrouter-observe".to_string(), observe);
+            .insert("bitrouter-telemetry".to_string(), telemetry);
         config
     }
 
@@ -1860,7 +2014,7 @@ mod otel_config_tests {
     fn malformed_otel_block_is_a_hard_error() {
         // `sampler` is a closed enum — an unknown variant fails to parse.
         // An explicit opt-in must surface that, not silently fall through.
-        let config = config_with_observe(serde_json::json!({
+        let config = config_with_telemetry(serde_json::json!({
             "otel": { "sampler": "not_a_real_sampler" }
         }));
         assert!(
@@ -1871,7 +2025,7 @@ mod otel_config_tests {
 
     #[test]
     fn valid_otel_block_parses() {
-        let config = config_with_observe(serde_json::json!({
+        let config = config_with_telemetry(serde_json::json!({
             "otel": { "endpoint": "http://collector:4318" }
         }));
         let plan = build_otel_config(&config)
@@ -1883,15 +2037,153 @@ mod otel_config_tests {
     }
 
     #[test]
-    fn legacy_otlp_endpoint_shim_still_works() {
-        let config = config_with_observe(serde_json::json!({
+    fn the_v0_otlp_endpoint_shim_is_gone() {
+        // Removed with the key rename: it existed to keep a **v0** YAML
+        // building, and v0 never had `plugins.bitrouter-telemetry`. An
+        // `otlp_endpoint` under the new key is therefore a config that has
+        // never worked, and it must not quietly half-work.
+        let config = config_with_telemetry(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));
-        let plan = build_otel_config(&config)
-            .expect("legacy shim is Ok")
-            .expect("legacy shim yields Some");
-        assert_eq!(plan.config.endpoint, "http://legacy:4318");
-        assert_eq!(plan.bearer_plan, BearerPlan::StaticOnly);
+        assert!(
+            build_otel_config(&config)
+                .expect("an unknown sub-key is not an error")
+                .is_none(),
+            "otlp_endpoint must no longer wire an exporter"
+        );
+    }
+
+    #[test]
+    fn the_old_plugin_id_is_reported_rather_than_read() {
+        // The rename's whole safety argument: a stale `plugins.bitrouter-observe`
+        // block wires nothing, and `unknown_plugin_ids` is what makes that
+        // audible instead of silent.
+        let mut config = Config::default();
+        config.plugins.insert(
+            "bitrouter-observe".to_string(),
+            serde_json::json!({ "otel": { "endpoint": "http://collector:4318" } }),
+        );
+        assert!(
+            build_otel_config(&config)
+                .expect("an unread plugin block is not an error")
+                .is_none()
+        );
+        assert_eq!(
+            super::unknown_plugin_ids(&config),
+            vec!["bitrouter-observe".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_typoed_guardrails_id_is_reported() {
+        // The sharpest case, and the reason the guard is not telemetry-specific:
+        // `bitrouter-guardrail` (singular) parses fine, wires nothing, and
+        // drops the operator's declared block / redact patterns. Silent before
+        // this list existed.
+        let mut config = Config::default();
+        config.plugins.insert(
+            "bitrouter-guardrail".to_string(),
+            serde_json::json!({ "custom_patterns": [] }),
+        );
+        assert_eq!(
+            super::unknown_plugin_ids(&config),
+            vec!["bitrouter-guardrail".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_stale_env_name_warns_until_the_new_one_is_set() {
+        let warn = |set: &[&str]| super::renamed_env_warnings(|name| set.contains(&name));
+        assert!(warn(&[]).is_empty(), "nothing set, nothing to say");
+        assert_eq!(
+            warn(&["BITROUTER_OBSERVE_CONTENT_CAPTURE"]).len(),
+            1,
+            "the old name alone is what an operator needs telling about"
+        );
+        assert!(
+            warn(&["BITROUTER_TELEMETRY_CONTENT_CAPTURE"]).is_empty(),
+            "the new name alone is the migrated state"
+        );
+        assert!(
+            warn(&[
+                "BITROUTER_OBSERVE_CONTENT_CAPTURE",
+                "BITROUTER_TELEMETRY_CONTENT_CAPTURE",
+            ])
+            .is_empty(),
+            "both set means migrated with a stale export left behind — not a line per start"
+        );
+    }
+
+    #[test]
+    fn known_plugin_ids_cover_every_reader() {
+        // The list's only real hazard is under-listing: an id the binary reads
+        // but forgot to declare gets warned about on every start, which is
+        // worse than not warning at all. That is not hypothetical — it shipped
+        // that way, because `bitrouter-policy` is read through a line-wrapped
+        // `config` / `.plugins` / `.get(…)` chain and the check was a human
+        // reading greps.
+        //
+        // So check against the source rather than against a hand-list. Any
+        // `.plugins` … `.get("<literal>")` in this file is a reader by
+        // definition, whatever whitespace sits between the pieces.
+        let source = include_str!("assemble.rs");
+        let mut readers: Vec<&str> = Vec::new();
+        for (index, _) in source.match_indices(".plugins") {
+            let rest = &source[index + ".plugins".len()..];
+            let Some(open) = rest.find(".get(") else {
+                continue;
+            };
+            // Only a call that follows immediately — whitespace, dots and
+            // comments aside — is the same expression. A `.get(` a hundred
+            // characters later belongs to something else.
+            if rest[..open].chars().any(|c| !c.is_whitespace()) {
+                continue;
+            }
+            let after = &rest[open + ".get(".len()..];
+            let after = after.trim_start();
+            let Some(quoted) = after.strip_prefix('"') else {
+                continue;
+            };
+            if let Some(end) = quoted.find('"') {
+                readers.push(&quoted[..end]);
+            }
+        }
+        assert!(
+            !readers.is_empty(),
+            "the scan found no readers at all — it has stopped testing"
+        );
+        for id in &readers {
+            assert!(
+                super::KNOWN_PLUGIN_IDS.contains(id),
+                "plugins.{id} is read but missing from KNOWN_PLUGIN_IDS, so the \
+                 daemon would warn about a plugin it honours"
+            );
+        }
+        // And the inverse, so a stale entry cannot linger either.
+        for id in super::KNOWN_PLUGIN_IDS {
+            assert!(
+                readers.contains(id),
+                "KNOWN_PLUGIN_IDS names {id}, which nothing reads"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_sub_key_under_the_new_id_is_reported() {
+        // The natural migration: the id-level warning says "rename", the
+        // operator renames, and their v0 `otlp_endpoint` comes along with it.
+        // Id-level checking alone sees a known id and says nothing.
+        let config = config_with_telemetry(serde_json::json!({
+            "otlp_endpoint": "http://legacy:4318"
+        }));
+        assert!(super::unknown_plugin_ids(&config).is_empty());
+        let warnings = super::ignored_config_warnings(&config);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("plugins.bitrouter-telemetry.otlp_endpoint")),
+            "got: {warnings:?}"
+        );
     }
 }
 

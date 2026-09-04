@@ -1092,6 +1092,17 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         options,
         routing,
     } = ctx;
+    // `serve` never builds an `App` and never reaches `build_observability`,
+    // so it gets the ignored-config warnings from neither. Emitted here, on
+    // the config as read — before `apply_routing_with_cloud_credentials`
+    // rewrites it — and safe to emit at once because `main` installs this
+    // path's subscriber before dispatching (`init_session_log_tracing_
+    // subscriber` for `bitrouter acp serve`, `init_basic_tracing_subscriber`
+    // for `bitrouter spawn --serve`). Both write to stderr, so the JSON-RPC
+    // stream on stdout stays pristine.
+    for message in crate::assemble::ignored_config_warnings(&config) {
+        tracing::warn!("{message}");
+    }
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
     // Route the sub-agent's LLM traffic through the daemon (default) unless
     // opted out. Fail fast — before speaking any ACP — so a manager handles
@@ -1961,7 +1972,7 @@ struct Turn<'a> {
     client: &'a AcpClient,
     session_id: &'a str,
     agent_id: &'a str,
-    recorder: Option<Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
 }
 
 /// Inner implementation for the wait (non-`--no-wait`) path.
@@ -2097,7 +2108,7 @@ where
 pub(crate) fn report_turn(
     client: &AcpClient,
     agent_id: &str,
-    recorder: Option<&Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    recorder: Option<&Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     response: &agent_client_protocol::schema::v1::PromptResponse,
     latency: Duration,
 ) {
@@ -2108,7 +2119,7 @@ pub(crate) fn report_turn(
         context: client.context_usage().lock().ok().and_then(|slot| *slot),
     };
     if let Some(recorder) = recorder {
-        recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
+        recorder.turn_completed(&bitrouter_telemetry::otel::acp::TurnRecord {
             stop_reason: record.stop_reason.clone(),
             latency,
             context_used: record.context.map(|c| c.used),
@@ -2141,8 +2152,8 @@ where
 /// The OTel exporter for this process and, when one exists, the span recorder
 /// bound to one session.
 struct Observability {
-    exporter: Option<Arc<bitrouter_observe::otel::OtelExporter>>,
-    recorder: Option<Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    exporter: Option<Arc<bitrouter_telemetry::otel::OtelExporter>>,
+    recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
 }
 
 /// Build the exporter and the session's span recorder. `conversation_id` is
@@ -2154,11 +2165,22 @@ async fn build_observability(
     conversation_id: &str,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Observability {
+    // These surfaces never build an `App`, so they do not get the daemon's
+    // ignored-config warnings for free — and they read the same telemetry
+    // config, which is exactly what the skill documents. Without this, a stale
+    // `plugins.bitrouter-observe` block is silent on `chat` and `acp prompt`
+    // while being loud on `bitrouter serve`. `acp_cli::serve` emits the same
+    // set itself, since it never reaches this function. The subscriber is
+    // already installed on all of these paths, so unlike the daemon these can
+    // be emitted in place.
+    for message in crate::assemble::ignored_config_warnings(config) {
+        tracing::warn!("{message}");
+    }
     let exporter =
         crate::assemble::build_otel_exporter_standalone_with_credentials(config, cloud_credentials)
             .await;
     let recorder = exporter.as_ref().map(|exporter| {
-        Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
+        Arc::new(bitrouter_telemetry::otel::acp::AcpSpanRecorder::new(
             exporter,
             agent_id,
             conversation_id,
@@ -2171,7 +2193,7 @@ async fn build_observability(
 /// translated update stream. Exporter-gated by its `recorder` argument:
 /// without one there is nothing to emit to.
 fn spawn_tool_spans(
-    recorder: Arc<bitrouter_observe::acp::AcpSpanRecorder>,
+    recorder: Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>,
     mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
 ) {
     tokio::spawn(async move {

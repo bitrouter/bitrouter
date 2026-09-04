@@ -65,8 +65,10 @@ impl App {
     }
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
-    /// after the SDK has mounted every route — used by `bitrouter-observe`
-    /// to install a `tower-http` `TraceLayer` at HTTP ingress.
+    /// after the SDK has mounted every route — used by
+    /// `bitrouter_telemetry::otel::http_layer` to open an OpenTelemetry SERVER
+    /// span at HTTP ingress. It is a genuine extension point rather than an
+    /// internal call: the renderer that uses it ships in another crate.
     pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,
@@ -218,8 +220,8 @@ const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// A router-wrapper closure. The wrapper runs after the SDK has mounted
 /// every route and applied every built-in layer, so a host can wrap the
-/// whole router in additional middleware (e.g. a `tower-http`
-/// `TraceLayer` that creates the SERVER span at HTTP ingress).
+/// whole router in additional middleware (e.g. the layer that creates the
+/// SERVER span at HTTP ingress).
 ///
 /// Held behind an `Arc<dyn Fn>` so [`RouterOptions`] remains `Clone`.
 /// `Fn` (not `FnOnce`) lets the same options be applied more than once.
@@ -244,9 +246,9 @@ pub struct RouterOptions {
 
 impl RouterOptions {
     /// Install a router-wrapper closure that runs after the SDK has mounted
-    /// every route. Used to add an inbound HTTP `tower::Layer` (e.g. the
-    /// observe plugin's `tower-http::trace::TraceLayer`) without coupling
-    /// the SDK to OpenTelemetry or any other tracing backend.
+    /// every route. Used to add inbound HTTP middleware (e.g. the observe
+    /// plugin's ingress-span layer) without coupling the SDK to OpenTelemetry
+    /// or any other tracing backend.
     pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,

@@ -47,7 +47,7 @@ pub struct OtelConfig {
 
     /// Whether to capture prompt / response message content onto spans.
     /// Default [`ContentCaptureMode::Off`] — no message bodies leave the
-    /// process. Override with `BITROUTER_OBSERVE_CONTENT_CAPTURE=full`.
+    /// process. Override with `BITROUTER_TELEMETRY_CONTENT_CAPTURE=full`.
     pub content_capture: ContentCaptureMode,
 
     /// Maximum byte length for a single captured content attribute
@@ -55,7 +55,7 @@ pub struct OtelConfig {
     /// [`ContentCaptureMode::Full`]. A conservative cap so a pathological
     /// prompt or response can't produce an oversized span the collector or
     /// backend would reject. Defaults to [`DEFAULT_CONTENT_ATTR_MAX_BYTES`];
-    /// override with `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES`.
+    /// override with `BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES`.
     pub content_attr_max_bytes: usize,
 
     /// Optional bearer token. When set, an `Authorization: Bearer <token>`
@@ -75,14 +75,27 @@ pub const DEFAULT_CONTENT_ATTR_MAX_BYTES: usize = 128 * 1024;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SamplerKind {
+    /// Sample every span, ignoring any inbound sampling decision. Useful for
+    /// low-volume deployments and local debugging.
     AlwaysOn,
+    /// Drop every span. Keeps the exporter wired without emitting traces.
     AlwaysOff,
+    /// Sample a deterministic fraction of traces, derived from the trace id so
+    /// the decision is consistent across every service in the trace. The
+    /// fraction comes from [`OtelConfig::sampler_arg`] (`0.0`–`1.0`).
     #[serde(rename = "traceidratio")]
     TraceIdRatio,
+    /// Honour the inbound `traceparent` sampling flag; sample when there is no
+    /// parent. The OTel-spec default, and this crate's.
     #[serde(rename = "parentbased_always_on")]
     ParentBasedAlwaysOn,
+    /// Honour the inbound `traceparent` sampling flag; drop when there is no
+    /// parent. Exports only traces an upstream caller already started.
     #[serde(rename = "parentbased_always_off")]
     ParentBasedAlwaysOff,
+    /// Honour the inbound `traceparent` sampling flag; fall back to
+    /// [`SamplerKind::TraceIdRatio`] with [`OtelConfig::sampler_arg`] when
+    /// there is no parent.
     #[serde(rename = "parentbased_traceidratio")]
     ParentBasedTraceIdRatio,
 }
@@ -105,6 +118,10 @@ pub enum ContentCaptureMode {
     Full,
 }
 
+/// Trace-pipeline settings, read when the exporter builds its
+/// `SdkTracerProvider`. Sampling lives on [`OtelConfig`] itself (it mirrors the
+/// spec's `OTEL_TRACES_SAMPLER`), so this groups only what shapes the span
+/// pipeline behind the sampler.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TraceConfig {
@@ -112,6 +129,10 @@ pub struct TraceConfig {
     pub batch: BatchConfig,
 }
 
+/// Tuning for the batch span processor that buffers finished spans and ships
+/// them to the collector off the request path. The two knobs trade export
+/// latency against memory and drop risk under load; spec:
+/// <https://opentelemetry.io/docs/specs/otel/trace/sdk/#batching-processor>.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BatchConfig {
@@ -122,6 +143,10 @@ pub struct BatchConfig {
     pub flush_ms: u64,
 }
 
+/// Metrics-pipeline settings, read when the exporter builds its
+/// `SdkMeterProvider`. Covers whether OTLP metric export runs at all, how often
+/// the periodic reader flushes, and the per-dimension cardinality caps applied
+/// before a label reaches an instrument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
@@ -250,12 +275,12 @@ impl OtelConfig {
         {
             self.sampler_arg = Some(ratio);
         }
-        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_CAPTURE")
+        if let Some(s) = lookup("BITROUTER_TELEMETRY_CONTENT_CAPTURE")
             && let Some(mode) = parse_content_capture(&s)
         {
             self.content_capture = mode;
         }
-        if let Some(s) = lookup("BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES")
+        if let Some(s) = lookup("BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES")
             && let Ok(n) = s.parse::<usize>()
             && n > 0
         {
@@ -401,13 +426,13 @@ mod tests {
             DEFAULT_CONTENT_ATTR_MAX_BYTES
         );
         let cfg = OtelConfig::default().with_env_from(env(&[(
-            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES",
             "262144",
         )]));
         assert_eq!(cfg.content_attr_max_bytes, 262_144);
         // Invalid / zero leaves the default untouched.
         let cfg = OtelConfig::default().with_env_from(env(&[(
-            "BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES",
+            "BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES",
             "bogus",
         )]));
         assert_eq!(cfg.content_attr_max_bytes, DEFAULT_CONTENT_ATTR_MAX_BYTES);
@@ -420,11 +445,11 @@ mod tests {
             ContentCaptureMode::Off
         );
         let cfg = OtelConfig::default()
-            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "full")]));
+            .with_env_from(env(&[("BITROUTER_TELEMETRY_CONTENT_CAPTURE", "full")]));
         assert_eq!(cfg.content_capture, ContentCaptureMode::Full);
         // Unknown value leaves the default untouched.
         let cfg = OtelConfig::default()
-            .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "bogus")]));
+            .with_env_from(env(&[("BITROUTER_TELEMETRY_CONTENT_CAPTURE", "bogus")]));
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
     }
 }

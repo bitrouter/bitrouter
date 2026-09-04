@@ -173,7 +173,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     );
 
     let span = attributed
-        .get_event::<bitrouter_observe::otel::SpanAttributes>()
+        .get_event::<bitrouter_sdk::observe::SpanAttributes>()
         .expect("session span attributes");
     assert_eq!(
         span.0

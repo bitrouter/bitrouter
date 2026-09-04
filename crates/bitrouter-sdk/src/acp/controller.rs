@@ -14,6 +14,9 @@ use agent_client_protocol::{
     Agent, Client, Conductor, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled,
     JsonRpcMessage, Proxy, Responder, UntypedMessage,
 };
+// The only conductor use in the workspace. It reaches `axum` non-optionally
+// through `agent-client-protocol-trace-viewer`, which is why `acp` links an
+// HTTP server — see the `acp` feature's comment in `Cargo.toml`.
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 

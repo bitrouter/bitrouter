@@ -1,0 +1,753 @@
+{
+  "schema_version": "1",
+  "scope_name": "io.bitrouter.observe",
+  "scope_version": "{rendering crate version}",
+  "resource_attributes": [
+    {
+      "key": "service.name",
+      "type": "string",
+      "requirement": "required",
+      "note": "Configured service name; defaults to the deployment's own name."
+    },
+    {
+      "key": "service.version",
+      "type": "string",
+      "requirement": "required",
+      "note": "The emitting crate's version."
+    }
+  ],
+  "spans": [
+    {
+      "name": "{http.request.method} {http.route}",
+      "kind": "server",
+      "parent": "The inbound W3C `traceparent` when the caller sent one; otherwise a trace root.",
+      "note": "One per inbound HTTP request. Every span below is a descendant of it.",
+      "attributes": [
+        {
+          "key": "http.request.method",
+          "type": "string",
+          "requirement": "required",
+          "note": "HTTP method."
+        },
+        {
+          "key": "http.route",
+          "type": "string",
+          "requirement": "required",
+          "note": "The matched route *template*, low cardinality by construction —                    `/mcp/{server}`, not `/mcp/some-server`. Falls back to the literal path for                    a request that matched no route, which is the only case with no template."
+        },
+        {
+          "key": "url.path",
+          "type": "string",
+          "requirement": "required",
+          "note": "The literal request path, as the URL semconv spells it. This is where the                    caller-specific segment `http.route` templates away is still readable."
+        },
+        {
+          "key": "http.response.status_code",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Stamped when the response head is produced. Absent only if no head was produced at all. Note the span itself outlives this: it ends when the response *body* is drained or dropped, so its duration covers a streamed generation and a mid-stream disconnect still exports the status the head carried."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "The status code as a string when the response was a 5xx, which is also when                    the span's own status is set to error. A 4xx leaves both unset: a malformed                    request is not a server failure."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "chat {gen_ai.request.model}",
+      "kind": "internal",
+      "parent": "The ingress SERVER span when one exists; otherwise the inbound W3C trace context; otherwise a trace root.",
+      "note": "Full request lifetime, named for the model the caller asked for — not the model that ultimately served it.",
+      "attributes": [
+        {
+          "key": "bitrouter.request_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Per-request id; the join key to logs and settlement records."
+        },
+        {
+          "key": "bitrouter.api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling key's id. Raw on the span — cardinality caps apply to metrics only."
+        },
+        {
+          "key": "bitrouter.user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling user's id. Raw on the span, as above."
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Always `chat` on this span."
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "requirement": "required",
+          "note": "Model the caller requested."
+        },
+        {
+          "key": "gen_ai.request.temperature",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.top_p",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.max_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the request set it."
+        },
+        {
+          "key": "gen_ai.request.seed",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.frequency_penalty",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.presence_penalty",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Read opportunistically from the request's untyped `extra` map."
+        },
+        {
+          "key": "gen_ai.request.stop_sequences",
+          "type": "string_array",
+          "requirement": "conditional",
+          "note": "Read from the request's `stop` extra; omitted when it holds no strings."
+        },
+        {
+          "key": "$screen_name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Vendor-specific: PostHog's \"URL / Screen\" column reads this key. Set once at request end to `<provider>/<model>`, or to the requested model when no provider was reached."
+        },
+        {
+          "key": "bitrouter.request_duration_ms",
+          "type": "int",
+          "requirement": "required",
+          "note": "End-to-end request latency."
+        },
+        {
+          "key": "bitrouter.outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "One of `completed`, `failed`, `disconnected`."
+        },
+        {
+          "key": "bitrouter.provider_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Provider that served the request; absent when none was reached."
+        },
+        {
+          "key": "bitrouter.model_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Model that served the request; absent when none was reached."
+        },
+        {
+          "key": "bitrouter.upstream_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time spent in the upstream call, when the executor reported it."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Label of the credential used, when the target carried one."
+        },
+        {
+          "key": "bitrouter.ttft_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time to first token, for a streamed response."
+        },
+        {
+          "key": "bitrouter.first_token_kind",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Which delta arrived first — reasoning, text or tool call."
+        },
+        {
+          "key": "bitrouter.generation_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "First-token-to-last-token span of a streamed generation."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Serving provider. The semconv's current key — it replaced `gen_ai.system`."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Model that actually served the request, which may differ from the requested one."
+        },
+        {
+          "key": "gen_ai.response.id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Gateway-observable response id — see the `gateway-observable-ids` invariant."
+        },
+        {
+          "key": "gen_ai.response.finish_reasons",
+          "type": "string_array",
+          "requirement": "conditional",
+          "note": "Single-element array; the semconv types this as an array."
+        },
+        {
+          "key": "gen_ai.response.time_to_first_chunk",
+          "type": "double",
+          "requirement": "conditional",
+          "note": "Time to first token in *seconds*, as the semconv requires. Measured from the first content delta, never from response headers."
+        },
+        {
+          "key": "gen_ai.usage.input_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the upstream reported usage."
+        },
+        {
+          "key": "gen_ai.usage.output_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "When the upstream reported usage."
+        },
+        {
+          "key": "gen_ai.usage.reasoning_tokens",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Only when non-zero."
+        },
+        {
+          "key": "gen_ai.input.messages",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "JSON-encoded prompt messages. Only under full content capture, which is off by default; truncated at the configured byte cap on a char boundary."
+        },
+        {
+          "key": "gen_ai.output.messages",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "JSON-encoded response content blocks, from the IR for a non-streamed response and reassembled from deltas for a streamed one. Full content capture only."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Error class, kept low-cardinality so metrics can dimension on it. The human-readable message rides the `exception` event instead."
+        }
+      ],
+      "events": [
+        {
+          "name": "exception",
+          "note": "OTel exception semconv. Carries the human-readable message that deliberately stays off `error.type`, which is kept low-cardinality for metric dimensions.",
+          "attributes": [
+            {
+              "key": "exception.type",
+              "type": "string",
+              "requirement": "required",
+              "note": "Error class — the same value as `error.type`."
+            },
+            {
+              "key": "exception.message",
+              "type": "string",
+              "requirement": "required",
+              "note": "Rendered error."
+            }
+          ]
+        },
+        {
+          "name": "tool_call.started",
+          "note": "Emitted per streamed tool-call delta that names a tool.",
+          "attributes": [
+            {
+              "key": "tool.name",
+              "type": "string",
+              "requirement": "required",
+              "note": "Tool being called."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "route",
+      "kind": "internal",
+      "parent": "The root `chat` span.",
+      "note": "Brief span recording what the router decided. Carries no `gen_ai.*` attribute.",
+      "attributes": [
+        {
+          "key": "bitrouter.route_chain_length",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Number of candidates in the resolved chain; absent when routing produced none."
+        },
+        {
+          "key": "bitrouter.route_head_provider",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Provider of the first candidate."
+        },
+        {
+          "key": "bitrouter.route_head_model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Model of the first candidate."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "chat {bitrouter.model_id}",
+      "kind": "client",
+      "parent": "The root `chat` span.",
+      "note": "A plain HTTP client span for one upstream attempt — *not* a gen_ai generation. See the `single-generation` invariant. Distinguished from the root `chat` span by kind: this one is CLIENT, the root is INTERNAL.",
+      "attributes": [
+        {
+          "key": "bitrouter.provider_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Provider this attempt targeted."
+        },
+        {
+          "key": "bitrouter.model_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Upstream model id this attempt targeted."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Label of the credential used, when the target carried one."
+        },
+        {
+          "key": "bitrouter.upstream_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Time in the upstream call, when the executor reported it."
+        },
+        {
+          "key": "server.address",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Upstream host, parsed from the effective API base."
+        },
+        {
+          "key": "server.port",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Upstream port, when the API base spelled one."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Error class for a failed attempt, or `stream_dropped` / `client_disconnected` when the response body ended abnormally."
+        }
+      ],
+      "events": [
+        {
+          "name": "exception",
+          "note": "OTel exception semconv. Carries the human-readable message that deliberately stays off `error.type`, which is kept low-cardinality for metric dimensions.",
+          "attributes": [
+            {
+              "key": "exception.type",
+              "type": "string",
+              "requirement": "required",
+              "note": "Error class — the same value as `error.type`."
+            },
+            {
+              "key": "exception.message",
+              "type": "string",
+              "requirement": "required",
+              "note": "Rendered error."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "settle",
+      "kind": "internal",
+      "parent": "The root `chat` span.",
+      "note": "Brief span recording the resolved provider / model / account. Carries no `gen_ai.*` attribute — see the `single-generation` invariant.",
+      "attributes": [
+        {
+          "key": "bitrouter.provider_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Provider that served the request."
+        },
+        {
+          "key": "bitrouter.model_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Model that served the request."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Label of the credential used, when one was recorded."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "invoke_agent {gen_ai.agent.name}",
+      "kind": "internal",
+      "parent": "A trace root. ACP session updates carry no causal parent ids.",
+      "note": "Emitted once per completed prompt turn, back-dated by the turn latency so its duration is real.",
+      "attributes": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Always `invoke_agent` on this span."
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Configured agent id."
+        },
+        {
+          "key": "gen_ai.conversation.id",
+          "type": "string",
+          "requirement": "required",
+          "note": "The session's stable record id. Also the join key to the HTTP plane: when the agent routes its model calls through BitRouter, one backend sees both the agent turns and the `chat` generations they caused."
+        },
+        {
+          "key": "bitrouter.stop_reason",
+          "type": "string",
+          "requirement": "required",
+          "note": "Turn stop reason, rendered as a string."
+        },
+        {
+          "key": "bitrouter.context.used",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Context-window occupancy, when the upstream reported usage. See the `occupancy-is-not-usage` invariant."
+        },
+        {
+          "key": "bitrouter.context.size",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Context-window size, when the upstream reported it."
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "execute_tool {gen_ai.tool.name}",
+      "kind": "internal",
+      "parent": "A trace root — a *sibling* of the turn span, not a child. ACP session updates carry no causal parent ids, so correlation runs through `gen_ai.conversation.id`.",
+      "note": "Emitted when a tool call reports a terminal status. A tool that never finishes emits no span.",
+      "attributes": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Always `execute_tool` on this span."
+        },
+        {
+          "key": "gen_ai.tool.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Tool title when the update carried one, else the tool call id."
+        },
+        {
+          "key": "gen_ai.conversation.id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Correlates the tool call with its turn."
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Configured agent id."
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "`tool_failed` when the tool reported failure."
+        }
+      ],
+      "events": []
+    }
+  ],
+  "meter_name": "bitrouter",
+  "metrics": [
+    {
+      "name": "bitrouter.requests",
+      "instrument": "counter",
+      "value_type": "int",
+      "unit": "1",
+      "note": "Total requests processed.",
+      "dimensions": [
+        {
+          "key": "api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+        },
+        {
+          "key": "user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling user's id, capped the same way."
+        },
+        {
+          "key": "outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "One of `completed`, `failed`, `disconnected`."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When the serving target carried a credential label."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.errors",
+      "instrument": "counter",
+      "value_type": "int",
+      "unit": "1",
+      "note": "Requests that ended in a failure. A client disconnect is not an error.",
+      "dimensions": [
+        {
+          "key": "api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+        },
+        {
+          "key": "user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling user's id, capped the same way."
+        },
+        {
+          "key": "outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "One of `completed`, `failed`, `disconnected`."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When the serving target carried a credential label."
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.client.operation.duration",
+      "instrument": "histogram",
+      "value_type": "double",
+      "unit": "s",
+      "note": "Request latency in seconds, per the GenAI semconv. Recorded even when an early failure produced no execution result.",
+      "dimensions": [
+        {
+          "key": "api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+        },
+        {
+          "key": "user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "Calling user's id, capped the same way."
+        },
+        {
+          "key": "outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "One of `completed`, `failed`, `disconnected`."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When a provider served the request."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When the serving target carried a credential label."
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.client.token.usage",
+      "instrument": "histogram",
+      "value_type": "int",
+      "unit": "{token}",
+      "note": "Token usage. One instrument for both directions — see the `one-token-histogram` invariant.",
+      "dimensions": [
+        {
+          "key": "api_key_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "As on the base dimensions."
+        },
+        {
+          "key": "user_id",
+          "type": "string",
+          "requirement": "required",
+          "note": "As on the base dimensions."
+        },
+        {
+          "key": "outcome",
+          "type": "string",
+          "requirement": "required",
+          "note": "As on the base dimensions."
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "requirement": "required",
+          "note": "Token usage is only recorded when a provider served the request."
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "requirement": "required",
+          "note": "Token usage is only recorded when a provider served the request."
+        },
+        {
+          "key": "bitrouter.account_label",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "When the serving target carried a credential label."
+        },
+        {
+          "key": "gen_ai.token.type",
+          "type": "string",
+          "requirement": "required",
+          "note": "`input` or `output`. This dimension is what makes one histogram sufficient."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.stream_parts",
+      "instrument": "counter",
+      "value_type": "int",
+      "unit": "1",
+      "note": "Stream parts observed. Not request-scoped, so it carries none of the base dimensions.",
+      "dimensions": [
+        {
+          "key": "part_type",
+          "type": "string",
+          "requirement": "required",
+          "note": "Stream part discriminant, e.g. `text_delta`, `usage`, `response_completed`."
+        }
+      ]
+    }
+  ],
+  "extension_region": {
+    "carrier": "observe.span_attributes",
+    "target_span": "chat {gen_ai.request.model}",
+    "reserved_prefixes": [
+      "bitrouter.",
+      "gen_ai."
+    ],
+    "rule": "A deployment may stamp any attribute onto the root `chat` span except keys under a reserved prefix and keys this schema already declares on any span. Reserved keys are dropped, not stamped: a deployment that redefined `bitrouter.*` would make the schema deployment-dependent, which is the one thing it exists not to be.",
+    "value_types": "Scalars only — string, bool, integer, float. Null and nested JSON are skipped, because an OTel attribute value is scalar.",
+    "diagnostic": "One DEBUG line per dropped key on the `bitrouter::observe::span_attributes` target."
+  },
+  "invariants": [
+    {
+      "id": "single-generation",
+      "rule": "Only the root `chat` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
+      "failure": "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own generation. Stamping a hop makes it count two generations per request and double the reported cost. Nothing errors; the bill is just wrong."
+    },
+    {
+      "id": "occupancy-is-not-usage",
+      "rule": "ACP agent spans never carry `gen_ai.usage.*`. Context-window occupancy rides `bitrouter.context.used` / `bitrouter.context.size` instead.",
+      "failure": "The substrate reports occupancy, not per-turn deltas. Writing occupancy into the token attributes corrupts every token dashboard built on them, and the numbers look plausible."
+    },
+    {
+      "id": "gateway-observable-ids",
+      "rule": "`gen_ai.response.id` carries the gateway-observable id. Under the Responses protocol that is an encoded gateway continuation id; the native upstream id never reaches an exported span.",
+      "failure": "A leaked native id is not resolvable through the gateway, so continuation breaks for anyone who reads it off a trace."
+    },
+    {
+      "id": "one-token-histogram",
+      "rule": "`gen_ai.client.token.usage` is a single histogram; input versus output is the `gen_ai.token.type` dimension.",
+      "failure": "Registering a second same-named instrument is a duplicate-instrument conflict: the SDK warns once and merges them anyway, so the split silently does nothing."
+    },
+    {
+      "id": "span-cardinality-is-unbounded",
+      "rule": "Cardinality caps apply to metric dimensions only. Spans carry raw `api_key_id` / `user_id` values.",
+      "failure": "Capping span attributes trades per-tenant debug fidelity for storage the tracing backend was never going to charge for. Cardinality is a metrics concern."
+    },
+    {
+      "id": "wire-visible-names",
+      "rule": "The scope name, the meter name, and the instrument names are wire contract.",
+      "failure": "Dashboards and collector routing rules select on them. Renaming one to track the crate that happens to host the code breaks every consumer, and the export keeps succeeding."
+    }
+  ]
+}

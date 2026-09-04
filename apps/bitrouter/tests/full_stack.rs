@@ -9,8 +9,8 @@
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
 //! - `bitrouter_guardrails::*` (shared plugin: pre-request block +
 //!   stream-stage redact)
-//! - `bitrouter_observe::OtelObserveHook` (shared plugin: per-request OTLP
-//!   trace + metric export)
+//! - `bitrouter_telemetry::otel::OtelObserveHook` (SDK `otel` feature: per-request
+//!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
 //!
 //! These tests are the canonical "did anyone break the assembly?" gate —
@@ -137,7 +137,7 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
 
     // Use a short explicit trace interval so this test checks export behavior
     // without racing the production default. Indentation matches the 4-space
-    // depth under `bitrouter-observe:`.
+    // depth under `bitrouter-telemetry:`.
     let observe_block = format!(
         "    otel:\n      endpoint: \"{otlp}\"\n      traces:\n        batch:\n          flush_ms: 100\n      metrics:\n        enabled: {metrics_enabled}",
         otlp = otlp_collector.uri()
@@ -172,7 +172,7 @@ plugins:
     custom_patterns:
       - {{ name: ssn,       pattern: '\d{{3}}-\d{{2}}-\d{{4}}', action: redact }}
       - {{ name: forbidden, pattern: '(?i)forbidden',           action: block  }}
-  bitrouter-observe:
+  bitrouter-telemetry:
 {observe_block}
 "#,
         upstream = upstream.uri(),

@@ -654,9 +654,9 @@ dependencies = [
  "base64 0.22.1",
  "bitrouter-guardrails",
  "bitrouter-mcp",
- "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
+ "bitrouter-telemetry",
  "bitrouter-tui",
  "chrono",
  "clap",
@@ -729,35 +729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-observe"
-version = "1.0.0-alpha.27"
-dependencies = [
- "async-trait",
- "axum",
- "bitrouter-sdk",
- "bytes",
- "criterion",
- "dashmap",
- "futures",
- "futures-core",
- "http",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bitrouter-providers"
 version = "1.0.0-alpha.27"
 dependencies = [
@@ -816,6 +787,37 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "bitrouter-telemetry"
+version = "1.0.0-alpha.27"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bitrouter-sdk",
+ "bytes",
+ "criterion",
+ "dashmap",
+ "futures",
+ "futures-core",
+ "http",
+ "http-body",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "pin-project-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tower",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5467,7 +5469,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

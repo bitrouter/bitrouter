@@ -18,9 +18,12 @@ path = "src/main.rs"
 
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
+# `server`: the inbound ingress SERVER span, which wraps the SDK router this
+# binary serves. A deployment that builds its own ingress span takes
+# `otel-http` alone.
+bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
 bitrouter-guardrails.workspace = true
-bitrouter-observe = { workspace = true, features = ["otel-http"] }
 bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.27" }
 chrono.workspace = true
 sha2.workspace = true
@@ -80,7 +83,7 @@ axum-test = "21"
 http.workspace = true
 serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
-# bodies the observe plugin pushes to the configured collector.
-# https://docs.rs/opentelemetry-proto/0.32/
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
-prost = "0.14"
+# bodies the observe plugin pushes to the configured collector. Pins live in
+# the root `[workspace.dependencies]` alongside the rest of the 0.32.x stack.
+opentelemetry-proto.workspace = true
+prost.workspace = true

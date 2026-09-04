@@ -2125,7 +2125,13 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
                     .into_iter()
                     .map(|name| UnsetVar { unset_env: name })
                     .collect(),
-            )),
+            )
+            // Reported, never fatal: an unread `plugins.<id>` block is a
+            // misconfiguration rather than a malformed config, and this
+            // command is CI-gating. The daemon warns about the same set on
+            // every start (`assemble::ignored_config_warnings`) — that is the path
+            // that reaches an operator who never runs `validate`.
+            .with_ignored_config(bitrouter::assemble::ignored_config_file_warnings(&cfg))),
             Err(error) => Ok(ValidateReport::invalid(
                 path.display().to_string(),
                 error.to_string(),
@@ -2555,7 +2561,7 @@ fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_observe::otel::OtelExporter::new`]
+/// so this MUST be called after [`bitrouter_telemetry::otel::OtelExporter::new`]
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
 ///
@@ -2564,7 +2570,7 @@ fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
 /// `bitrouter reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 fn init_serve_tracing_subscriber(
-    exporter: Option<&bitrouter_observe::otel::OtelExporter>,
+    exporter: Option<&bitrouter_telemetry::otel::OtelExporter>,
     config_log_level: &str,
 ) {
     use tracing_subscriber::layer::SubscriberExt;
@@ -2575,7 +2581,7 @@ fn init_serve_tracing_subscriber(
         .with(tracing_subscriber::fmt::layer());
     match exporter {
         Some(exp) => registry
-            .with(bitrouter_observe::otel::http_layer::tracing_subscriber_layer(exp))
+            .with(bitrouter_telemetry::otel::subscriber::tracing_subscriber_layer(exp))
             .init(),
         None => registry.init(),
     }
@@ -2667,6 +2673,12 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     if let Some(msg) = &assembled.otel_init_error {
         tracing::error!("{msg}");
     }
+    // Same deferral, same reason: assembly runs before the subscriber, so
+    // these are collected there and emitted here. Without this the guard is
+    // silent on exactly the path it exists for.
+    for msg in &assembled.ignored_config {
+        tracing::warn!("{msg}");
+    }
     let workflow_trace_capture =
         bitrouter::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
     if workflow_trace_capture.is_some() {
@@ -2715,12 +2727,23 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
 
     let http_app = app.clone();
     let http_listen = listen.clone();
+    // The ingress SERVER span is created from the exporter's own tracer — the
+    // SDK installs no global `TracerProvider`, so there is nothing to reach
+    // for implicitly. With OTel disabled there is no ingress span at all,
+    // which is the honest behaviour: the previous `TraceLayer` ran regardless
+    // and built `tracing` spans that went nowhere.
+    let otel_router_wrapper = assembled
+        .otel_exporter
+        .as_deref()
+        .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
     let http = async move {
-        // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
-        // trace-context propagation) so the inbound HTTP request becomes
-        // the SERVER span parent of the bitrouter `chat` INTERNAL span.
-        let otel_wrapper = bitrouter_observe::otel::http_layer::router_wrapper();
+        // Open an OTel SERVER span per inbound request and publish it on the
+        // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
+        let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
+            Some(wrapper) => wrapper(router),
+            None => router,
+        };
         let shutdown = async move {
             let _ = http_shutdown_rx.await;
         };
@@ -3001,10 +3024,10 @@ fn maybe_announce_telemetry(home: &std::path::Path) {
     );
     eprintln!("    • full     — the above plus request + response message content");
     eprintln!();
-    eprintln!("  Enable it under plugins.bitrouter-observe.telemetry in your config:");
+    eprintln!("  Enable it under plugins.bitrouter-telemetry.telemetry in your config:");
     eprintln!();
     eprintln!("       plugins:");
-    eprintln!("         bitrouter-observe:");
+    eprintln!("         bitrouter-telemetry:");
     eprintln!("           telemetry:");
     eprintln!("             enabled: true");
     eprintln!("             level: metadata   # or: full");
@@ -4684,7 +4707,7 @@ async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
 /// "feature off" from "daemon down."
 async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
-    use bitrouter_observe::OTEL_ENABLED;
+    use bitrouter_telemetry::OTEL_ENABLED;
 
     let (snapshot, daemon_reachable) =
         match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {

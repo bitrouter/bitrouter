@@ -1,5 +1,11 @@
 //! GenAI **agent** spans for the ACP substrate path (`bitrouter acp …`).
 //!
+//! Not to be confused with [`bitrouter_sdk::acp`], which is the ACP pipeline itself.
+//! This module only *observes* that path: it lives here, rather than beside
+//! the pipeline, because `AcpSpanRecorder` stores a tracer obtained from
+//! `OtelExporter::tracer_clone()`, which stays `pub(crate)` (see
+//! `docs/OTEL_SDK_MIGRATION_SPEC.md`).
+//!
 //! Maps substrate-shaped events onto the OTel GenAI *agent* semantic
 //! conventions (<https://opentelemetry.io/docs/specs/semconv/gen-ai/> —
 //! Development status, so attribute churn is expected):
@@ -44,6 +50,8 @@ pub struct TurnRecord {
     /// Context-window occupancy (tokens in context / window size) as of the
     /// latest upstream usage report, when one was seen.
     pub context_used: Option<u64>,
+    /// Total context-window size the upstream model reported, when one was
+    /// seen. Pairs with [`TurnRecord::context_used`] to give an occupancy ratio.
     pub context_size: Option<u64>,
 }
 
@@ -282,5 +290,72 @@ mod tests {
         );
         assert_eq!(spans[1].name, "execute_tool Write file");
         assert!(attr(&spans[1], "error.type").is_none());
+    }
+
+    #[test]
+    fn agent_spans_conform_to_the_committed_span_schema() {
+        // Same contract the exporter's conformance tests enforce for the HTTP
+        // plane: nothing reaches the wire that
+        // `crates/bitrouter-sdk/span-schema.json` does not describe.
+        use bitrouter_sdk::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+
+        let (tracer, captured) = capturing_tracer();
+        let recorder = AcpSpanRecorder::with_tracer(tracer, "claude-acp", "rec-1");
+        recorder.turn_completed(&TurnRecord {
+            stop_reason: "EndTurn".to_string(),
+            latency: Duration::from_millis(10),
+            context_used: Some(1500),
+            context_size: Some(200_000),
+        });
+        recorder.tool_started("t1", "Read file");
+        recorder.tool_finished("t1", false, None);
+
+        let spans = captured.lock().expect("captured");
+        assert_eq!(spans.len(), 2, "one turn span and one tool span");
+        for span in spans.iter() {
+            assert_eq!(
+                span.span_kind,
+                SpanKind::Internal,
+                "`{}` must stay INTERNAL",
+                span.name
+            );
+            let def = span_def_for(&span.name, SchemaKind::Internal)
+                .unwrap_or_else(|| panic!("exported span `{}` matches no declaration", span.name));
+            for kv in span.attributes.iter() {
+                assert!(
+                    def.attributes.iter().any(|a| a.key == kv.key.as_str()),
+                    "`{}` carries `{}`, which otel::schema does not declare on it",
+                    def.name,
+                    kv.key
+                );
+            }
+            for declared in def
+                .attributes
+                .iter()
+                .filter(|a| matches!(a.requirement, Requirement::Required))
+            {
+                assert!(
+                    span.attributes
+                        .iter()
+                        .any(|kv| kv.key.as_str() == declared.key),
+                    "`{}` is missing required attribute `{}`",
+                    def.name,
+                    declared.key
+                );
+            }
+            // The `occupancy-is-not-usage` invariant. Asserted here rather than
+            // left to the generic key check because it is the one an ACP
+            // re-implementation is most likely to get wrong: the substrate
+            // reports occupancy, and writing it into the token attributes
+            // produces plausible-looking, wrong dashboards.
+            assert!(
+                span.attributes
+                    .iter()
+                    .all(|kv| !kv.key.as_str().starts_with("gen_ai.usage.")),
+                "`{}` must not carry gen_ai.usage.* — the substrate reports context occupancy, \
+                 not per-turn token deltas",
+                def.name
+            );
+        }
     }
 }

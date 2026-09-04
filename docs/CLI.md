@@ -29,6 +29,63 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
+## Logging (`RUST_LOG`)
+
+Diagnostics are emitted with `tracing` and filtered by **`RUST_LOG`**, using standard [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. When `RUST_LOG` is unset the filter defaults to `info`; a malformed value falls back to `info` rather than failing to start.
+
+Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, …), so `RUST_LOG=warn,bitrouter=debug` works as you would expect. Three targets are **pinned explicitly** and are *not* module paths:
+
+| Target | What it carries |
+| --- | --- |
+| `bitrouter::observe::http` | DEBUG diagnostics from the HTTP ingress layer: one line per request, plus one when an inbound `traceparent` arrives but does not parse. **Silent unless OTel is configured** — the ingress layer is only installed when an exporter exists. |
+| `bitrouter::observe::cardinality` | WARN when the metric-dimension cardinality limiter recovers from a poisoned lock. |
+| `bitrouter::observe::span_attributes` | DEBUG per span attribute a deployment forwarded that the span schema reserves — see below. |
+
+These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
+
+- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in `bitrouter-telemetry`, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter_telemetry::otel::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
+- **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `crates/bitrouter-sdk/span-schema.json`.
+- **`RUST_LOG` no longer affects tracing.** This used to be the opposite, and the reversal is worth stating because the old advice is still in circulation: the ingress span was a `tracing` span bridged into OpenTelemetry, so a filter that dropped `bitrouter::observe::http` at INFO also dropped the SERVER span, and every `chat` span exported as an orphan root with no error reported anywhere. A blanket `RUST_LOG=warn` was enough to do it. The ingress span is now an OpenTelemetry span in its own right and never passes through the `tracing` subscriber, so **no filter can suppress it**. Set `RUST_LOG` for the logs you want; traces are unaffected either way.
+
+## Ignored configuration
+
+`Config::plugins` is an unvalidated map and the JSON Schema declares it
+`additionalProperties: true`, so a `plugins.<id>` block the binary does not
+read is **silently ignored** — a typo like `plugins.bitrouter-guardrail`
+(singular) drops the operator's declared block / redact patterns and the
+process starts anyway. Two places report it:
+
+- `bitrouter config validate` lists them under `ignored_config`. It does not
+  fail validation — an ignored block is a misconfiguration, not a malformed
+  config, and this command is CI-gating.
+- Every runtime surface logs one WARN per unread id on start: the daemon, and
+  `bitrouter acp serve|prompt` and `bitrouter chat`, none of which build the
+  daemon's `App` but all of which read the same config. This is the path that
+  matters: validation is opt-in, the runtime always runs.
+
+The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
+`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+rename that carries an obsolete setting along with it is not silent either.
+
+**Renamed in this release** — the old names are ignored, and the daemon warns
+when it sees one set:
+
+| Old | New |
+| --- | --- |
+| `plugins.bitrouter-observe.*` | `plugins.bitrouter-telemetry.*` |
+| `BITROUTER_OBSERVE_CONTENT_CAPTURE` | `BITROUTER_TELEMETRY_CONTENT_CAPTURE` |
+| `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES` | `BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES` |
+
+`plugins.bitrouter-observe.otlp_endpoint`, the v0 flat shim, is **removed**
+rather than carried over: it existed to keep a v0 config building, and v0 never
+had a `plugins.bitrouter-telemetry` key for it to live under.
+
+The `bitrouter::observe::*` log targets above, the `io.bitrouter.observe`
+instrumentation scope, and the `bitrouter` meter name are **not** renamed and
+will not be. They are wire and `RUST_LOG` contract — a rename there is silently
+wrong for every dashboard and every existing selector, with no safety net
+possible.
+
 ## Config resolution
 
 Local router subcommands that load a config accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:

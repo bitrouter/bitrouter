@@ -12,7 +12,7 @@ publish = false
 dist = false
 
 [dependencies]
-bitrouter-sdk = { workspace = true, features = ["config_file", "mcp", "acp"] }
+bitrouter-sdk = { workspace = true, features = ["config_file", "mcp"] }
 schemars.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

@@ -215,8 +215,10 @@ impl AppBuilder {
     }
 
     /// Wire a Prometheus-style metrics renderer. When set, the HTTP server
-    /// exposes `GET /metrics` against it. Typically the same
-    /// `Arc<PrometheusHook>` you registered as an `ObserveHook`.
+    /// exposes `GET /metrics` against it. Typically the same in-process
+    /// accumulator you registered as an `ObserveHook`; the OSS binary has no
+    /// such accumulator any more (it pushes over OTLP) and mounts a stub
+    /// renderer that serves a migration banner instead.
     pub fn metrics_renderer(mut self, renderer: Arc<dyn MetricsRenderer>) -> Self {
         self.metrics_renderer = Some(renderer);
         self

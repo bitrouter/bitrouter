@@ -233,7 +233,7 @@ impl SettlementRecorder for MeteringRecorder {
             })
             .transpose()?;
         if let Some(event) = &session_event {
-            ctx.emit(bitrouter_observe::otel::SpanAttributes(
+            ctx.emit(bitrouter_sdk::observe::SpanAttributes(
                 session_span_attributes(event),
             ));
         }

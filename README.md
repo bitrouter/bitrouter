@@ -57,7 +57,7 @@ explicit physical model IDs remain passthrough.
 Against that spec BitRouter provides the control plane for an **act → observe → evaluate → improve** cycle:
 
 - **Act — the router** reads the lock and rewrites each `@preset[:variant]` call to its tier's model: policy routing, cross-protocol translation, multi-account failover.
-- **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported to Prometheus or any OTLP backend.
+- **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported as OpenTelemetry traces and metrics to any OTLP backend.
 - **Evaluate — the generic eval exchange** lets task-native tests, humans, enterprise systems, or an external agentic judge submit the same versioned outcome contract. BitRouter admits, disputes, and snapshots evidence; it does not pretend one bundled judge is universal.
 - **Improve — the policy compiler** turns a frozen admitted-evidence snapshot into a deterministic, certificate-backed `policy-lock.yaml` candidate (an npm-style manifest/lock split, git-owned). Review and publication are explicit; the evidence database never changes a live route.
 

@@ -1279,3 +1279,73 @@ async fn chat_on_a_pipe_is_plain_text() {
         "the agent's reply must still reach a pipe; got {stdout:?}\nstderr:\n{stderr}"
     );
 }
+
+// ── `acp serve` emits the ignored-config warnings ─────────────────────────────
+
+/// `bitrouter acp serve` never builds an `App` and never reaches
+/// `build_observability`, so for the whole of PR #851 it was the one telemetry
+/// surface that read `plugins.*` and said nothing about the blocks it ignores.
+/// The guard is emitted first thing in `acp_cli::serve`, which is why this test
+/// can assert it without a live harness: `--direct` short-circuits routing, and
+/// an agent id that is in neither the config nor the harness catalog fails
+/// immediately *after* the warnings have gone out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_warns_about_ignored_plugin_blocks() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config_path,
+        "plugins:\n  bitrouter-observe:\n    enabled: true\n",
+    )
+    .expect("write config");
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let binary = workspace_root
+        .join("target")
+        .join(profile)
+        .join("bitrouter");
+    if !binary.exists() {
+        eprintln!(
+            "serve_warns_about_ignored_plugin_blocks: binary not found at {}; skipping",
+            binary.display()
+        );
+        return;
+    }
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(&binary)
+            .args([
+                "acp",
+                "serve",
+                "--agent",
+                "no-such-agent",
+                "--direct",
+                "--config",
+                config_path.to_str().expect("config path utf8"),
+            ])
+            .current_dir(dir.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("acp serve must exit promptly on an unknown agent")
+    .expect("acp serve output");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("plugins.bitrouter-observe is not read by this binary and is ignored"),
+        "acp serve must warn about `plugins.*` blocks it ignores; stderr was:\n{stderr}"
+    );
+}

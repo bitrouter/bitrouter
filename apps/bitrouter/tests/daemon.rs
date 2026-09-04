@@ -104,6 +104,70 @@ async fn wait_until_ready(socket: &std::path::Path) {
     }
 }
 
+/// The ignored-config guard must reach the operator on the `serve` path, and
+/// the only way it can is by being *carried out* of assembly rather than
+/// logged inside it: `build_app_with_path` runs before
+/// `init_serve_tracing_subscriber`, so a `tracing::warn!` in there is emitted
+/// into a process with no subscriber installed and is dropped silently.
+///
+/// That is exactly how the first version of this guard shipped-and-did-nothing
+/// in local testing, so the regression is worth pinning.
+///
+/// **Be precise about what this does and does not pin.** It asserts the
+/// warnings are *carried out* of assembly. It does **not** assert that nothing
+/// was logged during assembly, so re-adding a `tracing::warn!` inside
+/// `build_app_with_path` would still pass here. That assertion was considered
+/// and rejected as unreliable in the wrong direction: `tracing`'s per-callsite
+/// `Interest` cache is process-global, so a sibling test in this binary hitting
+/// the same callsite with no subscriber installed caches `Interest::never` —
+/// and a "nothing was logged" assertion then passes vacuously, which is exactly
+/// the failure it exists to catch. `crates/bitrouter-telemetry/tests/ingress_log_target.rs`
+/// is a separate binary for the same reason; the difference is that its
+/// assertion is positive, so a vacuous run fails rather than passes.
+#[tokio::test]
+async fn ignored_config_is_carried_out_of_assembly_not_logged_inside_it() {
+    let dir = tempdir("ignored-config");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let path = dir.join("bitrouter.yaml");
+    tokio::fs::write(
+        &path,
+        format!(
+            "{}\nplugins:\n  bitrouter-observe:\n    otel:\n      endpoint: http://collector:4318\n",
+            tiny_config_yaml("sqlite::memory:")
+        ),
+    )
+    .await
+    .unwrap();
+    let cfg = config::load(&path).await.unwrap();
+
+    // What the guard produces for this config, computed independently of
+    // assembly. Asserting against this rather than against a substring makes
+    // the second assertion exact: assembly must carry these out *verbatim*,
+    // not merely emit something that happens to mention the stale id.
+    let expected = bitrouter::assemble::ignored_config_warnings(&cfg);
+    assert!(
+        expected
+            .iter()
+            .any(|line| line.contains("plugins.bitrouter-observe")),
+        "the guard must flag the stale plugin id, got: {expected:?}"
+    );
+
+    let assembled = build_app_with_path(&cfg, Some(&path)).await.unwrap();
+    // Deliberately not `assert_eq!`, and deliberately printing only `expected`.
+    // `Assembled` also carries `continuation_registry`, which lazily derives
+    // from installation key material, and CodeQL's taint tracking is
+    // field-insensitive across the struct — so formatting *any* field off
+    // `assembled` reads as logging a secret (rule `rust/cleartext-logging`,
+    // alert 43). It is a false positive: `ignored_config` is the first thing
+    // `build_app_with_path` computes, purely from `config`, before a key is
+    // touched. Printing the untracked side costs nothing and keeps the alert
+    // honest for the day it catches something real.
+    assert!(
+        assembled.ignored_config == expected,
+        "assembly must carry the guard's warnings out rather than logging them; expected {expected:?}"
+    );
+}
+
 #[tokio::test]
 async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     let dir = tempdir("status");

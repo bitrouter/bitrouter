@@ -112,7 +112,7 @@ pub(crate) async fn run(
     session: &mut crate::acp_cli::ControlledSession,
     session_id: &str,
     agent_id: &str,
-    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     via: Option<String>,
 ) -> Result<()> {
     let (mut view, mut stdin) = match open_terminal(via) {
@@ -221,7 +221,7 @@ async fn drive(
     client: &AcpClient,
     session_id: &str,
     agent_id: &str,
-    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
 ) -> Result<bool> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
@@ -505,7 +505,7 @@ pub(crate) async fn chat_plain(
     client: &AcpClient,
     session_id: &str,
     agent_id: &str,
-    recorder: Option<std::sync::Arc<bitrouter_observe::acp::AcpSpanRecorder>>,
+    recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
 ) -> Result<()> {
     use std::io::Write as _;
 
