@@ -134,8 +134,17 @@ mod tests {
     use super::*;
     use bitrouter_mcp::capabilities::skill_catalog::SkillCatalog as _;
 
+    /// `rel` is written with `/` separators for readability, so push its
+    /// segments one at a time rather than joining the whole string: on Windows
+    /// `root.join(".claude/skills")` keeps the slash *inside* one component,
+    /// and the helper's path then disagrees with the native one discovery
+    /// builds — a test-only artefact that looks like a production bug.
     fn install(root: &std::path::Path, rel: &str, dir: &str, body: &str) -> std::path::PathBuf {
-        let skill_dir = root.join(rel).join(dir);
+        let mut skill_dir = root.to_path_buf();
+        for segment in rel.split('/').filter(|segment| !segment.is_empty()) {
+            skill_dir.push(segment);
+        }
+        skill_dir.push(dir);
         std::fs::create_dir_all(&skill_dir).expect("mkdir");
         std::fs::write(skill_dir.join("SKILL.md"), body).expect("write");
         skill_dir
