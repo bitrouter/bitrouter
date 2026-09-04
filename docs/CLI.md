@@ -155,7 +155,9 @@ bitrouter status --requests          # what the router has actually done
 bitrouter status --requests --human  # the same, as a table
 ```
 
-Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
+Prints pid, listen address, number of routable models, the distinct providers behind them, and the control socket path. Exits cleanly with "stopped" when no daemon is reachable.
+
+The same report the origin MCP server's `status` tool returns — one shared type, so `bitrouter status --json` and that tool's structured content are the same bytes.
 
 `--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
 
@@ -334,7 +336,7 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 |---|---|---|
 | `complete` | every profile | Route a completion through BitRouter and return the full result |
 | `list_models` | every profile | List models routable through BitRouter |
-| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, control socket) and, on the cloud profile, the credit balance |
+| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) and, on the cloud profile, the credit balance. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
 | `route_preview` | stdio + local | How a model/prompt *would* route — provider chain, policy decision, cost estimate — without sending anything upstream |
 | `skills_search` | `--backend skills` | Search installed skills by name/description |
 | `skills_get` | `--backend skills` | Fetch one skill's frontmatter + body |
@@ -349,8 +351,10 @@ skills pair.
 JSON-RPC methods plus `resources/list` / `resources/read` over the skill files,
 for hosts that consume the extension rather than the tool pair.
 
-On stdio + local, successful `complete` and `status` results carry a second
-content item with today's spend, read from the local metering database.
+On stdio + local, successful `complete` results carry a second content item
+with today's spend, read from the local metering database. `status` no longer
+carries one: it returns structured content typed by the shared report, which
+leaves no room for a free-text footer.
 
 ### `bitrouter mcp install`
 

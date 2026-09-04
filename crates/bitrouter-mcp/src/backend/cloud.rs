@@ -2,20 +2,24 @@
 //! (`https://api.bitrouter.ai`) with a bearer token. v1 takes the token
 //! explicitly; auto-reading the stored OAuth credential is v1.x.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use super::{
     Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
-    ModelsEnvelope, StatusInfo, Usage,
+    ModelsEnvelope, Usage,
 };
+use crate::actions::status::{Credits, StatusQuery, StatusReport};
+use crate::error::ToolError;
 
 /// Wire shape for `GET /v1/billing/balance`.
 ///
 /// Field-for-field the same shape as the CLI's
-/// `bitrouter::cloud::management::billing::BalanceResponse`. It is re-declared
-/// here only because this crate must not depend on `apps/bitrouter` (that edge
-/// would be a cycle); the two must stay identical, so `currency` is carried and
-/// surfaced rather than silently dropped.
+/// `bitrouter::cloud::management::billing::BalanceResponse`, and as the
+/// [`Credits`] block of the shared status report. It is re-declared here only
+/// because this crate must not depend on `apps/bitrouter` (that edge would be
+/// a cycle).
 #[derive(Debug, serde::Deserialize)]
 struct BillingBalanceResponse {
     /// Raw balance from the credit account (before pending debits).
@@ -163,31 +167,52 @@ impl Backend for CloudBackend {
         })
     }
 
-    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError> {
-        let bearer = self.resolve_bearer(caller)?;
+    /// The cloud account's credits are exactly what this backend is positioned
+    /// to answer — it holds the base URL and resolves the caller's own bearer —
+    /// so it hands itself over as the `status` port.
+    fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl StatusQuery for CloudBackend {
+    /// `GET /v1/billing/balance` with the **caller's** bearer, so a
+    /// multi-tenant HTTP deployment reports each client's own credits.
+    ///
+    /// There is no process, listen address or control socket to report — the
+    /// deployment is somebody else's — so reaching the account at all is the
+    /// liveness answer.
+    async fn status(&self, caller: &CallerAuth) -> Result<StatusReport, ToolError> {
+        let bearer = self
+            .resolve_bearer(caller)
+            .map_err(|e| ToolError::new(e.to_string()))?;
         let url = format!("{}/v1/billing/balance", self.base_url);
         let resp = self
             .authed(bearer, self.http.get(&url))
             .send()
             .await
-            .map_err(|e| BackendError::Transport(e.to_string()))?;
+            .map_err(|e| ToolError::new(BackendError::Transport(e.to_string()).to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(BackendError::Upstream {
-                status: status.as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            });
+            return Err(ToolError::new(
+                BackendError::Upstream {
+                    status: status.as_u16(),
+                    body: resp.text().await.unwrap_or_default(),
+                }
+                .to_string(),
+            ));
         }
         let b: BillingBalanceResponse = resp
             .json()
             .await
-            .map_err(|e| BackendError::Decode(e.to_string()))?;
-        Ok(StatusInfo::Cloud {
-            available_micro_usd: b.available_micro_usd,
+            .map_err(|e| ToolError::new(BackendError::Decode(e.to_string()).to_string()))?;
+        Ok(StatusReport::credited(Credits {
             balance_micro_usd: b.balance_micro_usd,
-            pending_micro_usd: b.pending_debits_micro_usd,
+            pending_debits_micro_usd: b.pending_debits_micro_usd,
+            available_micro_usd: b.available_micro_usd,
             currency: b.currency,
-        })
+        }))
     }
 }
 
@@ -228,24 +253,28 @@ mod tests {
             .await;
 
         let backend = CloudBackend::new(server.uri(), CloudAuth::Static("brk_test".into()));
-        match backend
-            .status(&CallerAuth::default())
+        let report = StatusQuery::status(&backend, &CallerAuth::default())
             .await
-            .expect("status")
-        {
-            StatusInfo::Cloud {
-                available_micro_usd,
-                balance_micro_usd,
-                pending_micro_usd,
-                currency,
-            } => {
-                assert_eq!(available_micro_usd, 4_231_000);
-                assert_eq!(balance_micro_usd, 5_000_000);
-                assert_eq!(pending_micro_usd, 769_000);
-                assert_eq!(currency, "USD");
-            }
-            other => panic!("expected Cloud, got {other:?}"),
-        }
+            .expect("status");
+        assert!(report.running);
+        assert_eq!(
+            report.credits,
+            Some(Credits {
+                balance_micro_usd: 5_000_000,
+                pending_debits_micro_usd: 769_000,
+                available_micro_usd: 4_231_000,
+                currency: "USD".into(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn status_port_is_the_backend_itself() {
+        let backend = Arc::new(CloudBackend::new(
+            "https://api.bitrouter.ai",
+            CloudAuth::PerCaller,
+        ));
+        assert!(Backend::status_port(backend).is_some());
     }
 
     #[tokio::test]

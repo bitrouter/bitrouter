@@ -12,6 +12,7 @@
 
 pub mod acp_cli;
 pub mod acp_runtime;
+pub mod actions;
 pub mod adequacy;
 pub mod agent_registry;
 pub mod agents;

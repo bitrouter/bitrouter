@@ -17,18 +17,23 @@ This crate makes BitRouter itself the server.
 ## Tools
 
 The handler assembles its tool set from one set of schemas. The completion
-tools are HTTP-safe and always present. Host-bound tools — routing
-introspection and skills — are injected app-side through the crate's
-capability ports (`RoutingQuery`, `SkillsQuery`) so the crate itself stays
-substrate-free, and they are wired on **stdio only**: they read the serving
-machine's own routing table and skill library, which has no meaning on a
-multi-tenant HTTP transport.
+tools are HTTP-safe and always present. Every other tool is injected app-side
+through one of the crate's ports — `StatusQuery` (in `actions/`), `RoutingQuery`
+and `SkillsQuery` (in `capabilities/`) — so the crate itself stays
+substrate-free. The host-bound ones are wired on **stdio only**: they read the
+serving machine's own routing table and skill library, which has no meaning on
+a multi-tenant HTTP transport.
+
+`status` is the first **action**: one report type (`actions::status::StatusReport`)
+shared by the MCP tool and `bitrouter status`, listed in `actions::ACTIONS` and
+held there by a guard test in `apps/bitrouter`. See
+[`docs/ACTIONS_SPEC.md`](../../docs/ACTIONS_SPEC.md).
 
 | Tool | Wired on | Description |
 |------|----------|-------------|
 | `complete` | all | Route a completion through BitRouter and return the full result |
 | `list_models` | all | List models routable through BitRouter |
-| `status` | all | Report BitRouter status (local: liveness/models/providers; cloud: credit balance + currency) |
+| `status` | stdio + local, any cloud | Report BitRouter status: liveness (pid, listen, models, providers, control socket) and, on a metered deployment, the credit balance. Returns the shared `actions::status::StatusReport`, so the tool advertises an `output_schema` and a stopped daemon is `running: false` rather than a tool error |
 | `route_preview` | stdio + local | Preview how a model/prompt would route (provider chain, policy decision, cost) |
 | `skills_search` | stdio + skills | Search installed BitRouter skills by name/description |
 | `skills_get` | stdio + skills | Fetch a skill's frontmatter + body |
@@ -81,6 +86,7 @@ A typical MCP client config entry (stdio):
 mcp/
 ├── src/
 │   ├── lib.rs          # serve() / install() entry points, Transport / BackendKind
+│   ├── actions/        # shared report types + their ports + the ACTIONS inventory
 │   ├── backend/        # Backend trait + LocalBackend / CloudBackend (thin reqwest)
 │   ├── capabilities/   # port traits: RoutingQuery, SkillsQuery, SkillCatalog + schemas
 │   ├── error.rs        # ToolError — the substrate-free error a port returns

@@ -1,8 +1,17 @@
-//! The `Backend` abstraction over *where* tool calls route, plus the wire
+//! The `Backend` abstraction over *where* completions route, plus the wire
 //! types the tools and both backends share. Implementations are thin reqwest
 //! clients — no routing logic lives here.
+//!
+//! `status` is **not** here: it is an [action](crate::actions), answered
+//! through [`StatusQuery`](crate::actions::status::StatusQuery) by whichever
+//! side actually knows. A backend that can answer it hands its port over via
+//! [`Backend::status_port`].
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
+
+use crate::actions::status::StatusQuery;
 
 pub mod cloud;
 pub mod local;
@@ -45,31 +54,6 @@ pub struct ModelInfo {
     pub provider: String,
 }
 
-/// Backend-specific status payload.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(untagged)]
-pub enum StatusInfo {
-    Local {
-        listen: String,
-        models: usize,
-        providers: Vec<ProviderStatus>,
-    },
-    Cloud {
-        available_micro_usd: i64,
-        balance_micro_usd: i64,
-        pending_micro_usd: i64,
-        /// Currency code (today: `"USD"`) — carried so this payload does not
-        /// diverge from the CLI's `BalanceResponse`, which is the same wire
-        /// shape read through the management client.
-        currency: String,
-    },
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub struct ProviderStatus {
-    pub id: String,
-}
-
 /// Envelope returned by `/v1/models` on both backends.
 #[derive(serde::Deserialize)]
 pub(super) struct ModelsEnvelope {
@@ -106,7 +90,7 @@ pub enum BackendError {
     MissingCredential,
 }
 
-/// Where tool calls route. Object-safe so tools hold `Arc<dyn Backend>`.
+/// Where completions route. Object-safe so tools hold `Arc<dyn Backend>`.
 #[async_trait]
 pub trait Backend: Send + Sync {
     async fn complete(
@@ -115,5 +99,14 @@ pub trait Backend: Send + Sync {
         req: CompleteRequest,
     ) -> Result<CompleteResponse, BackendError>;
     async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError>;
-    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError>;
+
+    /// The `status` port this backend can answer with, or `None`.
+    ///
+    /// This is wiring, not logic: it exists so the HTTP profile — which is
+    /// assembled from an `Arc<dyn Backend>` and nothing else — can still serve
+    /// `status` for the deployment whose status the backend genuinely knows
+    /// (the cloud account's credits). A local daemon's liveness is a
+    /// control-socket question, so `LocalBackend` returns `None` and the
+    /// embedding binary injects the real port instead.
+    fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>;
 }

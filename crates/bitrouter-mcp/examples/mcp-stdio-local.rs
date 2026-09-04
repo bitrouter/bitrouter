@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
+use bitrouter_mcp::backend::CallerAuth;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
@@ -14,6 +16,18 @@ use rmcp::model::{
     ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
+
+/// A stopped daemon, so the stdio tests see the same tool surface the shipping
+/// stdio profile has (where `bitrouter` injects a control-socket port) without
+/// needing a daemon on the machine running them.
+struct FixtureStatus;
+
+#[async_trait::async_trait]
+impl StatusQuery for FixtureStatus {
+    async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
+        Ok(StatusReport::stopped("/tmp/bitrouter.sock".into()))
+    }
+}
 
 /// A fixed one-skill catalog, so the roundtrip tests exercise the SEP-2640
 /// surface without needing skills installed on the machine running them.
@@ -230,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
 
     let server = BitrouterMcp::builder()
         .completion_local("http://127.0.0.1:4356")
+        .status(Arc::new(FixtureStatus))
         .build();
     bitrouter_mcp::server::serve_stdio(server, None).await
 }

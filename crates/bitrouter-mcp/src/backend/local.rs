@@ -2,12 +2,15 @@
 //! (`http://127.0.0.1:4356`). Pure HTTP: no control socket, no config, no
 //! dependency on `apps/bitrouter` (which would be a cycle).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use super::{
     Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
-    ModelsEnvelope, ProviderStatus, StatusInfo, Usage,
+    ModelsEnvelope, Usage,
 };
+use crate::actions::status::StatusQuery;
 
 /// Routes tool calls to the local daemon's `/v1/*` HTTP API.
 pub struct LocalBackend {
@@ -128,40 +131,13 @@ impl Backend for LocalBackend {
         })
     }
 
-    async fn status(&self, _caller: &CallerAuth) -> Result<StatusInfo, BackendError> {
-        let url = format!("{}/v1/models", self.base_url);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| BackendError::DaemonUnreachable(self.base_url.clone()).if_not(e))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(BackendError::Upstream {
-                status: status.as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            });
-        }
-        let env: ModelsEnvelope = resp
-            .json()
-            .await
-            .map_err(|e| BackendError::Decode(e.to_string()))?;
-
-        let mut seen = std::collections::BTreeSet::new();
-        let mut providers = Vec::new();
-        for m in &env.data {
-            for p in &m.providers {
-                if seen.insert(p.clone()) {
-                    providers.push(ProviderStatus { id: p.clone() });
-                }
-            }
-        }
-        Ok(StatusInfo::Local {
-            listen: self.base_url.clone(),
-            models: env.data.len(),
-            providers,
-        })
+    /// `None`: a local daemon's liveness is a control-socket question, and
+    /// this backend only speaks `/v1/*` HTTP. The embedding binary injects the
+    /// real `status` port (see `bitrouter::actions::status`); a `GET /v1/models`
+    /// standing in for a health check reported neither pid nor socket and could
+    /// not distinguish "stopped" from "broken".
+    fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+        None
     }
 }
 
@@ -236,66 +212,6 @@ mod tests {
             }
         );
         assert_eq!(out.model, "openai/gpt-4o");
-    }
-
-    #[tokio::test]
-    async fn status_maps_non_2xx_to_upstream_error() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
-            .mount(&server)
-            .await;
-        let backend = LocalBackend::new(server.uri());
-        match backend.status(&CallerAuth::default()).await {
-            Err(BackendError::Upstream { status, .. }) => assert_eq!(status, 500),
-            other => panic!("expected Upstream 500, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn status_summarizes_models_and_distinct_providers() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "object": "list",
-                "data": [
-                    { "id": "openai/gpt-4o", "providers": ["openai"] },
-                    { "id": "openai/gpt-4o-mini", "providers": ["openai"] },
-                    { "id": "claude/sonnet", "providers": ["anthropic"] }
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let backend = LocalBackend::new(server.uri());
-        match backend
-            .status(&CallerAuth::default())
-            .await
-            .expect("status")
-        {
-            StatusInfo::Local {
-                models,
-                mut providers,
-                ..
-            } => {
-                assert_eq!(models, 3);
-                providers.sort_by(|a, b| a.id.cmp(&b.id));
-                assert_eq!(
-                    providers,
-                    vec![
-                        ProviderStatus {
-                            id: "anthropic".into(),
-                        },
-                        ProviderStatus {
-                            id: "openai".into(),
-                        },
-                    ]
-                );
-            }
-            other => panic!("expected Local, got {other:?}"),
-        }
     }
 
     #[tokio::test]

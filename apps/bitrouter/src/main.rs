@@ -30,9 +30,7 @@ use bitrouter::output::reports::agents::{
     AgentsListReport,
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
-use bitrouter::output::reports::daemon::{
-    DaemonActionReport, RouteHopView, RouteReport, StatusReport,
-};
+use bitrouter::output::reports::daemon::{DaemonActionReport, RouteHopView, RouteReport};
 use bitrouter::output::reports::eval::EvalReport;
 use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
@@ -51,6 +49,7 @@ use bitrouter::output::reports::trajectory::{
     replay_report as trajectory_replay_report,
 };
 use bitrouter::output::{CliReport, Output};
+use bitrouter_mcp::actions::status::StatusReport;
 use bitrouter_sdk::config;
 
 async fn supervise_http_shutdown<Http, Control, Hup, Term>(
@@ -2264,6 +2263,19 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 },
                 None => None,
             };
+            // `status` over the control socket, for the same stdio → local
+            // pairing: only this process can read the socket, and only the
+            // socket knows the pid, the models count and the provider set. On
+            // any other profile the port stays unset and the backend's own
+            // `status_port` answers (the cloud account's credits).
+            let status: Option<std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>> =
+                match local_stdio {
+                    true => resolve_client_socket(None, None).await.ok().map(|socket| {
+                        std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(socket))
+                            as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
+                    }),
+                    false => None,
+                };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -2273,6 +2285,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 bind,
                 cost_footer,
                 routing,
+                status,
             })
             .await
         }
@@ -3237,25 +3250,18 @@ async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     }
 }
 
+/// `bitrouter status` — the control-socket probe, plus the CLI's own chrome.
+///
+/// The probe itself is the shared `status` action
+/// ([`bitrouter::actions::status`]), so this leaf and the origin MCP server's
+/// `status` tool return the same report from the same code.
 async fn status(socket: &Path) -> Result<StatusReport> {
-    let report = match daemon::send_command(socket, &DaemonCommand::Status).await {
-        Ok(DaemonResponse::Status {
-            pid,
-            listen,
-            models,
-        }) => StatusReport::running(pid, listen, models, socket.display().to_string()),
-        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-        // No daemon listening on the socket → report stopped, not error.
-        // Anything else (permission denied, malformed response, …) is a
-        // real failure and bubbles to the pretty reporter.
-        Err(e) if daemon::is_not_reachable(&e) => {
-            StatusReport::stopped(socket.display().to_string())
-        }
-        Err(e) => return Err(e),
-    };
+    let report = bitrouter::actions::status::DaemonStatus::new(socket)
+        .report()
+        .await?;
     // #607 self-update nudge — emitted to stderr so stdout stays a pure JSON
-    // result (`status 2>/dev/null | jq` must not see the nudge).
+    // result (`status 2>/dev/null | jq` must not see the nudge). CLI-only:
+    // it is a prompt for the human at the terminal, not part of the answer.
     if let Ok(source) = bitrouter::paths::resolve_config(None) {
         bitrouter::update::maybe_nudge(source.home(), &bitrouter::style::Palette::for_stderr())
             .await;
@@ -3324,6 +3330,7 @@ async fn request_daemon_view(socket: &Path) -> Option<DaemonView> {
             pid,
             listen,
             models,
+            ..
         }) => Some(DaemonView {
             pid,
             listen,
@@ -5207,6 +5214,7 @@ mod tests {
                         pid: 4_249,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
+                        providers: Vec::new(),
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -5241,6 +5249,7 @@ mod tests {
                         pid: 4_250,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
+                        providers: Vec::new(),
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -5266,6 +5275,7 @@ mod tests {
                     pid: 0,
                     listen: "127.0.0.1:4356".to_string(),
                     models: 0,
+                    providers: Vec::new(),
                 }),
             ),
             (
@@ -5701,6 +5711,161 @@ mod tests {
         };
         assert!(error.to_string().contains("does not match"));
         Ok(())
+    }
+
+    // ===== the actions table's guard =====
+    //
+    // `bitrouter_mcp::actions::ACTIONS` is the inventory of the questions
+    // BitRouter answers on more than one surface. These tests are what make it
+    // load-bearing rather than documentary. Direction matters: every MCP tool
+    // must have a row, but **not** every CLI leaf — mirroring clap's ~100
+    // leaves would be maintenance with no consumer, and `bitrouter policy
+    // verify` needs no MCP tool in order to exist.
+    //
+    // They live here, in the binary's own test module, because this is the only
+    // place that can name both `Cli` (defined in this file) and the crate's
+    // `ACTIONS`; an integration test sees only the library.
+
+    /// A fully-wired server: every port filled by a stub, so `tools()` returns
+    /// the *whole* tool surface. `CAPABILITIES` registers a capability's router
+    /// only when its port is `Some`, so a server built from any real wiring
+    /// would hide exactly the tools a missing row would hide.
+    fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
+        use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
+        use bitrouter_mcp::backend::{
+            Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
+        };
+        use bitrouter_mcp::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
+        use bitrouter_mcp::capabilities::skills::SkillsQuery;
+        use bitrouter_mcp::error::ToolError;
+
+        struct Stub;
+
+        #[async_trait::async_trait]
+        impl Backend for Stub {
+            async fn complete(
+                &self,
+                _: &CallerAuth,
+                _: CompleteRequest,
+            ) -> std::result::Result<CompleteResponse, BackendError> {
+                Err(BackendError::Transport("stub".into()))
+            }
+            async fn list_models(
+                &self,
+                _: &CallerAuth,
+            ) -> std::result::Result<Vec<ModelInfo>, BackendError> {
+                Ok(Vec::new())
+            }
+            fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+                None
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl StatusQuery for Stub {
+            async fn status(&self, _: &CallerAuth) -> std::result::Result<StatusReport, ToolError> {
+                Ok(StatusReport::stopped("/stub.sock".into()))
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl RoutingQuery for Stub {
+            async fn preview(
+                &self,
+                _: RoutePreviewArgs,
+            ) -> std::result::Result<serde_json::Value, ToolError> {
+                Ok(serde_json::json!({}))
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl SkillsQuery for Stub {
+            async fn search(&self, _: &str) -> std::result::Result<serde_json::Value, ToolError> {
+                Ok(serde_json::json!({}))
+            }
+            async fn get(&self, _: &str) -> std::result::Result<serde_json::Value, ToolError> {
+                Ok(serde_json::json!({}))
+            }
+        }
+
+        bitrouter_mcp::server::BitrouterMcp::builder()
+            .completion(Arc::new(Stub))
+            .status(Arc::new(Stub))
+            .routing(Arc::new(Stub))
+            .skills(Arc::new(Stub))
+            .build()
+    }
+
+    /// Every remotable action must be inventoried. A tool added to the origin
+    /// server without an `ACTIONS` row fails here.
+    #[test]
+    fn every_mcp_tool_has_an_actions_row() {
+        let rows: Vec<&str> = bitrouter_mcp::actions::ACTIONS
+            .iter()
+            .filter_map(|a| a.mcp_tool)
+            .collect();
+        for tool in every_tool().tools() {
+            assert!(
+                rows.contains(&tool.name.as_ref()),
+                "MCP tool `{}` has no row in `bitrouter_mcp::actions::ACTIONS`. Add one \
+                 (id, cli_leaf, mcp_tool, output_schema) so the CLI and the tool cannot \
+                 answer this question differently. Known rows: {rows:?}",
+                tool.name
+            );
+        }
+    }
+
+    /// A row naming a leaf clap does not have is a stale row: renaming
+    /// `bitrouter status` without updating the table fails here.
+    #[test]
+    fn every_actions_row_resolves_to_a_cli_leaf() {
+        use clap::CommandFactory;
+        let root = Cli::command();
+        for action in bitrouter_mcp::actions::ACTIONS {
+            let Some(leaf) = action.cli_leaf else {
+                continue;
+            };
+            let mut command = &root;
+            for segment in leaf.split_whitespace() {
+                let found = command
+                    .get_subcommands()
+                    .find(|sub| sub.get_name() == segment);
+                match found {
+                    Some(sub) => command = sub,
+                    None => panic!(
+                        "action `{}` names CLI leaf `{leaf}`, but `{segment}` is not a \
+                         subcommand of `{}`",
+                        action.id,
+                        command.get_name()
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The agreement itself: the tool advertises the row's schema, so a client
+    /// reading `output_schema` and a `--json` consumer see one type. Rows with
+    /// no schema yet (the unmigrated actions) have no agreement to check.
+    #[test]
+    fn every_actions_row_matches_its_tools_output_schema() {
+        let tools = every_tool().tools();
+        for action in bitrouter_mcp::actions::ACTIONS {
+            let Some(name) = action.mcp_tool else {
+                continue;
+            };
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("action `{}` names missing tool `{name}`", action.id));
+            let Some(schema) = action.output_schema else {
+                continue;
+            };
+            assert_eq!(
+                tool.output_schema.as_deref(),
+                Some(&schema()),
+                "tool `{name}` does not advertise the schema its `ACTIONS` row claims"
+            );
+        }
     }
 
     #[test]

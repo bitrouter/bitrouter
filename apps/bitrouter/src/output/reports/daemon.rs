@@ -1,6 +1,7 @@
 //! Reports for the daemon-lifecycle (`start` / `stop` / `restart` / `reload` /
 //! `status`) and `route` commands.
 
+use bitrouter_mcp::actions::status::StatusReport;
 use serde::Serialize;
 
 use crate::output::CliReport;
@@ -98,60 +99,53 @@ impl CliReport for DaemonActionReport {
     }
 }
 
-/// Result of `bitrouter status`. Exit code stays 0 whether running or stopped —
-/// "stopped" is an answer, not a failure.
-#[derive(Serialize)]
-pub struct StatusReport {
-    pub running: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub listen: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub models: Option<usize>,
-    pub socket: String,
-}
-
-impl StatusReport {
-    pub fn running(pid: u32, listen: String, models: usize, socket: String) -> Self {
-        Self {
-            running: true,
-            pid: Some(pid),
-            listen: Some(listen),
-            models: Some(models),
-            socket,
-        }
-    }
-    pub fn stopped(socket: String) -> Self {
-        Self {
-            running: false,
-            pid: None,
-            listen: None,
-            models: None,
-            socket,
-        }
-    }
-}
-
+/// The human view of `bitrouter status`. Exit code stays 0 whether running or
+/// stopped — "stopped" is an answer, not a failure.
+///
+/// The report type itself is
+/// [`bitrouter_mcp::actions::status::StatusReport`](StatusReport): the `status`
+/// tool returns the same type, so `bitrouter status --json` and the tool's
+/// structured content are the same bytes. Rendering stays here — a local trait
+/// on a foreign type is legal, and it keeps [`Human`] out of the crate.
 impl CliReport for StatusReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
-        if self.running {
-            h.status_block(Health::Up, "bitrouter is running")?;
-            if let Some(pid) = self.pid {
-                h.field("pid", pid)?;
-            }
-            if let Some(listen) = &self.listen {
-                h.field("listen", listen)?;
-            }
-            if let Some(models) = self.models {
-                h.field("models", format!("{models} routable"))?;
-            }
-            h.field("socket", &self.socket)
-        } else {
+        if !self.running {
             h.status_block(Health::Down, "bitrouter is stopped")?;
-            h.field("socket", &self.socket)?;
-            h.note("Run `bitrouter start` to launch the daemon.")
+            if let Some(socket) = &self.socket {
+                h.field("socket", socket)?;
+            }
+            return h.note("Run `bitrouter start` to launch the daemon.");
         }
+        h.status_block(Health::Up, "bitrouter is running")?;
+        if let Some(pid) = self.pid {
+            h.field("pid", pid)?;
+        }
+        if let Some(listen) = &self.listen {
+            h.field("listen", listen)?;
+        }
+        if let Some(models) = self.models {
+            h.field("models", format!("{models} routable"))?;
+        }
+        if !self.providers.is_empty() {
+            h.field("providers", self.providers.join(", "))?;
+        }
+        if let Some(socket) = &self.socket {
+            h.field("socket", socket)?;
+        }
+        if let Some(credits) = &self.credits {
+            // Not `metering::fmt_usd`: that takes an unsigned amount and hard-
+            // codes a `$`, neither of which holds for a signed balance in a
+            // currency the account declares.
+            h.field(
+                "credits",
+                format!(
+                    "{:.2} {} available",
+                    credits.available_micro_usd as f64 / 1_000_000.0,
+                    credits.currency
+                ),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -205,16 +199,24 @@ mod tests {
 
     #[test]
     fn status_running_json_and_human() {
-        let r = StatusReport::running(7, "127.0.0.1:4356".into(), 42, "/x.sock".into());
+        let r = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            42,
+            vec!["anthropic".into(), "openai".into()],
+            "/x.sock".into(),
+        );
         assert_eq!(
             json(&r),
             serde_json::json!({
-                "running": true, "pid": 7, "listen": "127.0.0.1:4356", "models": 42, "socket": "/x.sock"
+                "running": true, "pid": 7, "listen": "127.0.0.1:4356", "models": 42,
+                "providers": ["anthropic", "openai"], "socket": "/x.sock"
             })
         );
         let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
         assert!(h.contains("● bitrouter is running"), "{h:?}");
         assert!(h.contains("  models    42 routable"), "{h:?}");
+        assert!(h.contains("anthropic, openai"), "{h:?}");
     }
 
     #[test]
@@ -222,8 +224,24 @@ mod tests {
         let r = StatusReport::stopped("/x.sock".into());
         assert_eq!(
             json(&r),
-            serde_json::json!({"running": false, "socket": "/x.sock"})
+            serde_json::json!({"running": false, "providers": [], "socket": "/x.sock"})
         );
+    }
+
+    /// The whole point of the shared type: what the CLI prints is what the MCP
+    /// tool returns, so the tool's structured content deserializes straight
+    /// back into the report the CLI emitted.
+    #[test]
+    fn status_json_round_trips_through_the_shared_type() {
+        let r = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            42,
+            vec!["openai".into()],
+            "/x.sock".into(),
+        );
+        let back: StatusReport = serde_json::from_value(json(&r)).expect("round trip");
+        assert_eq!(serde_json::to_value(&back).unwrap(), json(&r));
     }
 
     #[test]

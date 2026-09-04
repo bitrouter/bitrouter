@@ -152,6 +152,13 @@ pub enum DaemonResponse {
         listen: String,
         /// Count of routable models.
         models: usize,
+        /// The distinct providers behind those models, sorted.
+        ///
+        /// `#[serde(default)]` for wire-compat: a client talking to a daemon
+        /// from before this field existed reads an empty list rather than
+        /// failing the whole exchange.
+        #[serde(default)]
+        providers: Vec<String>,
     },
     /// A resolved route chain.
     Route {
@@ -386,6 +393,7 @@ pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
             pid,
             listen,
             models,
+            ..
         }) => Ok(Some(ReadyInfo {
             pid,
             listen,
@@ -550,14 +558,24 @@ async fn dispatch(
             }
         }
         DaemonCommand::Status => {
-            let models = app
+            let routable = app
                 .language_model()
-                .map(|p| p.routing_table().list_models().len())
-                .unwrap_or(0);
+                .map(|p| p.routing_table().list_models())
+                .unwrap_or_default();
+            // One pass over the table the model count already walks: the
+            // distinct providers behind it, which is what an operator or an
+            // agent actually wants to see next to "42 routable".
+            let providers: Vec<String> = routable
+                .iter()
+                .flat_map(|m| m.providers.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
             DaemonResponse::Status {
                 pid: std::process::id(),
                 listen: listen.to_string(),
-                models,
+                models: routable.len(),
+                providers,
             }
         }
         DaemonCommand::AcpSessionSpend {
@@ -1334,13 +1352,20 @@ mod tests {
             pid: 42,
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
+            providers: vec!["openai".to_string()],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: DaemonResponse = serde_json::from_str(&json).unwrap();
         match back {
-            DaemonResponse::Status { pid, models, .. } => {
+            DaemonResponse::Status {
+                pid,
+                models,
+                providers,
+                ..
+            } => {
                 assert_eq!(pid, 42);
                 assert_eq!(models, 3);
+                assert_eq!(providers, ["openai"]);
             }
             other => panic!("expected Status, got {other:?}"),
         }

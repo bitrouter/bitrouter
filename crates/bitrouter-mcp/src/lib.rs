@@ -1,10 +1,17 @@
-//! BitRouter origin MCP server — exposes BitRouter's own tools
-//! (`complete` / `list_models` / `status`) over stdio and streamable HTTP.
+//! BitRouter's action contract, plus its MCP binding — exposing BitRouter's
+//! own tools (`complete` / `list_models` / `status`) over stdio and streamable
+//! HTTP.
 //!
 //! Distinct from the MCP *gateway* in `bitrouter-sdk::mcp`, which proxies
 //! *upstream* MCP servers. This crate is the *origin* server for BitRouter's
 //! own capabilities.
+//!
+//! [`actions`] holds the shared report types and their port traits: one typed
+//! answer per question, so the CLI leaf and the MCP tool cannot drift apart.
+//! The implementations live app-side; this crate keeps no business logic for
+//! an action it owns.
 
+pub mod actions;
 pub mod backend;
 pub mod capabilities;
 pub mod error;
@@ -81,6 +88,11 @@ pub struct ServeOptions {
     /// transport only — it reads the serving machine's own routing table,
     /// which is not what a multi-tenant HTTP caller is asking about).
     pub routing: Option<std::sync::Arc<dyn capabilities::routing::RoutingQuery>>,
+    /// Optional `status` port. When unset, the backend's own
+    /// [`status_port`](backend::Backend::status_port) is used — which is how
+    /// the cloud profile reports credits. The local profile has no such
+    /// fallback: only the embedding binary can read the control socket.
+    pub status: Option<std::sync::Arc<dyn actions::status::StatusQuery>>,
 }
 
 /// Run the MCP server to completion: the router profile (completion, plus
@@ -97,7 +109,13 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     )?;
     match opts.transport {
         Transport::Stdio => {
-            let mut builder = server::BitrouterMcp::builder().completion(backend);
+            let mut builder = server::BitrouterMcp::builder().completion(backend.clone());
+            // The injected port wins: on the local profile it is the control
+            // socket, which knows the pid and the socket path the backend's
+            // `/v1/*` client never could.
+            if let Some(status) = opts.status.or_else(|| backend.status_port()) {
+                builder = builder.status(status);
+            }
             if let Some(routing) = opts.routing {
                 builder = builder.routing(routing);
             }
