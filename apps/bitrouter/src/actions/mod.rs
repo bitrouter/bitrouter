@@ -9,4 +9,5 @@
 //! keeps its own report under [`crate::output::reports`].
 
 pub mod models;
+pub mod route;
 pub mod status;

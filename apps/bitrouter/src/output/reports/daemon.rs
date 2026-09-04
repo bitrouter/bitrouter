@@ -1,6 +1,7 @@
 //! Reports for the daemon-lifecycle (`start` / `stop` / `restart` / `reload` /
 //! `status`) and `route` commands.
 
+use bitrouter_mcp::actions::route::{ResolvedVia, RouteReport};
 use bitrouter_mcp::actions::status::StatusReport;
 use serde::Serialize;
 
@@ -183,42 +184,66 @@ fn render_spend(
     Ok(())
 }
 
-/// One hop of a resolved route chain: provider → upstream service id → protocol.
-#[derive(Serialize)]
-pub struct RouteHopView {
-    pub provider: String,
-    pub service_id: String,
-    pub protocol: String,
-}
-
-/// Result of `bitrouter route <model>`.
-#[derive(Serialize)]
-pub struct RouteReport {
-    pub model: String,
-    /// Where the chain came from: `live daemon` | `config` | `zero-config`.
-    pub resolved_via: String,
-    pub chain: Vec<RouteHopView>,
-}
-
+/// Human rendering for the shared `route` report.
+///
+/// The type itself lives in `bitrouter-mcp` so the MCP tool can return it;
+/// `Human` stays here, app-side, which is what keeps the CLI's presentation
+/// vocabulary out of the crate.
 impl CliReport for RouteReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        let via = match self.resolved_via {
+            ResolvedVia::LiveDaemon => "live daemon",
+            ResolvedVia::Config => "config",
+            ResolvedVia::ZeroConfig => "zero-config",
+        };
         h.line(&format!(
-            "model: {}  (resolved via: {})",
-            self.model, self.resolved_via
+            "model: {}  (resolved via: {via})",
+            self.requested_model
         ))?;
-        if self.chain.is_empty() {
+        // Only worth a line when the policy table moved the request: an
+        // unchanged model with no effort is what the reader already assumed.
+        if self.effective_model != self.requested_model || self.effective_effort.is_some() {
+            let effort = match self.effective_effort {
+                Some(effort) => format!("  (effort: {effort})"),
+                None => String::new(),
+            };
+            h.line(&format!("  policy → {}{effort}", self.effective_model))?;
+        }
+        if self.provider_chain.is_empty() {
             return h.line("  (empty chain — no provider declares this model)");
         }
-        for (i, hop) in self.chain.iter().enumerate() {
+        for (i, hop) in self.provider_chain.iter().enumerate() {
             h.line(&format!(
                 "  {}. {} → {} ({})",
                 i + 1,
                 hop.provider,
                 hop.service_id,
-                hop.protocol
+                hop.api_protocol
+            ))?;
+        }
+        if let Some(cost) = &self.estimated_cost {
+            // Rates, not a total: nothing was sent, so there is nothing to
+            // multiply by. The bracket count is the honest warning that the
+            // base rates are not the whole story for this model.
+            h.line(&format!(
+                "  rates: in {} / out {} µUSD per token{}",
+                rate(cost.input_micro_usd_per_token),
+                rate(cost.output_micro_usd_per_token),
+                match cost.context_tiers.len() {
+                    0 => String::new(),
+                    n => format!(" (+{n} long-context bracket(s))"),
+                }
             ))?;
         }
         Ok(())
+    }
+}
+
+/// A per-token rate, or `?` where the registry prices nothing.
+fn rate(value: Option<f64>) -> String {
+    match value {
+        Some(v) => format!("{v}"),
+        None => "?".to_string(),
     }
 }
 
@@ -365,14 +390,91 @@ mod tests {
         assert_eq!(serde_json::to_value(&back).unwrap(), json(&r));
     }
 
+    /// An unroutable model is an empty array, not a missing key: a consumer
+    /// indexing `provider_chain` must not have to special-case absence.
     #[test]
     fn route_empty_chain_is_empty_array() {
         let r = RouteReport {
-            model: "m".into(),
-            resolved_via: "config".into(),
-            chain: vec![],
+            requested_model: "m".into(),
+            effective_model: "m".into(),
+            effective_effort: None,
+            resolved_via: ResolvedVia::Config,
+            policy_decision: None,
+            provider_chain: vec![],
+            estimated_cost: None,
         };
-        assert_eq!(json(&r)["chain"], serde_json::json!([]));
+        assert_eq!(json(&r)["provider_chain"], serde_json::json!([]));
+        let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
+        assert!(h.contains("no provider declares this model"), "{h}");
+    }
+
+    /// The human line has to *say* when the policy table moved the request —
+    /// printing only the requested model is how `bitrouter route` used to name
+    /// a model the daemon would never pick.
+    #[test]
+    fn route_human_names_the_effective_model_when_policy_moved_it() {
+        use bitrouter_mcp::actions::route::ProviderHop;
+        let r = RouteReport {
+            requested_model: "small".into(),
+            effective_model: "big".into(),
+            effective_effort: None,
+            resolved_via: ResolvedVia::Config,
+            policy_decision: None,
+            provider_chain: vec![ProviderHop {
+                provider: "demo".into(),
+                service_id: "big".into(),
+                api_protocol: "openai".into(),
+            }],
+            estimated_cost: None,
+        };
+        let h = String::from_utf8(Output::new(Format::Human).render_to_vec(&r)).unwrap();
+        assert!(h.contains("policy → big"), "{h}");
+    }
+
+    /// The whole point of the shared type: what `bitrouter route --json` prints
+    /// is what the `route_preview` tool returns, so the tool's structured
+    /// content deserializes straight back into the report the CLI emitted —
+    /// including the enum wire values, which a rename would silently break.
+    #[test]
+    fn route_json_round_trips_through_the_shared_type() {
+        use bitrouter_mcp::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
+        use bitrouter_sdk::language_model::types::ReasoningEffort;
+        for via in [
+            ResolvedVia::LiveDaemon,
+            ResolvedVia::Config,
+            ResolvedVia::ZeroConfig,
+        ] {
+            let r = RouteReport {
+                requested_model: "small".into(),
+                effective_model: "big".into(),
+                effective_effort: Some(ReasoningEffort::High),
+                resolved_via: via,
+                policy_decision: None,
+                provider_chain: vec![ProviderHop {
+                    provider: "demo".into(),
+                    service_id: "big".into(),
+                    api_protocol: "openai".into(),
+                }],
+                estimated_cost: Some(EstimatedCost::new(
+                    Some(1.0),
+                    Some(2.0),
+                    vec![ContextTierRates {
+                        above_input_tokens: 200_000,
+                        input_micro_usd_per_token: Some(2.0),
+                        output_micro_usd_per_token: Some(4.0),
+                    }],
+                )),
+            };
+            let emitted = json(&r);
+            let back: RouteReport = serde_json::from_value(emitted.clone()).expect("round trip");
+            assert_eq!(serde_json::to_value(&back).unwrap(), emitted);
+            // The context tiers survive the trip: dropping them would report a
+            // long-context model at its cheapest bracket.
+            assert_eq!(
+                emitted["estimated_cost"]["context_tiers"][0]["above_input_tokens"],
+                200_000
+            );
+        }
     }
 
     #[test]

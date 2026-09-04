@@ -261,10 +261,26 @@ route selection. An empty or omitted schedule preserves the existing behavior.
 ### `bitrouter route <model>`
 
 ```
-bitrouter route gpt-4o [-c <path>] [--socket <path>]
+bitrouter route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
-Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable; falls back to a local config parse.
+Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable; falls back to a local config parse — **policy table included**, so what it prints is what would actually run.
+
+`--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution.
+
+The report is the shared `route` action's, so `bitrouter route --json` is byte-identical to the MCP `route_preview` tool's structured content:
+
+| Field | Meaning |
+|---|---|
+| `requested_model` | what you asked about |
+| `effective_model` | what would actually run — differs when the policy table selects another model |
+| `effective_effort` | the reasoning effort policy selected, when it selected one |
+| `resolved_via` | `live daemon` \| `config` \| `zero-config` |
+| `policy_decision` | the static decision behind `effective_model`. Absent on `live daemon` — the daemon applied policy upstream, so there is no separate static decision to show |
+| `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
+| `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
+
+Read-only throughout — nothing is sent upstream.
 
 ### `bitrouter models`
 
@@ -368,7 +384,7 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 | `complete` | every profile | Route a completion through BitRouter and return the full result |
 | `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bitrouter models --provider` does. Returns the same report type as `bitrouter models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
 | `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
-| `route_preview` | stdio + local | How a model/prompt *would* route — provider chain, policy decision, cost estimate — without sending anything upstream |
+| `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bitrouter route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
 | `skills_search` | `--backend skills` | Search installed skills by name/description |
 | `skills_get` | `--backend skills` | Fetch one skill's frontmatter + body |
 

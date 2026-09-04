@@ -18,6 +18,7 @@
 //! belong here — the CLI's ~100 other leaves keep their own report types.
 
 pub mod models;
+pub mod route;
 pub mod status;
 
 /// One action, and the surfaces that answer it.
@@ -79,10 +80,16 @@ pub const ACTIONS: &[ActionSpec] = &[
         }),
     },
     ActionSpec {
+        // The tool keeps its published name; the *action* is `route`, which is
+        // what the CLI leaf is called and what the shared report answers.
         id: "route",
         cli_leaf: Some("route"),
         mcp_tool: Some("route_preview"),
-        output_schema: None,
+        output_schema: Some(|| {
+            rmcp::handler::server::tool::schema_for_output::<route::RouteReport>()
+                .as_ref()
+                .clone()
+        }),
     },
     ActionSpec {
         id: "skills_search",

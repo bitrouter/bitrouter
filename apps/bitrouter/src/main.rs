@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
-use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
@@ -30,7 +30,7 @@ use bitrouter::output::reports::agents::{
     AgentsListReport,
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
-use bitrouter::output::reports::daemon::{DaemonActionReport, RouteHopView, RouteReport};
+use bitrouter::output::reports::daemon::DaemonActionReport;
 use bitrouter::output::reports::eval::EvalReport;
 use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
@@ -50,6 +50,7 @@ use bitrouter::output::reports::trajectory::{
 };
 use bitrouter::output::{CliReport, Output};
 use bitrouter_mcp::actions::models::ModelsReport;
+use bitrouter_mcp::actions::route::{RouteInput, RouteReport};
 use bitrouter_mcp::actions::status::StatusReport;
 use bitrouter_sdk::config;
 
@@ -206,10 +207,16 @@ enum Command {
         requests: bool,
     },
     /// Resolve a model name through the routing table. Uses the running
-    /// daemon if reachable, otherwise loads the config and resolves locally.
+    /// daemon if reachable, otherwise loads the config — policy table included
+    /// — and resolves locally. Read-only: nothing is sent upstream.
     Route {
         /// The model name to resolve.
         model: String,
+        /// Prompt text to resolve *for*. The policy table keys on the
+        /// agent-loop step a request represents, so the model it selects can
+        /// differ with the prompt; omit for a bare model resolution.
+        #[arg(long)]
+        prompt: Option<String>,
         /// Path to `bitrouter.yaml` (used as the standalone fallback and
         /// to locate the control socket).
         #[arg(short, long)]
@@ -1483,12 +1490,13 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Route {
             model,
+            prompt,
             config,
             socket,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
-            output.emit(&route(&model, &source, &socket).await?)?;
+            output.emit(&route(RouteInput { model, prompt }, &source, &socket).await?)?;
             Ok(())
         }
         Command::Init {
@@ -2247,23 +2255,23 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             // the same pairing as the spend footer: stdio → local daemon. It
             // prefers the live daemon's view (subscription providers, reloads)
             // and falls back to static config when the control socket is
-            // unreachable — the same order `bitrouter route` uses. Best-effort
-            // throughout: an unreadable config just means no `route_preview`
-            // tool, never a failed `mcp serve`.
-            let routing: Option<
-                std::sync::Arc<dyn bitrouter_mcp::capabilities::routing::RoutingQuery>,
-            > = match &source {
-                Some(source) => match bitrouter::paths::load_config(source).await {
-                    Ok(cfg) => {
+            // unreachable — the same order, and now the same code, as
+            // `bitrouter route`.
+            //
+            // The *source* is wired, not a parsed config: the action loads the
+            // file on every call, so a long-lived server answers from whatever
+            // `bitrouter.yaml` says now. Snapshotting it here is what used to
+            // make the tool and the CLI disagree after an edit.
+            let routing: Option<std::sync::Arc<dyn bitrouter_mcp::actions::route::RouteQuery>> =
+                match &source {
+                    Some(source) => {
                         let socket = resolve_client_socket_from(source, None).await.ok();
                         Some(std::sync::Arc::new(
-                            bitrouter::routing_preview::RoutingPreview::new(&cfg, socket),
+                            bitrouter::actions::route::RouteAction::new(source.clone(), socket),
                         ))
                     }
-                    Err(_) => None,
-                },
-                None => None,
-            };
+                    None => None,
+                };
             // `list_models` on the same stdio → local pairing, and for a
             // sharper reason than the others: the backend's own answer is a
             // `GET /v1/models` that *needs the daemon up*, so an agent on a
@@ -3375,57 +3383,20 @@ async fn request_daemon_view(socket: &Path) -> Option<DaemonView> {
     }
 }
 
+/// `bitrouter route` — the CLI surface of the shared `route` action.
+///
+/// The daemon-first / config-fallback behaviour, the policy table, and the
+/// report all live in [`bitrouter::actions::route`], which the MCP
+/// `route_preview` tool goes through too. This is the leaf, not a second
+/// implementation.
 async fn route(
-    model: &str,
+    input: RouteInput,
     source: &bitrouter::paths::ConfigSource,
     socket: &Path,
 ) -> Result<RouteReport> {
-    // Try the running daemon first — its routing table reflects any `reload`s.
-    if daemon::endpoint_in_use(socket) {
-        match daemon::send_command(
-            socket,
-            &DaemonCommand::Route {
-                model: model.into(),
-            },
-        )
+    bitrouter::actions::route::RouteAction::new(source.clone(), Some(socket.to_path_buf()))
+        .report(input)
         .await
-        {
-            Ok(DaemonResponse::Route { chain }) => {
-                return Ok(route_report(model, "live daemon", chain));
-            }
-            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-            Err(e) => {
-                // Fall through to the standalone resolution. The daemon may
-                // just not be reachable from this client invocation.
-                tracing::debug!(error = %e, "daemon route failed — resolving from config");
-            }
-        }
-    }
-    let cfg = bitrouter::paths::load_config(source).await?;
-    let chain = commands::resolve_route(&cfg, model).await?;
-    let label = if source.is_default() {
-        "zero-config"
-    } else {
-        "config"
-    };
-    Ok(route_report(model, label, chain))
-}
-
-/// Build a [`RouteReport`] from a resolved hop chain (wire-safe `RouteHop`s).
-fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteReport {
-    RouteReport {
-        model: model.to_string(),
-        resolved_via: resolved_via.to_string(),
-        chain: chain
-            .into_iter()
-            .map(|h| RouteHopView {
-                provider: h.provider,
-                service_id: h.service_id,
-                protocol: h.api_protocol,
-            })
-            .collect(),
-    }
 }
 
 // ===== management commands =====
@@ -5770,11 +5741,11 @@ mod tests {
     /// would hide exactly the tools a missing row would hide.
     fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
         use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
+        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
         use bitrouter_mcp::backend::{
             Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse,
         };
-        use bitrouter_mcp::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
         use bitrouter_mcp::capabilities::skills::SkillsQuery;
         use bitrouter_mcp::error::ToolError;
 
@@ -5815,12 +5786,20 @@ mod tests {
         }
 
         #[async_trait::async_trait]
-        impl RoutingQuery for Stub {
-            async fn preview(
+        impl RouteQuery for Stub {
+            async fn route(
                 &self,
-                _: RoutePreviewArgs,
-            ) -> std::result::Result<serde_json::Value, ToolError> {
-                Ok(serde_json::json!({}))
+                input: RouteInput,
+            ) -> std::result::Result<RouteReport, ToolError> {
+                Ok(RouteReport {
+                    requested_model: input.model.clone(),
+                    effective_model: input.model,
+                    effective_effort: None,
+                    resolved_via: ResolvedVia::Config,
+                    policy_decision: None,
+                    provider_chain: Vec::new(),
+                    estimated_cost: None,
+                })
             }
         }
 
