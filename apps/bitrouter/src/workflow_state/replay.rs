@@ -136,6 +136,9 @@ impl ReplayEvaluator {
                         && expected
                             .task_family
                             .is_none_or(|family| family == prediction.task_family)
+                        && expected
+                            .progress_state
+                            .is_none_or(|progress| progress == prediction.progress_state)
                 });
             if let Some(matches) = prediction_matches_expected {
                 summary.predictive_expectation_count += 1;

@@ -16,6 +16,6 @@
     "state_kind": "edit",
     "baseline_fingerprint": "after_Edit",
     "confidence_min": 0.7,
-    "prediction": {"next_step_role": "verify", "next_action_class": "execute_or_test", "route_risk": "normal"}
+    "prediction": {"next_step_role": "verify", "next_action_class": "execute_or_test", "route_risk": "normal", "task_family": "code_generation", "progress_state": "progressing"}
   }
 }

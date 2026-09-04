@@ -616,6 +616,19 @@ fn parse_unit_interval_ppm(value: &str) -> std::result::Result<u32, String> {
 
 #[derive(Subcommand)]
 enum WorkflowStateAction {
+    /// Evaluate a shadow task/role/progress/risk classifier without routing.
+    ClassifierBakeoff {
+        /// Directory tree containing frozen workflow-state fixture JSON files.
+        #[arg(long)]
+        fixtures: PathBuf,
+        /// Optional candidate submission JSON. Omit to evaluate the compiled
+        /// deterministic scorecard as an uncalibrated baseline.
+        #[arg(long)]
+        submission: Option<PathBuf>,
+        /// Output path for the deterministic manifest and evaluation report.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Build a deterministic benchmark trace bundle.
     Bundle {
         /// Run label stored in `run-artifact.json`.
@@ -1768,6 +1781,31 @@ async fn settlement_api_key(
 
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
+        WorkflowStateAction::ClassifierBakeoff {
+            fixtures,
+            submission,
+            output,
+        } => {
+            use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
+            use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
+            use bitrouter::workflow_state::shadow_classifier::ShadowClassifierSubmission;
+
+            let fixtures = WorkflowTraceFixture::load_tree(&fixtures)
+                .with_context(|| format!("read classifier fixtures {}", fixtures.display()))?;
+            let submission = submission
+                .as_ref()
+                .map(ShadowClassifierSubmission::load_json)
+                .transpose()?;
+            let artifact = ClassifierBakeoffArtifact::build(&fixtures, submission)?;
+            artifact.write_json(&output)?;
+            println!(
+                "✓ wrote shadow classifier bake-off to {} (accepted: {}/{})",
+                output.display(),
+                artifact.report.accepted_count,
+                artifact.report.total_count
+            );
+            Ok(())
+        }
         WorkflowStateAction::Bundle {
             run_label,
             traces,
@@ -5765,6 +5803,32 @@ mod tests {
             cli.command,
             Some(Command::WorkflowState {
                 action: WorkflowStateAction::Bundle { outcomes: None, .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn shadow_classifier_bakeoff_flags_parse_without_a_submission() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "classifier-bakeoff",
+            "--fixtures",
+            "fixtures",
+            "--output",
+            "bakeoff.json",
+        ])
+        .expect("parse shadow classifier bake-off");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::WorkflowState {
+                action: WorkflowStateAction::ClassifierBakeoff {
+                    submission: None,
+                    ..
+                }
             })
         ));
     }

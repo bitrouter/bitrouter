@@ -771,6 +771,7 @@ These commands export and validate the request-scoped evidence used by policy
 benchmarks:
 
 ```text
+bitrouter workflow-state classifier-bakeoff --fixtures <DIR> [--submission <JSON>] --output <JSON>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
@@ -778,6 +779,24 @@ bitrouter workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --
 bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
+
+`classifier-bakeoff` is a research-only, read-only route-context evaluation.
+With no `--submission`, it records the compiled deterministic scorecard as an
+uncalibrated baseline; its heuristic margin is never reported as probability.
+An external submission must contain exactly one canonically ordered prediction
+for every frozen fixture and bind the dataset, input projection, model artifact,
+features, training split, and (when applicable) calibration split. Task family,
+next-step role, progress, and shadow risk use separate heads. OOD and abstention
+are explicit, and the shadow risk head is evidence only: deterministic rules and
+signed policy remain authoritative.
+
+The report contains per-head exact counts and macro-F1, per-slice coverage and
+accepted error risk, fixed-point Brier/ECE for calibrated candidates, OOD
+confusion counts, resource measurements when supplied, and a versioned
+decision-weighted loss. The checked-in fixtures are an evaluation contract and
+must not be used as both training and evaluation data; the command rejects
+matching split commitments. Synthetic unit-test predictions are test vectors,
+not classifier research results or production promotion evidence.
 
 `reconcile-metering` reads the API-key environment named by `--api-key-env`
 (default `BITROUTER_API_KEY`) first; a non-empty value takes precedence over
