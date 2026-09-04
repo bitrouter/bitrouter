@@ -355,10 +355,10 @@ Prints a YAML stub for the named catalog agent. Paste the output under `agents:`
 
 ```
 bitrouter acp serve --agent <id> [-c <path>]
-bitrouter acp prompt --agent <id> [-c <path>] <text>
+bitrouter acp prompt --agent <id> [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [-c <path>] <text>
 ```
 
-Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session identity, history, and storage are the harness's own on every path; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout — or, under `--format text`, the transcript as `chat` prints it to a pipe, or under `--format quiet` the assistant's text alone. Nobody is at a headless terminal to broker permissions, so the caller states the rule: `--deny-all` (the default) answers every request with the agent's reject option, `--approve-reads` approves calls the harness labels `read` or `search` and denies the rest, `--approve-all` approves everything, and `--permission-policy` overrides per tool (`autoApprove`/`autoDeny` lists matching the tool kind, title, or title's first word; `defaultAction` for the rest). Each answer is a `{"type":"permission",…}` line, and the process **exits 5** when at least one request was denied and none approved. The decision runs through the same `Policy` and the same wire the interactive TUI's keystroke takes. Session identity, history, and storage are the harness's own on every path; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter chat`
 
@@ -451,7 +451,7 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 ### `bitrouter spawn`
 
 ```
-bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [routing/session flags]   # one prompt → NDJSON
+bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [routing/session flags]   # one prompt → NDJSON
 bitrouter spawn <agent> --serve [flags]                                      # ACP over stdio
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
@@ -461,6 +461,8 @@ Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a progra
 **Attempts to route the sub-agent's LLM traffic through the daemon by default when the headless adapter supports redirection** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch -a claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
 
 Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
+
+The permission flags and `--format` are `-p`'s only and are described under `bitrouter acp` above; `--serve` hands permissions to the manager, and passing them with it is an error.
 
 `--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 

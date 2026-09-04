@@ -18,10 +18,23 @@
 //!
 //! The options come from the agent, so this module never invents one — it can
 //! only choose among what was offered, or decline to choose.
+//!
+//! # The headless answer
+//!
+//! A pipe has nobody to ask, and until now every headless path answered every
+//! question with the reject option. [`Policy`] is the one rule a headless
+//! caller states instead — approve everything, approve reads, deny everything,
+//! and a per-tool override list — and [`Policy::decide`] applies it to a
+//! [`Prompt`]. It chooses only among what the agent offered: a policy that
+//! says *approve* against a request with no allow option still resolves to the
+//! reject option, and reports that it denied, because the alternative is a
+//! consent the agent never asked for.
+
+use std::fmt;
 
 use agent_client_protocol_schema::v1::{
     PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
-    SelectedPermissionOutcome,
+    SelectedPermissionOutcome, ToolKind,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -37,6 +50,10 @@ pub struct Prompt {
     id: String,
     /// What the agent said it is about to do.
     title: String,
+    /// What kind of tool the agent said this is, when it said. The protocol
+    /// calls it a display hint; a headless policy reads it as the only
+    /// classification the wire carries.
+    kind: Option<ToolKind>,
     /// The choices, in the order the agent listed them.
     options: Vec<PermissionOption>,
 }
@@ -53,11 +70,13 @@ impl Prompt {
         id: impl Into<String>,
         title: Option<String>,
         tool_call_id: impl Into<String>,
+        kind: Option<ToolKind>,
         options: Vec<PermissionOption>,
     ) -> Self {
         Self {
             id: id.into(),
             title: title.unwrap_or_else(|| tool_call_id.into()),
+            kind,
             options,
         }
     }
@@ -65,6 +84,16 @@ impl Prompt {
     /// Which request this prompt answers.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// What the agent said it is about to do.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The tool kind the agent labelled the call with, if it labelled it.
+    pub fn kind(&self) -> Option<ToolKind> {
+        self.kind
     }
 
     /// The prompt as it appears in the live area.
@@ -108,6 +137,22 @@ impl Prompt {
             .map(|option| option.option_id.clone())
     }
 
+    /// The option that says yes, when the agent offered one.
+    ///
+    /// Prefers *allow once* over *allow always*: a headless policy answers one
+    /// request at a time, and standing consent is not something a flag on one
+    /// invocation should hand out. `None` when every option offered says no,
+    /// in which case the caller reports a denial rather than inventing consent.
+    pub fn allow(&self) -> Option<PermissionOptionId> {
+        let of = |kind: PermissionOptionKind| {
+            self.options
+                .iter()
+                .find(|option| option.kind == kind)
+                .map(|option| option.option_id.clone())
+        };
+        of(PermissionOptionKind::AllowOnce).or_else(|| of(PermissionOptionKind::AllowAlways))
+    }
+
     /// What to answer when the user declines to choose (escape, or the
     /// session ending under an open prompt).
     ///
@@ -141,13 +186,155 @@ impl Prompt {
             None => RequestPermissionOutcome::Cancelled,
         }
     }
+
+    /// Resolve a policy's decision to an outcome the agent offered.
+    ///
+    /// Returns the decision that was *actually* taken beside the outcome: an
+    /// approval against a request with no allow option falls back to
+    /// [`Prompt::unanswered`] and reports [`Decision::Deny`], so a caller
+    /// tallying its exit status counts what the agent heard, not what the
+    /// policy meant.
+    pub fn answer(&self, decision: Decision) -> (Decision, RequestPermissionOutcome) {
+        match decision {
+            Decision::Approve => match self.allow() {
+                Some(id) => (
+                    Decision::Approve,
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
+                ),
+                None => (Decision::Deny, self.unanswered()),
+            },
+            Decision::Deny => (Decision::Deny, self.unanswered()),
+        }
+    }
+}
+
+/// What a headless policy decided about one request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Select the agent's allow option.
+    Approve,
+    /// Select the agent's reject option.
+    Deny,
+}
+
+impl fmt::Display for Decision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Decision::Approve => "approved",
+            Decision::Deny => "denied",
+        })
+    }
+}
+
+/// The blanket rule a headless caller runs under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Every request is approved.
+    ApproveAll,
+    /// Requests the agent labelled `read` or `search` are approved; every
+    /// other kind, and an unlabelled request, is denied.
+    ApproveReads,
+    /// Every request is denied. The default: the tool kind is the harness's
+    /// own label, and trusting it is opted into.
+    #[default]
+    DenyAll,
+}
+
+/// How a headless path answers permission requests.
+///
+/// The per-tool lists outrank the mode, and a deny outranks an approve, so a
+/// request matched by both is denied. `default_action`, when set, answers the
+/// requests no list matched instead of the mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Policy {
+    /// The rule for requests no list names.
+    pub mode: Mode,
+    /// Patterns that approve. See [`Policy::decide`] for what a pattern matches.
+    pub auto_approve: Vec<String>,
+    /// Patterns that deny. Outrank `auto_approve`.
+    pub auto_deny: Vec<String>,
+    /// The answer for an unmatched request, in place of the mode.
+    pub default_action: Option<Decision>,
+}
+
+impl Policy {
+    /// Decide one request.
+    ///
+    /// A pattern matches, case-insensitively, the tool kind's wire name
+    /// (`read`, `execute`, …), the whole title, or the title's first word — so
+    /// `Write` names every `Write src/main.rs` without naming a path.
+    pub fn decide(&self, prompt: &Prompt) -> Decision {
+        let matches = |patterns: &[String]| patterns.iter().any(|pattern| prompt.matches(pattern));
+        if matches(&self.auto_deny) {
+            return Decision::Deny;
+        }
+        if matches(&self.auto_approve) {
+            return Decision::Approve;
+        }
+        if let Some(action) = self.default_action {
+            return action;
+        }
+        match self.mode {
+            Mode::ApproveAll => Decision::Approve,
+            Mode::ApproveReads => match prompt.kind {
+                Some(ToolKind::Read | ToolKind::Search) => Decision::Approve,
+                _ => Decision::Deny,
+            },
+            Mode::DenyAll => Decision::Deny,
+        }
+    }
+}
+
+impl Prompt {
+    /// Whether a policy pattern names this request.
+    fn matches(&self, pattern: &str) -> bool {
+        let title = self.title.trim();
+        let head = title.split_whitespace().next().unwrap_or_default();
+        self.kind
+            .is_some_and(|kind| kind_name(kind).eq_ignore_ascii_case(pattern))
+            || title.eq_ignore_ascii_case(pattern)
+            || head.eq_ignore_ascii_case(pattern)
+    }
+}
+
+/// The wire spelling of a tool kind, which is what a policy pattern names.
+///
+/// Spelled here rather than through `serde_json` so that matching a pattern
+/// never allocates; pinned to the serialised form by a test.
+fn kind_name(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Read => "read",
+        ToolKind::Edit => "edit",
+        ToolKind::Delete => "delete",
+        ToolKind::Move => "move",
+        ToolKind::Search => "search",
+        ToolKind::Execute => "execute",
+        ToolKind::Think => "think",
+        ToolKind::Fetch => "fetch",
+        ToolKind::SwitchMode => "switch_mode",
+        // `Other`, and any kind a later schema adds: nothing a pattern can name.
+        _ => "other",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn request(options: Vec<PermissionOption>) -> Prompt {
-        Prompt::new("r1", Some("Write src/main.rs".to_string()), "t1", options)
+        Prompt::new(
+            "r1",
+            Some("Write src/main.rs".to_string()),
+            "t1",
+            Some(ToolKind::Edit),
+            options,
+        )
+    }
+
+    fn selected(outcome: &RequestPermissionOutcome) -> Option<String> {
+        match outcome {
+            RequestPermissionOutcome::Selected(selected) => Some(selected.option_id.0.to_string()),
+            _ => None,
+        }
     }
 
     fn option(id: &str, name: &str, kind: PermissionOptionKind) -> PermissionOption {
@@ -277,5 +464,162 @@ mod tests {
             request(Vec::new()).unanswered(),
             RequestPermissionOutcome::Cancelled
         ));
+    }
+
+    /// Approving selects *allow once* first, so one invocation's consent is
+    /// never standing consent; with only *always* on offer it takes that; and
+    /// with nothing that says yes it selects nothing.
+    #[test]
+    fn allow_prefers_once_over_always_and_never_invents() {
+        assert_eq!(
+            request(offered())
+                .allow()
+                .map(|id| id.0.to_string())
+                .as_deref(),
+            Some("allow")
+        );
+        let always_only = request(vec![
+            option("always", "always allow", PermissionOptionKind::AllowAlways),
+            option("no", "reject", PermissionOptionKind::RejectOnce),
+        ]);
+        assert_eq!(
+            always_only.allow().map(|id| id.0.to_string()).as_deref(),
+            Some("always")
+        );
+        let reject_only = request(vec![option(
+            "no",
+            "reject",
+            PermissionOptionKind::RejectOnce,
+        )]);
+        assert!(reject_only.allow().is_none());
+    }
+
+    /// The decision reported is the one the agent heard: an approval the
+    /// agent offered no option for is a denial, not an approval that failed.
+    #[test]
+    fn an_approval_with_nothing_to_select_reports_deny() {
+        let (decision, outcome) = request(offered()).answer(Decision::Approve);
+        assert_eq!(decision, Decision::Approve);
+        assert_eq!(selected(&outcome).as_deref(), Some("allow"));
+
+        let reject_only = request(vec![option(
+            "no",
+            "reject",
+            PermissionOptionKind::RejectOnce,
+        )]);
+        let (decision, outcome) = reject_only.answer(Decision::Approve);
+        assert_eq!(decision, Decision::Deny);
+        assert_eq!(selected(&outcome).as_deref(), Some("no"));
+
+        let (decision, outcome) = request(Vec::new()).answer(Decision::Approve);
+        assert_eq!(decision, Decision::Deny);
+        assert!(matches!(outcome, RequestPermissionOutcome::Cancelled));
+    }
+
+    /// The three modes, against the kind the agent labelled the call with.
+    #[test]
+    fn approve_reads_reads_the_tool_kind() {
+        let with =
+            |kind: Option<ToolKind>| Prompt::new("r", Some("t".to_string()), "t1", kind, offered());
+        let reads = Policy {
+            mode: Mode::ApproveReads,
+            ..Policy::default()
+        };
+        assert_eq!(reads.decide(&with(Some(ToolKind::Read))), Decision::Approve);
+        assert_eq!(
+            reads.decide(&with(Some(ToolKind::Search))),
+            Decision::Approve
+        );
+        for not_a_read in [
+            Some(ToolKind::Edit),
+            Some(ToolKind::Execute),
+            Some(ToolKind::Other),
+            None,
+        ] {
+            assert_eq!(
+                reads.decide(&with(not_a_read)),
+                Decision::Deny,
+                "{not_a_read:?}"
+            );
+        }
+        let all = Policy {
+            mode: Mode::ApproveAll,
+            ..Policy::default()
+        };
+        assert_eq!(
+            all.decide(&with(Some(ToolKind::Execute))),
+            Decision::Approve
+        );
+        assert_eq!(
+            Policy::default().decide(&with(Some(ToolKind::Read))),
+            Decision::Deny
+        );
+    }
+
+    /// The four layers, in order: a deny list outranks an approve list, which
+    /// outranks the default action, which outranks the mode. Patterns name the
+    /// kind, the title, or the title's first word, and case does not matter.
+    #[test]
+    fn auto_deny_outranks_auto_approve_outranks_default_outranks_mode() {
+        let prompt = request(offered());
+        let policy =
+            |approve: &[&str], deny: &[&str], default: Option<Decision>, mode: Mode| Policy {
+                mode,
+                auto_approve: approve.iter().map(|s| s.to_string()).collect(),
+                auto_deny: deny.iter().map(|s| s.to_string()).collect(),
+                default_action: default,
+            };
+        // The title's first word, and the kind, both name it — and deny wins.
+        assert_eq!(
+            policy(&["write"], &["edit"], None, Mode::ApproveAll).decide(&prompt),
+            Decision::Deny
+        );
+        // The approve list beats a deny default and a deny mode.
+        assert_eq!(
+            policy(
+                &["Write src/main.rs"],
+                &[],
+                Some(Decision::Deny),
+                Mode::DenyAll
+            )
+            .decide(&prompt),
+            Decision::Approve
+        );
+        // The default action beats the mode.
+        assert_eq!(
+            policy(&[], &[], Some(Decision::Approve), Mode::DenyAll).decide(&prompt),
+            Decision::Approve
+        );
+        // Nothing matched, no default: the mode answers.
+        assert_eq!(
+            policy(&["read"], &["execute"], None, Mode::DenyAll).decide(&prompt),
+            Decision::Deny
+        );
+        // A pattern that is neither the kind, the title, nor its first word
+        // matches nothing — a path fragment does not name a tool.
+        assert_eq!(
+            policy(&["main.rs"], &[], None, Mode::DenyAll).decide(&prompt),
+            Decision::Deny
+        );
+    }
+
+    /// The names a pattern may use are the wire's own.
+    #[test]
+    fn kind_names_are_the_wire_spelling() {
+        for kind in [
+            ToolKind::Read,
+            ToolKind::Edit,
+            ToolKind::Delete,
+            ToolKind::Move,
+            ToolKind::Search,
+            ToolKind::Execute,
+            ToolKind::Think,
+            ToolKind::Fetch,
+            ToolKind::SwitchMode,
+            ToolKind::Other,
+        ] {
+            let wire = serde_json::to_value(kind).expect("a tool kind serialises");
+            assert_eq!(wire.as_str(), Some(kind_name(kind)), "{kind:?}");
+        }
     }
 }

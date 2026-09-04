@@ -174,5 +174,10 @@ controller namespace, which only `acp serve` and `chat` declare, so a prompt ses
 rows carry no controller instance to key on.
 It no longer carries `record_id`; that alias is off the wire. Then come
 `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`
-lines, and a `result` line. `--no-wait` emits `submitted`. This NDJSON
-presentation belongs to `prompt` only; it is not the `acp serve` wire format.
+lines, a `permission` line for each request the headless policy answered
+(`--deny-all` by default; `--approve-reads`, `--approve-all`, or a per-tool
+`--permission-policy`; exit 5 when something was denied and nothing approved),
+and a `result` line. `--no-wait` emits `submitted`. This NDJSON presentation is
+`--format json`, the default; `--format text` and `quiet` print the transcript
+or the assistant text instead. It belongs to `prompt` only; it is not the
+`acp serve` wire format.
