@@ -998,6 +998,10 @@ impl AcpSessionCost for CachedSessionCost {
 /// vouch for. In every one of those the controller advertises no route control
 /// and no attributed cost, which is what makes their absence honest rather
 /// than a dead control.
+/// Cloneable because a terminal login relaunches the harness (ACP_AUTH_SPEC
+/// §7.3) and the second launch needs the same binding: re-deriving it would
+/// repeat `open`'s `--base-url` note, and the binding is three owned strings.
+#[derive(Clone)]
 struct LocalControllerBinding {
     socket_path: PathBuf,
     api_principal: String,
@@ -1224,17 +1228,87 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
-        .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))
-        .map_err(show_session_log)?;
-    let ids = match session.client.new_session(cwd, mcp_servers).await {
-        Ok(ids) => ids,
-        Err(error) => {
-            session.shutdown().await;
-            return Err(show_session_log(
-                error.context("opening the harness session"),
-            ));
+    // The one path with a person at a terminal, so the one path that may claim
+    // it can run a `terminal` login.
+    let options = LaunchOptions {
+        terminal_auth: true,
+        ..options
+    };
+    let mut session =
+        launch_controlled(&config, agent_id, &routed, options.clone(), binding.clone())
+            .await
+            .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+            .map_err(show_session_log)?;
+
+    // At most one authentication round. A second `auth_required` after a login
+    // the agent reported as successful is the agent disagreeing with itself,
+    // and retrying it would be a loop with a person in it.
+    let mut authenticated = false;
+    let ids = loop {
+        match session
+            .client
+            .new_session(cwd.clone(), mcp_servers.clone())
+            .await
+        {
+            Ok(ids) => break ids,
+            Err(error) => {
+                // A harness that is merely unauthenticated is not a broken one,
+                // and relaying its JSON-RPC error would leave the reader to
+                // guess which of the two it is. The protocol already said
+                // which; say it — and offer what it advertised.
+                if !bitrouter_sdk::acp::client::is_auth_required(&error) {
+                    session.shutdown().await;
+                    return Err(show_session_log(
+                        error.context("opening the harness session"),
+                    ));
+                }
+                let choice = if authenticated {
+                    AuthChoice::Declined
+                } else {
+                    choose_auth_method(agent_id, session.client.auth_methods())?
+                };
+                match choice {
+                    // No log tail: unlike a launch that died with its reason on
+                    // the child's stderr, this failure is already fully
+                    // explained, and a tail would bury the sentence that
+                    // explains it.
+                    AuthChoice::Declined => {
+                        let context =
+                            unauthenticated_message(agent_id, session.client.auth_methods());
+                        session.shutdown().await;
+                        return Err(error.context(context));
+                    }
+                    AuthChoice::Agent(method_id) => {
+                        if let Err(failed) = session.client.authenticate(method_id).await {
+                            session.shutdown().await;
+                            return Err(show_session_log(
+                                failed
+                                    .context(format!("authenticating '{agent_id}' with the agent")),
+                            ));
+                        }
+                    }
+                    // Out of band: the harness's own program owns the terminal
+                    // for the login, so this connection is torn down first and
+                    // rebuilt after — which is also what reinitializes it.
+                    AuthChoice::Terminal(method) => {
+                        session.shutdown().await;
+                        // Its stdio was inherited, so whatever went wrong was
+                        // on screen as it happened; no tail to add.
+                        run_terminal_login(&config, agent_id, &method).await?;
+                        session = launch_controlled(
+                            &config,
+                            agent_id,
+                            &routed,
+                            options.clone(),
+                            binding.clone(),
+                        )
+                        .await
+                        .with_context(|| format!("relaunching '{agent_id}' after its login"))
+                        .map_err(show_session_log)?;
+                    }
+                }
+                authenticated = true;
+            }
         }
     };
     let observability =
@@ -1273,6 +1347,209 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
 /// differs from `prompt` is only the consumer — a journal rendered per turn
 /// rather than an NDJSON stream — which is why the loop itself lives beside
 /// the renderers in [`crate::chat::session`].
+/// What a person chose at the authentication prompt.
+enum AuthChoice {
+    /// A method the agent performs itself: `authenticate`, then retry on the
+    /// same connection.
+    Agent(agent_client_protocol::schema::v1::AuthMethodId),
+    /// A method whose login runs out of band: relaunch the harness's own
+    /// program with these additions, then reconnect and retry.
+    Terminal(Box<agent_client_protocol::schema::v1::AuthMethodTerminal>),
+    /// Nobody chose. The session does not start, and that is not consent.
+    Declined,
+}
+
+/// Offer the agent's advertised authentication methods and read one choice.
+///
+/// A cooked-terminal prompt rather than a TUI modal, because this runs *before*
+/// the renderer exists: `session/new` is what reports `auth_required`, and the
+/// view is not opened until a session exists. Numbered like every other choice
+/// this CLI offers.
+///
+/// Declines rather than guesses whenever a person cannot answer — no tty, EOF,
+/// or an empty method list. An unanswered prompt must never resolve to a login
+/// attempt nobody asked for.
+fn choose_auth_method(
+    agent_id: &str,
+    methods: &[agent_client_protocol::schema::v1::AuthMethod],
+) -> Result<AuthChoice> {
+    use std::io::{BufRead, IsTerminal as _};
+
+    if methods.is_empty() || !std::io::stdin().is_terminal() {
+        return Ok(AuthChoice::Declined);
+    }
+    eprintln!();
+    eprintln!("  '{agent_id}' is not authenticated. How would you like to sign in?");
+    for (index, method) in methods.iter().enumerate() {
+        match method.description() {
+            Some(description) => {
+                eprintln!("    {}) {} — {description}", index + 1, method.name())
+            }
+            None => eprintln!("    {}) {}", index + 1, method.name()),
+        }
+    }
+    eprintln!("    0) cancel");
+
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    loop {
+        eprint!("  Choose [1]: ");
+        let mut line = String::new();
+        if handle
+            .read_line(&mut line)
+            .context("reading the authentication choice")?
+            == 0
+        {
+            // EOF, not a choice.
+            eprintln!();
+            return Ok(AuthChoice::Declined);
+        }
+        match classify_choice(&line, methods) {
+            Some(choice) => return Ok(choice),
+            // Not a selection: say why, then ask again.
+            None => match line.trim().parse::<usize>() {
+                Ok(n) => eprintln!(
+                    "    choice must be between 0 and {}, got {n}",
+                    methods.len()
+                ),
+                Err(_) => eprintln!("    '{}' is not a number", line.trim()),
+            },
+        }
+    }
+}
+
+/// Classify one typed line against the offered methods.
+///
+/// Pure, so the interesting half of the picker is testable without a terminal:
+/// `choose_auth_method` owns stdin and the menu, this owns what the answer
+/// means. The same split `Editor::apply` and `machine::step` already use.
+///
+/// `0` cancels, an empty line takes the `[1]` default, and `1..=methods.len()`
+/// selects. Anything else is `None` — not a selection, ask again. Out-of-range
+/// never wraps onto a method that was not offered.
+fn classify_choice(
+    input: &str,
+    methods: &[agent_client_protocol::schema::v1::AuthMethod],
+) -> Option<AuthChoice> {
+    use agent_client_protocol::schema::v1::AuthMethod;
+
+    let trimmed = input.trim();
+    let index = if trimmed.is_empty() {
+        1
+    } else {
+        match trimmed.parse::<usize>() {
+            Ok(0) => return Some(AuthChoice::Declined),
+            Ok(n) if (1..=methods.len()).contains(&n) => n,
+            Ok(_) | Err(_) => return None,
+        }
+    };
+    Some(match methods.get(index - 1)? {
+        // ACP is explicit that a terminal method is never passed to
+        // `authenticate`: the interactive process is not the connection.
+        AuthMethod::Terminal(terminal) => AuthChoice::Terminal(Box::new(terminal.clone())),
+        other => AuthChoice::Agent(other.id().clone()),
+    })
+}
+
+/// Run a `terminal` method's login: the harness's **own** program, relaunched
+/// interactively with the descriptor's additions.
+///
+/// The command is never the descriptor's — ACP does not let it name one, which
+/// is what stops an agent pointing the client at an unrelated program. It comes
+/// from the configured transport, and the descriptor may only append `args` and
+/// overlay `env`.
+///
+/// Stdio is inherited: the login owns the terminal for its lifetime, which is
+/// the whole reason this is out of band. Exit status zero is the only success —
+/// a non-zero status, a signal, or a spawn failure all leave the session
+/// unauthenticated.
+async fn run_terminal_login(
+    config: &Config,
+    agent_id: &str,
+    method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
+) -> Result<()> {
+    let agent = config
+        .agents
+        .get(agent_id)
+        .with_context(|| format!("no acp agent configured for '{agent_id}'"))?;
+    let AcpTransport::Stdio { command, args, env } = &agent.transport;
+
+    let mut invocation = args.clone();
+    invocation.extend(method.args.iter().cloned());
+
+    eprintln!();
+    eprintln!("  Running '{}'s login — {}.", agent_id, method.name);
+    eprintln!("  Finish it in the terminal below; this session resumes afterwards.");
+    eprintln!();
+
+    let mut child = tokio::process::Command::new(command);
+    child.args(&invocation).envs(env);
+    // Descriptor values override same-named variables in the base launch
+    // configuration, per the RFD.
+    child.envs(method.env.iter());
+    let status = child
+        .status()
+        .await
+        .with_context(|| format!("running the login for '{agent_id}'"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "the login for '{agent_id}' did not complete ({status}) — \
+             the session is still unauthenticated"
+        );
+    }
+    Ok(())
+}
+
+/// What to say when a harness answered `auth_required` and no login ran.
+///
+/// Names the harness and what it advertised, because those are the two things
+/// the reader needs and the two things only the protocol knows.
+///
+/// The advice depends on **why** no login ran, and getting that wrong is worse
+/// than saying less: telling someone who just cancelled to "sign in with the
+/// harness's own tooling" hides the offer they are one keystroke from taking,
+/// and telling a piped caller to choose from a prompt it will never see is a
+/// control that cannot act.
+///
+/// Deliberately says nothing about providers, routes, or `providers login`:
+/// this is the harness's own authentication, not the daemon's upstream
+/// credential, and conflating the two sends the reader to the wrong fix.
+fn unauthenticated_message(
+    agent_id: &str,
+    methods: &[agent_client_protocol::schema::v1::AuthMethod],
+) -> String {
+    use std::io::IsTerminal as _;
+
+    if methods.is_empty() {
+        return format!(
+            "'{agent_id}' is not authenticated, and advertises no authentication method. \
+             Sign in with the harness's own tooling, then run this again"
+        );
+    }
+    let offered = methods
+        .iter()
+        .map(|method| match method.description() {
+            Some(description) => format!("{} ({description})", method.name()),
+            None => method.name().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    // A method was offered and declined — either by a person choosing cancel,
+    // or by there being no person to ask.
+    if std::io::stdin().is_terminal() {
+        format!(
+            "'{agent_id}' is not authenticated and the sign-in was cancelled. \
+             It offers: {offered}"
+        )
+    } else {
+        format!(
+            "'{agent_id}' is not authenticated. It offers: {offered}. \
+             Run `bitrouter chat {agent_id}` in a terminal to sign in, or use the \
+             harness's own tooling"
+        )
+    }
+}
+
 async fn chat_piped(
     config: &Config,
     agent_id: &str,
@@ -1290,10 +1567,26 @@ async fn chat_piped(
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
+            // A harness that is merely unauthenticated is not a broken one, and
+            // relaying its JSON-RPC error would leave the reader to guess which
+            // of the two it is. The protocol already said which; say it.
+            let unauthenticated = bitrouter_sdk::acp::client::is_auth_required(&error);
+            let context = if unauthenticated {
+                unauthenticated_message(agent_id, session.client.auth_methods())
+            } else {
+                "opening the harness session".to_string()
+            };
             session.shutdown().await;
-            return Err(show_session_log(
-                error.context("opening the harness session"),
-            ));
+            let failure = error.context(context);
+            // The log tail is for a launch that died with its reason on the
+            // child's stderr. An unauthenticated harness already carries its
+            // own explanation, and a tail would bury the sentence that gives
+            // it.
+            return Err(if unauthenticated {
+                failure
+            } else {
+                show_session_log(failure)
+            });
         }
     };
     let observability =
@@ -1386,8 +1679,16 @@ where
     let ids = match session.client.new_session(cwd, mcp_servers).await {
         Ok(ids) => ids,
         Err(error) => {
+            // A harness that is merely unauthenticated is not a broken one, and
+            // relaying its JSON-RPC error would leave the reader to guess which
+            // of the two it is. The protocol already said which; say it.
+            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+                unauthenticated_message(agent_id, session.client.auth_methods())
+            } else {
+                "opening the harness session".to_string()
+            };
             session.shutdown().await;
-            return Err(error.context("opening the harness session"));
+            return Err(error.context(context));
         }
     };
     let observability =
@@ -1625,6 +1926,12 @@ async fn launch_controlled(
         manager_side,
         ClientOptions {
             turn_timeout: options.turn_timeout,
+            // §6.2's first condition always holds here — the harness is a local
+            // child of this process, `AcpTransport::Stdio` being the only
+            // transport, so its invocation is always reproducible. The second
+            // is the caller's to answer, because only an interactive caller can
+            // hand a person the terminal the login needs.
+            terminal_auth: options.terminal_auth,
         },
     )
     .await
@@ -2020,6 +2327,16 @@ pub struct LaunchOptions {
     /// MCP servers passed to the agent in `session/new` (`mcpServers`) — the
     /// caller's tool surface for the session.
     pub mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
+    /// Whether this caller can run a `terminal` authentication method's login
+    /// (ACP_AUTH_SPEC §6.2, §7.3).
+    ///
+    /// **False by default, and only interactive `chat` sets it.** The login
+    /// takes over the terminal and waits for a person, so the paths with
+    /// nobody at one — `serve`, `prompt`, a piped `chat` — must not advertise
+    /// it: an agent may offer a `terminal` method only when the client claimed
+    /// support, and offering one into a pipe would hang a program nobody is
+    /// watching.
+    pub terminal_auth: bool,
 }
 
 /// A completed ACP turn, as this process records it.
@@ -2050,6 +2367,178 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     LaunchOptions {
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod auth_report_tests {
+    use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent, AuthMethodTerminal};
+
+    use super::{
+        AuthChoice, LaunchOptions, choose_auth_method, classify_choice, unauthenticated_message,
+    };
+
+    /// Two `agent` methods, in the order the picker numbers them.
+    fn two_methods() -> Vec<AuthMethod> {
+        vec![
+            AuthMethod::Agent(AuthMethodAgent::new("oauth", "Sign in with Anthropic")),
+            AuthMethod::Agent(AuthMethodAgent::new("api-key", "Paste an API key")),
+        ]
+    }
+
+    /// **A control that cannot act is absent** (ACP_AUTH_SPEC §6.2). Only the
+    /// interactive caller may claim it can run a terminal login; every other
+    /// path — `serve`, `prompt`, a piped `chat` — leaves it false, so an agent
+    /// never offers a login into a pipe.
+    #[test]
+    fn terminal_auth_is_off_unless_a_caller_opts_in() {
+        assert!(
+            !LaunchOptions::default().terminal_auth,
+            "the default must not claim a terminal this caller may not have"
+        );
+        assert!(
+            !super::launch_options(None).terminal_auth,
+            "the shared serve/prompt constructor must not claim it either"
+        );
+    }
+
+    /// **Nobody answering is never a login** (ACP_AUTH_SPEC §6.3). With no
+    /// advertised method there is nothing to offer, and the prompt declines
+    /// rather than inventing one.
+    #[test]
+    fn nothing_advertised_declines_without_prompting() {
+        let choice = choose_auth_method("pi-acp", &[]).expect("declining is not an error");
+        assert!(
+            matches!(choice, AuthChoice::Declined),
+            "an empty method list must decline"
+        );
+    }
+
+    /// **Cancelling never authenticates** (ACP_AUTH_SPEC §6.3). The typed
+    /// decline is its own branch, distinct from the EOF one that returns the
+    /// same answer — this is the branch a live terminal was needed to reach.
+    #[test]
+    fn a_typed_zero_declines() {
+        assert!(
+            matches!(
+                classify_choice("0", &two_methods()),
+                Some(AuthChoice::Declined)
+            ),
+            "'0' is the cancel entry the menu prints"
+        );
+    }
+
+    /// A bare enter takes the `[1]` the prompt shows as the default — the
+    /// offer on screen and the answer must not disagree.
+    #[test]
+    fn a_bare_enter_takes_the_advertised_default() {
+        let Some(AuthChoice::Agent(id)) = classify_choice("\n", &two_methods()) else {
+            panic!("an empty line selects the first method")
+        };
+        assert_eq!(
+            id.to_string(),
+            "oauth",
+            "the default is the '[1]' on screen"
+        );
+    }
+
+    /// The numbering is the menu's, one-based.
+    #[test]
+    fn a_digit_selects_that_numbered_method() {
+        let Some(AuthChoice::Agent(id)) = classify_choice("2", &two_methods()) else {
+            panic!("'2' selects the second method")
+        };
+        assert_eq!(id.to_string(), "api-key", "numbering starts at one");
+    }
+
+    /// Out of range is not a selection. Nothing wraps onto an index the
+    /// harness never offered — the alternative is authenticating with a method
+    /// nobody was shown.
+    #[test]
+    fn an_unoffered_index_is_not_a_selection() {
+        assert!(
+            classify_choice("9", &two_methods()).is_none(),
+            "'9' against two methods must re-prompt, not wrap"
+        );
+    }
+
+    /// Anything that is not a number re-prompts rather than resolving.
+    #[test]
+    fn a_non_number_is_not_a_selection() {
+        assert!(
+            classify_choice("x", &two_methods()).is_none(),
+            "'x' must re-prompt"
+        );
+    }
+
+    /// A `terminal` method is routed to the out-of-band flow, never to
+    /// `authenticate` — ACP forbids passing it there because the interactive
+    /// process is not the ACP connection.
+    #[test]
+    fn a_terminal_method_never_becomes_an_authenticate_call() {
+        let methods = vec![AuthMethod::Terminal(
+            AuthMethodTerminal::new("login", "Log in from the terminal")
+                .args(vec!["--login".to_string()]),
+        )];
+        let Some(AuthChoice::Terminal(descriptor)) = classify_choice("1", &methods) else {
+            panic!("a terminal method classifies to the out-of-band branch")
+        };
+        assert_eq!(
+            descriptor.args,
+            vec!["--login".to_string()],
+            "the descriptor's args are what the login appends"
+        );
+        assert!(
+            descriptor.env.is_empty(),
+            "an unset env overlays nothing onto the base configuration"
+        );
+    }
+
+    /// The reader is told which harness, and what it actually advertised.
+    #[test]
+    fn the_message_names_the_harness_and_what_it_offers() {
+        let methods = vec![AuthMethod::Agent(
+            AuthMethodAgent::new("oauth", "Sign in with Anthropic")
+                .description("opens a browser".to_string()),
+        )];
+        let message = unauthenticated_message("claude-acp", &methods);
+        assert!(message.contains("'claude-acp'"), "{message}");
+        assert!(message.contains("Sign in with Anthropic"), "{message}");
+        assert!(message.contains("opens a browser"), "{message}");
+    }
+
+    /// A harness advertising nothing says so, rather than naming an empty list
+    /// or implying a control that is not there.
+    #[test]
+    fn advertising_nothing_is_reported_as_nothing() {
+        let message = unauthenticated_message("pi-acp", &[]);
+        assert!(
+            message.contains("advertises no authentication method"),
+            "{message}"
+        );
+    }
+
+    /// **The two axes are never conflated** (ACP_AUTH_SPEC §6.4). This message
+    /// is about the harness's own authentication; sending the reader to
+    /// `providers login` or a route would be the wrong fix for it.
+    #[test]
+    fn the_message_never_mentions_the_routing_axis() {
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("t", "Terminal"))];
+        for message in [
+            unauthenticated_message("claude-acp", &methods),
+            unauthenticated_message("claude-acp", &[]),
+        ] {
+            // The product's own name contains "route"; strip it before looking
+            // for the routing *concept*, or the check fails on "bitrouter".
+            let prose = message.replace("bitrouter", "");
+            for forbidden in ["providers login", "provider", "route", "--direct"] {
+                assert!(
+                    !prose.contains(forbidden),
+                    "an agent-auth message must not name the routing axis \
+                     ({forbidden:?}): {message}"
+                );
+            }
+        }
     }
 }
 

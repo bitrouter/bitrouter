@@ -74,7 +74,8 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
+    AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification,
+    ClientCapabilities, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
     NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
     SessionUpdate, TextContent, ToolCallUpdate,
@@ -331,6 +332,17 @@ pub struct ClientOptions {
     /// the turn errors. The connection-level controller deliberately does not
     /// enforce deadlines, so this is the client's job.
     pub turn_timeout: Option<Duration>,
+    /// Whether this caller can relaunch the configured agent program in an
+    /// interactive terminal, which is what ACP's `terminal` authentication
+    /// method requires of a client.
+    ///
+    /// A **parameter, not an inference**: only the caller knows whether it owns
+    /// the harness process. A caller that launched the harness itself can
+    /// reproduce its invocation; one talking to an agent over a remote
+    /// transport cannot, and the spec is explicit that such a client must omit
+    /// the capability. Advertising it falsely would invite the agent to offer a
+    /// login this client cannot perform — a control that cannot act.
+    pub terminal_auth: bool,
 }
 
 /// The wire key under which a controller advertises itself in the
@@ -418,6 +430,25 @@ impl RouteControlCapability {
     pub fn allows(&self, method: RouteMethod) -> bool {
         self.methods.iter().any(|listed| listed == method.wire())
     }
+}
+
+/// Did this failure mean "the agent is not authenticated"?
+///
+/// Classified by **error code** (`auth_required`, -32000), never by message
+/// text, so every consumer agrees on what the state looks like — the same rule
+/// [`RouteError`] classification follows.
+///
+/// A `false` here is not a claim that the agent *is* authenticated. ACP does
+/// not require `session/new` to check authorization at all: some agents verify
+/// eagerly, others lazily on the first model call, so an unauthenticated agent
+/// can fail much later and by another name. This answers only "was *this*
+/// error an authentication one".
+pub fn is_auth_required(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<agent_client_protocol::Error>()
+        .is_some_and(|rpc| {
+            i32::from(rpc.code) == i32::from(agent_client_protocol::ErrorCode::AuthRequired)
+        })
 }
 
 /// Why a `_bitrouter/route/*` call did not install or report a route.
@@ -513,6 +544,11 @@ enum Command {
         req: Box<PromptRequest>,
         reply: oneshot::Sender<anyhow::Result<PromptResponse>>,
     },
+    /// Answer the agent's `authenticate` for one advertised method.
+    Authenticate {
+        method_id: AuthMethodId,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
     /// Send a `session/cancel` notification for `session_id`.
     Cancel { session_id: String },
     /// Exit the command loop, tearing the connection down. `done` fires once
@@ -529,6 +565,17 @@ pub struct AcpClient {
     /// client acts on is read out of it here, at handshake, and keeping the
     /// rest would be state with no reader.
     route_control: RouteControlCapability,
+    /// The authentication methods the agent advertised, in its own order.
+    ///
+    /// Read at handshake for the same reason `route_control` is: it is the only
+    /// moment `initialize` is in hand. Retained rather than dropped because it
+    /// is the only honest answer to "why can this session not start" — the
+    /// alternative is relaying a JSON-RPC error and letting the reader guess
+    /// whether the harness is unauthenticated or the route is dead.
+    ///
+    /// Empty is meaningful: an agent that advertises nothing offers no
+    /// authentication this client may drive.
+    auth_methods: Vec<AuthMethod>,
     /// Submits [`Command`]s into the connection's command loop.
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
@@ -577,6 +624,7 @@ impl AcpClient {
                 permissions: Arc::clone(&permissions),
             },
             handshake_tx,
+            options.terminal_auth,
         );
 
         // Detached: the driver ends when the command channel closes (this
@@ -587,8 +635,10 @@ impl AcpClient {
             .await
             .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
         let route_control = RouteControlCapability::from_init(&init);
+        let auth_methods = init.auth_methods.clone();
         Ok(Self {
             route_control,
+            auth_methods,
             cmd_tx,
             updates_tx,
             raw_updates_tx,
@@ -632,6 +682,38 @@ impl AcpClient {
     /// methods it needs and draws nothing when the answer is no.
     pub fn route_control(&self) -> &RouteControlCapability {
         &self.route_control
+    }
+
+    /// The authentication methods the agent advertised at handshake, in its
+    /// own order.
+    ///
+    /// Empty when the agent advertised none, which is not an error: it means
+    /// this client has no authentication to offer for that agent, and a
+    /// consumer should say so rather than draw a control that cannot act.
+    pub fn auth_methods(&self) -> &[AuthMethod] {
+        &self.auth_methods
+    }
+
+    /// `authenticate`: ask the agent to authenticate with one advertised
+    /// method, and wait for it to finish.
+    ///
+    /// **Only for methods the agent performs itself.** A `terminal` method is
+    /// not one of them: ACP is explicit that a client must not pass it here,
+    /// because the interactive process is not the ACP connection. Its login
+    /// runs out of band and the caller reconnects afterwards.
+    ///
+    /// Returning `Ok` means the agent reported the method succeeded. It is not
+    /// evidence that a later request will be served — an agent may validate
+    /// credentials lazily — so the caller retries the operation rather than
+    /// assuming it will now work.
+    pub async fn authenticate(&self, method_id: AuthMethodId) -> anyhow::Result<()> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(Command::Authenticate { method_id, reply })
+            .map_err(|_| anyhow::anyhow!("acp command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the agent dropped the authenticate reply"))?
     }
 
     /// `_bitrouter/route/list`: the routes the daemon suggests for
@@ -901,6 +983,7 @@ async fn drive(
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     plane: CallbackPlane,
     handshake_tx: oneshot::Sender<anyhow::Result<Box<InitializeResponse>>>,
+    terminal_auth: bool,
 ) {
     let notif_updates = plane.updates_tx.clone();
     let notif_raw_updates = plane.raw_updates_tx.clone();
@@ -1014,12 +1097,23 @@ async fn drive(
         .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
             // ── Handshake: initialize only ─────────────────────────────────
             // `session/new` is a command (below) so the caller can relay a
-            // manager's cwd + mcpServers into it. Client capabilities are
-            // deliberately left at their defaults (no fs / no terminal): ACP
-            // v2 removes that client surface, and a manager provides such
-            // tooling via the relayed MCP servers instead.
+            // manager's cwd + mcpServers into it.
+            //
+            // The *tooling* capabilities stay at their defaults (no fs, no
+            // `terminal`): ACP v2 removes that client surface, and a manager
+            // provides such tooling via the relayed MCP servers instead.
+            // `auth.terminal` is a different field with a different meaning —
+            // whether this client can relaunch the agent's own program for an
+            // interactive login — and it is stabilized in both v1 and v2, so
+            // the reasoning above does not reach it. It is advertised only when
+            // the caller said it can (see [`ClientOptions::terminal_auth`]).
             let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .send_request(
+                    InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                        ClientCapabilities::new()
+                            .auth(AuthCapabilities::new().terminal(terminal_auth)),
+                    ),
+                )
                 .block_task()
                 .await?;
 
@@ -1063,6 +1157,19 @@ async fn drive(
                                         .and_then(|v| v.as_str())
                                         .map(str::to_string),
                                 })
+                                .map_err(anyhow::Error::from);
+                            let _ = reply.send(result);
+                            Ok(())
+                        })?;
+                    }
+                    Command::Authenticate { method_id, reply } => {
+                        let auth_connection = connection.clone();
+                        connection.spawn(async move {
+                            let result = auth_connection
+                                .send_request(AuthenticateRequest::new(method_id))
+                                .block_task()
+                                .await
+                                .map(|_| ())
                                 .map_err(anyhow::Error::from);
                             let _ = reply.send(result);
                             Ok(())
@@ -1501,6 +1608,7 @@ mod tests {
             PromptBehaviour::AskPermissionAndStall,
             ClientOptions {
                 turn_timeout: Some(Duration::from_millis(150)),
+                ..ClientOptions::default()
             },
         )
         .await;
@@ -1737,6 +1845,47 @@ mod tests {
         assert!(
             !RouteControlCapability::from_init(&bare).allows(RouteMethod::List),
             "no controller block at all advertises nothing"
+        );
+    }
+
+    /// `auth_required` is recognised by its code, and nothing else is — an
+    /// error whose *text* mentions authentication is still not an
+    /// authentication error, and an unrelated code carrying authentication
+    /// words must not send the reader to a login.
+    #[test]
+    fn auth_required_is_classified_by_code_not_text() {
+        let auth = anyhow::Error::from(agent_client_protocol::Error::auth_required());
+        assert!(is_auth_required(&auth), "the auth_required code");
+
+        let impostor = anyhow::Error::from(
+            agent_client_protocol::Error::internal_error()
+                .data("authentication required: please log in"),
+        );
+        assert!(
+            !is_auth_required(&impostor),
+            "message text must never classify"
+        );
+
+        let untyped = anyhow::anyhow!("auth_required");
+        assert!(
+            !is_auth_required(&untyped),
+            "an error carrying no ACP error must not be read as one"
+        );
+    }
+
+    /// The capability is a promise to *run* the login, so it is sent exactly
+    /// as the caller declared it — never inferred, and false by default.
+    #[tokio::test]
+    async fn terminal_auth_is_advertised_only_when_the_caller_says_so() {
+        let (client, _log) =
+            connect_to_stub(PromptBehaviour::AskPermission, ClientOptions::default()).await;
+        assert!(
+            client.auth_methods().is_empty(),
+            "a stub advertising no methods must retain none"
+        );
+        assert!(
+            !ClientOptions::default().terminal_auth,
+            "the default must not claim a flow the caller may not have"
         );
     }
 
