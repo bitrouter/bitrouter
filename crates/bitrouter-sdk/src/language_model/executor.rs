@@ -534,9 +534,9 @@ impl UpstreamErrorScrubber {
             BitrouterError::Internal(message) => {
                 BitrouterError::Internal(self.scrub_text(&message))
             }
-            error @ (BitrouterError::UpstreamTimeout | BitrouterError::UpstreamUnavailable) => {
-                error
-            }
+            error @ (BitrouterError::UpstreamTimeout
+            | BitrouterError::ClientDisconnected
+            | BitrouterError::UpstreamUnavailable) => error,
         }
     }
 }

@@ -10,6 +10,7 @@ use std::{future::Future, mem};
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::error::{BitrouterError, Result};
@@ -135,6 +136,28 @@ pub(crate) struct PreparedStreamPart {
 pub(crate) struct PreparedPipelineResponse {
     pub(crate) response: PipelineResponse,
     pub(crate) delivery: DeliveryPermit,
+}
+
+struct DisconnectOnDrop {
+    token: Option<CancellationToken>,
+}
+
+impl DisconnectOnDrop {
+    fn new(token: CancellationToken) -> Self {
+        Self { token: Some(token) }
+    }
+
+    fn disarm(&mut self) {
+        self.token = None;
+    }
+}
+
+impl Drop for DisconnectOnDrop {
+    fn drop(&mut self) {
+        if let Some(token) = self.token.take() {
+            token.cancel();
+        }
+    }
 }
 
 enum DeliveryAuthorizationOutcome {
@@ -279,6 +302,10 @@ impl UpstreamTurn for PipelineUpstream<'_> {
         self.pipeline
             .execute_with_fallback(self.chain, prompt, self.ctx)
             .await
+    }
+
+    fn should_continue(&self) -> bool {
+        !self.ctx.client_disconnected()
     }
 }
 
@@ -467,6 +494,8 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
+        let disconnect_token = CancellationToken::new();
+        let execution_token = disconnect_token.clone();
         // `tokio::spawn` does not propagate the current tracing span, so attach
         // it explicitly — otherwise the whole request's logs would detach from
         // the handler's request span / trace context.
@@ -474,7 +503,9 @@ impl Pipeline {
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         self.detached_executions.spawn(
             async move {
-                let result = pipeline.execute_prepared(req).await;
+                let result = pipeline
+                    .execute_prepared_with_control(req, Some(execution_token))
+                    .await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
                 // this shutdown-tracked task.
@@ -482,7 +513,10 @@ impl Pipeline {
             }
             .instrument(span),
         );
-        prepared_rx.await.map_err(|error| {
+        let mut disconnect_on_drop = DisconnectOnDrop::new(disconnect_token);
+        let prepared = prepared_rx.await;
+        disconnect_on_drop.disarm();
+        prepared.map_err(|error| {
             BitrouterError::internal(format!(
                 "non-streaming execution task failed to complete: {error}"
             ))
@@ -497,7 +531,18 @@ impl Pipeline {
     }
 
     async fn execute_prepared(&self, req: PipelineRequest) -> Result<PreparedPipelineResponse> {
+        self.execute_prepared_with_control(req, None).await
+    }
+
+    async fn execute_prepared_with_control(
+        &self,
+        req: PipelineRequest,
+        disconnect_token: Option<CancellationToken>,
+    ) -> Result<PreparedPipelineResponse> {
         let mut ctx = PipelineContext::new(req);
+        if let Some(token) = disconnect_token {
+            ctx.install_client_disconnect_token(token);
+        }
         self.observe_start(&ctx).await;
 
         // ---- Stage 1: pre-request checks ----
@@ -598,8 +643,12 @@ impl Pipeline {
                 // Settlement still runs for failed requests (records the error).
                 self.run_settlement(&mut ctx, false, Some(e.clone())).await;
                 self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
-                    .await;
+                let outcome = if matches!(e, BitrouterError::ClientDisconnected) {
+                    RequestOutcome::ClientDisconnected
+                } else {
+                    RequestOutcome::Failed(e.clone())
+                };
+                self.observe_end(&ctx, outcome).await;
                 return Err(e);
             }
         }
@@ -981,8 +1030,16 @@ impl Pipeline {
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
         for (attempt_index, target) in chain.iter().enumerate() {
-            self.wait_before_fallback(attempt_index).await;
+            self.wait_before_fallback(attempt_index, ctx).await?;
+            if ctx.client_disconnected() {
+                return Err(BitrouterError::ClientDisconnected);
+            }
             self.observe_hop_start(ctx, target).await;
+            if ctx.client_disconnected() {
+                self.observe_hop_end(ctx, target, HopOutcome::NotDispatched)
+                    .await;
+                return Err(BitrouterError::ClientDisconnected);
+            }
             let outcome = self.executor.execute(target, prompt, ctx).await;
             match &outcome {
                 Ok(result) => {
@@ -1002,19 +1059,24 @@ impl Pipeline {
                     ctx.set_successful_target(target.clone());
                     return Ok(result);
                 }
-                Err(e) => match self.classify_failure(ctx, &e, target).await {
-                    FallbackDecision::TryNext => {
-                        tracing::warn!(
-                            provider = %target.provider_name,
-                            model = %target.service_id,
-                            error = %e,
-                            "upstream route candidate failed"
-                        );
-                        errors.push(e);
-                        continue;
+                Err(e) => {
+                    if ctx.client_disconnected() {
+                        return Err(BitrouterError::ClientDisconnected);
                     }
-                    FallbackDecision::Fail(e) => return Err(e),
-                },
+                    match self.classify_failure(ctx, &e, target).await {
+                        FallbackDecision::TryNext => {
+                            tracing::warn!(
+                                provider = %target.provider_name,
+                                model = %target.service_id,
+                                error = %e,
+                                "upstream route candidate failed"
+                            );
+                            errors.push(e);
+                            continue;
+                        }
+                        FallbackDecision::Fail(e) => return Err(e),
+                    }
+                }
             }
         }
         Err(aggregate_fallback_errors(errors))
@@ -1027,7 +1089,7 @@ impl Pipeline {
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
         for (attempt_index, target) in chain.iter().enumerate() {
-            self.wait_before_fallback(attempt_index).await;
+            self.wait_before_fallback(attempt_index, ctx).await?;
             let provider_started_at = Instant::now();
             self.observe_hop_start(ctx, target).await;
             let outcome = self
@@ -1081,21 +1143,28 @@ impl Pipeline {
         Err(aggregate_fallback_errors(errors))
     }
 
-    async fn wait_before_fallback(&self, attempt_index: usize) {
+    async fn wait_before_fallback(
+        &self,
+        attempt_index: usize,
+        ctx: &PipelineContext,
+    ) -> Result<()> {
         if attempt_index == 0 || self.fallback_backoff.is_empty() {
-            return;
+            return Ok(());
         }
         let schedule_index = (attempt_index - 1).min(self.fallback_backoff.len() - 1);
         let delay = self.fallback_backoff[schedule_index];
         if delay.is_zero() {
-            return;
+            return Ok(());
         }
         tracing::debug!(
             attempt = attempt_index + 1,
             delay_ms = delay.as_millis(),
             "waiting before retryable fallback candidate"
         );
-        tokio::time::sleep(delay).await;
+        tokio::select! {
+            () = tokio::time::sleep(delay) => Ok(()),
+            () = ctx.client_disconnected_signal() => Err(BitrouterError::ClientDisconnected),
+        }
     }
 
     /// Decide fallback after an upstream failure. Any registered execution hook

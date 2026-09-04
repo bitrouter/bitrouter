@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
@@ -41,6 +43,12 @@ static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Default)]
 struct Extensions {
     map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+/// Request-scoped controls shared by server-tool prompt forks.
+#[derive(Clone, Default)]
+struct ExecutionControl {
+    client_disconnect: Option<CancellationToken>,
 }
 
 /// A request-local native provider continuation resolved by a route hook.
@@ -197,6 +205,9 @@ pub struct PipelineContext {
     /// is readable from the stream stage.
     extensions: Extensions,
 
+    /// Advisory request-lifetime signals checked at safe non-stream boundaries.
+    execution_control: ExecutionControl,
+
     // ===== typed event bus =====
     events: EventBus,
 
@@ -240,6 +251,7 @@ impl PipelineContext {
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions::default(),
+            execution_control: ExecutionControl::default(),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
         }
@@ -275,6 +287,7 @@ impl PipelineContext {
             credential_authority: self.credential_authority.clone(),
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
+            execution_control: self.execution_control.clone(),
             events: self.events.clone(),
             outbound_trace_headers: Mutex::new(None),
         }
@@ -455,6 +468,42 @@ impl PipelineContext {
     /// The canonical request body.
     pub fn prompt(&self) -> &Prompt {
         &self.prompt
+    }
+
+    /// Install the request-scoped client-disconnect signal for non-stream
+    /// continuation checks. Prompt forks retain a clone of this token.
+    pub(crate) fn install_client_disconnect_token(&mut self, token: CancellationToken) {
+        self.execution_control.client_disconnect = Some(token);
+    }
+
+    /// Whether the downstream client has disconnected from this request.
+    ///
+    /// This read-only predicate is for app-owned pre-dispatch and admission
+    /// boundaries, before provider or tool execution (or any other side
+    /// effect) starts. Never use it to cancel or race an already-started
+    /// provider or tool future; dispatched work and its settlement must finish.
+    pub fn client_disconnected(&self) -> bool {
+        self.execution_control
+            .client_disconnect
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    }
+
+    /// Wait until the downstream client disconnects from this request.
+    ///
+    /// This read-only signal is for app-owned pre-dispatch and admission waits,
+    /// so they can wake and re-check before provider, tool, or other side
+    /// effects begin. Never race it against or use it to cancel an
+    /// already-started provider or tool future; dispatched work and its
+    /// settlement must finish.
+    ///
+    /// When the SDK has not installed a detached non-stream disconnect signal,
+    /// this future remains pending indefinitely.
+    pub async fn client_disconnected_signal(&self) {
+        match &self.execution_control.client_disconnect {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending().await,
+        }
     }
 
     /// The inbound wire protocol the request arrived on, if known. Route
@@ -1065,6 +1114,33 @@ mod tests {
             tool_choice: None,
             stream: false,
         }
+    }
+
+    #[tokio::test]
+    async fn disconnect_token_is_shared_by_forked_contexts() {
+        let token = CancellationToken::new();
+        let mut ctx = ctx_from_prompt(empty_prompt());
+        ctx.install_client_disconnect_token(token.clone());
+        let fork = ctx.fork_for_prompt(ctx.prompt().clone());
+
+        token.cancel();
+
+        assert!(ctx.client_disconnected());
+        assert!(fork.client_disconnected());
+    }
+
+    #[tokio::test]
+    async fn disconnect_signal_completes_when_installed_token_is_cancelled() {
+        let token = CancellationToken::new();
+        let mut ctx = ctx_from_prompt(empty_prompt());
+        ctx.install_client_disconnect_token(token.clone());
+        assert!(!ctx.client_disconnected());
+
+        let signal = ctx.client_disconnected_signal();
+        token.cancel();
+        signal.await;
+
+        assert!(ctx.client_disconnected());
     }
 
     #[test]

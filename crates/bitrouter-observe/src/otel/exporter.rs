@@ -670,6 +670,9 @@ impl ObserveHook for OtelExporter {
                 );
                 hop_span.set_status(Status::error(err.to_string()));
             }
+            HopOutcome::NotDispatched => {
+                hop_span.set_attribute(KeyValue::new("bitrouter.provider_dispatched", false));
+            }
         }
         hop_span.end();
     }

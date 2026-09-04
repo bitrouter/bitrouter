@@ -129,6 +129,10 @@ pub enum BitrouterError {
     #[error("upstream timeout")]
     UpstreamTimeout,
 
+    /// 499 — the downstream client disconnected before the request completed.
+    #[error("client disconnected")]
+    ClientDisconnected,
+
     /// 503 — the upstream route set is temporarily unavailable.
     #[error("upstream unavailable")]
     UpstreamUnavailable,
@@ -163,6 +167,7 @@ impl BitrouterError {
             Self::UpstreamInvalidResponse { .. } => 502,
             Self::UpstreamAuth { status, .. } => *status,
             Self::UpstreamTimeout => 504,
+            Self::ClientDisconnected => 499,
             Self::UpstreamUnavailable => 503,
             Self::Internal(_) => 500,
         }
@@ -184,6 +189,7 @@ impl BitrouterError {
             Self::Upstream { .. }
             | Self::UpstreamInvalidResponse { .. }
             | Self::UpstreamTimeout => "upstream_error",
+            Self::ClientDisconnected => "client_disconnected",
             Self::UpstreamUnavailable => "upstream_error",
             Self::UpstreamAuth { status: 403, .. } => "permission_error",
             Self::UpstreamAuth { .. } => "authentication_error",
@@ -208,6 +214,7 @@ impl BitrouterError {
             Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
             Self::UpstreamAuth { .. } => "upstream_auth_required",
             Self::UpstreamTimeout => "upstream_timeout",
+            Self::ClientDisconnected => "client_disconnected",
             Self::UpstreamUnavailable => "upstream_unavailable",
             Self::Internal(_) => "internal_error",
         }
@@ -256,6 +263,7 @@ impl BitrouterError {
             Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
             Self::UpstreamTimeout => ErrorKind::UpstreamTimeout,
+            Self::ClientDisconnected => ErrorKind::ClientDisconnected,
             Self::UpstreamUnavailable => ErrorKind::UpstreamUnavailable,
             Self::Internal(_) => ErrorKind::Internal,
         }
@@ -288,6 +296,7 @@ impl BitrouterError {
                 format!("upstream auth required ({status})")
             }
             Self::UpstreamTimeout => "upstream timeout".to_string(),
+            Self::ClientDisconnected => "client disconnected".to_string(),
             Self::UpstreamUnavailable => "upstream unavailable".to_string(),
         };
         ErrorEnvelope {
@@ -314,6 +323,7 @@ impl BitrouterError {
             Self::UpstreamInvalidResponse { .. } => {
                 "upstream returned an invalid response".to_string()
             }
+            Self::ClientDisconnected => "client disconnected".to_string(),
             _ => self.to_string(),
         }
     }
@@ -350,6 +360,8 @@ pub enum ErrorKind {
     UpstreamAuth,
     /// 504 — upstream timed out.
     UpstreamTimeout,
+    /// 499 — downstream client disconnected.
+    ClientDisconnected,
     /// 503 — the upstream route set is temporarily unavailable.
     UpstreamUnavailable,
     /// 500 — internal error.
@@ -493,5 +505,16 @@ mod tests {
             .message,
             "upstream error (502): boom"
         );
+    }
+
+    #[test]
+    fn client_disconnected_has_stable_contract() {
+        let error = BitrouterError::ClientDisconnected;
+
+        assert_eq!(error.status(), 499);
+        assert_eq!(error.error_code(), "client_disconnected");
+        assert_eq!(error.kind(), ErrorKind::ClientDisconnected);
+        assert_eq!(error.public_message(), "client disconnected");
+        assert_eq!(error.to_envelope().error.message, "client disconnected");
     }
 }
