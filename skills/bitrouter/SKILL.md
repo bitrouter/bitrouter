@@ -159,7 +159,7 @@ wire contract are there — before reasoning about this surface.
 
 ```bash
 bitrouter route claude-sonnet-4-6   # resolve a model through the routing table
-bitrouter models                    # everything routable
+bitrouter models                    # everything routable, with every provider that serves it
 bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
 ```
 

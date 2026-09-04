@@ -272,7 +272,23 @@ Resolves a model name through the routing table and prints the full fallback cha
 bitrouter models [-c <path>] [-p <provider-id>]
 ```
 
-Lists all routable models. Filter by provider with `--provider`.
+Lists all routable models, each with **every** provider that can serve it — the
+fallback chain, in order. Filter to one provider with `--provider`.
+
+Queries the running daemon if reachable and falls back to a local config parse,
+the same order `bitrouter route` uses: the live routing table reflects `reload`s
+and providers whose credential is resolved at daemon start-up (`claude-code`,
+`google-ai`) rather than declared in the config, which a static parse marks
+inactive and drops. `--json` reports which view answered as
+`resolved_via: "live" | "config"`, and the human view annotates a `config`
+listing.
+
+The config fallback probes each `auto_discover: true` provider's `/models`
+endpoint (bounded: 2s connect, 5s per request; failures leave that provider with
+no models rather than failing the command). The daemon path does no such probing.
+
+Same report type as the origin MCP server's `list_models` tool, so
+`bitrouter models --json` and the tool's structured content are the same bytes.
 
 ### `bitrouter providers list`
 
@@ -350,7 +366,7 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 | Tool | Wired on | What it answers |
 |---|---|---|
 | `complete` | every profile | Route a completion through BitRouter and return the full result |
-| `list_models` | every profile | List models routable through BitRouter |
+| `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bitrouter models --provider` does. Returns the same report type as `bitrouter models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
 | `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
 | `route_preview` | stdio + local | How a model/prompt *would* route — provider chain, policy decision, cost estimate — without sending anything upstream |
 | `skills_search` | `--backend skills` | Search installed skills by name/description |

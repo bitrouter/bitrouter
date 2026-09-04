@@ -1,6 +1,6 @@
 # Spec: one actions table — stopping CLI, MCP, and TUI from drifting apart
 
-Status: **phases 0–1 implemented; 2–5 proposed** · Author: Claude (with Spikel)
+Status: **phases 0–2 implemented; 3–5 proposed** · Author: Claude (with Spikel)
 · Date: 2026-09-04
 · Issue: [#868](https://github.com/bitrouter/bitrouter/issues/868)
 · Refs: [#863](https://github.com/bitrouter/bitrouter/issues/863) (open),
@@ -15,6 +15,17 @@ above each. The corrections: the guard test cannot live in the crate (§5),
 `output_schema` must be optional and every tool needs a row from day one (§3,
 §6 phase 1), `providers[]` needed a producer (§6 phase 1), and phase 0's interim
 `currency` fix does not survive phase 1 (§6 phase 0).
+
+**Implementation note, phase 2 (2026-09-04).** Phase 2 landed on
+`claude/actions-table-phase02`. It corrected three things below, all marked
+**[corrected post-implementation]**: §6 phase 2's config-only implementation is
+wrong for a server whose `complete` goes to the daemon (the phase is daemon-first
+with a config fallback, and the fallback is what delivers the standalone win);
+§10's "no `reqwest` call for … `list_models`" is unachievable while the HTTP
+profile is assembled from an `Arc<dyn Backend>`; and the report needed a
+`resolved_via` position the spec did not name, because two sources of truth with
+different meanings cannot share an unlabelled shape. It also confirmed the §3
+rule-2 deviation phase 1 recorded, now covering `Backend::models_port` as well.
 
 **Follow-up (2026-09-04), same branch.** [D2](#d2--the-cloud-profile) was
 implemented on its recommendation, reviewed, and **decided differently**:
@@ -318,6 +329,59 @@ consequences it did not predict:
   becomes a filter on the same report, and the MCP tool grows the same optional
   filter argument.
 
+**[corrected post-implementation]** Three things, one of them the phase's central
+decision:
+
+- **Daemon-first, not config-only.** "app-side implementation is today's
+  `commands::list_models`" gets the *source* wrong. Config-only is simpler and
+  does deliver standalone operation, but it makes `list_models` disagree with the
+  `complete` sitting next to it on the same server: `complete` goes to the
+  daemon, and a static config projection is neither a subset nor a superset of
+  what that daemon will accept. It is missing every provider whose credential is
+  resolved at daemon start-up — `assemble.rs` runs
+  `activate_stored_credential_providers` and `list_models_for` skips inactive
+  providers, so the `claude-code` and `google-ai` subscription models are simply
+  absent — and it lists models from a config edited since the daemon started,
+  which that daemon would refuse. Measured on a two-provider config with a
+  `claude-code` credential in the store: config-only listed 2 models, the live
+  table 10. So the implementation is daemon-first with a config fallback, the
+  order `route_preview` and `bitrouter route` already use, and the fallback is
+  what delivers the standalone win the phase was named for. The daemon path is a
+  new control-socket verb (`DaemonCommand::Models` →
+  `DaemonResponse::Models { models: Vec<ModelInfo> }`), returning whole the list
+  `Status` already walks to produce its count.
+  - Consequence the phase text did not anticipate: **`bitrouter models` becomes
+    daemon-aware too.** One implementation means one behaviour, and the CLI leaf
+    gains the subscription models it used to drop. The daemon is the one serving
+    that leaf's config (the socket resolves from the same `--config`), so
+    `bitrouter models -c other.yaml` still answers about `other.yaml`.
+  - Config resolution happens **per call**, not at `mcp serve` start, so the
+    stale-snapshot bug phase 3 has to fix for `route_preview` is not reproduced
+    here.
+- **The report needed `resolved_via`.** `ModelsReport { models }` alone cannot
+  say which of two materially different views answered, and "what a running
+  router will accept" versus "what this config would accept" is exactly the
+  distinction an agent deciding whether it may route needs. `resolved_via:
+  ModelsSource::{Live, Config}` carries it, mirroring `route_preview`'s field of
+  the same name. **This changes `bitrouter models --json`'s shape** — additively:
+  `models[]` and its entries are untouched, so a consumer reading models keeps
+  working, but the object gains a key. Worth stating because it is an
+  agent-readable surface.
+- **`ModelsQuery` is a second `Backend` port, not the end of `Backend`.** Both
+  backends implement `ModelsQuery` and hand it over via
+  `Backend::models_port(self: Arc<Self>)`, the same wiring `status_port`
+  introduced and the same deviation from §3 rule 2. It is not optional here: the
+  HTTP profile is assembled from `serve_http_on(Arc<dyn Backend>, …)`, which
+  `multitenant_http.rs` pins, so a backend that cannot hand over a port cannot
+  keep its tool — and unlike `status`, a `--local-url` or cloud client's
+  `GET /v1/models` *is* the right answer for its deployment, so dropping it would
+  be a regression rather than an honest absence. `Backend` is therefore left with
+  `complete` plus two port accessors, not `complete` alone; it collapses when
+  `complete` is port-ified.
+- Also deleted: `Builder::completion_local`, whose only caller was the stdio test
+  fixture and which wired a `LocalBackend` as *just* the completion backend —
+  misleading now that the same backend also answers `list_models`.
+
 ### Phase 3 — `route` / `route_preview`
 
 One action, `route`, with input `{ model, prompt: Option<String> }` and one
@@ -544,7 +608,10 @@ routing-table generation only if it shows up.**
   structured content deserialize into the **same** Rust type in a test that runs
   both.
 - `bitrouter models` and `list_models` return the same models with the same
-  provider lists, with no daemon running.
+  provider lists, with no daemon running. *(Met at phase 2:
+  `actions::models::tests::both_surfaces_keep_every_provider_of_a_model` runs
+  both surfaces against a config where one model has two providers and asserts
+  the two serializations are equal, with nothing listening on the socket.)*
 - `status` over MCP with the daemon stopped returns `running: false` and is not
   a tool error.
 - A skill with malformed frontmatter, a `./skills/foo` skill, and a user-global
@@ -553,6 +620,17 @@ routing-table generation only if it shows up.**
 - `_bitrouter/route/list` never offers a route `_bitrouter/route/set` refuses.
 - `crates/bitrouter-mcp/` contains no `reqwest` call for `status` or
   `list_models`, and no dead doc link.
+  - **[corrected post-implementation]** The `list_models` half is unachievable
+    and should not have been written. The HTTP profile is built from an
+    `Arc<dyn Backend>` and nothing else, and `GET /v1/models` against the cloud
+    account with the caller's own bearer is the *correct* answer for that
+    deployment — there is nothing app-side to move it to. The reqwest call
+    survives, relocated from `Backend::list_models` into
+    `impl ModelsQuery for {Local,Cloud}Backend`. What the criterion was reaching
+    for does hold: the crate keeps no *second implementation* of the action, and
+    the surface an agent reads is one shared type. The same applies to `status`,
+    where phase 1 already recorded it. Both close when `complete` is port-ified
+    and `Backend` goes away.
 - `cargo nextest run --all-features`, `cargo clippy --all-features`,
   `cargo fmt -- --check` clean; `skills/bitrouter/` updated in the same PRs.
 
