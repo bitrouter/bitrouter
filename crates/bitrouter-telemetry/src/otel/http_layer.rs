@@ -94,7 +94,19 @@ async fn server_span(
     next: Next,
 ) -> Response {
     let method = request.method().as_str().to_owned();
-    let route = request.uri().path().to_owned();
+    let path = request.uri().path().to_owned();
+    // `http.route` is the matched *template*, not the request path: the
+    // semconv requires it to be low cardinality, and this router mounts
+    // `POST /mcp/{server}` and `POST /v1beta/models/{model_action}`, so using
+    // the path made every MCP server id its own span name and its own
+    // `http.route` value. `MatchedPath` is in the request extensions here
+    // because `router_wrapper` applies this middleware with `Router::layer`,
+    // which runs after routing. The path is the fallback for the one case that
+    // has no template — a request that matched no route at all.
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| path.clone(), |matched| matched.as_str().to_owned());
 
     let parent_cx = global::get_text_map_propagator(|propagator| {
         propagator.extract(&HeaderExtractor(request.headers()))
@@ -117,7 +129,7 @@ async fn server_span(
         .with_attributes(vec![
             KeyValue::new("http.request.method", method.clone()),
             KeyValue::new("http.route", route.clone()),
-            KeyValue::new("url.path", route.clone()),
+            KeyValue::new("url.path", path.clone()),
         ]);
     let cx = if inbound_is_valid {
         // Extend the *extracted* context rather than the ambient one, so
@@ -140,6 +152,7 @@ async fn server_span(
         target: "bitrouter::observe::http",
         method = %method,
         route = %route,
+        path = %path,
         "ingress span opened"
     );
 
@@ -314,6 +327,10 @@ mod tests {
                 "/boom",
                 get(|| async { http::StatusCode::INTERNAL_SERVER_ERROR }),
             )
+            // Same shape as the SDK router's `POST /mcp/{server}`: the
+            // templated route whose path segment is caller-chosen, and so
+            // unbounded in cardinality.
+            .route("/mcp/{server}", axum::routing::post(|| async { "ok" }))
             .route(
                 "/probe",
                 get(move || {
@@ -494,6 +511,94 @@ mod tests {
                 .iter()
                 .any(|span| span.span_kind == SpanKind::Server),
             "releasing the body ends the ingress span"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_templated_route_reports_the_template_not_the_path() {
+        // `http.route` and the span name must be the matched template. The SDK
+        // router mounts `POST /mcp/{server}` and
+        // `POST /v1beta/models/{model_action}`, so deriving them from the
+        // request path made every MCP server id a new span name and a new
+        // `http.route` value — an unbounded dimension on the one attribute the
+        // semconv requires to be low cardinality. `url.path` keeps the literal
+        // path, which is where the caller-specific detail belongs.
+        let (tracer, provider, captured) = capturing_tracer();
+        let router = probe_router(tracer, Arc::new(Mutex::new(None)));
+
+        let response = router
+            .oneshot(
+                http::Request::builder()
+                    .method(http::Method::POST)
+                    .uri("/mcp/some-server")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        drop(response);
+        assert!(provider.force_flush().is_ok());
+
+        let spans = captured.lock().expect("captured").clone();
+        let server = spans
+            .iter()
+            .find(|span| span.span_kind == SpanKind::Server)
+            .expect("SERVER span exported");
+        assert_eq!(server.name, "POST /mcp/{server}");
+        let attribute = |key: &str| {
+            server
+                .attributes
+                .iter()
+                .find(|kv| kv.key.as_str() == key)
+                .map(|kv| kv.value.clone())
+        };
+        assert_eq!(
+            attribute("http.route"),
+            Some(opentelemetry::Value::String("/mcp/{server}".into())),
+            "`http.route` must be the matched template"
+        );
+        assert_eq!(
+            attribute("url.path"),
+            Some(opentelemetry::Value::String("/mcp/some-server".into())),
+            "`url.path` must stay the literal path"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unmatched_request_falls_back_to_the_literal_path() {
+        // Nothing matched, so there is no template to report. The schema
+        // declares `http.route` as required, so the literal path stands in
+        // rather than the attribute going missing.
+        let (tracer, provider, captured) = capturing_tracer();
+        let router = probe_router(tracer, Arc::new(Mutex::new(None)));
+
+        let response = router
+            .oneshot(
+                http::Request::builder()
+                    .uri("/missing")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        drop(response);
+        assert!(provider.force_flush().is_ok());
+
+        let spans = captured.lock().expect("captured").clone();
+        let server = spans
+            .iter()
+            .find(|span| span.span_kind == SpanKind::Server)
+            .expect("SERVER span exported");
+        assert_eq!(server.name, "GET /missing");
+        assert_eq!(
+            server
+                .attributes
+                .iter()
+                .find(|kv| kv.key.as_str() == "http.route")
+                .map(|kv| kv.value.clone()),
+            Some(opentelemetry::Value::String("/missing".into()))
         );
     }
 

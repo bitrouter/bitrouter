@@ -302,13 +302,13 @@ const SERVER_SPAN: SpanDef = SpanDef {
             key: "http.route",
             ty: AttrType::String,
             requirement: Requirement::Required,
-            note: "Request path.",
+            note: "The matched route *template*, low cardinality by construction —                    `/mcp/{server}`, not `/mcp/some-server`. Falls back to the literal path for                    a request that matched no route, which is the only case with no template.",
         },
         AttrDef {
             key: "url.path",
             ty: AttrType::String,
             requirement: Requirement::Required,
-            note: "Request path, as the URL semconv spells it.",
+            note: "The literal request path, as the URL semconv spells it. This is where the                    caller-specific segment `http.route` templates away is still readable.",
         },
         AttrDef {
             key: "http.response.status_code",

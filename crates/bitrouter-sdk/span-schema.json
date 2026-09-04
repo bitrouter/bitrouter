@@ -33,13 +33,13 @@
           "key": "http.route",
           "type": "string",
           "requirement": "required",
-          "note": "Request path."
+          "note": "The matched route *template*, low cardinality by construction —                    `/mcp/{server}`, not `/mcp/some-server`. Falls back to the literal path for                    a request that matched no route, which is the only case with no template."
         },
         {
           "key": "url.path",
           "type": "string",
           "requirement": "required",
-          "note": "Request path, as the URL semconv spells it."
+          "note": "The literal request path, as the URL semconv spells it. This is where the                    caller-specific segment `http.route` templates away is still readable."
         },
         {
           "key": "http.response.status_code",
