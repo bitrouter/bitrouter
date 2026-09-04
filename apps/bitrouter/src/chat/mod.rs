@@ -42,6 +42,7 @@
 //! `lifecycle`'s `the_panic_hook_restores_and_still_reports`, which pins that
 //! `restore` runs *and* that the panic is still reported afterwards.
 
+pub mod effects;
 pub mod input;
 pub mod session;
 pub mod signals;
@@ -67,6 +68,7 @@ mod tests {
     #[test]
     fn the_chat_module_reaches_nothing_daemon_wide() {
         let sources = [
+            ("effects.rs", include_str!("effects.rs")),
             ("input.rs", include_str!("input.rs")),
             ("session.rs", include_str!("session.rs")),
         ];

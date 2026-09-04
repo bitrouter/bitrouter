@@ -51,7 +51,7 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::text::Line;
 
 use crate::editor::{Edit, Editor};
-use crate::permission::Prompt;
+use crate::permission::{Decision, Policy, Prompt};
 use crate::picker::Picker;
 use crate::writer::Trigger;
 
@@ -244,6 +244,18 @@ fn resolve(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
         id: prompt.id().to_string(),
         outcome,
     }
+}
+
+/// Answer a question the way a headless policy says to.
+///
+/// The pipe's counterpart of `answering_key`: a person's keystroke and a
+/// policy's rule both end as the same [`Effect::Resolve`], carried by the same
+/// id, run by the same driver — which is what makes a headless run answer the
+/// agent exactly as the terminal would have. The decision returned is the one
+/// the agent heard (see [`Prompt::answer`]).
+pub fn decide(policy: &Policy, prompt: &Prompt) -> (Decision, Effect) {
+    let (decision, outcome) = prompt.answer(policy.decide(prompt));
+    (decision, resolve(prompt, outcome))
 }
 
 /// Leave whatever phase is current, answering every question it holds, and
@@ -633,6 +645,7 @@ mod tests {
             id,
             Some("Write src/main.rs".to_string()),
             "t1",
+            Some(agent_client_protocol_schema::v1::ToolKind::Edit),
             vec![
                 option("allow", PermissionOptionKind::AllowOnce),
                 option("always", PermissionOptionKind::AllowAlways),
@@ -1261,5 +1274,59 @@ mod tests {
             assert_eq!(said.as_deref(), Some(expected));
             assert_eq!(phase_of(&state), "idle");
         }
+    }
+
+    /// A headless policy answers with the agent's own option, as a `Resolve`
+    /// for the question's id — the effect a keystroke would have produced.
+    #[test]
+    fn a_headless_policy_answers_with_the_agents_own_option() {
+        use crate::permission::Mode;
+
+        let prompt = question("r1");
+        let approve = Policy {
+            mode: Mode::ApproveAll,
+            ..Policy::default()
+        };
+        let (decision, effect) = decide(&approve, &prompt);
+        assert_eq!(decision, Decision::Approve);
+        assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("allow"));
+
+        let (decision, effect) = decide(&Policy::default(), &prompt);
+        assert_eq!(decision, Decision::Deny);
+        assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("no"));
+    }
+
+    /// A policy that cannot approve — the agent offered no allow option —
+    /// selects the reject option and says so, so an exit status built on the
+    /// decision counts what the agent heard.
+    #[test]
+    fn a_policy_that_cannot_approve_reports_deny() {
+        use crate::permission::Mode;
+
+        let approve = Policy {
+            mode: Mode::ApproveAll,
+            ..Policy::default()
+        };
+        let reject_only = Prompt::new(
+            "r1",
+            Some("Write src/main.rs".to_string()),
+            "t1",
+            None,
+            vec![option("no", PermissionOptionKind::RejectOnce)],
+        );
+        let (decision, effect) = decide(&approve, &reject_only);
+        assert_eq!(decision, Decision::Deny);
+        assert_eq!(answered_with(&[effect], "r1").as_deref(), Some("no"));
+
+        let nothing = Prompt::new("r2", None, "t2", None, Vec::new());
+        let (decision, effect) = decide(&approve, &nothing);
+        assert_eq!(decision, Decision::Deny);
+        assert!(matches!(
+            effect,
+            Effect::Resolve {
+                outcome: RequestPermissionOutcome::Cancelled,
+                ..
+            }
+        ));
     }
 }
