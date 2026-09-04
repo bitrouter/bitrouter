@@ -96,7 +96,7 @@ endorsed models in this phase.
 - [x] Obtain independent review and resolve every finding.
 - [x] Update the external research report without reading its `archive/`
   directory.
-- [ ] Push a PR, wait for required CI, and squash-merge it to `main`.
+- [x] Push PR #865, wait for required CI, and squash-merge it to `main`.
 
 ## Acceptance criteria
 
