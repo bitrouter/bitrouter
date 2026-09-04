@@ -15,17 +15,18 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882b815ffa67b023e1b40e7ea3bab3f05869654e8565d6811870c5545285e1d3"
+version = "2.0.0"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
+ "async-io",
  "async-process",
  "blocking",
  "futures",
  "futures-concurrency",
  "rustc-hash",
+ "rustix 1.1.4",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -36,20 +37,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-client-protocol-conductor"
+version = "2.0.0"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+dependencies = [
+ "agent-client-protocol",
+ "agent-client-protocol-trace-viewer",
+ "anyhow",
+ "chrono",
+ "clap",
+ "futures",
+ "futures-concurrency",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "strip-ansi-escapes",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "agent-client-protocol-derive"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd5ca63f112bd2459bcaf9eda0683b9ba95fc3b5e5fdd9036ca941c6a09345b1"
+version = "2.0.0"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
 dependencies = [
  "quote",
- "syn 2.0.118",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "1.4.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06679e1542356341f4550ccfb16338b64f37f6af70de2105446ef6fbb078234c"
+checksum = "ca98360c7bb8cc97d7acd49e2a8a851c3f7bee6b2f0535036d8ab86b5fcd223d"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -59,6 +82,19 @@ dependencies = [
  "serde_with",
  "strum 0.28.0",
  "tracing",
+]
+
+[[package]]
+name = "agent-client-protocol-trace-viewer"
+version = "2.0.0"
+source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "open",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -616,12 +652,11 @@ dependencies = [
  "axum",
  "axum-test",
  "base64 0.22.1",
- "bitrouter-cloud-sdk",
  "bitrouter-guardrails",
  "bitrouter-mcp",
- "bitrouter-observe",
  "bitrouter-providers",
  "bitrouter-sdk",
+ "bitrouter-telemetry",
  "bitrouter-tui",
  "chrono",
  "clap",
@@ -654,27 +689,8 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "bitrouter-cloud-sdk"
-version = "1.0.0-alpha.27"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bitrouter-sdk",
- "chrono",
- "rand 0.10.2",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
  "url",
+ "uuid",
  "wiremock",
 ]
 
@@ -699,7 +715,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "bitrouter-cloud-sdk",
  "bitrouter-sdk",
  "http",
  "reqwest",
@@ -714,47 +729,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-observe"
-version = "1.0.0-alpha.27"
-dependencies = [
- "async-trait",
- "axum",
- "bitrouter-sdk",
- "bytes",
- "criterion",
- "dashmap",
- "futures",
- "futures-core",
- "http",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bitrouter-providers"
 version = "1.0.0-alpha.27"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "bitrouter-sdk",
+ "chrono",
  "keyring",
  "rand 0.10.2",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",
@@ -768,6 +757,7 @@ name = "bitrouter-sdk"
 version = "1.0.0-alpha.27"
 dependencies = [
  "agent-client-protocol",
+ "agent-client-protocol-conductor",
  "agent-client-protocol-schema",
  "anyhow",
  "async-stream",
@@ -797,6 +787,37 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "bitrouter-telemetry"
+version = "1.0.0-alpha.27"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bitrouter-sdk",
+ "bytes",
+ "criterion",
+ "dashmap",
+ "futures",
+ "futures-core",
+ "http",
+ "http-body",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "pin-project-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tower",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2623,6 +2644,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
+name = "is-docker"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "928bae27f42bc99b60d9ac7334e3a21d10ad8f1835a4e12ec3ec0464765ed1b3"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
+name = "is-wsl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "173609498df190136aa7dea1a91db051746d339e18476eed5ca40521f02d7aa5"
+dependencies = [
+ "is-docker",
+ "once_cell",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3168,6 +3208,16 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "open"
+version = "5.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ade3be4664bc1ef537ce133015f04c176b737815c2ba9fd60edf212d6e90dd55"
+dependencies = [
+ "is-wsl",
+ "libc",
+]
 
 [[package]]
 name = "openssl-probe"
@@ -5008,6 +5058,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5411,7 +5470,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 
@@ -5488,6 +5546,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5497,12 +5565,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -5701,6 +5772,15 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"

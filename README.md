@@ -57,7 +57,7 @@ explicit physical model IDs remain passthrough.
 Against that spec BitRouter provides the control plane for an **act → observe → evaluate → improve** cycle:
 
 - **Act — the router** reads the lock and rewrites each `@preset[:variant]` call to its tier's model: policy routing, cross-protocol translation, multi-account failover.
-- **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported to Prometheus or any OTLP backend.
+- **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported as OpenTelemetry traces and metrics to any OTLP backend.
 - **Evaluate — the generic eval exchange** lets task-native tests, humans, enterprise systems, or an external agentic judge submit the same versioned outcome contract. BitRouter admits, disputes, and snapshots evidence; it does not pretend one bundled judge is universal.
 - **Improve — the policy compiler** turns a frozen admitted-evidence snapshot into a deterministic, certificate-backed `policy-lock.yaml` candidate (an npm-style manifest/lock split, git-owned). Review and publication are explicit; the evidence database never changes a live route.
 
@@ -163,7 +163,7 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --watch                # live request stream + spend
+bitrouter status --requests             # settled requests + spend
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys list               # manage API keys
@@ -233,16 +233,19 @@ actually resolves. Full catalog in [`registry/`](registry/).
 ## Harness integrations
 
 BitRouter runs *under* Claude Code, Codex, and the rest — not instead of them.
-Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. For the four harnesses below, `bitrouter launch` does the wiring for you: it starts the harness's own native TUI with its traffic already pointed at the daemon, and never edits the harness's config files.
+Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` for OpenAI-compatible clients or `ANTHROPIC_BASE_URL=http://localhost:4356` for Anthropic-compatible clients. For catalog harnesses with an interactive binary, `bitrouter launch` starts the harness's own native TUI without editing its config files. Routed harnesses start with traffic pointed at the daemon; own-auth harnesses start directly and say so in the startup line.
 
-| Name | Description |
+| Name | Launch behavior |
 | ---- | ----------- |
 | Claude Code | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
 | OpenAI Codex | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
 | OpenCode | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
 | Pi-Agent | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
+| Hermes | Synthesized `HERMES_HOME` with a loopback `custom` provider |
+| OpenClaw | Synthesized `OPENCLAW_STATE_DIR` plus `OPENCLAW_CONFIG_PATH` |
+| Grok / Antigravity (`agy`) | Own-auth launch: not redirected or metered by `launch`; those sessions remain usable by the daemon as provider capacity |
 
-`launch` supports these four because every promise it makes — routing and gateway injection — has to be re-verified per harness against upstream releases nobody controls. Four is a surface that stays honest.
+Routing and gateway injection are per-harness promises, so the table calls out the maintained mechanisms instead of implying one universal redirect path.
 
 Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 

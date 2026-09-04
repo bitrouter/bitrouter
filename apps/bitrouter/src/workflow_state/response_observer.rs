@@ -2128,6 +2128,8 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -2165,6 +2167,7 @@ mod tests {
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
             request_id: request_id.into(),
+            original_model: "model".into(),
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),

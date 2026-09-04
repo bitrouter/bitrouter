@@ -842,7 +842,7 @@ async fn native_literal_histories_receive_exact_template_decisions() {
 
     let traces = capture.records();
     assert_eq!(traces.len(), 16);
-    for pair in traces.chunks_exact(4) {
+    for pair in traces.as_chunks::<4>().0 {
         assert_eq!(pair[0].harness, HarnessId::Terminus2);
         assert_eq!(pair[1].harness, HarnessId::Terminus2);
         assert_eq!(pair[2].harness, HarnessId::ClaudeCode);
@@ -872,7 +872,7 @@ async fn native_literal_histories_receive_exact_template_decisions() {
         (root_key, root_tier),
     ) in scenarios
         .iter()
-        .zip(decisions.chunks_exact(4))
+        .zip(decisions.as_chunks::<4>().0)
         .zip(root_expectations)
     {
         for root in [&pair[0], &pair[2]] {

@@ -32,6 +32,11 @@
 //!   - [`metrics`] — the [`MetricsRenderer`] trait (the `GET /metrics`
 //!     endpoint contract; spend / token / rate aggregation are
 //!     deployment-specific concerns).
+//!   - [`observe`] — the observability *contract*: the span schema
+//!     ([`observe::schema`], rendered to the committed `span-schema.json`) and
+//!     the [`SpanAttributes`](observe::SpanAttributes) extension hatch.
+//!     Ungated and dependency-free; rendering it onto a wire is
+//!     `bitrouter-telemetry`'s job.
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
 //!
 //! - **Optional features** (off by default):
@@ -98,23 +103,46 @@
 //! With the `server` feature on, `app.serve("0.0.0.0:4356")` wires the
 //! whole router and runs it until SIGTERM.
 //!
-//! ## What ships in adjacent crates
+//! ## What ships here, and what ships elsewhere
 //!
-//! Two shared library plugins in this repo:
+//! The dividing line is **contracts and the seams they plug into ship here;
+//! renderers of them, and deployment business logic, do not.**
 //!
-//! - `bitrouter-observe` — Prometheus exporter + OTLP/HTTP traces.
+//! [`observe`] is the case in point, and it is the one that used to be
+//! misdrawn. What the SDK owns is the **span schema** — the span names
+//! (`chat`, `route`, `settle`, the per-hop `chat`), the `bitrouter.*`
+//! attribute vocabulary, and the invariants that fail silently and expensively
+//! when a deployment gets them wrong: a hop is not a `gen_ai` generation, and
+//! stamping it as one makes every gen_ai-aware backend double-count the
+//! reported cost. That schema has to be identical across every deployment or
+//! "interop surface" means nothing, and it is declared here as data, under no
+//! feature gate, so a deployment can implement it without taking a renderer.
+//!
+//! What the SDK does *not* own is any rendering of it. OTLP transport,
+//! credentials, batch processing, endpoint configuration and cardinality
+//! limiting are one egress path's implementation, not contract, and they ship
+//! in `bitrouter-telemetry`. [`ObserveHook`](language_model::ObserveHook) is
+//! the seam they plug into — a seam with more than one production
+//! implementation, since the OSS binary registers its own observers alongside
+//! the OTLP one.
+//!
+//! Two shared library plugins live in their own crates:
+//!
+//! - `bitrouter-telemetry` — optional telemetry egress: the OTLP exporter, the
+//!   inbound ingress span, and the `tracing` ↔ OpenTelemetry bridge.
 //! - `bitrouter-guardrails` — request / response content scanning (block +
-//!   redact).
+//!   redact). Content policy is a deployment's own call, not a wire standard.
 //!
-//! Anything else (auth, policy, charging, metering) is **deployment-specific
-//! business logic, not shared library code**. The OSS `apps/bitrouter`
-//! binary provides its own implementations under
+//! Everything else in that category (auth, policy, charging, metering) is
+//! **deployment-specific business logic, not shared library code**. The OSS
+//! `apps/bitrouter` binary provides its own implementations under
 //! `apps/bitrouter/src/{auth,policy,metering}/`. Closed-source deployments
 //! (e.g. a cloud product) write their own `PreRequestHook` /
 //! `SettlementRecorder` impls against the SDK's stable traits.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // ===== shared library code (crate root) =====
 pub mod app;
@@ -122,13 +150,20 @@ pub mod caller;
 pub mod error;
 pub mod event;
 pub mod metrics;
+// The observability contract — the span schema and the attribute extension
+// hatch. Ungated and dependency-free on purpose: a deployment implementing the
+// contract must not have to enable a renderer it is not using. Rendering it
+// onto a wire is `bitrouter-telemetry`'s job, not this crate's.
+pub mod observe;
 pub mod plugin;
 pub mod url_validator;
 
 #[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod config;
 
 #[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod server;
 
 // ===== per-protocol modules =====

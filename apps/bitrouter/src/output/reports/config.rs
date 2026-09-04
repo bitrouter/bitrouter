@@ -13,8 +13,18 @@ pub struct UnsetVar {
 }
 
 /// Result of `bitrouter config validate`. `valid: false` carries `errors` and
-/// exits non-zero (CI-safe); `valid: true` carries the catalog counts and any
-/// unset-var `warnings`.
+/// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
+/// unset-var `warnings`, and any `ignored_config`.
+///
+/// `ignored_config` is a separate field rather than another `warnings` entry
+/// because the two are different shapes and a consumer already parses
+/// `warnings[].unset_env`. Neither fails the validation: config the binary
+/// ignores is a misconfiguration, not a malformed config, and `valid` is what
+/// CI gates on.
+///
+/// It carries the same lines the daemon logs at startup, minus the environment
+/// ones — this command validates a file, which may not belong to the machine
+/// running it.
 #[derive(Serialize)]
 pub struct ValidateReport {
     pub valid: bool,
@@ -29,6 +39,9 @@ pub struct ValidateReport {
     pub variants: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<UnsetVar>,
+    /// Configuration present in the file that the binary will not act on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored_config: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
 }
@@ -50,8 +63,16 @@ impl ValidateReport {
             presets: Some(presets),
             variants: Some(variants),
             warnings,
+            ignored_config: Vec::new(),
             errors: Vec::new(),
         }
+    }
+
+    /// Attach the configuration the binary will ignore. Separate from
+    /// [`Self::valid`] so its argument list does not keep growing.
+    pub fn with_ignored_config(mut self, ignored_config: Vec<String>) -> Self {
+        self.ignored_config = ignored_config;
+        self
     }
 
     pub fn invalid(path: String, error: String) -> Self {
@@ -63,6 +84,7 @@ impl ValidateReport {
             presets: None,
             variants: None,
             warnings: Vec::new(),
+            ignored_config: Vec::new(),
             errors: vec![error],
         }
     }
@@ -90,6 +112,17 @@ impl CliReport for ValidateReport {
                     h.line(&format!("    - ${{{}}}", w.unset_env))?;
                 }
             }
+            if !self.ignored_config.is_empty() {
+                h.blank()?;
+                h.line(&format!(
+                    "  note: {} setting(s) this binary does not act on — ignored, \
+                     which is silent at runtime:",
+                    self.ignored_config.len()
+                ))?;
+                for line in &self.ignored_config {
+                    h.line(&format!("    - {line}"))?;
+                }
+            }
             Ok(())
         } else {
             h.line(&format!("✗ {} is invalid", self.path))?;
@@ -109,6 +142,28 @@ impl CliReport for ValidateReport {
 mod tests {
     use super::*;
     use crate::output::CliReport;
+
+    #[test]
+    fn ignored_config_is_reported_without_failing_validation() {
+        let report = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![])
+            .with_ignored_config(vec!["plugins.bitrouter-guardrail is ignored".into()]);
+        // A misconfiguration, not a malformed config: CI gates on `valid`, and
+        // an ignored block must not turn a green pipeline red.
+        assert_eq!(report.exit_code(), 0);
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            v["ignored_config"][0],
+            "plugins.bitrouter-guardrail is ignored"
+        );
+        // and it is omitted entirely when there is nothing to say.
+        let clean = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![]);
+        assert!(
+            serde_json::to_value(&clean)
+                .unwrap()
+                .get("ignored_config")
+                .is_none()
+        );
+    }
 
     #[test]
     fn validate_exit_code_and_shape() {

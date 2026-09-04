@@ -246,6 +246,8 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
+            experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -269,6 +271,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
     let observer = PredictiveResponseObserver::new(pending.clone());
     let mut context = PipelineContext::new(PipelineRequest {
         request_id: "request-observed".into(),
+        original_model: "model".into(),
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),
@@ -477,6 +480,8 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest: semantic_digest(&active)?,
+            experiment: None,
+            route_measurement: None,
         }],
         requested_dimensions: BTreeSet::from(["quality.pass".into()]),
         evidence_digest: evidence_digest(&evidence)?,

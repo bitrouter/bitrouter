@@ -2,6 +2,17 @@
 
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
+> **Historical note (2026-08-16):** `status --watch` was later removed in favor
+> of `bitrouter status --requests`; references below to it being untouched or
+> authoritative describe the codebase state when this spec was written.
+>
+> **Controller boundary update (2026-09-01):**
+> [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) supersedes this spec's
+> single-session product boundary, manager-facing use of `providers/*` for
+> BitRouter route selection, and one-`Session` relay architecture. The shipped
+> renderer, inline terminal behavior, permission UI, cost presentation, and
+> `chat` command remain valid as clients of the new controller.
+
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
 [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. Leaves
@@ -56,8 +67,8 @@ decision at n=4, and the stale text is still in source in two places.
 They are a deliberate split, and each is coherent alone:
 
 - Want Claude Code's own plan mode, slash commands, and native affordances?
-  `bitrouter launch` — inherited, zero BitRouter terminal code, all nine
-  harnesses.
+  `bitrouter launch` — inherited, zero BitRouter terminal code, all launchable
+  catalog harnesses.
 - Want to swap **agent and model** freely with router-measured cost? The ACP
   TUI.
 
@@ -99,8 +110,8 @@ independent of hosting; only `exec_hosted` goes.
 
 Removed dependencies: `alacritty_terminal`, `portable-pty`, `termwiz`,
 `wezterm-input-types` (`termwiz` alone resolves ~107 crates for three imported
-symbols). `ratatui` and `crossterm` stay — `status --watch` and the new TUI
-both need them.
+symbols). The final tree keeps `crossterm` in the app for terminal I/O and
+`ratatui` behind `crates/bitrouter-tui`; `status --watch` was later removed.
 
 **Supporting evidence, verified.** These are not the reason to delete it, but
 they establish that the code was not load-bearing:
@@ -474,15 +485,22 @@ The honesty problem is solved there too
 > way, instead of showing an empty session forever or, worse, showing the
 > daemon's numbers as if they were the session's.*
 
-That is the fix for the fidelity matrix's defect #1, already written. So:
-**share `snapshot.rs` and `Scope`; keep `watch.rs` and this TUI as separate
-renderers over it.** That yields what merging would actually buy — one data
-layer, consistent numbers, honest attribution — without merging the views.
+That was the proposed fix for the fidelity matrix's defect #1. The final tree
+keeps chat cost scope in `crates/bitrouter-tui::cost::Scope` with the
+BitRouter-specific wire key in `apps/bitrouter/src/chat/cost.rs`; the removed
+`status --watch` view no longer shares a renderer with chat.
 
 **Carry the caveat.** For a subscription harness that ignores the injected
 credential (Claude Code on Max), requests never reach the daemon, so session
 cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
 visibly rather than silently. Inherit that behaviour; do not reinvent it.
+
+> **Superseded 2026-09-02 by [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md)
+> C2/C3/C5.** `Scope::Wider` left the ACP surface: `UsageUpdate.cost` is
+> session-attributed or absent, `_meta["bitrouter.dev/cost"]` marks
+> *provenance* rather than scope, and every unattributable case above is
+> reached through absence — the footer shows `cost unreported`, never a
+> daemon-wide figure.
 
 ## 9. Decision 6 — no crate yet, with a stated trigger
 

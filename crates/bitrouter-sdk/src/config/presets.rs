@@ -95,7 +95,7 @@ fn reserved_preset(slug: &str) -> Result<&'static str> {
 fn missing_reserved_binding(preset: &str) -> BitrouterError {
     BitrouterError::bad_request(format!(
         "'{RESERVED_NAMESPACE}{preset}' needs a preset named '{preset}' bound to a routing \
-         policy; run `bitrouter optimize setup`"
+         policy; run `bitrouter policy init {preset} --preset {preset} --economy provider:model`"
     ))
 }
 
@@ -389,7 +389,10 @@ mod tests {
         // unknown provider model.
         let err = resolve_presets(AUTO_SLUG, &presets(), &variants()).unwrap_err();
         assert_eq!(err.status(), 400);
-        assert!(err.to_string().contains("bitrouter optimize setup"));
+        assert!(
+            err.to_string()
+                .contains("bitrouter policy init auto --preset auto --economy")
+        );
     }
 
     #[test]
@@ -411,12 +414,10 @@ mod tests {
             result.as_ref().map(|_| ()).map_err(|err| err.status()),
             Err(400)
         );
-        assert!(
-            result
-                .as_ref()
-                .err()
-                .is_some_and(|err| err.to_string().contains("bitrouter optimize setup"))
-        );
+        assert!(result.as_ref().err().is_some_and(|err| {
+            err.to_string()
+                .contains("bitrouter policy init auto --preset auto --economy")
+        }));
     }
 
     #[test]

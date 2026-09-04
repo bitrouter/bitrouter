@@ -34,6 +34,33 @@ pub enum ReconciliationStatus {
     Unknown,
 }
 
+/// Normalized agent-session correlation persisted with one request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeteringSessionIdentity {
+    /// Route namespace this request was attributed under — the only field
+    /// here that is an authorization boundary rather than a declared
+    /// correlation, and the one a spend query must key on.
+    pub route_scope_id: String,
+    /// Recognized harness.
+    pub agent_harness: Option<String>,
+    /// Caller-declared controller correlation.
+    pub controller_instance_id: Option<String>,
+    /// Caller-declared ACP session correlation.
+    pub acp_session_id: Option<String>,
+    /// Native root session.
+    pub native_root_session_id: Option<String>,
+    /// Native exact agent/thread.
+    pub native_agent_thread_id: Option<String>,
+    /// Native parent lineage.
+    pub native_parent_agent_thread_id: Option<String>,
+    /// Native turn identity.
+    pub native_turn_id: Option<String>,
+    /// Matching ephemeral route lease.
+    pub route_lease_id: Option<String>,
+    /// Redaction-reviewed normalized event JSON.
+    pub serialized: String,
+}
+
 impl ReconciliationStatus {
     /// Stable database and JSON representation.
     pub fn as_str(self) -> &'static str {
@@ -69,6 +96,8 @@ pub struct RequestMetric {
     pub api_key_id: String,
     /// The `bitrouter launch` session this request belongs to, if any.
     pub launch_id: Option<String>,
+    /// Normalized ACP/native identity, absent for ordinary model API traffic.
+    pub session_identity: Option<MeteringSessionIdentity>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.

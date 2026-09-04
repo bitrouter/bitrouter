@@ -1,0 +1,17 @@
+{
+  "id": "classifier-short-opening-fix-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["short", "opening"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [{"role": "user", "content": "fix tests"}],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "implement", "next_action_class": "mutate", "route_risk": "normal", "task_family": "code_debugging", "progress_state": "opening"}
+  }
+}

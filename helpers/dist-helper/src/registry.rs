@@ -922,7 +922,12 @@ fn serialize_data(data: Vec<Value>) -> Result<String> {
     Ok(out)
 }
 
-fn sort_value(value: Value) -> Value {
+/// Recursively key-sort a JSON value so a generated artifact's bytes do not
+/// depend on map iteration order.
+///
+/// `pub(crate)` because `schema` needs the same guarantee for the same reason —
+/// see its `render`.
+pub(crate) fn sort_value(value: Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.into_iter().map(sort_value).collect()),
         Value::Object(obj) => {

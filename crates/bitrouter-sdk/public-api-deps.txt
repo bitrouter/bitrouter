@@ -1,0 +1,52 @@
+# Foreign crates reachable from `bitrouter-sdk`'s public API under
+# `--all-features`, one per line, sorted. Generated — see `public-api.pins`
+# for the exact command and the pinned toolchain.
+#
+# A diff here is a semver-relevant event: the SDK gained or lost a *public*
+# dependency, so an upstream breaking release in that crate becomes a
+# BitRouter breaking release.
+#
+# `tracing_core` and `tracing_subscriber` used to be on this list, put there by
+# one function — the `tracing` ↔ OpenTelemetry bridge's return type and bound.
+# Both are 0.x, where every minor is breaking, so a `tracing-subscriber` 0.4
+# would have forced a breaking release on every consumer, including the five
+# that never enabled `otel`. They left when the renderer did; that removal is
+# the measurable half of `docs/TELEMETRY_CRATE_SPEC.md`. Do not let them back
+# without deciding to accept that liability again.
+#
+# This tracks the public *dependency surface*, not every public item. Adding a
+# method to an existing type does not belong in review as a 6-line diff of
+# auto-derived marker impls; adding a new public dependency does.
+#
+# Regenerate AFTER merging, never before. This file is rewritten wholesale, so
+# a merge resolves it without conflict and silently keeps one side — a stale
+# copy generated pre-merge will not announce itself.
+#
+# `agent_client_protocol` is here because `acp::controller::Controller`'s
+# generic bound and an `impl ConnectTo for acp::up::AgentProcess` name it
+# (added by #849). It is not this crate's doing; it is the first thing this
+# guard caught, on the first CI run after the job existed, which is the case
+# the guard was built for — a public dependency arriving unnoticed.
+#
+# `futures_channel` is the second such catch, from #848's ACP rebuild:
+# `acp::up::AgentProcess::reaped` returns a `futures_channel::oneshot::Receiver`.
+# `futures` 0.3's re-export means the call site reads `futures::channel`, so
+# nothing at the source names the crate that ends up in the contract — which is
+# exactly the shape this manifest exists to surface.
+#
+# Lines beginning with `#` are stripped before comparison.
+agent_client_protocol
+agent_client_protocol_schema
+anyhow
+axum
+axum_core
+futures_channel
+futures_core
+http
+pin_project_lite
+reqwest
+rmcp
+schemars
+serde_core
+serde_json
+tokio

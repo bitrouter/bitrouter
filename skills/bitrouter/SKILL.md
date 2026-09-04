@@ -1,22 +1,13 @@
 ---
 name: bitrouter
 description: >
-  Use this skill when the user wants to install, configure, run, or
-  troubleshoot BitRouter — an LLM proxy that runs two ways: a local Rust
-  daemon at http://localhost:4356 (BYOK) or BitRouter Cloud at
-  https://api.bitrouter.ai/v1 (managed, brk_* keys, Stripe credits or
-  x402 wallet). Unifies OpenAI, Anthropic, Google, OpenRouter, GitHub
-  Copilot, and OpenCode Zen/Go behind one endpoint. Also covers signup
-  on bitrouter.ai, minting brk_ API keys, running auditable benchmarks,
-  migrating off LiteLLM /
-  OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
-  bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
-  Hermes Agent, Harbor Terminus-2, OpenClaw), plus optimizing agent workflows
-  against eval quality and normalized routed cost. Trigger on "set up a local LLM proxy",
-  "managed AI gateway", "replace litellm", "point claude code at a
-  proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
-  port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
-  BitRouter directly.
+  Use when installing, configuring, running, or troubleshooting BitRouter from
+  its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
+  Anthropic-shaped traffic to any provider, via a coding-agent subscription,
+  hosted BitRouter, or your own keys. Covers bitrouter init, provider
+  credentials, wiring a coding agent with bitrouter launch, routing, and spend.
+  Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
+  pointing a coding agent at a proxy.
 license: Apache-2.0
 metadata:
   author: BitRouterAI
@@ -24,13 +15,7 @@ metadata:
     - llm
     - proxy
     - routing
-    - openai
-    - anthropic
-    - google
-    - gemini
-    - openrouter
-    - copilot
-    - opencode
+    - cli
     - ai-gateway
     - claude-code
     - codex
@@ -38,162 +23,180 @@ metadata:
 
 # BitRouter
 
-BitRouter routes OpenAI- or Anthropic-shaped requests to any LLM provider. It runs **two ways**: a local Rust daemon at `http://127.0.0.1:4356` (BYOK — your keys, your machine) or a managed cloud service at `https://api.bitrouter.ai/v1` (one bill, no per-provider keys).
+BitRouter is a Rust daemon the user **self-hosts** at `http://127.0.0.1:4356`,
+routing OpenAI- or Anthropic-shaped requests to any provider, driven entirely
+from the `bitrouter` CLI. No BitRouter account is required to run it — where the
+tokens are actually bought is a *provider* choice made in §4, not a different way
+of deploying.
 
-## 1. Ask first: Local or Cloud?
+## Activate in one pass
 
-Before touching anything, ask the user this:
+Work top to bottom, probing before asking — on a machine that has used BitRouter
+before, most of these steps are already done.
 
-> Do you want to run BitRouter **locally** (install the daemon, BYOK with your own provider API keys, you pay each upstream directly) or use **BitRouter Cloud** (managed proxy at `api.bitrouter.ai`, one bill via Stripe credits or x402 wallet payments, no per-provider keys needed)?
+### 1. Probe
 
-### If Local
-Continue to §2 (Install). Skip the Cloud paths below.
+```bash
+bitrouter --version          # not found -> step 2
+bitrouter status             # prints `running: no` when no daemon is reachable
+bitrouter providers list     # ID  MODELS  ACTIVE  API_BASE
+```
 
-### If Cloud — four entry points
+These emit **JSON by default** (`--human` renders the readable view) — parse it
+rather than scraping prose. Branch on what comes back: `command not found` → §2;
+installed but no active providers → §3; providers active but the daemon stopped
+→ `bitrouter start`, then §5; both → §5, the harness is all that is left. Do not
+open with a deployment question: self-hosted is the path, and §4 picks the
+providers.
 
-Each is written up in full (dashboard URLs, credit model, key rotation) in `references/cloud-setup.md`, keyed A-D.
-
-1. **Web playground** (A) — zero install. <https://bitrouter.ai> → sign up → top up credits → use the in-browser playground. 2. **`brk_*` API key in their SDK** (B) — the production path. Mint at Dashboard → API Keys, then point any OpenAI- or Anthropic-shaped SDK at `https://api.bitrouter.ai/v1` (drop `/v1` for the Anthropic SDK). No daemon. 3. **Permissionless wallet** (C) — Solana/EVM, no account; x402/MPP handles payment. Point the user at the docs; do not script the JWT signing yourself. 4. **Headless CLI** (D) — `bitrouter cloud login`, RFC 8628 device flow. The credential persists and auto-refreshes, and the local daemon then auto-adds a `bitrouter` provider in zero-config mode, so entitled models are routable as `bitrouter:<model-id>` against `localhost:4356` — no `brk_*` paste, no config edit. An explicit `BITROUTER_API_KEY` overrides that stored session for inference; unset it to use the login credential. `bitrouter cloud --help` drives typed management workflows (namespace / keys / usage / requests / billing / policy / budget / preset / byok); use `bitrouter cloud api <relative-endpoint>` for additional Cloud API routes.
-
-## 2. Install (Local only)
+### 2. Install
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh
 ```
 
-macOS users may prefer `brew install bitrouter/tap/bitrouter`; environments that already manage global npm tools can use `npm install -g bitrouter`. Windows:
+macOS: `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
+Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"`.
+Verify with `bitrouter --version`; on failure read `references/diagnose.md`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"
-```
+### 3. Configure — drive the headless wizard
 
-`https://bitrouter.ai/install.{sh,ps1}` is the canonical entry point — it proxies the latest GitHub release's cargo-dist installer and survives transient asset-publishing gaps by falling back to the most recent release that actually has the installer attached.
-
-Verify: `bitrouter --version`. If `command not found`, see `references/diagnose.md`.
-
-## 3. Run (Local only)
-
-**Guided onboarding.** Bare `bitrouter` is the front door: a network-free credential probe launches the wizard when nothing is configured, or prints a one-line status plus a `bitrouter launch` hint when it already is. It never re-onboards and never auto-spawns. `bitrouter init` re-runs it; `--yes` runs it headlessly and scaffolds the starter `bitrouter.yaml`. Every prompt has a flag equivalent — see `references/cli.md` → *Setup helpers*. The two commands below remain the fast path.
-
-**Zero-config (BYOK).** Export any of the supported env vars and start the daemon. It auto-enables every provider whose key is present.
+`bitrouter init --yes` is the scriptable onboarding path: it never blocks on a
+human, scaffolds a starter `bitrouter.yaml` (`skip_auth: true`, `listen:
+127.0.0.1:4356`), and **prints a JSON result envelope** — parse it rather than
+guessing what happened.
 
 ```bash
-export OPENAI_API_KEY=sk-...           # openai
-export ANTHROPIC_API_KEY=sk-ant-...    # anthropic
-export GEMINI_API_KEY=...              # google  (NOT GOOGLE_API_KEY)
-export OPENROUTER_API_KEY=sk-or-...    # openrouter
-export OPENCODE_ZEN_API_KEY=...        # opencode-zen AND opencode-go (shared)
-
-bitrouter start          # detached daemon, logs to ~/.bitrouter/bitrouter.log
-bitrouter status         # green dot + pid / listen / model count
-bitrouter status --requests # settled-request table + spend (same piped or not)
-bitrouter update         # self-update the binary (prereleases by default); --check to dry-run
+bitrouter init --yes --use-detected --harness claude --after launch
 ```
 
-The daemon writes its runtime files (`bitrouter.sock`, `bitrouter.pid`, `bitrouter.log`, optional `bitrouter.db`) into `~/.bitrouter/`.
+Read `providers_skipped_interactive` off the envelope and carry it to step 4:
+those are the credentials that need a human. Every prompt has a flag
+(`--provider`, `--harness`, `--after`, `--model`, `--reset`, …); bare
+`bitrouter` runs the wizard interactively when nothing is configured. The whole
+envelope and every flag: `references/cli.md` → *Setup helpers*.
 
-Beyond the local-login providers, the daemon merges the public provider registry on startup: any registry **BYOK** provider whose key is present (convention `${NAME}_API_KEY`) becomes routable for the models it serves — the curated catalog plus any BYOK / BYO-subscription extras the provider lists beyond it — and providers are ranked by a configurable priority ladder. See `references/providers.md` → *Provider registry*.
+The daemon writes runtime files to `~/.bitrouter/` and merges the public provider
+registry on start. For multi-account, custom endpoints, or ACP agents, write an
+explicit `bitrouter.yaml` and check it with `bitrouter config validate -c
+./bitrouter.yaml` (CI-safe, no secrets); see `references/providers.md`.
 
-**With a config file.** When you want explicit control (multi-account, MCP servers, ACP agents, custom providers):
+### 4. Choose providers — subscription first
+
+These logins are interactive, so they are what `providers_skipped_interactive`
+reports. Work the order below: it buys the same tokens for less money.
+
+**a. The subscription they already pay for.** If the user drives Claude Code or
+Codex, log that in first so the harness keeps serving its own models from the
+plan they have already bought instead of from metered API calls.
 
 ```bash
-bitrouter init                    # writes ./bitrouter.yaml (skip_auth: true)
-$EDITOR bitrouter.yaml
-bitrouter config validate -c ./bitrouter.yaml   # CI-safe: exits non-zero if invalid
-bitrouter start --config ./bitrouter.yaml
+bitrouter providers login claude-code    # adopts the live Claude Code session
+bitrouter providers login openai-codex   # ChatGPT PKCE flow in a browser
+bitrouter providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
 
-Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory. `config validate` runs the real parse path (structure, `derives`, the SSRF gate) and is CI-safe — unset `${VAR}`s become warnings, so no secrets are needed. A JSON Schema for editor autocomplete ships at `dist/schema/bitrouter.config.schema.json`; see `references/cli.md` → *Setup helpers*.
+Auth method is catalog-derived and differs per provider, so do not promise a
+browser prompt that will not appear — `references/providers.md` → *Known
+providers* lists what each login actually does.
 
-### Durable history (Local)
+**b. Hosted BitRouter for everything else — the recommended default.** Managed
+provider routing with OAuth built in, so the user collects no per-provider key.
+It is a provider, not a second deployment: signing in adds a `bitrouter`
+provider to this daemon, routable as `bitrouter:<model-id>`.
 
-Two opt-in, restart-only subsystems record routed-request history: `trajectory` (task-neutral progress evidence, off by default) and `continuation` (Responses IDs, always on). Neither hot-reloads. Config keys, validation ranges, the privacy boundary, and `bitrouter trajectory inspect|replay|prune` are in `references/cli.md` → *Durable trajectory operations*.
+**c. BYOK for anything they want to own directly.** Export the key and start —
+the daemon auto-enables every provider whose key is present, and
+`export ...; bitrouter reload` rotates one without a restart.
 
-**Subscription / OAuth providers.** Different — local login, not env vars:
+Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not
+`GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
+
+`providers login` also takes `--api-key` / `--key-stdin`, and
+`references/cloud-setup.md` covers the hosted account, credits, and `brk_*`
+keys. Net effect: the subscription serves its native models; hosted BitRouter
+or BYOK supplements everything it does not cover.
+
+### 5. Wire the coding agent
+
+`bitrouter launch` routes a harness's native TUI without editing its config
+files — reversible, per-process, and it auto-starts the daemon if it is down.
 
 ```bash
-bitrouter providers login claude-code    # Claude Pro/Max, via the Claude Code session
-bitrouter providers login openai-codex   # ChatGPT/Codex subscription
-bitrouter providers login github-copilot # browser device flow
-bitrouter providers login supergrok      # SuperGrok, via the Grok CLI session
-bitrouter providers login google-ai      # Google AI (Antigravity), via the `agy` keyring
+bitrouter launch -a claude
+bitrouter launch -a codex -- -p "summarize this repo"
 ```
 
-BYOK providers can also be seeded non-interactively with `--api-key` or `--key-stdin`. Per-provider auth methods, env vars, and protocol notes are in `references/providers.md`.
+`-a` accepts `claude`, `codex`, `opencode`, and `pi` (catalog ids `claude-acp`,
+`codex-acp`, `pi-acp` also resolve). Everything after `--` is forwarded verbatim,
+and a session spend summary prints on exit. For durable wiring instead of a
+wrapper, see the harness references.
 
-## 4. Connect your SDK
+Leave the harness's own model on its subscription and let BitRouter carry the
+rest — subagents, bulk work, models the plan does not include. Pinning the whole
+harness off a subscription they already pay for usually costs more, so make it a
+deliberate choice rather than a default.
 
-Point any OpenAI- or Anthropic-shaped SDK at the daemon. The credential the daemon validates is set by `server.skip_auth` (true in the starter config — credential-less local requests admitted; flip to `false` and mint a virtual key with `bitrouter key sign --user <id>` for multi-tenant).
+**The restart handoff — say it every time.** Wiring cannot reroute the session
+already running; harnesses read their base URL at startup. End with: "run
+`bitrouter launch -a claude` (or restart the harness with the env override) to
+route this session." One exception: the origin MCP server (`bitrouter mcp
+install --client claude|cursor`) exposes a `complete` tool that offloads a
+subtask *inside* the running session — if they cannot relaunch, say it exists
+and send them to `bitrouter mcp --help`.
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
-client.chat.completions.create(
-    model="openai/gpt-4o",                # provider/model
-    messages=[{"role": "user", "content": "hi"}],
-)
-```
+For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
+`bitrouter spawn codex-acp --serve`. Stable ACP v1 on exact adapter pins,
+initializing the harness with the manager's capabilities and transparently
+carrying multiple harness-native sessions on one connection; BitRouter owns
+none of their IDs, transcripts, or storage. Route leases
+(`_bitrouter/route/list|set|reset`) and session-attributed cost are
+capability-gated and need a local control binding, which an explicit remote
+`--base-url` does not provide. Read `references/sessions.md` — the pins and the
+wire contract are there — before reasoning about this surface.
 
-Resolve a model name without making a request: `bitrouter route openai/gpt-4o`.
-
-> For Cloud, swap `http://localhost:4356/v1` → `https://api.bitrouter.ai/v1` and `api_key="unused"` → `api_key="brk_..."`. Everything else stays identical.
-
-## 5. Origin MCP server
-
-BitRouter exposes its own tools (`complete`, `list_models`, `status`) over MCP. This is the **origin** server — it wraps BitRouter's routing core — and is **distinct** from the MCP gateway at `/mcp`, which proxies the upstream MCP servers declared in `bitrouter.yaml`.
+### 6. Verify
 
 ```bash
-bitrouter mcp serve                      # stdio → local daemon (the default)
-bitrouter mcp install --client claude    # print the mcpServers config block
+bitrouter route claude-sonnet-4-6   # resolve a model through the routing table
+bitrouter models                    # everything routable
+bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
 ```
 
-Transport picks the backend: `stdio` → local daemon at `127.0.0.1:4356`; `http` → cloud at `api.bitrouter.ai`, multi-tenant, each client sending its own `Authorization: Bearer`. `--backend skills` serves installed skills over stdio.
+`status --requests` reads the metering store directly, so it works with no
+daemon and is safe for an agent to call — a routed call appearing there, naming
+the provider that actually served it, is the proof activation worked. Do **not**
+use the cost as that proof: most rows carry no charge evidence and render `?`,
+and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
+ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
+`references/diagnose.md` has the full spelling rules.
 
-See `references/mcp-server.md` for every flag, the tool JSON shapes, and the transport↔backend matrix. `bitrouter skills list|init` is in `references/cli.md` → *Setup helpers*.
-
-## 6. References
-
-Read these on demand — don't load them all upfront.
+## References — read on demand, not upfront
 
 | File | When to read |
 |---|---|
-| `references/cloud-setup.md` | User chose Cloud — signup walkthrough, key mint, billing, wallet path |
-| `references/cli.md` | Full subcommand reference + what each one does |
-| `references/providers.md` | Add / configure providers, multi-account, MCP servers, custom OpenAI-compatible endpoints |
-| `references/diagnose.md` | Install issues, daemon won't start, connection refused, provider errors, log locations |
-| `references/migrate-from-litellm.md` | Migrating off LiteLLM |
-| `references/migrate-from-openrouter.md` | Migrating off OpenRouter (or keeping it as a fallback) |
-| `references/migrate-from-openai-compatible.md` | Migrating from raw OpenAI keys, Azure, Together, Groq, Ollama, LM Studio, or any other OpenAI-compatible endpoint |
-| `references/migrate-from-anthropic-compatible.md` | Migrating from raw Anthropic keys or any Anthropic-Messages-shaped gateway |
-| `references/harness-claude-code.md` | Wiring Claude Code at `localhost:4356` |
-| `references/harness-codex.md` | Wiring Codex CLI |
-| `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
-| `references/harness-hermes-agent.md` | Wiring Hermes Agent persistently (its native plugin; `bitrouter launch -a hermes` synthesizes a throwaway `HERMES_HOME` instead) |
-| `references/harness-openclaw.md` | Wiring OpenClaw persistently (its native plugin; `bitrouter launch -a openclaw` synthesizes a throwaway profile instead) |
-| `references/adaptive-routing.md` | Generic `bitrouter/auto` routing, trace projections, policy locks, and compatibility |
-| `references/workflow-optimization.md` | Version-controlled agentic quality/cost optimization: onboarding, run/review/publish loop, evaluator defaults, and failure semantics |
-| `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
-| `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
-| `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
-| `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
-| `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt`, NDJSON format, caller-prepared cwd, one-agent-per-session, turn queue, identity, v1 limits |
+| `references/cli.md` | Full subcommand reference — the primary reference |
+| `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
+| `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
+| `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
+| `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
+| `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
+| `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
+| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
 
-`bitrouter chat <agent>` is the interactive terminal client for the same
-sessions — inline viewport, `/route` to switch provider mid-session, and a cost
-line that always states whose spend it is. See `references/cli.md`.
+## Gotchas
 
-## 7. Gotchas
-
-- **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
-- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, `openai-codex`, `supergrok`, and `google-ai`), not a top-level `login` command.
-- **Cloud management is `bitrouter cloud …`.** After `bitrouter cloud login`, run `bitrouter cloud --help` for the subcommand index: `keys`, `usage`, `requests`, `billing`, `policy`, `budget`, `preset`, `byok`. Every leaf accepts `--json`.
-- **Local port: `127.0.0.1:4356`.** Old docs (and the upstream README) sometimes say 8787 — those are stale.
-- **Cloud endpoints:** `https://api.bitrouter.ai/v1` for the OpenAI shape; `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry as Local.
-- **Google's env var is `GEMINI_API_KEY`**, matching Google's own SDKs. `GOOGLE_API_KEY` is not auto-detected; override in `bitrouter.yaml` if you must.
-- **Reload propagates env changes:** `export OPENAI_API_KEY=new...; bitrouter reload` updates the running daemon — no restart needed.
-- **Trajectory settings do not hot-reload.** Changes to `enabled`, `retention_days`, or `outbox_batch_size` are rejected; restart the daemon. Any signed `progress_guard` requires trajectory to be enabled.
-- **`bitrouter providers add/remove/use/test/stats` do not exist.** Provider management is `bitrouter providers list`, `bitrouter providers login <provider>`, and `bitrouter providers logout <provider>`. Edit `bitrouter.yaml` and `bitrouter reload` for config changes.
-- **Model ids vs provider pins:** canonical model ids use slashes (`openai/gpt-4o`). An explicit provider pin uses a colon (`openrouter:openai/gpt-4o`, `claude-code:claude-sonnet-4-6`) and is still supported by the routing table.
-- **`bitrouter/*` is reserved.** BitRouter resolves the whole namespace itself before any provider lookup, so no provider or registry model may declare an id under it. It holds `bitrouter/auto` (policy-driven routing, see `references/adaptive-routing.md`) and `bitrouter/fusion` (multi-model deliberation). An unrecognised slug is a `400`, not a `404`, and the colon form `bitrouter:auto` is rejected with a pointer to the slash spelling. Send `bitrouter/auto`, not `@auto` — the generic `@preset[:variant]` form still works for every preset, including `auto`, but the slug is the documented spelling.
-- **`bitrouter launch` supports every catalog harness with an interactive binary:** `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy`. `grok` and `agy` are **own-auth**: they launch with their own subscription auth and are never routed or metered (the startup line says so), and they additionally remain **providers** the daemon borrows sessions from. `launch` always hands the harness the real terminal — there is no hosted-terminal mode.
-- **No `bitrouter doctor`.** Diagnostics are: `bitrouter status`, `bitrouter route <model>`, `bitrouter models`, `bitrouter providers list`, log file at `~/.bitrouter/bitrouter.log`.
+- **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
+  `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
+  (no `/v1`) for the Anthropic SDK — same asymmetry locally.
+- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
+  everything else `providers login <id>`; there is no top-level `login`.
+- **`init --harness` only accepts `claude` and `codex`**; `launch -a` adds
+  `opencode` and `pi`. `hermes`, `openclaw`, `grok`, and `agy` are no longer
+  `launch`-supported — run them directly or via `spawn`; they remain providers.
+- **`providers add/remove/use/test/stats` and `bitrouter doctor` do not exist.**
+  Manage with `providers list|login|logout` + `bitrouter.yaml`/`reload`; diagnose
+  with `status`, `route <model>`, `models`, `~/.bitrouter/bitrouter.log`.
+- **`bitrouter/*` is reserved** — resolved before any provider lookup, holding
+  `bitrouter/auto` and `bitrouter/fusion`. An unrecognised slug is a `400`, and
+  `bitrouter:auto` is rejected in favour of the slash spelling.

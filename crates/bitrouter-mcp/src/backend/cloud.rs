@@ -3,12 +3,18 @@
 //! explicitly; auto-reading the stored OAuth credential is v1.x.
 
 use async_trait::async_trait;
-use bitrouter_cloud_sdk::management::billing::BalanceResponse;
 
 use super::{
     Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelInfo,
     ModelsEnvelope, StatusInfo, Usage,
 };
+
+#[derive(Debug, serde::Deserialize)]
+struct BillingBalanceResponse {
+    available_micro_usd: i64,
+    balance_micro_usd: i64,
+    pending_debits_micro_usd: i64,
+}
 
 /// How a [`CloudBackend`] authenticates upstream.
 pub enum CloudAuth {
@@ -160,7 +166,7 @@ impl Backend for CloudBackend {
                 body: resp.text().await.unwrap_or_default(),
             });
         }
-        let b: BalanceResponse = resp
+        let b: BillingBalanceResponse = resp
             .json()
             .await
             .map_err(|e| BackendError::Decode(e.to_string()))?;
@@ -177,6 +183,19 @@ mod tests {
     use super::*;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn billing_balance_response_decodes_locally() -> anyhow::Result<()> {
+        let response: BillingBalanceResponse = serde_json::from_value(serde_json::json!({
+            "available_micro_usd": 11,
+            "balance_micro_usd": 17,
+            "pending_debits_micro_usd": 6
+        }))?;
+        assert_eq!(response.available_micro_usd, 11);
+        assert_eq!(response.balance_micro_usd, 17);
+        assert_eq!(response.pending_debits_micro_usd, 6);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn status_reads_billing_balance_with_bearer() {

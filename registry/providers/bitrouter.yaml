@@ -471,6 +471,40 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 6
+  - id: qwen/qwen3.8-2.4t-a95b
+    provider_model_id: qwen/qwen3.8-2.4t-a95b
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.17
+        cache_write: 2.5
+      output_tokens:
+        text: 6
+  - id: qwen/qwen3.8-27b
+    provider_model_id: qwen/qwen3.8-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
+      output_tokens:
+        text: 3
+  - id: z-ai/glm-5.3
+    provider_model_id: z-ai/glm-5.3
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: z-ai/glm-5.3-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.015
+      output_tokens:
+        text: 0.25
 status: active
 weight: 1
 community: false

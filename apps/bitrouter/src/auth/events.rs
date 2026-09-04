@@ -25,3 +25,19 @@ impl PipelineEvent for Authenticated {
         "auth.authenticated"
     }
 }
+
+/// Opaque route namespace derived from the ordinary API credential.
+///
+/// This value is internal correlation state, not a second credential. The
+/// public API-key id remains on [`Authenticated`] and the request caller.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiPrincipalEstablished {
+    /// Stable per-credential route namespace.
+    pub route_scope_id: String,
+}
+
+impl PipelineEvent for ApiPrincipalEstablished {
+    fn event_name(&self) -> &'static str {
+        "auth.api_principal_established"
+    }
+}

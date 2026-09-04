@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
+use crate::eval::types::EvalExperimentRef;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +61,7 @@ pub struct RouteIntent {
     /// cycle through the selected tier.
     pub trajectory_snapshot_digest: String,
     pub policy_digest: String,
+    pub experiment: Option<EvalExperimentRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +230,7 @@ pub fn evaluate(
             clauses,
             trajectory_snapshot_digest: input.pre_intent_snapshot.evidence_digest.clone(),
             policy_digest: input.policy_digest.to_owned(),
+            experiment: None,
         },
         causal_completeness,
         activated,
@@ -1109,6 +1112,7 @@ mod tests {
                 structural: BTreeMap::from([("guard.hold_for_requests".into(), 2)]),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),
+                route_measurement: None,
             },
             content_digest: String::new(),
             ..guard
@@ -1150,6 +1154,7 @@ mod tests {
                     ("history.completeness".into(), "complete".into()),
                 ]),
                 digests: BTreeMap::new(),
+                route_measurement: None,
             },
             captured_at: "2026-08-01T00:00:00Z".into(),
             content_digest: String::new(),
@@ -1200,6 +1205,7 @@ mod tests {
                     ("route.health_snapshot".into(), DIGEST.into()),
                     ("route.policy_lock".into(), DIGEST.into()),
                 ]),
+                route_measurement: None,
             },
             captured_at: "2026-08-01T00:00:00Z".into(),
             content_digest: String::new(),
@@ -1224,6 +1230,7 @@ mod tests {
                     ("guard.health_snapshot".into(), DIGEST.into()),
                     ("guard.policy_lock".into(), DIGEST.into()),
                 ]),
+                route_measurement: None,
             },
             captured_at: "2026-08-01T00:00:00Z".into(),
             content_digest: String::new(),

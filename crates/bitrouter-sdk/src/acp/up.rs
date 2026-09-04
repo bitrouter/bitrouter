@@ -1,252 +1,143 @@
-//! Upstream path — spawns the chosen agent process and speaks the ACP `Client`
-//! role to it (we are the client; the agent is the upstream).
+//! Agent-process transport, and the thread-owned connection the engine uses.
 //!
-//! [`UpstreamConnection`] owns a dedicated thread running a multi-thread tokio
-//! runtime (the `feed.rs` / `ai.rs` pattern). That thread drives one ACP
-//! connection via [`agent_client_protocol::Client::connect_with`]: the
-//! connection's background actors run only while the `main_fn` closure is alive,
-//! so `main_fn` runs a **command loop** that stays resident for the connection's
-//! lifetime. Callers on other runtimes reach that loop through a `futures` mpsc
-//! of `Command`s — `prompt_typed`/`cancel` enqueue a command carrying a
-//! oneshot reply channel; the loop drives the request and answers the oneshot.
+//! [`AgentProcess`] is the ACP component that spawns one harness child and
+//! speaks to it over stdio: stripped inherited markers, config-authored env
+//! precedence, stderr draining, process-group teardown, and a prompt that
+//! fails rather than hangs when the child dies. Both the connection-level
+//! [`Controller`](crate::acp::controller::Controller) and the shared
+//! [`AcpClient`](crate::acp::client::AcpClient) reach a harness through it.
 //!
-//! ## Callback plane
-//!
-//! - `session/update` notifications fan out on two `tokio` broadcasts from the
-//!   same handler: the **translated** [`SessionUpdateKind`] stream (for the GUI /
-//!   telemetry consumers), exposed by [`UpstreamConnection::subscribe_updates`],
-//!   and the **raw** ACP [`SessionUpdate`] stream, exposed by
-//!   [`UpstreamConnection::subscribe_raw_updates`]. The raw stream exists so the
-//!   down-facing `SessionAgent` can forward each upstream update to its manager
-//!   verbatim, with no lossy reverse-mapping.
-//! - upstream `session/request_permission` requests → a [`PendingPermission`]
-//!   (raw tool-call + options + resolver) pushed onto a `futures` mpsc, exposed by
-//!   [`UpstreamConnection::subscribe_permissions`].
-//!
-//! ## Deadlock avoidance
-//!
-//! The command loop never blocks on a prompt turn to completion: each prompt is
-//! driven inside `connection.spawn(...)` so the loop returns to selecting on the
-//! command channel immediately (mirrors `feed.rs`). The permission handler does
-//! its parked wait + respond inside `connection.spawn(...)` too, never in the
-//! dispatch callback, so it never blocks the SDK's message-dispatch loop.
-//!
-//! ## Single permission resolver
-//!
-//! Each `session/request_permission` has exactly **one** resolver: the oneshot
-//! sender carried by the emitted [`PendingPermission`]. The resolver carries the
-//! **exact** [`RequestPermissionOutcome`] (the chosen `optionId`, validated
-//! against the offered set by [`sanitize_selection`]) — never a coarse
-//! allow/deny that would collapse same-kind options. If the sender is dropped
-//! (i.e. the consumer dropped the `PendingPermission` without resolving), the
-//! parked handler task defaults to the reject option
-//! ([`select_option`]`(`[`PermissionOutcome::Deny`]`)`), so the upstream never
-//! hangs.
-
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+//! There is no wrapper type here any more. `UpstreamConnection` — an
+//! `AcpClient` over an `AgentProcess`, plus a dedicated thread running its own
+//! multi-thread tokio runtime — existed for the shape the retired engine was
+//! built against, and went with it. A caller connects an
+//! [`AcpClient`](crate::acp::client::AcpClient) directly and drives it on its
+//! own runtime.
 
 use std::collections::HashMap;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
-    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
-    SessionUpdate, TextContent, ToolCallUpdate,
-};
-use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Responder};
-use futures::channel::{mpsc, oneshot};
-use futures::{Stream, StreamExt};
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
+use agent_client_protocol::schema::v1::InitializeRequest;
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectTo, ConnectionTo};
+use futures::channel::oneshot;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-
-use crate::acp::telemetry::{ContextUsage, SharedContextUsage};
-use crate::acp::translate::{
-    PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
-};
-
-/// Capacity of the broadcast channel that fans `session/update`-derived
-/// [`SessionUpdateKind`]s out to subscribers. Sized to absorb a streaming burst
-/// without dropping; a subscriber that lags past this sees the broadcast's
-/// `Lagged` skip, which [`UpstreamConnection::subscribe_updates`] filters out.
-const UPDATE_CHANNEL_CAPACITY: usize = 1024;
-
-/// A permission request awaiting a decision. Carries the raw tool-call payload
-/// and permission options plus a one-shot [`resolve`](PendingPermission::resolve) to answer it.
-///
-/// There is exactly **one** resolver per request — the one carried here. A
-/// consumer that cannot answer should simply **drop** the `PendingPermission`:
-/// dropping the resolver makes the parked upstream handler respond with the
-/// reject option ([`PermissionOutcome::Deny`] mapped via [`select_option`]),
-/// so the upstream never
-/// hangs.
-///
-/// Unresolved permissions are otherwise reaped only when the connection tears
-/// down — ACP v1 has no per-turn-cancel cleanup for in-flight permission
-/// requests.
-///
-/// # Shared once-only resolver
-///
-/// `PendingPermission` is **cloneable**: the resolver is shared behind an
-/// [`Arc`], so the session-scoped
-/// [`PermissionRegistry`](crate::acp::permissions::PermissionRegistry) and any manager
-/// forwarder can each hold a clone. The upstream is answered exactly **once**
-/// (first [`resolve`](Self::resolve) wins; later calls are no-ops), and a mere
-/// consumer drop no longer defaults to Deny while another clone (the registry) is
-/// alive — that is what lets a permission survive a manager detach and be
-/// re-issued on reattach. The upstream defaults to the reject option only when
-/// the **last** clone drops (session teardown).
-#[derive(Debug, Clone)]
-pub struct PendingPermission {
-    /// Id we minted for this request; stable for the life of the request.
-    pub request_id: String,
-    /// The verbatim tool-call payload from the upstream `request_permission`.
-    /// The down-facing `SessionAgent` re-issues it to its manager unchanged.
-    pub tool_call: ToolCallUpdate,
-    /// The verbatim permission options from the upstream `request_permission`.
-    /// Carried so a consumer that re-issues the request (the down-facing agent)
-    /// forwards the same options and resolves with the exact selection.
-    pub options: Vec<PermissionOption>,
-    /// Shared, once-only resolver back to the parked upstream handler.
-    resolver: Arc<PermissionResolver>,
-}
-
-/// The once-only sink that answers one upstream `request_permission`. Shared by
-/// every [`PendingPermission`] clone; the first `take` wins.
-#[derive(Debug)]
-struct PermissionResolver {
-    tx: Mutex<Option<oneshot::Sender<RequestPermissionOutcome>>>,
-}
-
-impl PendingPermission {
-    /// Build a pending item wrapping the parked handler's one-shot sender.
-    pub(crate) fn new(
-        request_id: String,
-        tool_call: ToolCallUpdate,
-        options: Vec<PermissionOption>,
-        resolver: oneshot::Sender<RequestPermissionOutcome>,
-    ) -> Self {
-        Self {
-            request_id,
-            tool_call,
-            options,
-            resolver: Arc::new(PermissionResolver {
-                tx: Mutex::new(Some(resolver)),
-            }),
-        }
-    }
-
-    /// Answer this permission request with the **exact** outcome — the chosen
-    /// `optionId` (or `Cancelled`) as selected by the consumer. The parked
-    /// upstream handler validates the id against the offered options
-    /// ([`sanitize_selection`]) before responding. **Idempotent**: the first call
-    /// (across any clone) answers the upstream; later calls are no-ops. If every
-    /// clone is instead **dropped** without calling this, the upstream handler
-    /// defaults the response to the reject option.
-    pub fn resolve(&self, outcome: RequestPermissionOutcome) {
-        if let Ok(mut guard) = self.resolver.tx.lock()
-            && let Some(tx) = guard.take()
-        {
-            let _ = tx.send(outcome);
-        }
-    }
-
-    /// Whether the upstream has already been answered (or the resolver lock was
-    /// poisoned — treated as resolved so a broken entry is not re-offered). The
-    /// [`PermissionRegistry`](crate::acp::permissions::PermissionRegistry) filters on
-    /// this so a resolved permission is never replayed on reattach.
-    pub fn is_resolved(&self) -> bool {
-        self.resolver.tx.lock().map(|g| g.is_none()).unwrap_or(true)
-    }
-
-    /// Answer this request with the reject option — the safe default when no
-    /// manager will ever broker it (the headless `bitrouter acp prompt` path).
-    /// Convenience over [`resolve`](Self::resolve); idempotent. This is now
-    /// **explicit** because, unlike before the session-scoped registry,
-    /// *dropping* a `PendingPermission` no longer defaults to Deny (a registry
-    /// clone keeps it alive for a possible reattach).
-    pub fn deny(&self) {
-        self.resolve(select_option(PermissionOutcome::Deny, &self.options));
-    }
-}
-
-/// The wire identity minted by the upstream's `session/new`.
-#[derive(Debug, Clone)]
-pub struct UpstreamSessionIds {
-    /// The ACP wire session id.
-    pub acp_session_id: String,
-    /// The provider-native id from `_meta.agentSessionId`, when the upstream
-    /// exposes one. Never synthesized.
-    pub agent_session_id: Option<String>,
-}
-
-/// One command driven inside the connection's command loop.
-enum Command {
-    /// Create the upstream session (`session/new`) with the given working
-    /// directory and MCP servers (the manager's, relayed verbatim); reply
-    /// with the minted wire identity.
-    NewSession {
-        cwd: PathBuf,
-        mcp_servers: Vec<McpServer>,
-        reply: oneshot::Sender<anyhow::Result<UpstreamSessionIds>>,
-    },
-    /// Drive a prompt turn; reply with the typed [`PromptResponse`].
-    Prompt {
-        req: Box<PromptRequest>,
-        reply: oneshot::Sender<anyhow::Result<PromptResponse>>,
-    },
-    /// Send a `session/cancel` notification for `session_id`.
-    Cancel { session_id: String },
-    /// Exit the command loop, tearing the connection down (which kills the
-    /// agent child). `done` fires once teardown has completed.
-    Shutdown { done: oneshot::Sender<()> },
-}
-
-/// How long [`UpstreamConnection::shutdown`] waits for the driver to confirm
-/// teardown before reporting failure. Killing the child is a synchronous
-/// signal, so this is generous.
-const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// What the handshake reports back to [`UpstreamConnection::spawn`] before the
-/// command loop takes over.
-struct Handshake {
-    /// The upstream agent's `initialize` response — capabilities, agent info,
-    /// auth methods. Kept so the down-facing endpoint can reflect the real
-    /// agent's capabilities to its manager instead of fabricating minimal ones.
-    init: Box<InitializeResponse>,
-}
-
-/// A live upstream ACP `Client` connection to one agent process.
-///
-/// `spawn` runs `initialize` only; the session itself is created later via
-/// [`new_session`](Self::new_session) so the caller (the engine / down-facing
-/// endpoint) can relay the **manager's** `cwd` and `mcpServers` into the
-/// upstream `session/new` instead of fabricating them at launch.
-pub struct UpstreamConnection {
-    /// The upstream agent's `initialize` response, captured at handshake.
-    init: Box<InitializeResponse>,
-    /// Submits [`Command`]s into the connection's command loop.
-    cmd_tx: mpsc::UnboundedSender<Command>,
-    /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
-    updates_tx: broadcast::Sender<SessionUpdateKind>,
-    /// Source of raw ACP [`SessionUpdate`]s; cloned per `subscribe_raw_updates`.
-    /// Fed from the same `session/update` handler as `updates_tx`, so the
-    /// down-facing agent can forward updates to its manager verbatim.
-    raw_updates_tx: broadcast::Sender<SessionUpdate>,
-    /// Single permissions receiver, handed out once by `subscribe_permissions`.
-    permissions_rx: Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>,
-    /// Latest context-window usage from upstream `UsageUpdate`s; written by the
-    /// `session/update` handler, snapshotted by the telemetry hook.
-    usage: SharedContextUsage,
-    /// Keeps the driver thread alive for the connection's lifetime.
-    _thread: std::thread::JoinHandle<()>,
-}
 
 /// The ACP-over-stdio transport wired to a spawned agent child.
 type AgentTransport =
     ByteStreams<Compat<tokio::process::ChildStdin>, Compat<tokio::process::ChildStdout>>;
+
+/// Reusable ACP agent-process connector.
+///
+/// It carries the established child policy: stripped inherited markers,
+/// config-authored env precedence, stderr draining, process-group teardown,
+/// and prompt failure when the child dies.
+pub struct AgentProcess {
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    strip_inherited_env: Vec<String>,
+    /// Fired once this child's process group is killed and the child reaped.
+    ///
+    /// Handed out by [`AgentProcess::reaped`] rather than only awaited inside
+    /// [`ConnectTo::connect_to`], because that tail does not run on the normal
+    /// path: when the connection closes, the SDK drops the transport task
+    /// mid-`select!`, so anything after the protocol future is skipped. The
+    /// group kill still happens — dropping `kill_tx` wakes the reaper — but
+    /// nothing waits for it, and an owner that drops its runtime in the same
+    /// breath can lose the wrapped grandchild. The owner awaits this instead.
+    reaped: Option<oneshot::Sender<()>>,
+}
+
+impl std::fmt::Debug for AgentProcess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentProcess")
+            .field("command", &"[CONFIGURED]")
+            .field("arg_count", &self.args.len())
+            .field("env_names", &self.env.keys().collect::<Vec<_>>())
+            .field("env_values", &"[REDACTED]")
+            .field("strip_inherited_env", &self.strip_inherited_env)
+            .finish()
+    }
+}
+
+impl AgentProcess {
+    /// Construct a child connector from a configured stdio invocation.
+    pub fn new(
+        command: impl Into<String>,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            args,
+            env,
+            strip_inherited_env: Vec::new(),
+            reaped: None,
+        }
+    }
+
+    /// A signal that resolves once this process and its group are reaped.
+    ///
+    /// Take it before handing the process to a connection, and await it after
+    /// the connection is torn down but **before** dropping the runtime the
+    /// reaper lives on. Without that wait, teardown races the kill: `npx` is
+    /// reached by `kill_on_drop`, the `node` it spawned is not.
+    pub fn reaped(&mut self) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        self.reaped = Some(tx);
+        rx
+    }
+
+    /// Remove additional ambient variables before applying the configured
+    /// child environment. Explicit values in `env` still win.
+    #[must_use]
+    pub fn strip_inherited_env(mut self, names: Vec<String>) -> Self {
+        self.strip_inherited_env = names;
+        self
+    }
+}
+
+/// How long teardown waits for the reaper to confirm the child and its group
+/// are gone before reporting that it could not.
+pub const REAP_CONFIRM: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl ConnectTo<Client> for AgentProcess {
+    async fn connect_to(
+        self,
+        client: impl ConnectTo<Agent>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let (transport, child) = spawn_agent_process(
+            &self.command,
+            &self.args,
+            &self.env,
+            &self.strip_inherited_env,
+        )
+        .map_err(agent_client_protocol::util::internal_error)?;
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        spawn_child_reaper(child, kill_rx, dead_tx, done_tx, self.reaped);
+
+        let protocol = ConnectTo::<Client>::connect_to(transport, client);
+        tokio::pin!(protocol);
+        let result = tokio::select! {
+            result = &mut protocol => result,
+            _ = &mut dead_rx => Err(agent_client_protocol::util::internal_error(
+                "agent process exited while the ACP controller was connected",
+            )),
+        };
+        let _ = kill_tx.send(());
+        // Only reached when the protocol future resolves on its own. On the
+        // ordinary path the SDK drops this task the moment the connection
+        // closes, and everything from here down is skipped — which is why the
+        // owner holds its own signal (see [`AgentProcess::reaped`]).
+        if tokio::time::timeout(REAP_CONFIRM, done_rx).await.is_err() {
+            tracing::warn!("agent child reaper did not confirm within {REAP_CONFIRM:?}");
+        }
+        result
+    }
+}
 
 /// Inherited env vars an agent child must never see. The substrate launches
 /// an **independent** agent session, so a leaked "you are running inside
@@ -296,8 +187,7 @@ fn agent_command(
 /// `uvx → python`), and killing only the immediate child orphans the real
 /// agent — the process re-parents to pid 1 and does not reliably exit on
 /// stdin EOF. Must run inside a tokio runtime (both call sites do). Shared by
-/// [`UpstreamConnection::spawn`] and [`health_check`] so both paths spawn
-/// identically.
+/// [`AgentProcess`] and [`health_check`] so both paths spawn identically.
 ///
 /// The child's stderr is **captured**, not inherited, and re-emitted line by
 /// line through `tracing` under the `acp::agent` target. Inheriting it wrote
@@ -393,6 +283,7 @@ fn spawn_child_reaper(
     kill_rx: oneshot::Receiver<()>,
     dead_tx: oneshot::Sender<()>,
     done_tx: oneshot::Sender<()>,
+    reaped: Option<oneshot::Sender<()>>,
 ) {
     tokio::spawn(async move {
         let pid = child.id();
@@ -412,525 +303,13 @@ fn spawn_child_reaper(
         }
         let _ = dead_tx.send(());
         let _ = done_tx.send(());
+        // The owner's copy. `done_tx` is awaited by `connect_to`'s tail, which
+        // the SDK skips whenever it drops the transport task; this one is held
+        // outside the connection and so survives that.
+        if let Some(reaped) = reaped {
+            let _ = reaped.send(());
+        }
     });
-}
-
-impl UpstreamConnection {
-    /// Spawn the agent process, connect as an ACP `Client`, and run
-    /// `initialize`. Returns once the handshake completes and the command
-    /// loop is resident, or an error if spawn/handshake failed. The session
-    /// itself is created afterwards via [`new_session`](Self::new_session)
-    /// (which carries the cwd — the child's working directory is not set;
-    /// ACP carries it at the protocol level).
-    pub async fn spawn(
-        command: &str,
-        args: &[String],
-        env: &HashMap<String, String>,
-    ) -> anyhow::Result<Self> {
-        Self::spawn_with_stripped_env(command, args, env, &[]).await
-    }
-
-    /// Like [`spawn`](Self::spawn), but first removes `strip_inherited_env`
-    /// names from the inherited environment, so an isolated caller can stop
-    /// ambient credentials crossing into the agent while still letting a
-    /// deliberately configured `env` entry win.
-    pub async fn spawn_with_stripped_env(
-        command: &str,
-        args: &[String],
-        env: &HashMap<String, String>,
-        strip_inherited_env: &[String],
-    ) -> anyhow::Result<Self> {
-        let command = command.to_string();
-        let args = args.to_vec();
-        let env = env.clone();
-        let strip_inherited_env = strip_inherited_env.to_vec();
-
-        let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
-        let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
-        let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
-        let (perm_tx, perm_rx) = mpsc::unbounded::<PendingPermission>();
-        let (handshake_tx, handshake_rx) = oneshot::channel::<anyhow::Result<Handshake>>();
-        let usage: SharedContextUsage = Arc::new(Mutex::new(None));
-
-        let updates_for_thread = updates_tx.clone();
-        let raw_updates_for_thread = raw_updates_tx.clone();
-        let usage_for_thread = usage.clone();
-        let thread = std::thread::Builder::new()
-            .name("bitrouter-acp-up".to_string())
-            .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = handshake_tx
-                            .send(Err(anyhow::anyhow!("failed to start ACP runtime: {e}")));
-                        return;
-                    }
-                };
-                rt.block_on(drive(
-                    command,
-                    args,
-                    env,
-                    strip_inherited_env,
-                    cmd_rx,
-                    CallbackPlane {
-                        updates_tx: updates_for_thread,
-                        raw_updates_tx: raw_updates_for_thread,
-                        usage: usage_for_thread,
-                        perm_tx,
-                    },
-                    handshake_tx,
-                ));
-            })?;
-
-        let handshake = handshake_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("upstream driver thread exited before handshake"))??;
-
-        Ok(Self {
-            init: handshake.init,
-            cmd_tx,
-            updates_tx,
-            raw_updates_tx,
-            permissions_rx: Mutex::new(Some(perm_rx)),
-            usage,
-            _thread: thread,
-        })
-    }
-
-    /// Create the upstream session: `session/new` with `cwd` and the given
-    /// MCP servers (the manager's, relayed verbatim). Returns the minted wire
-    /// identity. The caller decides when this happens — the engine's
-    /// immediate-open launch calls it right away; the down-facing endpoint
-    /// calls it when its manager sends `session/new`.
-    pub async fn new_session(
-        &self,
-        cwd: PathBuf,
-        mcp_servers: Vec<McpServer>,
-    ) -> anyhow::Result<UpstreamSessionIds> {
-        let (reply, reply_rx) = oneshot::channel();
-        self.cmd_tx
-            .unbounded_send(Command::NewSession {
-                cwd,
-                mcp_servers,
-                reply,
-            })
-            .map_err(|_| anyhow::anyhow!("upstream command loop closed"))?;
-        reply_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("upstream dropped the session/new reply"))?
-    }
-
-    /// The upstream agent's `initialize` response, captured at handshake. The
-    /// down-facing endpoint reflects these capabilities (masked for what the
-    /// substrate itself cannot honor) to its manager.
-    pub fn upstream_init(&self) -> &InitializeResponse {
-        &self.init
-    }
-
-    /// Handle to the latest context-window usage reported by the upstream
-    /// (`session/update UsageUpdate`); `None` until the upstream reports one.
-    /// The telemetry hook snapshots this into each [`RequestCompleted`]
-    /// record.
-    ///
-    /// [`RequestCompleted`]: crate::acp::telemetry::RequestCompleted
-    pub fn context_usage(&self) -> SharedContextUsage {
-        self.usage.clone()
-    }
-
-    /// Subscribe to the stream of translated `session/update` notifications.
-    /// Each call yields an independent stream from the current point onward.
-    ///
-    /// **Lossy under lag.** Updates ride a bounded `tokio` broadcast: a
-    /// subscriber that falls more than `UPDATE_CHANNEL_CAPACITY` messages
-    /// behind silently skips the dropped chunks (the broadcast's `Lagged` marker
-    /// is filtered out, not surfaced as an error). A consumer that needs a
-    /// complete transcript must subscribe immediately after
-    /// [`spawn`](Self::spawn) and keep up with the stream.
-    pub fn subscribe_updates(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdateKind> + Send>> {
-        // Drop `Lagged` markers: a slow subscriber skips ahead rather than
-        // seeing an error item in the stream.
-        Box::pin(
-            BroadcastStream::new(self.updates_tx.subscribe()).filter_map(|r| async move { r.ok() }),
-        )
-    }
-
-    /// Subscribe to the stream of **raw** ACP `session/update` notifications,
-    /// untranslated. Each call yields an independent stream from the current
-    /// point onward. The down-facing `SessionAgent` uses this to forward each
-    /// upstream update to its manager verbatim (no lossy reverse-mapping).
-    ///
-    /// **Lossy under lag**, exactly like [`subscribe_updates`](Self::subscribe_updates):
-    /// rides the same bounded `UPDATE_CHANNEL_CAPACITY` broadcast and silently
-    /// skips ahead (filters the `Lagged` marker) for a subscriber that falls
-    /// behind.
-    pub fn subscribe_raw_updates(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
-        Box::pin(
-            BroadcastStream::new(self.raw_updates_tx.subscribe())
-                .filter_map(|r| async move { r.ok() }),
-        )
-    }
-
-    /// Take the stream of pending permission requests. Single-consumer: the
-    /// first call returns the receiver; later calls return an empty stream.
-    pub fn subscribe_permissions(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = PendingPermission> + Send>> {
-        let taken = self
-            .permissions_rx
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.take());
-        match taken {
-            Some(rx) => Box::pin(rx),
-            None => Box::pin(futures::stream::empty()),
-        }
-    }
-
-    /// Send a typed `PromptRequest` and return the typed `PromptResponse`.
-    /// Later tasks (the session executor) call this directly — zero round-trip.
-    pub async fn prompt_typed(&self, req: PromptRequest) -> anyhow::Result<PromptResponse> {
-        let (reply, reply_rx) = oneshot::channel();
-        self.cmd_tx
-            .unbounded_send(Command::Prompt {
-                req: Box::new(req),
-                reply,
-            })
-            .map_err(|_| anyhow::anyhow!("upstream command loop closed"))?;
-        reply_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("upstream dropped the prompt reply"))?
-    }
-
-    /// Text convenience over [`prompt_typed`](Self::prompt_typed).
-    pub async fn prompt(&self, session_id: &str, text: &str) -> anyhow::Result<PromptResponse> {
-        self.prompt_typed(PromptRequest::new(
-            SessionId::new(session_id),
-            vec![ContentBlock::Text(TextContent::new(text.to_string()))],
-        ))
-        .await
-    }
-
-    /// Send a `session/cancel` notification for `session_id`.
-    pub async fn cancel(&self, session_id: &str) -> anyhow::Result<()> {
-        self.cmd_tx
-            .unbounded_send(Command::Cancel {
-                session_id: session_id.to_string(),
-            })
-            .map_err(|_| anyhow::anyhow!("upstream command loop closed"))
-    }
-
-    /// Tear the connection down **deterministically**: the command loop exits,
-    /// the connection (and its transport) drops — killing the agent child —
-    /// and this returns once the driver confirms teardown. Idempotent: if the
-    /// loop is already gone the connection is already down and this returns
-    /// `Ok`. Errs only when the driver fails to confirm within
-    /// `SHUTDOWN_TIMEOUT` (5s), in which case the child may still be alive.
-    pub async fn shutdown(&self) -> anyhow::Result<()> {
-        let (done_tx, done_rx) = oneshot::channel::<()>();
-        if self
-            .cmd_tx
-            .unbounded_send(Command::Shutdown { done: done_tx })
-            .is_err()
-        {
-            // Command loop already ended — the connection is already down.
-            return Ok(());
-        }
-        match tokio::time::timeout(SHUTDOWN_TIMEOUT, done_rx).await {
-            // Confirmed, or the driver ended before processing the command
-            // (receiver dropped) — either way the connection is down.
-            Ok(_) => Ok(()),
-            Err(_) => Err(anyhow::anyhow!(
-                "upstream teardown did not confirm within {SHUTDOWN_TIMEOUT:?}"
-            )),
-        }
-    }
-}
-
-/// Build the ACP client, perform the handshake (reporting it back over
-/// `handshake_tx`), then run the command loop until the command channel closes.
-/// The callback-plane outputs `drive` fans upstream events onto: the two
-/// update broadcasts, the latest-usage slot, and the permissions channel.
-struct CallbackPlane {
-    updates_tx: broadcast::Sender<SessionUpdateKind>,
-    raw_updates_tx: broadcast::Sender<SessionUpdate>,
-    usage: SharedContextUsage,
-    perm_tx: mpsc::UnboundedSender<PendingPermission>,
-}
-
-async fn drive(
-    command: String,
-    args: Vec<String>,
-    env: HashMap<String, String>,
-    strip_inherited_env: Vec<String>,
-    mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-    plane: CallbackPlane,
-    handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
-) {
-    // Spawn the agent child ourselves (own process group) and hand its stdio
-    // to the SDK as a ByteStreams transport; the reaper owns the child.
-    let (transport, child) = match spawn_agent_process(&command, &args, &env, &strip_inherited_env)
-    {
-        Ok(spawned) => spawned,
-        Err(e) => {
-            let _ = handshake_tx.send(Err(e));
-            return;
-        }
-    };
-    let (kill_tx, kill_rx) = oneshot::channel::<()>();
-    let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
-    let (done_tx, done_rx) = oneshot::channel::<()>();
-    spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
-
-    let notif_updates = plane.updates_tx.clone();
-    let notif_raw_updates = plane.raw_updates_tx.clone();
-    let notif_usage = plane.usage.clone();
-    let handler_perm_tx = plane.perm_tx.clone();
-
-    // The handshake oneshot is consumed exactly once. The `connect_with`
-    // closure reports `Ok` on success then enters the command loop; if the
-    // connection ends before the closure took it, the post-await arm reports the
-    // error so `spawn()` never hangs on the oneshot. Shared so both arms can
-    // take it.
-    let handshake_tx: Arc<Mutex<Option<oneshot::Sender<anyhow::Result<Handshake>>>>> =
-        Arc::new(Mutex::new(Some(handshake_tx)));
-    let closure_handshake_tx = handshake_tx.clone();
-
-    // Confirmation for an explicit `Command::Shutdown`: the command loop stashes
-    // the sender here and breaks; it fires AFTER `connect_with` returns (the
-    // connection and its transport dropped, the agent child killed).
-    let shutdown_done: Arc<Mutex<Option<oneshot::Sender<()>>>> = Arc::new(Mutex::new(None));
-    let closure_shutdown_done = shutdown_done.clone();
-
-    let connect = agent_client_protocol::Client
-        .builder()
-        .name("bitrouter-acp")
-        .on_receive_notification(
-            move |notification: SessionNotification, _cx| {
-                let notif_updates = notif_updates.clone();
-                let notif_raw_updates = notif_raw_updates.clone();
-                let notif_usage = notif_usage.clone();
-                async move {
-                    let raw = notification.update;
-                    // Forward the raw ACP update verbatim (down-facing agent), and
-                    // — when it maps to one — the translated kind (GUI/telemetry).
-                    // A `send` error just means no subscriber is attached yet.
-                    let _ = notif_raw_updates.send(raw.clone());
-                    if let Some(update) = translate(raw) {
-                        // Keep the latest context usage snapshot current for the
-                        // telemetry hook.
-                        if let SessionUpdateKind::Usage { used, size, .. } = &update
-                            && let Ok(mut slot) = notif_usage.lock()
-                        {
-                            *slot = Some(ContextUsage {
-                                used: *used,
-                                size: *size,
-                            });
-                        }
-                        let _ = notif_updates.send(update);
-                    }
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_notification!(),
-        )
-        .on_receive_request(
-            move |request: RequestPermissionRequest,
-                  responder: Responder<RequestPermissionResponse>,
-                  connection: ConnectionTo<Agent>| {
-                let perm_tx = handler_perm_tx.clone();
-                async move {
-                    let request_id = uuid::Uuid::new_v4().to_string();
-
-                    // Exactly one resolver per request: the oneshot sender carried
-                    // by the emitted `PendingPermission`. The parked task below
-                    // awaits its receiver; if the consumer drops the
-                    // `PendingPermission` without resolving, the sender drops and
-                    // the receiver yields `Err`, which defaults to the reject
-                    // option.
-                    let (item_tx, item_rx) = oneshot::channel::<RequestPermissionOutcome>();
-                    // `options` is needed both by the emitted item (so a consumer
-                    // can re-issue the request with the same options) and by the
-                    // parked task below (to validate the chosen id / pick the
-                    // reject default). Clone once for the parked task; move the
-                    // rest into the item.
-                    let options = request.options.clone();
-                    let pending_item = PendingPermission::new(
-                        request_id,
-                        request.tool_call,
-                        request.options,
-                        item_tx,
-                    );
-                    // If no one is listening on the permissions stream the item
-                    // is dropped immediately and `item_rx` resolves to `Deny`.
-                    let _ = perm_tx.unbounded_send(pending_item);
-
-                    // Park the wait + respond OUTSIDE the dispatch loop so other
-                    // messages keep flowing while the decision is pending.
-                    connection.spawn(async move {
-                        // The consumer's exact selection passes through verbatim
-                        // (validated against the offered set); a dropped resolver
-                        // (the consumer dropped the `PendingPermission`) defaults
-                        // to the reject option so the upstream never hangs.
-                        let outcome = match item_rx.await {
-                            Ok(selection) => sanitize_selection(selection, &options),
-                            Err(_) => select_option(PermissionOutcome::Deny, &options),
-                        };
-                        responder.respond(RequestPermissionResponse::new(outcome))
-                    })?;
-                    Ok(())
-                }
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-            // ── Handshake: initialize only ─────────────────────────────────
-            // `session/new` is a command (below) so the caller can relay the
-            // manager's cwd + mcpServers into it instead of fabricating them
-            // here at spawn time. Client capabilities are deliberately left at
-            // their defaults (no fs / no terminal): ACP v2 removes that client
-            // surface, and a manager provides such tooling via the relayed MCP
-            // servers instead.
-            let init = connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
-
-            let report = closure_handshake_tx
-                .lock()
-                .ok()
-                .and_then(|mut guard| guard.take());
-            if let Some(tx) = report {
-                let _ = tx.send(Ok(Handshake {
-                    init: Box::new(init),
-                }));
-            }
-
-            // ── Command loop ───────────────────────────────────────────────
-            // Never blocks on a prompt turn: each prompt runs in its own task so
-            // the loop stays responsive while a turn (and its mid-turn permission
-            // requests) is in flight. Ends when the command channel closes or an
-            // explicit `Shutdown` arrives; agent death is handled one level up
-            // (the whole connection future is raced against the reaper's death
-            // signal), because a ByteStreams transport EOF does NOT fail
-            // in-flight requests — a request racing a dying agent would park
-            // forever inside this loop's awaits otherwise.
-            while let Some(cmd) = cmd_rx.next().await {
-                match cmd {
-                    Command::NewSession {
-                        cwd,
-                        mcp_servers,
-                        reply,
-                    } => {
-                        let session_connection = connection.clone();
-                        connection.spawn(async move {
-                            let mut req = NewSessionRequest::new(cwd);
-                            req.mcp_servers = mcp_servers;
-                            let result = session_connection
-                                .send_request(req)
-                                .block_task()
-                                .await
-                                .map(|resp| UpstreamSessionIds {
-                                    acp_session_id: resp.session_id.0.to_string(),
-                                    // `_meta.agentSessionId`, when the upstream
-                                    // exposes one. Never synthesized.
-                                    agent_session_id: resp
-                                        .meta
-                                        .as_ref()
-                                        .and_then(|m| m.get("agentSessionId"))
-                                        .and_then(|v| v.as_str())
-                                        .map(str::to_string),
-                                })
-                                .map_err(anyhow::Error::from);
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
-                    }
-                    Command::Prompt { req, reply } => {
-                        let turn_connection = connection.clone();
-                        connection.spawn(async move {
-                            let result = turn_connection
-                                .send_request(*req)
-                                .block_task()
-                                .await
-                                .map_err(anyhow::Error::from);
-                            // Returning Err here would tear the whole connection
-                            // down (SDK contract); deliver it over the reply
-                            // oneshot instead.
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
-                    }
-                    Command::Cancel { session_id } => {
-                        let _ = connection
-                            .send_notification(CancelNotification::new(SessionId::new(session_id)));
-                    }
-                    Command::Shutdown { done } => {
-                        // Stash the confirmation; it fires after `connect_with`
-                        // returns (teardown complete), not here.
-                        if let Ok(mut guard) = closure_shutdown_done.lock() {
-                            *guard = Some(done);
-                        }
-                        break;
-                    }
-                }
-            }
-
-            Ok(())
-        });
-
-    // Race the connection against agent death. The SDK's ByteStreams
-    // transport does not fail pending requests on EOF, so a dead child would
-    // otherwise leave the handshake / prompts parked forever; dropping the
-    // connection future cancels everything (dispatch, spawned request tasks,
-    // the command loop), which drops every pending reply oneshot — callers
-    // get errors instead of hangs. This mirrors the child-monitor race the
-    // SDK's own AcpAgent transport performs.
-    tokio::pin!(connect);
-    let result = tokio::select! {
-        result = &mut connect => result,
-        _ = &mut dead_rx => {
-            // The pinned connection future is simply never polled again; it
-            // (and every task it owns) drops at the end of this function,
-            // failing all pending reply oneshots.
-            tracing::warn!("agent process exited; tearing the connection down");
-            Ok(())
-        }
-    };
-
-    // Teardown: order the reaper to SIGKILL the child's process group (a
-    // no-op if the child already died — the reaper group-killed on that path
-    // too) and wait for the reap to complete before the runtime drops.
-    let _ = kill_tx.send(());
-    if tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
-        .await
-        .is_err()
-    {
-        tracing::warn!("agent child reaper did not confirm within 2s");
-    }
-
-    // An explicit shutdown was requested and the connection is now fully torn
-    // down (transport dropped, agent process group killed): confirm it.
-    if let Some(tx) = shutdown_done.lock().ok().and_then(|mut guard| guard.take()) {
-        let _ = tx.send(());
-    }
-
-    // If the handshake never completed (connect/initialize failed), surface
-    // the error to `spawn()` so it doesn't hang on the oneshot.
-    let report = handshake_tx.lock().ok().and_then(|mut guard| guard.take());
-    if let Some(tx) = report {
-        let err = match result {
-            Ok(()) => anyhow::anyhow!("upstream connection ended before handshake"),
-            Err(e) => anyhow::anyhow!("upstream connection failed: {e}"),
-        };
-        let _ = tx.send(Err(err));
-    }
 }
 
 /// How long `health_check` waits for `initialize` before declaring the agent
@@ -941,9 +320,9 @@ const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Spawn the agent, run ACP `initialize` only (no session), return elapsed on
 /// success or an error string. Used by `bitrouter agents check`.
 ///
-/// `env` is applied to the spawned child process (same plumbing as
-/// [`UpstreamConnection::spawn`]) so an agent that needs API-key vars answers
-/// the health-check.
+/// `env` is applied to the spawned child process (the same plumbing every
+/// other caller of [`AgentProcess`] gets) so an agent that needs API-key vars
+/// answers the health-check.
 ///
 /// Tears the connection down (drops) immediately after `initialize` succeeds
 /// or after `HEALTH_CHECK_TIMEOUT` (10s) elapses.
@@ -975,7 +354,8 @@ async fn health_check_inner(
     let (kill_tx, kill_rx) = oneshot::channel::<()>();
     let (dead_tx, _dead_rx) = oneshot::channel::<()>();
     let (done_tx, done_rx) = oneshot::channel::<()>();
-    spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+    // No owner signal: this path awaits `done_rx` itself, below.
+    spawn_child_reaper(child, kill_rx, dead_tx, done_tx, None);
 
     let (result_tx, result_rx) =
         futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
@@ -1032,6 +412,33 @@ mod tests {
     use futures::StreamExt;
 
     #[test]
+    fn stable_v1_initialize_keeps_numeric_wire_version() -> anyhow::Result<()> {
+        let request = InitializeRequest::new(ProtocolVersion::V1);
+        let wire = serde_json::to_value(request)?;
+
+        assert_eq!(wire["protocolVersion"], serde_json::json!(1));
+        assert!(wire.get("clientCapabilities").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn agent_process_debug_redacts_arguments_and_environment_values() {
+        let process = AgentProcess::new(
+            "/private/bin/agent-secret-path",
+            vec!["--token=argument-secret".to_string()],
+            HashMap::from([(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "environment-secret".to_string(),
+            )]),
+        );
+        let rendered = format!("{process:?}");
+        assert!(!rendered.contains("argument-secret"), "{rendered}");
+        assert!(!rendered.contains("environment-secret"), "{rendered}");
+        assert!(!rendered.contains("agent-secret-path"), "{rendered}");
+        assert!(rendered.contains("ANTHROPIC_AUTH_TOKEN"), "{rendered}");
+    }
+
+    #[test]
     fn agent_child_never_inherits_nested_session_markers() {
         let cmd = agent_command("echo", &[], &HashMap::new(), &[]);
         let removed: Vec<_> = cmd
@@ -1077,6 +484,27 @@ mod tests {
     }
 
     #[cfg(unix)]
+    use crate::acp::client::{AcpClient, ClientOptions};
+
+    /// Drive a bash-script agent through the shared client.
+    ///
+    /// These tests were written against `UpstreamConnection`, the thread-owning
+    /// wrapper the engine used. It is gone; the child itself is unchanged, so
+    /// the same scripts run through `AgentProcess` + `AcpClient`. Two of them
+    /// pin invariants — I1 (a dropped permission defaults to deny) and I10 (the
+    /// wrapper chain's process group dies with the connection) — so they are
+    /// ported rather than dropped with the type they happened to be written on.
+    fn connect_child(
+        script: &str,
+    ) -> impl std::future::Future<Output = anyhow::Result<AcpClient>> + use<> {
+        let process = AgentProcess::new(
+            "bash".to_string(),
+            vec!["-c".to_string(), script.to_string()],
+            HashMap::new(),
+        );
+        AcpClient::connect(process, ClientOptions::default())
+    }
+
     #[tokio::test]
     async fn connects_initializes_and_prompts() {
         let script = r#"
@@ -1090,10 +518,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
         let ids = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -1137,10 +562,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
         let usid = conn
             .new_session(std::path::PathBuf::from("/"), vec![])
             .await
@@ -1192,10 +614,7 @@ mod tests {
               esac
             done
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
 
         conn.shutdown().await.expect("shutdown confirms");
 
@@ -1237,9 +656,7 @@ done
         // `; :` keeps the outer bash alive as a parent instead of exec-ing
         // the inner command (which would collapse the chain to one process).
         let outer = format!("bash {} ; :", inner.display());
-        let conn = UpstreamConnection::spawn("bash", &["-c".into(), outer], &HashMap::new())
-            .await
-            .expect("spawn wrapper chain");
+        let conn = connect_child(&outer).await.expect("spawn wrapper chain");
 
         // The inner (grand)child is alive and identified.
         let mut inner_pid = String::new();
@@ -1300,10 +717,7 @@ done
             sleep 0.3
             exit 0
         "#;
-        let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
-                .await
-                .expect("spawn");
+        let conn = connect_child(script).await.expect("spawn");
 
         // The child dies with this prompt unanswered. It must resolve to an
         // error promptly (bounded), never hang.

@@ -1,144 +1,117 @@
-# Agent workflow optimization
+# History-driven routing optimization
 
-Use this flow when the user wants to reduce an agent workflow's model cost
-while retaining a user-defined quality outcome. The online router never sees
-task answers or benchmark labels. It sees ordinary request traces; the offline
-optimizer joins those decisions to the workflow's observable eval result and
-daemon-authored normalized metering.
+Use this flow when the user wants to reduce the complete cost of agent tasks or
+episodes while retaining an externally evaluated quality threshold. BitRouter
+does not launch a benchmark, discover a workflow, manage worktrees, or bundle a
+judge. Normal routed use produces traces; an external evaluator submits generic
+Eval Exchange results; the optimizer advances the signed policy one step.
 
-## Onboard
+## Initialize and collect history
 
-Interactive:
-
-```bash
-bitrouter init
-```
-
-Choose workflow optimization, confirm a discovered workflow (or provide exact
-argv), provide an observable success contract, then choose a qualitative
-preference. Setup proposes repository-owned eval/benchmark package scripts and
-executable entrypoints; it adopts one unambiguous candidate automatically and
-offers a numbered choice when several are plausible. Ordinary unit-test
-scripts and symlink escapes are not guessed. Do not
-promise fixed quality-loss or latency percentages: latency is observe-only in
-this release and the user's eval data determines the actual trade-off.
-
-Headless:
+Create a named adaptive policy with a strong champion and an economy tier:
 
 ```bash
-bitrouter init --yes --write-config --use-detected --harness codex \
-  --after exit --optimize \
-  --optimize-workflow-command ./run-agent-eval \
-  --optimize-workflow-arg --suite \
-  --optimize-workflow-arg smoke.jsonl \
-  --optimize-workflow-input .venv \
-  --optimize-strong openai-codex:gpt-5.6-sol \
-  --optimize-strong-effort high \
-  --optimize-economy openai-codex:gpt-5.6-sol \
-  --optimize-economy-effort low \
-  --optimize-success 'The eval command exits successfully and reports its required checks.'
+bitrouter policy init auto --preset auto --economy provider:model
 ```
 
-This creates three user-owned, version-controlled artifacts without
-overwriting existing files:
+Then run the coding agent or Terminal Bench normally through `bitrouter/auto`.
+The whole `bitrouter/` namespace is reserved and resolved before provider
+lookup; an unknown slug is a `400`. If `bitrouter/auto` has no binding, create
+one with `policy init`; BitRouter never falls through to a provider default.
 
-- `bitrouter.optimize.yaml`: workflow, route ladder, evaluator, and preference;
-- `bitrouter.optimize.lock.yaml`: exact adapter/model/digests and latest run;
-- `bitrouter.eval.md`: observable success contract.
+Route requests must carry a stable task or episode identity for experimental
+assignment. BitRouter prefers benchmark run plus trial identity, then a parent
+workflow/session identity. Missing stable identity fails safe to the champion.
+Every target-route request in the same assignment unit gets the same arm.
+Tool-use and progress guardrails may clamp the actual route upward without
+changing the router-authored arm evidence.
 
-The default evaluator is BitRouter's embedded generic agentic eval protocol,
-run in a fresh ACP session. BitRouter prefers the detected local agent's own
-subscription and pins its adapter integrity, runtime executable digest, and
-model. The installed adapter/runtime is a trusted executor, not an OS sandbox.
-Pass `--evaluator-via-cloud` to
-`bitrouter optimize setup` only when the user explicitly wants Cloud judging.
-ORI is not required.
+## Evaluate outside the serving path
 
-The default route ladder is `openai-codex:gpt-5.6-sol` (Codex subscription)
-to `bitrouter:deepseek/deepseek-v4-flash-0731` (BitRouter Cloud OAuth). Both
-routes execute through the private daemon. The intent pins the subscription's
-normalized API-equivalent price schedule; this is showback for comparison, not
-a claim of marginal cash spend.
-
-Strong/economy targets may also use the same supported model at different
-effort levels. Pass `--strong-effort` and `--economy-effort` with one of
-`none|minimal|low|medium|high|xhigh|max`; setup validates the exact
-provider/model matrix before writing the lineage. When both tiers name the same
-model, both flags are required and must be distinct. Explicit policy effort
-owns the request and overrides caller effort, while a scalar legacy target
-preserves caller effort. The daemon translates the canonical value to each
-provider's native request shape; it never bypasses BitRouter or launches a
-direct model call for an effort variant.
-
-## Evolve one route at a time
+Use the `evaluating-bitrouter-routes` skill or another generic Eval adapter to
+seal subjects and submit immutable results:
 
 ```bash
-bitrouter optimize run --human
-bitrouter optimize review --human
-bitrouter optimize publish # confirms the first frozen -> adaptive publication on a TTY
-# Headless/CI first publication: bitrouter optimize publish --enable-adaptive
-# Optional: restore a prior policy while keeping the optimization lock aligned.
-bitrouter optimize rollback sha256:<digest>
+bitrouter eval subject seal subject-draft.json --output subject.json
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
 ```
 
-`run` launches the same exact argv once for the active baseline and once for a
-candidate that changes one observed route key. It does not retry. The workflow
-command may itself run a multi-case eval suite; its output is judged against
-the success contract. BitRouter—not the judge—provides normalized cost, latency,
-policy lineage, and request attribution.
+The evaluator stops after admission. It never freezes snapshots, compiles a
+candidate, or publishes a policy. It must preserve each router-authored
+decision reference, including the optional `experiment` object, verbatim. It
+must never invent or edit the experiment id, arm, assignment unit,
+assignment-id digest, or challenger propensity. The evaluator-owned `cohort`
+string does not determine optimizer membership.
 
-`review` reports baseline/candidate quality, normalized showback cost delta,
-observed latency, the route-key change, and content digests. `run` never changes the
-active policy. `publish` is a separate explicit action and rejects stale or
-mismatched lineage. Run the loop again after publication to optimize another
-eligible route key.
+Only complete `task` and `episode` subjects gate optimization quality and cost.
+Request subjects rank opportunities by observed frequency and cost
+contribution, but cannot pass or fail a challenger. Record the complete task or
+episode cost: prefer `trajectory.cost.usd_micros`; evaluator-authored
+`cost.usd_micros` must use the `micro_usd` unit. Per-request price is not the
+promotion cost.
 
-The stable public model is `bitrouter/auto`. Internal policy and preset keys
-remain `auto`, and the generic `@auto` preset form still resolves to the same
-policy — document and send `bitrouter/auto`.
+## Advance one autonomous step
 
-The whole `bitrouter/` namespace is reserved and resolved before any provider
-lookup, so an unrecognised slug is a `400`, not a `404`. Sending
-`bitrouter/auto` before a policy is bound reports the missing binding and names
-`bitrouter optimize setup`; it does not fall back to a default route.
+```bash
+bitrouter optimize run --policy auto --config bitrouter.yaml
+bitrouter optimize status --policy auto --config bitrouter.yaml
+```
 
-Profiles:
+Calling `optimize run` is authorization for exactly one autonomous controller
+step. There is no manual review or publish approval. The command reads an
+immutable admitted-Eval snapshot, compares against the active policy digest,
+publishes a successor atomically when the decision mutates state, and reloads a
+reachable daemon. A concurrent publisher makes the parent stale. Publication
+or reload failure restores the previous active state.
 
-- `quality-first`: no observed quality regression;
-- `balanced`: prioritize frequently used route keys and require manual review;
-- `savings-first`: prioritize greatest normalized cost and require manual
-  review;
+The first run can use champion-only history to rank a route and cold-start
+signed exploration; it cannot promote an unexecuted challenger. Later steps
+are:
 
-These profiles control search order. This version still requires one explicit
-agentic pass and lower normalized showback cost; it does not claim a
-statistical percentage quality-loss budget.
+- `promote`: both arms have enough complete independent subjects, the
+  challenger meets the pass-rate gate with no hard violation, and its mean
+  complete-unit cost is lower;
+- `retreat`: a hard violation occurs, or the challenger budget is exhausted
+  without satisfying quality and cost;
+- `hold`: evidence remains inconclusive within budget;
+- `converged`: no eligible unrejected route/treatment remains.
 
-If the workflow uses ignored/generated inputs (for example `node_modules`,
-`.venv`, or fixtures), declare each one with repeated `--workflow-input` during
-setup or `--optimize-workflow-input` during onboarding. BitRouter freezes the
-same manifest into two detached Git worktrees. Controlled execution is
-currently Unix-only.
+Repeat normal traced agent or Terminal Bench use, external Eval submission, and
+`optimize run` until that command reports `converged`. `optimize status` is an
+optional, database-read-only observation of the signed policy: it reports
+`exploring` when an experiment is active and `idle` otherwise. Idle does not
+prove convergence because promotion and retreat also clear the active
+experiment. A retreat records its treatment context so the same rejected
+experiment is not retried unless its tier target or gate changes.
 
-The controlled two-tier experiment does not yet preserve a signed
-`progress_guard`. Setup checks every active policy before writing any
-optimization file and asks the user to use an unguarded `bitrouter/auto` lineage
-rather than silently changing guard semantics.
+Controller flags tune exposure and gates when needed:
 
-## Failure interpretation
+```text
+--candidate-tier TIER
+--exploration-ppm 100000
+--minimum-tasks 3
+--maximum-tasks 20
+--minimum-pass-rate-ppm 900000
+--evaluator-config-digest sha256:...
+```
 
-- Non-zero workflow exit: valid quality evidence for the evaluator.
-- Timeout: terminal run; never publishable.
-- No request/decision/metering-price join: infrastructure ambiguity; fail closed.
-- Candidate did not exercise the changed route: experiment invalid; fail
-  closed.
-- Workflow argv or referenced file changed between variants: source drift; fail
-  closed.
-- `publishable: false`: inspect `review`; do not force publication.
-- Intent/contract changed: run `bitrouter optimize resolve`, then start a new run.
+Omit `--candidate-tier` to use the signed policy's
+`adequacy.explore_tier`; pass `TIER` only to override that value for the step.
 
-Raw workflow output and model replies remain under the BitRouter home. Commit
-only the intent, lock, success contract, and policy lock. Provider auth stays
-inside the daemon's native credential stores (including Cloud OAuth); never put
-credentials in commands, configs, reports, or repository files. Known secrets
-are redacted best-effort, so eval
-commands must not intentionally print credentials.
+Without an explicit evaluator configuration digest, the candidate cohort must
+contain exactly one conclusive evaluator configuration. Conflicting or
+duplicate conclusive results for a subject and mixed arm evidence are excluded.
+
+## Generic and low-level interfaces remain available
+
+The generic Eval CLI and REST endpoints remain the evaluator interface.
+`policy compile`, `policy diff`, `policy publish`, `policy rollback`, and
+`policy verify --evidence` remain available for migration, audit, and explicit
+operator-managed policy work. They are not required approval stages for an
+optimizer step.
+
+Reports and locks contain structural counters, digests, tier names, gate
+settings, and complete-cost aggregates. Never place prompts, model output,
+tool arguments, evaluator output, credentials, task answers, or repository
+paths in them.

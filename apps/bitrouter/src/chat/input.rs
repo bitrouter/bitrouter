@@ -26,26 +26,6 @@
 use crossterm::event::Event;
 use futures::StreamExt as _;
 
-use bitrouter_tui::editor::{Edit, Editor};
-
-/// Why the line is being echoed.
-pub enum Echo<'a> {
-    /// The line changed and the screen should show it.
-    Changed(&'a str),
-    /// The user asked for the whole screen back (Ctrl-L). The line is
-    /// unchanged; what is stale is the terminal.
-    Redraw(&'a str),
-}
-
-/// How a prompt read ended.
-pub enum Prompt {
-    /// A submitted line, already known to be non-blank.
-    Line(String),
-    /// The session is over — Ctrl-C or Ctrl-D at an idle prompt, or stdin
-    /// itself ended.
-    End,
-}
-
 /// The single reader of the terminal, and the holder of raw mode.
 ///
 /// Raw mode is released on drop, which is what makes an early `?` from
@@ -90,50 +70,6 @@ impl Stdin {
     /// The next terminal event, or `None` once input has ended.
     pub async fn next_event(&mut self) -> Option<Event> {
         self.events.recv().await
-    }
-
-    /// Read one line, calling `echo` with the buffer after every change.
-    ///
-    /// The echo is a callback because this type owns the keys and the caller
-    /// owns the screen; handing it a renderer would put a second drawer of the
-    /// live row in the process.
-    ///
-    /// A blank submission is swallowed here rather than returned, which keeps
-    /// the caller's loop free of a "not really a prompt" case — and is why
-    /// [`Edit::Submitted`] does not decide it for us.
-    pub async fn read_line<E>(&mut self, mut echo: E) -> anyhow::Result<Prompt>
-    where
-        E: FnMut(Echo<'_>) -> anyhow::Result<()>,
-    {
-        let mut editor = Editor::default();
-        echo(Echo::Changed(editor.line()))?;
-        while let Some(event) = self.next_event().await {
-            match event {
-                Event::Key(key) => match editor.apply(key) {
-                    Edit::Ignored => {}
-                    Edit::Changed => echo(Echo::Changed(editor.line()))?,
-                    Edit::Redrawn => echo(Echo::Redraw(editor.line()))?,
-                    Edit::Submitted => {
-                        if editor.line().trim().is_empty() {
-                            editor.clear();
-                            echo(Echo::Changed(editor.line()))?;
-                        } else {
-                            return Ok(Prompt::Line(editor.take()));
-                        }
-                    }
-                    Edit::Ended => return Ok(Prompt::End),
-                },
-                // Bracketed paste arrives whole, which is the point: without
-                // it a pasted line is indistinguishable from a fast typist and
-                // its newline submits half of it.
-                Event::Paste(text) => {
-                    editor.paste(&text);
-                    echo(Echo::Changed(editor.line()))?;
-                }
-                _ => {}
-            }
-        }
-        Ok(Prompt::End)
     }
 }
 

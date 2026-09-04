@@ -10,7 +10,11 @@ use std::time::Duration;
 
 use bitrouter::build_app_with_path;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, NoopObserveStatus, NoopReloader};
+use bitrouter::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+use bitrouter::session_identity::{RequestOrigin, SessionIdentityObserved};
 use bitrouter_sdk::App;
+use bitrouter_sdk::caller::CallerContext;
+use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
 
 /// A reloader that re-reads only the routing table. Used by the reload test —
 /// production callers use the AppReloader in main.rs which also reloads the
@@ -100,6 +104,70 @@ async fn wait_until_ready(socket: &std::path::Path) {
     }
 }
 
+/// The ignored-config guard must reach the operator on the `serve` path, and
+/// the only way it can is by being *carried out* of assembly rather than
+/// logged inside it: `build_app_with_path` runs before
+/// `init_serve_tracing_subscriber`, so a `tracing::warn!` in there is emitted
+/// into a process with no subscriber installed and is dropped silently.
+///
+/// That is exactly how the first version of this guard shipped-and-did-nothing
+/// in local testing, so the regression is worth pinning.
+///
+/// **Be precise about what this does and does not pin.** It asserts the
+/// warnings are *carried out* of assembly. It does **not** assert that nothing
+/// was logged during assembly, so re-adding a `tracing::warn!` inside
+/// `build_app_with_path` would still pass here. That assertion was considered
+/// and rejected as unreliable in the wrong direction: `tracing`'s per-callsite
+/// `Interest` cache is process-global, so a sibling test in this binary hitting
+/// the same callsite with no subscriber installed caches `Interest::never` —
+/// and a "nothing was logged" assertion then passes vacuously, which is exactly
+/// the failure it exists to catch. `crates/bitrouter-telemetry/tests/ingress_log_target.rs`
+/// is a separate binary for the same reason; the difference is that its
+/// assertion is positive, so a vacuous run fails rather than passes.
+#[tokio::test]
+async fn ignored_config_is_carried_out_of_assembly_not_logged_inside_it() {
+    let dir = tempdir("ignored-config");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let path = dir.join("bitrouter.yaml");
+    tokio::fs::write(
+        &path,
+        format!(
+            "{}\nplugins:\n  bitrouter-observe:\n    otel:\n      endpoint: http://collector:4318\n",
+            tiny_config_yaml("sqlite::memory:")
+        ),
+    )
+    .await
+    .unwrap();
+    let cfg = config::load(&path).await.unwrap();
+
+    // What the guard produces for this config, computed independently of
+    // assembly. Asserting against this rather than against a substring makes
+    // the second assertion exact: assembly must carry these out *verbatim*,
+    // not merely emit something that happens to mention the stale id.
+    let expected = bitrouter::assemble::ignored_config_warnings(&cfg);
+    assert!(
+        expected
+            .iter()
+            .any(|line| line.contains("plugins.bitrouter-observe")),
+        "the guard must flag the stale plugin id, got: {expected:?}"
+    );
+
+    let assembled = build_app_with_path(&cfg, Some(&path)).await.unwrap();
+    // Deliberately not `assert_eq!`, and deliberately printing only `expected`.
+    // `Assembled` also carries `continuation_registry`, which lazily derives
+    // from installation key material, and CodeQL's taint tracking is
+    // field-insensitive across the struct — so formatting *any* field off
+    // `assembled` reads as logging a secret (rule `rust/cleartext-logging`,
+    // alert 43). It is a false positive: `ignored_config` is the first thing
+    // `build_app_with_path` computes, purely from `config`, before a key is
+    // touched. Printing the untracked side costs nothing and keeps the alert
+    // honest for the day it catches something real.
+    assert!(
+        assembled.ignored_config == expected,
+        "assembly must carry the guard's warnings out rather than logging them; expected {expected:?}"
+    );
+}
+
 #[tokio::test]
 async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     let dir = tempdir("status");
@@ -115,7 +183,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
 
     // Wait for the listener to be ready (bind is fast but not synchronous).
@@ -179,6 +247,163 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
 }
 
 #[tokio::test]
+async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
+    let dir = tempdir("acp-route");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await.unwrap();
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let runtime = assembled.acp_runtime.clone();
+    let app = Arc::new(assembled.app);
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+        socket.clone(),
+        app,
+        "127.0.0.1:1234".to_string(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        daemon::AcpControlPlane {
+            runtime: runtime.clone(),
+            metering: MeteringStore::new(assembled.db.clone()),
+        },
+    ));
+    wait_until_ready(&socket).await;
+
+    let set = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+            route: "gpt-5".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    match set {
+        DaemonResponse::AcpRouteState {
+            available,
+            current,
+            scope,
+        } => {
+            assert!(available.contains(&"gpt-5".to_string()));
+            assert_eq!(current.as_deref(), Some("gpt-5"));
+            assert_eq!(scope, "session");
+        }
+        other => panic!("expected ACP route state, got {other:?}"),
+    }
+
+    let invalid = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+            route: "missing-model".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(invalid, DaemonResponse::Error { .. }));
+    assert_eq!(
+        runtime
+            .current_route("principal-a", "brc_test", "native-session")
+            .unwrap()
+            .route(),
+        "gpt-5"
+    );
+
+    let other = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteList {
+            api_principal: "principal-b".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        other,
+        DaemonResponse::AcpRouteState {
+            current: None,
+            scope,
+            ..
+        } if scope == "default"
+    ));
+
+    let reset = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteReset {
+            api_principal: "principal-a".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "native-session".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        reset,
+        DaemonResponse::AcpRouteState {
+            current: None,
+            scope,
+            ..
+        } if scope == "default"
+    ));
+
+    let cleanup_target = daemon::send_command(
+        &socket,
+        &DaemonCommand::AcpRouteSet {
+            api_principal: "principal-a".to_string(),
+            controller_instance_id: "brc_test".to_string(),
+            session_id: "cleanup-target".to_string(),
+            route: "gpt-5".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        cleanup_target,
+        DaemonResponse::AcpRouteState {
+            current: Some(_),
+            scope,
+            ..
+        } if scope == "session"
+    ));
+    runtime
+        .set_route("principal-a", "brc_other", "cleanup-target", "shared")
+        .unwrap();
+
+    assert!(matches!(
+        daemon::send_command(
+            &socket,
+            &DaemonCommand::AcpControllerCleanup {
+                api_principal: "principal-a".to_string(),
+                controller_instance_id: "brc_test".to_string(),
+            },
+        )
+        .await
+        .unwrap(),
+        DaemonResponse::Ok
+    ));
+    assert!(
+        runtime
+            .current_route("principal-a", "brc_test", "cleanup-target")
+            .is_none()
+    );
+    assert_eq!(
+        runtime
+            .current_route("principal-a", "brc_other", "cleanup-target")
+            .unwrap()
+            .route(),
+        "shared"
+    );
+
+    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
 async fn probe_status_reports_ready_when_daemon_is_up() {
     let dir = tempdir("probe-up");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
@@ -193,7 +418,7 @@ async fn probe_status_reports_ready_when_daemon_is_up() {
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -238,7 +463,7 @@ async fn reload_re_reads_the_config_file() {
         "127.0.0.1:0".to_string(),
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -371,7 +596,7 @@ async fn route_for_unknown_model_returns_a_clean_error() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -411,7 +636,7 @@ async fn concurrent_clients_are_all_served() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -452,7 +677,7 @@ async fn malformed_input_does_not_take_the_server_down() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -501,7 +726,7 @@ async fn reload_returns_error_when_the_config_is_broken() {
         "127.0.0.1:0".to_string(),
         Arc::new(RoutingTableReloader(app.clone())),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -556,7 +781,7 @@ async fn socket_file_has_owner_only_permissions() {
         "127.0.0.1:0".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        None,
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
 
@@ -589,99 +814,143 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
     );
 }
 
-/// `providers/set`'s substrate: a `SetRoute` command over the control socket
-/// must move the traffic of the launch that asked, and only that launch.
-///
-/// This is the half the ACP surface could not do on its own — the substrate is
-/// a separate process and the agent child talks to the daemon directly, so
-/// without this the picker would be a control that does not do what it looks
-/// like it does.
-#[tokio::test]
-async fn set_route_reroutes_only_the_named_launch() {
-    use bitrouter::policy_table_router::{PolicyTable, PolicyTableRouter};
-    use bitrouter_sdk::{HeaderMap, PromptTransform};
+/// One routed model request settled the way the pipeline records it: priced
+/// (`10 × 2 + 5 × 10 = 70 µ$`) and carrying the identity the session hook
+/// emits for `controller`'s traffic on native session `root`.
+async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
+    let mut pricing = PricingTable::new();
+    pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
+    let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
+    let request_id = format!("spend-{controller}-{root}");
+    let mut settled = SettlementContext {
+        request_id: request_id.clone(),
+        caller: CallerContext::local(),
+        target: None,
+        model_id: "gpt-5".into(),
+        reasoning_effort: None,
+        provider_id: "openai".into(),
+        account_label: None,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        usage_origin: UsageOrigin::ProviderReported,
+        raw_usage: None,
+        web_search_count: 0,
+        media_input_count: 0,
+        media_output_count: 0,
+        server_tool_calls: Vec::new(),
+        streamed: false,
+        request_duration_ms: 100,
+        upstream_duration_ms: Some(80),
+        ttft_ms: None,
+        generation_duration_ms: None,
+        first_token_kind: None,
+        finish_reason: None,
+        error: None,
+        events: bitrouter_sdk::EventBus::new(),
+    };
+    settled.emit(SessionIdentityObserved {
+        router_request_id: request_id,
+        origin: RequestOrigin::AcpHarnessRequest,
+        api_principal_id: "local".to_string(),
+        harness: Some("claude_code".to_string()),
+        claimed_controller_instance_id: Some(controller.to_string()),
+        acp_session_id: None,
+        native_root_session_id: Some(root.to_string()),
+        native_agent_thread_id: None,
+        native_parent_agent_thread_id: None,
+        native_turn_id: None,
+        legacy_workflow_session_id: None,
+        api_continuation_id: None,
+        evidence: Vec::new(),
+        conflicts: Vec::new(),
+        attributed: true,
+        route_scope: "default".to_string(),
+        route_lease_id: None,
+        route_lease_outcome: None,
+    });
+    recorder.record(&mut settled).await.unwrap();
+}
 
-    let dir = tempdir("setroute");
+#[tokio::test]
+async fn acp_session_spend_roundtrips_over_the_control_socket() {
+    let dir = tempdir("acp-spend");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let runtime = assembled.acp_runtime.clone();
+    let metering = MeteringStore::new(assembled.db.clone());
     let app = Arc::new(assembled.app);
-
-    // The same handle the daemon holds and the live transform reads.
-    let router = Arc::new(PolicyTableRouter::new(PolicyTable::inert()));
-
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
         socket.clone(),
-        app.clone(),
+        app,
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        Some(router.clone()),
+        daemon::AcpControlPlane {
+            runtime: runtime.clone(),
+            metering: metering.clone(),
+        },
     ));
     wait_until_ready(&socket).await;
 
-    let routed_model = |auth: &str| {
-        let mut headers = HeaderMap::new();
-        if let Ok(value) = auth.parse() {
-            headers.insert("authorization", value);
-        }
-        let mut prompt = bitrouter_sdk::language_model::types::Prompt {
-            model: "gpt-5".to_string(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![bitrouter_sdk::language_model::types::Message::text(
-                bitrouter_sdk::language_model::types::Role::User,
-                "hi",
-            )],
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        router.apply_with_headers(&mut prompt, &headers);
-        prompt.model
+    settle_attributed_request(metering, "brc_spend", "native-session").await;
+    let spend_of = |controller: &str, session: &str| DaemonCommand::AcpSessionSpend {
+        api_principal: "local".to_string(),
+        controller_instance_id: controller.to_string(),
+        session_id: session.to_string(),
     };
 
-    // Before: the daemon serves the configured route.
-    assert_eq!(routed_model("Bearer brl_mine"), "gpt-5");
-
-    let resp = daemon::send_command(
+    // Spend is scoped by the principal that names the lease namespace — the
+    // same gate as route state — so an unnamed one buys nothing.
+    let unscoped = daemon::send_command(
         &socket,
-        &DaemonCommand::SetRoute {
-            launch_id: "brl_mine".to_string(),
-            provider_id: Some("shared".to_string()),
+        &DaemonCommand::AcpSessionSpend {
+            api_principal: String::new(),
+            controller_instance_id: "brc_spend".to_string(),
+            session_id: "native-session".to_string(),
         },
     )
     .await
     .unwrap();
-    assert!(
-        matches!(resp, DaemonResponse::Ok),
-        "SetRoute should succeed, got {resp:?}"
-    );
+    assert!(matches!(unscoped, DaemonResponse::Error { .. }));
 
-    // After: that launch reaches the new provider, keeping its model…
-    assert_eq!(routed_model("Bearer brl_mine"), "shared:gpt-5");
-    // …and nobody else moves.
-    assert_eq!(routed_model("Bearer brl_theirs"), "gpt-5");
-    assert_eq!(routed_model("Bearer sk-a-real-key"), "gpt-5");
-
-    // Clearing it restores the configured route.
-    let resp = daemon::send_command(
-        &socket,
-        &DaemonCommand::SetRoute {
-            launch_id: "brl_mine".to_string(),
-            provider_id: None,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(resp, DaemonResponse::Ok), "{resp:?}");
-    assert_eq!(routed_model("Bearer brl_mine"), "gpt-5");
-
-    daemon::send_command(&socket, &DaemonCommand::Stop)
+    let spend = daemon::send_command(&socket, &spend_of("brc_spend", "native-session"))
         .await
         .unwrap();
-    let _ = server.await;
+    match spend {
+        DaemonResponse::AcpSessionSpend {
+            spend_micro_usd,
+            requests,
+            unpriced,
+        } => {
+            assert_eq!((spend_micro_usd, requests, unpriced), (70, 1, 0));
+        }
+        other => panic!("expected ACP session spend, got {other:?}"),
+    }
+
+    // Another session under the same controller sees nothing of it.
+    let other_session = daemon::send_command(&socket, &spend_of("brc_spend", "other-session"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        other_session,
+        DaemonResponse::AcpSessionSpend {
+            spend_micro_usd: 0,
+            requests: 0,
+            unpriced: 0,
+        }
+    ));
+    // An empty session id is refused rather than matched against nothing.
+    let empty = daemon::send_command(&socket, &spend_of("brc_spend", "  "))
+        .await
+        .unwrap();
+    assert!(matches!(empty, DaemonResponse::Error { .. }));
+
+    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&dir).await;
 }

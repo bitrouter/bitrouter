@@ -1,0 +1,21 @@
+{
+  "id": "classifier-zh-post-read-implement-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["zh", "post_read"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {"role": "user", "content": "读取配置后实现重试退避，并运行测试。"},
+      {"role": "assistant", "content": null, "tool_calls": [{"id": "read-1", "type": "function", "function": {"name": "Read", "arguments": "{\"file_path\":\"src/retry.rs\"}"}}]},
+      {"role": "tool", "tool_call_id": "read-1", "content": "pub fn retry() { todo!() }"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "tool_followup",
+    "baseline_fingerprint": "after_Read",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "implement", "next_action_class": "mutate", "route_risk": "normal", "task_family": "code_generation", "progress_state": "progressing"}
+  }
+}

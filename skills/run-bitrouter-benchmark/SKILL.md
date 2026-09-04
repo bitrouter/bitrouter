@@ -29,10 +29,11 @@ and stop. Do not infer an unspecified choice from local state:
 
 If the user chooses a new custom config, ask one follow-up for the entry
 preset/model, reachable provider/model targets, fallback, and credential source
-names. Do not ask AWS questions when no deployment is needed. Do not require a
-baseline when the user only wants one routed score. Treat `any` as permission
-for that named choice only; never default a different missing choice. Ask all
-remaining Stage 1 choices together.
+names. Do not require a baseline when the user only wants one routed score. Do
+not ask AWS questions when neither BitRouter AWS deployment nor a Harbor
+AWS/EC2 environment is selected. Treat `any` as permission for that named
+choice only; never default a different missing choice. Ask all remaining Stage
+1 choices together.
 
 ## 2. Inspect before asking again
 
@@ -47,7 +48,8 @@ Inspect without external mutation:
 - BitRouter endpoint provenance and health metadata where available;
 - selected config source and every provider/model/fallback reachable from its
   entry route, plus broader exposure from inherited defaults or credentials;
-- AWS profile or assume-role name only if AWS deployment was selected.
+- AWS profile or assume-role name only if BitRouter AWS deployment or a Harbor
+  AWS/EC2 environment was selected.
 
 Use read-only host discovery first. A command absent from `PATH` is unresolved,
 not proof that the software is uninstalled. After discovery, batch all access
@@ -93,14 +95,17 @@ Present one compact plan containing:
 - bounded agent-specific smoke payload, maximum requests, expected cost, the
   whole benchmark's provider-spend estimate or ceiling, and retained artifacts;
 - installs, service/config/secret-store changes, plus AWS account/principal,
-  region, resources, and cost only when applicable;
+  region, resources, cost, and—when Harbor uses EC2—the resolved controller-to-
+  sandbox address/SSH path, bootstrap egress, proposed temporary rule
+  specifications and stopping condition, and cleanup only when applicable;
 - output path and upload destination, visibility, and data sensitivity.
 
 Require one explicit confirmation before installation, service start,
 secret-store write, paid provider request, AWS mutation, benchmark launch, or
 upload. Reconfirm provider/model targets even when they came from existing
 config. Read [agents.md](references/agents.md) for agent protocol and smoke
-checks; read [aws.md](references/aws.md) only when operating on AWS.
+checks; read [aws.md](references/aws.md) when operating BitRouter or a Harbor
+EC2 environment on AWS.
 
 ## 4. Prepare the route
 
@@ -159,6 +164,6 @@ job-isolated BitRouter evidence and an explicit join.
 | Read | When |
 |---|---|
 | [agents.md](references/agents.md) | Configure or smoke Codex, Claude Code, Terminus 2, or another Harbor agent |
-| [aws.md](references/aws.md) | Operate BitRouter OSS on AWS or select IAM boundaries |
+| [aws.md](references/aws.md) | Operate BitRouter OSS or a Harbor EC2 environment on AWS, or select IAM boundaries |
 | [harbor.md](references/harbor.md) | Discover/run/resume Harbor jobs and set attempts or concurrency |
 | [publishing.md](references/publishing.md) | Preserve evidence, upload to Hub, submit officially, or make route claims |

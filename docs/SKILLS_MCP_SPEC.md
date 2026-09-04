@@ -28,7 +28,8 @@ the spec had assumed something that turned out not to hold:
    Both justifications failed on inspection: `bitrouter-mcp` has no stated
    objection to depending on `bitrouter-sdk` (the recorded dependency-inversion
    rule names `bitrouter-substrate`, `bitrouter-skills`, and
-   `bitrouter-observe`, not the SDK) and the edge is not a cycle; and
+   `bitrouter-observe`, now `bitrouter-telemetry`, not the SDK) and the edge is not a
+   cycle; and
    "raw JSON preserves unknown fields" was true only of the type *as written* —
    a `#[serde(flatten)]` catchall gives verbatim passthrough **and** typed
    access. The split also produced a duplicated `SKILL_SCHEME` constant in two

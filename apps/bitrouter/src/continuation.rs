@@ -3251,10 +3251,7 @@ mod tests {
     {
         let registry = registry(75).await?;
         let gateway_id = encode_gateway_continuation_id("legacy-gateway")?;
-        let now = Utc
-            .with_ymd_and_hms(2026, 8, 2, 0, 0, 0)
-            .single()
-            .ok_or_else(|| anyhow::anyhow!("test timestamp is invalid"))?;
+        let now = Utc::now();
         registry
             .bind(
                 "legacy-owner",
@@ -3302,14 +3299,20 @@ mod tests {
         let mut cross_provider = target("other-credential");
         cross_provider.provider_name = "other".into();
         for candidate in [target("legacy-credential"), cross_provider] {
-            let error = runtime
+            let error = match runtime
                 .resolve(
                     &mut vec![candidate],
                     &mut continuation_context_for_owner(&gateway_id, "legacy-owner"),
                 )
                 .await
-                .expect_err("legacy plaintext must never reach an upstream route");
-            assert!(error.to_string().contains("model provenance"));
+            {
+                Ok(()) => anyhow::bail!("legacy plaintext reached an upstream route"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("model provenance"),
+                "unexpected continuation error: {error}"
+            );
         }
         Ok(())
     }
@@ -3769,6 +3772,7 @@ mod tests {
         );
         PipelineContext::new(PipelineRequest {
             request_id: "next-gateway".into(),
+            original_model: "openai:gpt-5".into(),
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
@@ -7061,6 +7065,7 @@ mod tests {
         }
         PipelineRequest {
             request_id: request_id.into(),
+            original_model: "gpt-5".into(),
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),

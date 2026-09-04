@@ -35,7 +35,7 @@ use bitrouter_sdk::{PluginId, Result};
 use http::HeaderMap;
 
 use crate::auth::db::{self, ApiKeyRecord};
-use crate::auth::events::Authenticated;
+use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
 use crate::auth::keys;
 
 /// The auth module id, used as the `PipelineContext` metadata key. The
@@ -96,6 +96,7 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        let credential = Self::extract_credential(ctx);
         // `skip_auth=true` on the SDK side synthesises a local caller
         // for *every* inbound request — admit immediately regardless of
         // any presented header. Validating a stray `Authorization`
@@ -104,8 +105,6 @@ impl PreRequestHook for AuthHook {
         if ctx.caller().is_local() {
             return Ok(HookDecision::Allow);
         }
-
-        let credential = Self::extract_credential(ctx);
 
         // API-key path.
         let Some(credential) = credential else {
@@ -157,6 +156,9 @@ impl PreRequestHook for AuthHook {
             api_key_id: record.id,
             user_id: record.user_id,
             policy_id: record.policy_id,
+        });
+        ctx.emit(ApiPrincipalEstablished {
+            route_scope_id: hash,
         });
         Ok(HookDecision::Allow)
     }

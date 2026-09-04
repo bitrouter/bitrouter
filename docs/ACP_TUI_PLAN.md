@@ -5,6 +5,11 @@ Companion to [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The spec holds the
 completion criteria*. Scope is the spec's **v1 column only** (§12) — every v2
 row is out of scope here.
 
+> **Historical note (2026-08-16):** this plan predates the removal of
+> `status --watch`. Steps that say to leave it untouched describe the state of
+> the implementation when the plan was executed; the current status surface is
+> `bitrouter status --requests`.
+
 Designed to be driven by `/goal`. See §A for the loop protocol and §B for the
 goal conditions to paste.
 
@@ -146,8 +151,10 @@ TUI; ACP v2.
   - Depends on: 1.1
   - Files: `apps/bitrouter/src/tui/{host,pty,term,lifecycle,conformance}.rs`,
     `apps/bitrouter/src/tui/fixtures/`, `scripts/record-vt-fixture.sh`
-  - Do: delete those files and their `mod` declarations in `tui/mod.rs`. Keep
-    `watch.rs`, `render.rs`, `snapshot.rs`, and `run_watch`/`oneshot_text`.
+  - Do: delete those files and their `mod` declarations in `tui/mod.rs`. At the
+    time this plan ran, `watch.rs`, `render.rs`, `snapshot.rs`, and
+    `run_watch`/`oneshot_text` survived; `watch.rs` was later removed with
+    `status --watch`.
   - Done when: those paths do not exist and `tui/mod.rs` declares only the
     surviving modules.
   - Verify: `cargo build -p bitrouter 2>&1 | tail -5`

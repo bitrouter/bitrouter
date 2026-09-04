@@ -12,7 +12,7 @@ use bitrouter_sdk::language_model::{
 };
 
 use crate::auth::db::{self, NewApiKey};
-use crate::auth::events::Authenticated;
+use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
 use crate::auth::hook::AuthHook;
 use crate::auth::keys;
 
@@ -87,6 +87,33 @@ async fn valid_key_authenticates_and_emits_event() {
     let event = ctx.get_event::<Authenticated>().expect("event emitted");
     assert_eq!(event.api_key_id, key_id);
     assert_eq!(event.policy_id.as_deref(), Some("pol_default"));
+    assert_eq!(
+        ctx.get_event::<ApiPrincipalEstablished>()
+            .expect("route principal event")
+            .route_scope_id,
+        keys::hash_key(&secret)
+    );
+}
+
+#[tokio::test]
+async fn skip_auth_keeps_declared_controller_headers_on_the_local_principal() {
+    let pool = pool().await;
+    let hook = AuthHook::new(pool);
+    let mut request = PipelineRequest::new("m", CallerContext::local(), prompt());
+    request
+        .headers
+        .insert("authorization", "Bearer forged".parse().unwrap());
+    request
+        .headers
+        .insert("x-bitrouter-controller-id", "brc_victim".parse().unwrap());
+    let mut ctx = PipelineContext::new(request);
+
+    assert!(matches!(
+        hook.check(&mut ctx).await.unwrap(),
+        HookDecision::Allow
+    ));
+    assert!(ctx.caller().is_local());
+    assert!(ctx.get_event::<ApiPrincipalEstablished>().is_none());
 }
 
 #[tokio::test]

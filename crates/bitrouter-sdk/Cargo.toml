@@ -7,6 +7,16 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# CI artifacts for the `sdk-public-api` job, not crate content: consumers who
+# download the crate have no use for the public-dependency manifest or its
+# toolchain pins.
+#
+# `span-schema.json` is deliberately NOT on this list even though it is
+# generated the same way. It is the interop surface itself — the declaration a
+# deployment implements when it renders BitRouter's telemetry, whether through
+# `bitrouter-telemetry`'s OTLP exporter or anything else — so it ships with the
+# crate.
+exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [dependencies]
 async-trait.workspace = true
@@ -35,7 +45,6 @@ base64.workspace = true
 # `server` feature
 axum = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
-
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
 
@@ -45,6 +54,14 @@ agent-client-protocol-schema = { workspace = true, optional = true }
 # builders, and stdio transport the live thin proxy (`acp::up` / `acp::down`)
 # drives. Only the runtime needs it; the pure-routing pipeline does not.
 agent-client-protocol = { workspace = true, optional = true }
+# `acp` feature — the official connection-level conductor. It lazily builds the
+# agent/proxy chain from the manager's initialize request and forwards
+# unhandled ACP traffic bidirectionally, which is the controller kernel.
+#
+# It reaches `axum` non-optionally, through
+# `agent-client-protocol-trace-viewer`, so enabling `acp` links an HTTP server.
+# That is unwanted and is tracked upstream; see the `acp` feature's comment.
+agent-client-protocol-conductor = { workspace = true, optional = true }
 # `acp` feature — the proxy's stream/compat glue: `BroadcastStream` for the
 # fan-out planes and `tokio_util::compat` to hand the child's tokio pipes to
 # the futures-io based ACP SDK.
@@ -60,7 +77,7 @@ rmcp = { workspace = true, optional = true }
 
 [features]
 default = []
-# axum HTTP server + SSE handlers + admin endpoints
+# axum HTTP server + SSE handlers + admin endpoints.
 server = ["dep:axum", "dep:tower", "tokio/signal"]
 # yaml config loading (serde-saphyr + tokio::fs)
 config_file = ["dep:serde-saphyr", "tokio/fs"]
@@ -77,6 +94,7 @@ mcp = ["dep:rmcp", "tokio/process"]
 acp = [
     "dep:agent-client-protocol-schema",
     "dep:agent-client-protocol",
+    "dep:agent-client-protocol-conductor",
     "dep:tokio-stream",
     "dep:anyhow",
     "dep:rustix",
@@ -85,6 +103,30 @@ acp = [
     "tokio/rt-multi-thread",
     "tokio-util/compat",
 ]
+
+# Conformance helpers for renderers' test suites: `span_def_for`,
+# `value_type_matches` and `render_json`, which resolve an exported span to its
+# declaration, check an emitted value's type against the declared one, and
+# render the committed artifact. They have no production callers — a renderer
+# emits against the schema, it does not read it back — so they are gated rather
+# than shipped as public API nobody calls (CLAUDE.md rule 4). Carries no
+# dependency: `serde` is already unconditional. A renderer enables it under
+# `[dev-dependencies]`; `bitrouter-telemetry` is the one in this workspace.
+testing = []
+
+# NOTE: `acp` pulls `agent-client-protocol-conductor`, which reaches `axum`
+# non-optionally through `agent-client-protocol-trace-viewer`. So enabling
+# `acp` links an HTTP server, which a consumer wanting ACP routing should not
+# have to.
+#
+# An `acp-controller` split was built and then withdrawn. It failed the test
+# this workspace applies everywhere else — name the beneficiary: `apps/bitrouter`
+# is the only consumer of `acp`, and it wants the controller. The one real
+# victim was `helpers/dist-helper`, which enabled `acp` without ever using it;
+# trimming that is the fix that shipped. #848 also fused the two halves —
+# `acp::client` imports `controller`'s route-control types — so separating them
+# now means restructuring that module, for nobody. The real fix is upstream
+# making the trace viewer optional. Revisit when a consumer exists.
 
 [target.'cfg(unix)'.dependencies]
 # `acp` feature — safe `killpg(2)` for reaping an agent child's whole process
@@ -103,3 +145,7 @@ tokio = { workspace = true, features = [
 ] }
 # `acp` runtime tests launch stub agents in throwaway working directories.
 tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1141,7 +1141,6 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
         &serde_json::from_str(&outbox_payload)?,
         &[
             "provider",
-            "model",
             "prompt_tokens",
             "completion_tokens",
             "reasoning_tokens",
@@ -1194,7 +1193,19 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
     );
 
     let eval_store = EvalStore::new(assembled.db.clone());
-    assert_eq!(eval_store.list_subjects_for_owner(owner).await?.len(), 1);
+    let subjects = eval_store.list_subjects_for_owner(owner).await?;
+    assert_eq!(subjects.len(), 1);
+    let routed_measurement = events
+        .iter()
+        .find(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
+        .and_then(|event| event.evidence.route_measurement.as_ref())
+        .ok_or_else(|| anyhow::anyhow!("route event measurement missing"))?;
+    let evaluated_measurement = subjects[0]
+        .decisions
+        .first()
+        .and_then(|decision| decision.route_measurement.as_ref())
+        .ok_or_else(|| anyhow::anyhow!("eval subject route measurement missing"))?;
+    assert_eq!(routed_measurement, evaluated_measurement);
     let admissions = eval_store.latest_admissions_for_owner(owner).await?;
     assert_eq!(admissions.len(), 1);
     let result_id = admissions
@@ -1209,7 +1220,6 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
         &serde_json::to_value(&evaluation)?,
         &[
             "provider",
-            "model",
             "prompt_tokens",
             "completion_tokens",
             "reasoning_tokens",

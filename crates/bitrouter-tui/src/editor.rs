@@ -148,7 +148,11 @@ pub fn is_redraw(event: &Event) -> bool {
 }
 
 /// The key event behind a press, if this event is one.
-fn press(event: &Event) -> Option<&KeyEvent> {
+///
+/// Public because the two modals read the raw key rather than going through
+/// [`Editor::apply`], and a key *release* must not answer a permission
+/// question any more than it may type a character.
+pub fn press(event: &Event) -> Option<&KeyEvent> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(key),
         _ => None,

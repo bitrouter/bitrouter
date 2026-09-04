@@ -551,6 +551,7 @@ mod tests {
                 structural,
                 categorical,
                 digests: BTreeMap::new(),
+                route_measurement: None,
             },
             captured_at: format!("2026-08-01T00:00:{:02}Z", sequence - 1),
             content_digest: String::new(),

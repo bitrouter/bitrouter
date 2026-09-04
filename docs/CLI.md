@@ -29,6 +29,63 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
+## Logging (`RUST_LOG`)
+
+Diagnostics are emitted with `tracing` and filtered by **`RUST_LOG`**, using standard [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. When `RUST_LOG` is unset the filter defaults to `info`; a malformed value falls back to `info` rather than failing to start.
+
+Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, …), so `RUST_LOG=warn,bitrouter=debug` works as you would expect. Three targets are **pinned explicitly** and are *not* module paths:
+
+| Target | What it carries |
+| --- | --- |
+| `bitrouter::observe::http` | DEBUG diagnostics from the HTTP ingress layer: one line per request, plus one when an inbound `traceparent` arrives but does not parse. **Silent unless OTel is configured** — the ingress layer is only installed when an exporter exists. |
+| `bitrouter::observe::cardinality` | WARN when the metric-dimension cardinality limiter recovers from a poisoned lock. |
+| `bitrouter::observe::span_attributes` | DEBUG per span attribute a deployment forwarded that the span schema reserves — see below. |
+
+These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
+
+- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in `bitrouter-telemetry`, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter_telemetry::otel::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
+- **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `crates/bitrouter-sdk/span-schema.json`.
+- **`RUST_LOG` no longer affects tracing.** This used to be the opposite, and the reversal is worth stating because the old advice is still in circulation: the ingress span was a `tracing` span bridged into OpenTelemetry, so a filter that dropped `bitrouter::observe::http` at INFO also dropped the SERVER span, and every `chat` span exported as an orphan root with no error reported anywhere. A blanket `RUST_LOG=warn` was enough to do it. The ingress span is now an OpenTelemetry span in its own right and never passes through the `tracing` subscriber, so **no filter can suppress it**. Set `RUST_LOG` for the logs you want; traces are unaffected either way.
+
+## Ignored configuration
+
+`Config::plugins` is an unvalidated map and the JSON Schema declares it
+`additionalProperties: true`, so a `plugins.<id>` block the binary does not
+read is **silently ignored** — a typo like `plugins.bitrouter-guardrail`
+(singular) drops the operator's declared block / redact patterns and the
+process starts anyway. Two places report it:
+
+- `bitrouter config validate` lists them under `ignored_config`. It does not
+  fail validation — an ignored block is a misconfiguration, not a malformed
+  config, and this command is CI-gating.
+- Every runtime surface logs one WARN per unread id on start: the daemon, and
+  `bitrouter acp serve|prompt` and `bitrouter chat`, none of which build the
+  daemon's `App` but all of which read the same config. This is the path that
+  matters: validation is opt-in, the runtime always runs.
+
+The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
+`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+rename that carries an obsolete setting along with it is not silent either.
+
+**Renamed in this release** — the old names are ignored, and the daemon warns
+when it sees one set:
+
+| Old | New |
+| --- | --- |
+| `plugins.bitrouter-observe.*` | `plugins.bitrouter-telemetry.*` |
+| `BITROUTER_OBSERVE_CONTENT_CAPTURE` | `BITROUTER_TELEMETRY_CONTENT_CAPTURE` |
+| `BITROUTER_OBSERVE_CONTENT_ATTR_MAX_BYTES` | `BITROUTER_TELEMETRY_CONTENT_ATTR_MAX_BYTES` |
+
+`plugins.bitrouter-observe.otlp_endpoint`, the v0 flat shim, is **removed**
+rather than carried over: it existed to keep a v0 config building, and v0 never
+had a `plugins.bitrouter-telemetry` key for it to live under.
+
+The `bitrouter::observe::*` log targets above, the `io.bitrouter.observe`
+instrumentation scope, and the `bitrouter` meter name are **not** renamed and
+will not be. They are wire and `RUST_LOG` contract — a rename there is silently
+wrong for every dashboard and every existing selector, with no safety net
+possible.
+
 ## Config resolution
 
 Local router subcommands that load a config accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
@@ -95,17 +152,26 @@ Any provider API keys present in the current environment are forwarded to the da
 ```
 bitrouter status [-c <path>] [--socket <path>]
 bitrouter status --requests          # what the router has actually done
+bitrouter status --requests --human  # the same, as a table
 ```
 
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
 
-`--requests` (`-r`) prints what the router has actually done instead: a newest-first table of settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — under a line stating daemon state and over today's spend and the trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (the state line says `history only` rather than showing an empty list that looks like idleness).
+`--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
 
-The output is identical whether stdout is a terminal or a pipe, so `bitrouter status --requests | less`, `> file`, and an agent reading the bytes all see the same thing. Repeat it with `watch -n1 bitrouter status --requests` for a live view. Bare `bitrouter status` is unchanged.
+Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Bare `bitrouter status` is unchanged.
+
+The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter chat`'s cost line is the per-session figure.
+
+**Spend is reported only where there is evidence.** Each row carries a `charge_status` — `computed` and `not_charged` are evidence, `unknown` and `legacy_unknown` are not — and only evidenced rows contribute to the total. A request the daemon recorded but could not price shows `?` in the cost column rather than `—` (which would claim it was free) or `$0.00` (which would claim it was measured). When nothing in the window has evidence, `spend_micro_usd` is `null` and the human view reads `unreported`; when only some does, the total is labelled a floor. This is the rule `bitrouter chat`'s cost line keeps: a client that cannot see a price has not observed a free turn.
+
+Each row also carries `episode_id` — the trajectory episode to hand to `bitrouter trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
 Portable — there is no terminal-only path left to gate.
 
-> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed exactly what `--requests` prints now, so scripts that piped it need only the new flag name.
+> **`--requests` emits JSON by default as of 1.0.0-alpha.28.** It previously printed the table unconditionally, ignoring `--json` — the only `status` path that did. Scripts that parsed the table need `--human`; anything that wanted the data now gets one clean JSON object with a stable `rows[]`.
+>
+> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed what `--requests --human` prints now.
 
 ---
 
@@ -289,10 +355,10 @@ Prints a YAML stub for the named catalog agent. Paste the output under `agents:`
 
 ```
 bitrouter acp serve --agent <id> [-c <path>]
-bitrouter acp prompt --agent <id> [-c <path>] <text>
+bitrouter acp prompt --agent <id> [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [-c <path>] <text>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout — or, under `--format text`, the transcript as `chat` prints it to a pipe, or under `--format quiet` the assistant's text alone. Nobody is at a headless terminal to broker permissions, so the caller states the rule: `--deny-all` (the default) answers every request with the agent's reject option, `--approve-reads` approves calls the harness labels `read` or `search` and denies the rest, `--approve-all` approves everything, and `--permission-policy` overrides per tool (`autoApprove`/`autoDeny` lists matching the tool kind, title, or title's first word; `defaultAction` for the rest). Each answer is a `{"type":"permission",…}` line, and the process **exits 5** when at least one request was denied and none approved. The decision runs through the same `Policy` and the same wire the interactive TUI's keystroke takes. Session identity, history, and storage are the harness's own on every path; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
 
 ### `bitrouter chat`
 
@@ -318,7 +384,7 @@ A tool call is **one entity, repainted in place**: a call going pending → in p
 | `Esc` | Answer the open permission prompt with *no*, or close the picker; with neither open, cancel the running turn |
 | `Ctrl-C` | Cancel the running turn; end the session when idle |
 | `Ctrl-D` | End the session (when idle) |
-| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal |
+| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal. Works with a permission prompt or the picker open, and leaves it open |
 | `Ctrl-W` | Delete the word before the cursor |
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
@@ -329,12 +395,12 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 
 | Input | Effect |
 |---|---|
-| `/route` | List routable providers and switch this session's route mid-session. Only offered when the session can honour it — see below. |
+| `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
 | `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
 
-**The cost line always states whose spend it is.** When the session's traffic is attributable, the figure is the session's. When it is not — you supplied your own credential, which BitRouter never rewrites to tag — the line reads `all callers` before the number, because it is then the daemon's total for the window and not yours alone. If the agent reports no cost, the line reads `cost unreported`, never `$0.00`.
+**The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
 
-**`/route` is absent when it cannot work.** Changing a live route needs a daemon to install the override in and an attributable launch id to scope it to. A `--direct` session has neither, and a session using your own credential has no launch id; in both cases `chat` says so rather than offering a command that would fail. When the switch is applied, `chat` re-reads `providers/list` and reports the route the daemon is actually serving — a refused change reports the old route and the reason.
+**`/route` is absent when it cannot work.** The picker is offered only when the controller advertised route control at initialize — `_meta["bitrouter.dev/controller"].routeControl` with `version: "1"`, `scope: "session"`, and both `_bitrouter/route/list` and `_bitrouter/route/set` listed — which it does only under a trusted local daemon binding. A `--direct` session or an explicit `--base-url` advertises nothing, and `chat` says so rather than offering a command that would fail. When a route is chosen, the footer shows the route the daemon **confirmed** in the set response, not the one asked for; a refused route reports the old route and the reason.
 
 On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
 
@@ -385,7 +451,7 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 ### `bitrouter spawn`
 
 ```
-bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [routing/session flags]   # one prompt → NDJSON
+bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [routing/session flags]   # one prompt → NDJSON
 bitrouter spawn <agent> --serve [flags]                                      # ACP over stdio
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
@@ -396,9 +462,11 @@ Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a progra
 
 Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
 
+The permission flags and `--format` are `-p`'s only and are described under `bitrouter acp` above; `--serve` hands permissions to the manager, and passing them with it is an error.
+
 `--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 
-In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
+In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","session_id":"…","agent_session_id":…,"agent":"…","via":"http://127.0.0.1:4356","launch_id":…}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line. `session_id` is the harness's own session id, used by every ACP method and every later line. **`launch_id` is the spend key**: metering attributes ACP traffic by the *authenticated* controller instance, and `prompt` routes with a launch token rather than a controller credential, so no controller column is populated for its rows. There is no `record_id`: session identity is harness-native.
 
 ### `bitrouter policy`
 
@@ -423,7 +491,15 @@ policy:
   mode: frozen # or adaptive
 ```
 
-`frozen` is the safe default. Live routes use only the static lock while BitRouter continues to record observations and evaluator results; ledger rows cannot affect requests or replace the lock. Dry-run compilation and candidate export remain available. `adaptive` permits validated publication, but does not enable request-time learning.
+`policy init` creates the named policy in `adaptive` mode so an explicit
+`optimize run` can publish its controller decision. Live routes still use only
+the signed lock; Eval rows never change request routing on their own. Operators
+can set `mode: frozen` to prohibit low-level or direct publication while
+continuing to record observations and evaluator results. Invoking `optimize
+run` is explicit authorization to activate adaptive mode and autonomously
+publish its successor when the controller decides to do so. Dry-run compilation
+and candidate export remain available. The mode controls write authority, not
+request-time learning.
 
 `policy publish` promotes the exact compiled v3 candidate after validating its
 parent digest, certificates, and current config. A stale candidate or frozen
@@ -436,107 +512,70 @@ The lock contains deterministic routes, tiers, and learning thresholds, but no a
 ### `bitrouter optimize`
 
 ```text
-bitrouter optimize setup [--workflow-command CMD] [--workflow-arg ARG ...] \
-  [--workflow-input PATH ...] \
-  [--strong PROVIDER:MODEL] [--strong-effort LEVEL] \
-  [--economy PROVIDER:MODEL] [--economy-effort LEVEL] \
-  [--normalized-price PROVIDER:MODEL=INPUT,CACHE_READ,CACHE_WRITE,OUTPUT] \
-  [--preference PROFILE]
-bitrouter optimize resolve [--config bitrouter.optimize.yaml]
-bitrouter optimize run [--config bitrouter.optimize.yaml]
-bitrouter optimize review [--config bitrouter.optimize.yaml]
-bitrouter optimize publish [--run ID] [--enable-adaptive] [--config bitrouter.optimize.yaml]
-bitrouter optimize rollback DIGEST [--config bitrouter.optimize.yaml] [--socket PATH]
-bitrouter optimize status [--config bitrouter.optimize.yaml]
+bitrouter optimize run [--policy auto] [--candidate-tier TIER] \
+  [--exploration-ppm 100000] [--minimum-tasks 3] [--maximum-tasks 20] \
+  [--minimum-pass-rate-ppm 900000] \
+  [--evaluator-config-digest sha256:...] \
+  [--config bitrouter.yaml] [--socket PATH]
+bitrouter optimize status [--policy auto] [--config bitrouter.yaml]
 ```
 
-`optimize` is the version-controlled quality/cost loop for an arbitrary agent
-workflow. `setup` creates `bitrouter.optimize.yaml`,
-`bitrouter.optimize.lock.yaml`, and a success-contract starter without
-overwriting existing files. With omitted workflow flags, interactive setup
-discovers project-owned eval/benchmark package scripts and executable
-entrypoints, selects a unique candidate automatically, and prompts when more
-than one is plausible. It reuses an existing `bitrouter/auto` strong/economy ladder;
-otherwise a TTY asks for both routes. Non-interactive ambiguity fails before
-any file mutation and reports the exact flags to supply. The workflow is launched without shell parsing;
-user argv boundaries are preserved after any catalog-owned routing prefix for
-a recognized agent. Common OpenAI, Anthropic, Gemini, and BitRouter client
-variables are pointed at a fresh private daemon using the configured preset.
-Baseline and candidate run in separate detached Git worktrees. Repeat
-`--workflow-input` for ignored dependencies or fixtures such as `node_modules`
-or `.venv` that the command requires.
+Optimization is driven by history from normal use, not by a bundled workflow
+runner. Initialize a policy, run a coding agent or Terminal Bench normally,
+submit externally evaluated results, and advance the controller one step:
 
-`LEVEL` is one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
-`max`. A structured tier target owns its effort and overrides an effort sent by
-the caller; a legacy scalar target preserves caller effort. `policy init` and
-`optimize setup` validate structured targets against the exact provider/model
-route before writing files, and runtime dispatch retains only routes that
-positively declare that level. This makes a same-model ladder such as `high` →
-`low` a real routing experiment rather than a model alias. Because some
-providers invalidate prompt-cache prefixes when effort changes, optimization
-uses settled cache-aware cost and never assumes that a lower effort value is
-intrinsically cheaper.
+```bash
+bitrouter policy init auto --preset auto --economy provider:model
+# run the coding agent or Terminal Bench normally through bitrouter/auto
+bitrouter eval result submit result.json --config bitrouter.yaml
+bitrouter optimize run --policy auto --config bitrouter.yaml
+bitrouter optimize status --policy auto --config bitrouter.yaml
+```
 
-Every strong/economy model call goes through that private daemon. The tiers may
-use different native daemon providers—for example a Codex subscription strong
-route and BitRouter Cloud OAuth economy route. Known agent executables receive
-the shared harness catalog's routing adapter in addition to the common
-loopback environment, so Codex cannot silently retain its direct provider.
-Unsupported known harnesses that cannot be redirected fail closed.
+Repeat normal traced work, external Eval submission, and `optimize run` until
+that command reports the controller decision `converged`. Use `optimize status`
+to observe the signed policy state without changing files or the database: it
+reports `exploring` while an experiment is active and `idle` otherwise, but
+does not infer convergence from Eval history. Calling `optimize run` grants
+autonomous authority for exactly one deterministic controller step: it may
+publish `explore`, `promote`, or `retreat`, or leave the lock unchanged for
+`hold` or `converged`. There is no separate review or publish approval.
+Publication uses the current policy digest as a compare-and-swap parent and
+reloads a reachable daemon; a stale parent or failed reload leaves or restores
+the prior active state. When `--candidate-tier` is omitted, the controller uses
+the signed policy's `adequacy.explore_tier`; pass `--candidate-tier TIER` only
+to override it for that step.
 
-Cost is normalized showback. Provider catalog prices are cache-aware; repeat
-`--normalized-price` to pin an API-equivalent schedule for a subscription or
-another unpriced provider. The four rates are micro-USD per token (numerically
-the same as USD per million tokens). These overrides are committed in
-`bitrouter.optimize.yaml`; they do not claim that a subscription incurred that
-cash charge.
+The first run can cold-start signed exploration from champion-only history.
+That history ranks opportunities by request frequency and cost contribution,
+but cannot prove an unexecuted challenger is better and therefore cannot
+promote one directly. Later runs use complete `task` or `episode` cohorts for
+quality and cost. Request subjects help rank the next opportunity but never
+enter the gate. Promotion requires the configured quality/pass gate, no hard
+violation, and a lower mean complete-unit cost for the challenger. Complete
+cost prefers `trajectory.cost.usd_micros` and accepts evaluator-authored
+`cost.usd_micros` in micro-USD; per-request price does not gate promotion.
 
-By default BitRouter detects the selected local coding agent, pins the exact
-ACP adapter and configured judge model in the lock, and uses that agent's own
-subscription for generic agentic evaluation. `--evaluator-via-cloud` opts the
-judge into an independent Cloud model; workflow model calls still use the
-private daemon and whichever provider each policy tier selects. The maintained
-Codex adapter is
-`@agentclientprotocol/codex-acp` and is installed on demand by `npx` at its
-locked version.
+During exploration, router-authored decision evidence contains an optional
+signed `experiment` reference with the experiment id, `control` or
+`challenger` arm, `task` or `episode` assignment unit, assignment-id digest,
+and challenger propensity. Evaluators must copy that object verbatim and must
+never invent or edit it. Optimizer cohort membership comes from this router
+evidence, not the evaluator-owned `cohort` string.
 
-One `run` executes one baseline command and one one-route-key candidate. Those
-workflow identities are never retried; the judge has at most one schema-repair
-turn. If the command itself represents a
-multi-case eval suite, its aggregate output is the measurement unit. Non-zero exits are
-preserved as quality evidence; missing identity, policy, metering/price, or
-single-variable attribution fails the run as infrastructure ambiguity.
-Referenced argv files and the resolved executable are fingerprinted before and
-after both variants.
+Router-authored decisions may also contain `route_measurement`. This versioned
+object records every tier/model/effort target declared by the same immutable
+policy snapshot, the semantic action chosen before tool, progress, or
+continuation guards, and its logging probability in integer ppm. The ordinary
+`selected_*` fields remain the effective post-guard route. Deterministic routes
+use one million ppm; assigned experiments use the signed arm probabilities. If
+an experiment lacks a stable task or episode identity, the router records a
+deterministic champion action instead of inventing randomized evidence.
 
-The qualitative profiles are intentionally loose in this release:
-`quality-first`, `balanced`, and `savings-first` choose different eligible
-route keys, while every publishable candidate still requires one agentic pass
-and lower normalized showback cost. They are not percentage quality-loss
-budgets. Latency is reported as
-`observe_only` and is not a gate. `run` never publishes. `publish` revalidates
-the exact report, snapshot, candidate, parent policy, and lock lineage before
-using the atomic policy publication and daemon-reload path. Publication is
-idempotent: if the policy write succeeded before an interrupted lock update,
-rerunning the command completes that lock transition. The first publication
-from the default frozen mode asks for explicit confirmation on a TTY;
-headless/CI publication requires `--enable-adaptive`. Setup does not silently
-widen policy permissions. `optimize rollback`
-restores an archived policy digest and updates the optimization lock so the
-next cycle starts from the restored parent; it can also reconcile a matching
-rollback previously made through `bitrouter policy rollback`.
-
-`bitrouter init --optimize` folds the same setup into onboarding. Headless
-automation supplies `--optimize-workflow-command`, repeated
-`--optimize-workflow-arg`/`--optimize-workflow-input`, and
-`--optimize-success`; model, effort, and preference flags remain optional.
-Use `--optimize-strong-effort` with `--optimize-strong` and
-`--optimize-economy-effort` with `--optimize-economy` for compound targets. If
-strong and economy name the same model, both effort flags are required and
-must name distinct supported levels. Optimization setup is currently
-Unix-only.
-Setup also rejects an active progress guard before mutation because the exact
-two-tier experiment cannot preserve guard semantics yet.
+The generic Eval Exchange and low-level `policy compile`, `policy diff`,
+`policy publish`, `policy rollback`, and `policy verify` commands remain
+available for independent evaluation, migration, audit, and operator-managed
+policy workflows. They are not extra approval stages for `optimize run`.
 
 ### `bitrouter trajectory`
 
@@ -734,18 +773,38 @@ These commands export and validate the request-scoped evidence used by policy
 benchmarks:
 
 ```text
+bitrouter workflow-state classifier-bakeoff --fixtures <DIR> [--submission <JSON>] --output <JSON>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
-bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
+bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
 bitrouter workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
 bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
 
-`reconcile-metering` accepts either the API-key environment named by
-`--api-key-env` (default `BITROUTER_API_KEY`) or an owner-only BitRouter Cloud
-credential file. The latter resolves static keys and refreshable OAuth without
-putting a bearer in the environment. Price specs use
+`classifier-bakeoff` is a research-only, read-only route-context evaluation.
+With no `--submission`, it records the compiled deterministic scorecard as an
+uncalibrated baseline; its heuristic margin is never reported as probability.
+An external submission must contain exactly one canonically ordered prediction
+for every frozen fixture and bind the dataset, input projection, model artifact,
+features, training split, and (when applicable) calibration split. Task family,
+next-step role, progress, and shadow risk use separate heads. OOD and abstention
+are explicit, and the shadow risk head is evidence only: deterministic rules and
+signed policy remain authoritative.
+
+The report contains per-head exact counts and macro-F1, per-slice coverage and
+accepted error risk, fixed-point Brier/ECE for calibrated candidates, OOD
+confusion counts, resource measurements when supplied, and a versioned
+decision-weighted loss. The checked-in fixtures are an evaluation contract and
+must not be used as both training and evaluation data; the command rejects
+matching split commitments. Synthetic unit-test predictions are test vectors,
+not classifier research results or production promotion evidence.
+
+`reconcile-metering` reads the API-key environment named by `--api-key-env`
+(default `BITROUTER_API_KEY`) first; a non-empty value takes precedence over
+the optional owner-only BitRouter Cloud credential file. That file must contain
+a static API key: OAuth credentials are rejected and are never refreshed for
+settlement. Price specs use
 `provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
 Repeat the same provider/model pair when a gateway may have applied one of
 several frozen schedules. A computed receipt is accepted only when exactly one
@@ -770,6 +829,14 @@ broadcasts a task reward across the request set. Session/trial metadata and
 timestamps are benchmark diagnostics, not strict join keys. Reward-feedback
 admission also requires completed requests and authoritative settlement; it
 does not use diagnostic identity fields for learning.
+
+Bundles also write `routing-baselines.json` and embed the same report in
+`run-artifact.json`. For each compatible candidate-set digest, the report
+contains an always-tier control for every declared target and a deterministic,
+content-blind control with exactly the observed selected-tier counts. Only
+hashed decision identities are emitted. Legacy decisions without measurement
+are counted as exclusions. These controls measure routing allocation; they do
+not estimate the unexecuted models' quality or authorize a policy change.
 
 ---
 

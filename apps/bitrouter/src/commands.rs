@@ -99,13 +99,13 @@ providers:
 #     transport:
 #       type: stdio
 #       command: npx
-#       args: ["-y", "@zed-industries/claude-code-acp@latest"]
+#       args: ["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
 #   codex:
 #     name: codex
 #     transport:
 #       type: stdio
 #       command: npx
-#       args: ["-y", "@agentclientprotocol/codex-acp@latest"]
+#       args: ["-y", "@agentclientprotocol/codex-acp@1.7.0"]
 
 inherit_defaults: true
 "#;
@@ -448,15 +448,37 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
         if n_bytes == 0 {
             anyhow::bail!("stdin closed before a choice was made");
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(options[0]);
+        match classify_method_choice(&line, options) {
+            Some(method) => return Ok(method),
+            // Not a selection: say why, then ask again.
+            None => match line.trim().parse::<usize>() {
+                Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
+                Err(_) => eprintln!("  '{}' is not a number", line.trim()),
+            },
         }
-        match trimmed.parse::<usize>() {
-            Ok(n) if (1..=options.len()).contains(&n) => return Ok(options[n - 1]),
-            Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
-            Err(_) => eprintln!("  '{trimmed}' is not a number"),
-        }
+    }
+}
+
+/// Classify one typed line against the offered methods.
+///
+/// Pure, so the interesting half of the picker is testable without a terminal:
+/// `prompt_method_choice` owns stdin and the menu, this owns what the answer
+/// means. The same split `classify_choice` gives the ACP picker, and the one
+/// `Editor::apply` and `machine::step` are built on.
+///
+/// An empty line takes the `[1]` default and `1..=options.len()` selects.
+/// Anything else is `None` — not a selection, ask again. Out-of-range never
+/// wraps onto a method that was not offered, and this menu has no cancel entry,
+/// so `0` is out of range like any other unoffered index. Callers offer at
+/// least one method; an empty slice selects nothing.
+fn classify_method_choice(input: &str, options: &[AuthMethod]) -> Option<AuthMethod> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return options.first().copied();
+    }
+    match trimmed.parse::<usize>() {
+        Ok(n) if (1..=options.len()).contains(&n) => options.get(n - 1).copied(),
+        Ok(_) | Err(_) => None,
     }
 }
 
@@ -653,6 +675,22 @@ fn choose_auth_method(
 /// can't refresh-rotate each other out (RFC 6749 §6). `login_provider` stores
 /// this marker under the `provider_id` it was invoked with, so
 /// `bitrouter providers login claude-code` lands it under `claude-code`.
+///
+/// # Why this names a login command, when the ACP path may not
+///
+/// `docs/ACP_AUTH_SPEC.md` §6.1 forbids writing a harness's login command in
+/// BitRouter — the harness declares it, or it is not offered. That rule governs
+/// the **agent-authentication** axis, and the ACP paths obey it: they read
+/// `authMethods` and run what the harness declared.
+///
+/// This is the other axis. `claude-code` here is a *provider*, and the `claude`
+/// CLI is its vendor tool, exactly as the Codex, Grok, and Antigravity CLIs are
+/// their providers' (see `import_cli_for`). Routing this through an ACP harness
+/// to avoid naming the command would make provider login depend on an ACP
+/// adapter being installed — `npx`, a download, a controller — to acquire a
+/// credential that has nothing to do with ACP, and would re-conflate the two
+/// axes §6.4 exists to keep apart. So the command is named here deliberately.
+/// What can be improved is the *seam*, which is what the framing below does.
 async fn run_claude_code_session()
 -> Result<bitrouter_providers::oauth::credential_store::Credential> {
     use std::io::IsTerminal;
@@ -696,7 +734,20 @@ async fn run_claude_code_session()
         .await
         .context("locating the claude CLI to sign you in")?;
 
-    eprintln!("  You're not signed in to Claude Code yet — launching `claude auth login`.");
+    // The handoff is stated before it happens, and marked at both ends.
+    //
+    // What follows is a *different program's* interactive flow, printing into
+    // the same terminal with nothing to distinguish it from bitrouter's own
+    // output. Its prompt reads "Paste code here if prompted", which is the
+    // `claude` CLI hedging across its flows — in the browser-code flow the
+    // paste is required, and a reader who takes "if" at face value closes the
+    // window and gets a bare 403. Naming the boundary is what this can fix; the
+    // child's own wording is not ours to change.
+    eprintln!("  You're not signed in to Claude Code yet.");
+    eprintln!("  Handing over to `claude auth login` — it is a separate program.");
+    eprintln!("  It opens a browser, and may then ask you to paste a code back here.");
+    eprintln!("  Complete both steps; this command resumes when it exits.");
+    eprintln!("  ─────────────────────────────────────────────────────────────");
     let status = tokio::process::Command::new(&claude)
         .arg("auth")
         .arg("login")
@@ -704,9 +755,15 @@ async fn run_claude_code_session()
         .status()
         .await
         .context("running `claude auth login`")?;
+    eprintln!("  ─────────────────────────────────────────────────────────────");
     if !status.success() {
+        // Which step failed is the child's to know, so this says what is true
+        // — it ended without signing in — and names the command that reports
+        // the state, rather than guessing at a cause.
         anyhow::bail!(
-            "`claude auth login` didn't complete — sign in, then re-run \
+            "`claude auth login` exited without completing the sign-in ({status}). \
+             If a browser opened, the flow may still need the code from it pasted \
+             into that prompt. Check with `claude auth status`, then re-run \
              `bitrouter providers login claude-code`."
         );
     }
@@ -1239,6 +1296,63 @@ mod tests {
         assert!(methods.contains(&AuthMethod::ImportFromCli));
         assert!(methods.contains(&AuthMethod::PkceSubscription));
         assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
+    }
+
+    /// The picker's two offered methods, in the order it numbers them.
+    fn two_methods() -> Vec<AuthMethod> {
+        vec![AuthMethod::ImportFromCli, AuthMethod::PkceSubscription]
+    }
+
+    /// A bare enter takes the `[1]` the prompt shows as the default — the offer
+    /// on screen and the answer must not disagree.
+    #[test]
+    fn a_bare_enter_takes_the_advertised_default() {
+        assert_eq!(
+            classify_method_choice("\n", &two_methods()),
+            Some(AuthMethod::ImportFromCli),
+            "the default is the '[1]' on screen"
+        );
+    }
+
+    /// The numbering is the menu's, one-based.
+    #[test]
+    fn a_digit_selects_that_numbered_method() {
+        assert_eq!(
+            classify_method_choice("2", &two_methods()),
+            Some(AuthMethod::PkceSubscription),
+            "numbering starts at one"
+        );
+    }
+
+    /// Out of range is not a selection. Nothing wraps onto an index the
+    /// provider never offered — the alternative is running a login flow nobody
+    /// was shown.
+    #[test]
+    fn an_unoffered_index_is_not_a_selection() {
+        assert!(
+            classify_method_choice("9", &two_methods()).is_none(),
+            "'9' against two methods must re-prompt, not wrap"
+        );
+    }
+
+    /// Unlike the ACP auth picker, this menu prints no `0) cancel` entry, so
+    /// zero is an unoffered index like any other and re-prompts. Aborting here
+    /// is Ctrl-C, not a hidden entry.
+    #[test]
+    fn zero_is_out_of_range_because_this_menu_offers_no_cancel() {
+        assert!(
+            classify_method_choice("0", &two_methods()).is_none(),
+            "'0' selects nothing on a menu that starts at one"
+        );
+    }
+
+    /// Anything that is not a number re-prompts rather than resolving.
+    #[test]
+    fn a_non_number_is_not_a_selection() {
+        assert!(
+            classify_method_choice("x", &two_methods()).is_none(),
+            "'x' must re-prompt"
+        );
     }
 
     #[test]

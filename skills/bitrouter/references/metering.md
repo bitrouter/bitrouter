@@ -73,10 +73,9 @@ prompt/response content, or tool commands.
 
 ## Reconcile request-scoped receipts
 
-Hosted BitRouter Cloud rows can be reconciled without exporting an OAuth bearer
-into the environment. Point the command at the owner-only credential file used
-by `bitrouter cloud login`; a usable bearer is read directly and a near-expiry
-OAuth token is refreshed before receipt polling:
+Hosted BitRouter Cloud rows can be reconciled without exporting a static API
+key into the environment. Point the command at the owner-only credential file
+used by `bitrouter cloud login`, provided that file contains a static API key:
 
 ```bash
 bitrouter workflow-state reconcile-metering \
@@ -87,8 +86,10 @@ bitrouter workflow-state reconcile-metering \
 ```
 
 For API-key environments, omit `--credentials-file` and provide the variable
-named by `--api-key-env` (default `BITROUTER_API_KEY`). Never place either
-credential in command arguments, logs, or benchmark artifacts.
+named by `--api-key-env` (default `BITROUTER_API_KEY`). A non-empty environment
+value takes precedence over the file. OAuth credentials are rejected and never
+refreshed for settlement. Never place either credential in command arguments,
+logs, or benchmark artifacts.
 
 ## Export an auditable usage snapshot
 
@@ -143,6 +144,19 @@ The benchmark bundle gate validates archival completeness. Reward-feedback
 admission additionally requires the exact request-ID joins, a completed
 request, and authoritative computed settlement; diagnostic identity fields do
 not participate in learning.
+
+The bundle writes `routing-baselines.json` in addition to the run artifact,
+trace, usage, outcome, decision, and shadow-policy files. Eligible policy
+decisions carry a versioned `route_measurement`: the complete semantic
+tier/model/effort candidate set, pre-guard logging action, and integer-ppm
+logging probabilities from one immutable policy snapshot. Effective
+`selected_*` fields can differ after safety or progress guards.
+
+Routing baselines are deterministic measurement controls. They are isolated by
+candidate-set digest, expose no raw request IDs, and include both every
+always-tier allocation and an exact share-matched content-blind allocation.
+They make no counterfactual quality claim; decisions without measurement are
+reported as excluded rather than silently synthesized.
 
 The in-memory analytical `build*` APIs may omit usage and decisions for
 extractor development. The `workflow-state bundle` command is benchmark-grade

@@ -2195,6 +2195,30 @@
           },
           "provider": "qianfan",
           "provider_model_id": "deepseek-v4-flash-0731"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.44
+            },
+            "output_tokens": {
+              "text": 1.32
+            }
+          },
+          "provider": "tencent",
+          "provider_model_id": "deepseek-v4-flash-0731",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-07-31"
@@ -2579,6 +2603,30 @@
           },
           "provider": "openrouter",
           "provider_model_id": "deepseek/deepseek-v4-pro-0813"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.044,
+              "no_cache": 1.32
+            },
+            "output_tokens": {
+              "text": 3.96
+            }
+          },
+          "provider": "tencent",
+          "provider_model_id": "deepseek-v4-pro-0813",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-08-13"
@@ -6795,6 +6843,271 @@
       "release_date": "2026-06-01"
     },
     {
+      "description": "Open-weight text MoE with 2.4T total parameters and 95B active parameters for coding, research, and agentic workflows.",
+      "family": "qwen3.8",
+      "id": "qwen/qwen3.8-2.4t-a95b",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Qwen: Qwen3.8 2.4T-A95B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.8-2.4t-a95b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "qwen3.8-2.4t-a95b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.8-2.4t-a95b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.8-2.4t-a95b",
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        }
+      ],
+      "release_date": "2026-08-12"
+    },
+    {
+      "description": "Open-weight dense native vision-language model for coding, professional work, and long-running agent tasks.",
+      "family": "qwen3.8",
+      "id": "qwen/qwen3.8-27b",
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Qwen: Qwen3.8 27B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.8-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.042,
+              "cache_write": 0.521,
+              "no_cache": 0.417
+            },
+            "output_tokens": {
+              "text": 1.667
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "qwen3.8-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.8-27b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.085,
+              "cache_write": 0.53125,
+              "no_cache": 0.425
+            },
+            "output_tokens": {
+              "text": 2.55
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.8-27b",
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        }
+      ],
+      "release_date": "2026-08-14"
+    },
+    {
       "description": "2.4T-parameter multimodal MoE flagship for coding, professional work, and long-horizon agentic workflows.",
       "family": "qwen3.8",
       "id": "qwen/qwen3.8-max",
@@ -7336,6 +7649,26 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 6.6
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "xai.grok-4.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -7352,6 +7685,11 @@
         {
           "api_protocol": "openai",
           "provider": "github-copilot",
+          "provider_model_id": "grok-4.6"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
           "provider_model_id": "grok-4.6"
         },
         {
@@ -8930,6 +9268,228 @@
         }
       ],
       "release_date": "2026-06-13"
+    },
+    {
+      "description": "Z.ai flagship reasoning model for complex software engineering and long-horizon agent tasks.",
+      "family": "glm",
+      "id": "z-ai/glm-5.3",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Zhipu: GLM-5.3",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-5.3"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "glm-5.3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-5.3",
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "zai",
+          "provider_model_id": "glm-5.3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "provider": "zai_coding_plan",
+          "provider_model_id": "glm-5.3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-08-14"
+    },
+    {
+      "description": "Open-weight native multimodal MoE for efficient coding, professional work, and long-horizon agent tasks.",
+      "family": "glm",
+      "id": "z-ai/glm-5.3-flash",
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Zhipu: GLM-5.3 Flash",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.25
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-5.3-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "glm-5.3-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.25
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-5.3-flash",
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.25
+            }
+          },
+          "provider": "zai",
+          "provider_model_id": "glm-5.3-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "provider": "zai_coding_plan",
+          "provider_model_id": "glm-5.3-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-08-26"
     }
   ]
 }

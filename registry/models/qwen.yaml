@@ -74,6 +74,34 @@
   release_date: 2026-06-10
   open_weights: false
   family: qwen3.7
+# Official model: https://www.qwencloud.com/models/qwen3.8-2.4t-a95b
+- id: qwen/qwen3.8-2.4t-a95b
+  name: 'Qwen: Qwen3.8 2.4T-A95B'
+  description: Open-weight text MoE with 2.4T total parameters and 95B active parameters for coding, research, and agentic workflows.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-08-12
+  open_weights: true
+  family: qwen3.8
+# Official model: https://www.qwencloud.com/models/qwen3.8-27b
+- id: qwen/qwen3.8-27b
+  name: 'Qwen: Qwen3.8 27B'
+  description: Open-weight dense native vision-language model for coding, professional work, and long-running agent tasks.
+  input_modalities:
+  - text
+  - image
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-08-14
+  open_weights: true
+  family: qwen3.8
 # Official model: https://www.qwencloud.com/models/qwen3.8-max
 - id: qwen/qwen3.8-max
   name: 'Qwen: Qwen3.8 Max'
