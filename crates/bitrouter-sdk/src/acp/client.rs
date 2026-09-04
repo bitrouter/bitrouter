@@ -436,7 +436,7 @@ impl RouteControlCapability {
 ///
 /// Classified by **error code** (`auth_required`, -32000), never by message
 /// text, so every consumer agrees on what the state looks like — the same rule
-/// [`RouteError::from_rpc`] follows.
+/// [`RouteError`] classification follows.
 ///
 /// A `false` here is not a claim that the agent *is* authenticated. ACP does
 /// not require `session/new` to check authorization at all: some agents verify
