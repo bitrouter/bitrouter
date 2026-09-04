@@ -120,7 +120,15 @@ __otel-core = [
 # no production callers, here or anywhere. This crate's conformance tests are
 # the beneficiary, so the feature is enabled here and nowhere else. It carries
 # no dependency of its own.
-bitrouter-sdk = { workspace = true, features = ["testing"] }
+#
+# Path-only on purpose — NOT `workspace = true`, which would inherit a
+# `version` alongside the path. `cargo package` resolves a versioned
+# dev-dependency against the *registry*, and the published `bitrouter-sdk`
+# 1.0.0-alpha.27 predates the `testing` feature, so inheriting the version made
+# `cargo publish` fail on a feature that exists only in this tree. Dropping the
+# version makes cargo strip this entry from the packaged manifest, which is
+# correct: it is a test-only edge that no consumer of the published crate has.
+bitrouter-sdk = { path = "../bitrouter-sdk", features = ["testing"] }
 tokio = { workspace = true, features = [
     "sync",
     "rt",
