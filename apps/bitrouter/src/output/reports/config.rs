@@ -14,7 +14,7 @@ pub struct UnsetVar {
 
 /// Result of `bitrouter config validate`. `valid: false` carries `errors` and
 /// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
-/// unset-var `warnings`, and any `unknown_plugins`.
+/// unset-var `warnings`, and any `ignored_config`.
 ///
 /// `ignored_config` is a separate field rather than another `warnings` entry
 /// because the two are different shapes and a consumer already parses

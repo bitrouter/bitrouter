@@ -55,11 +55,13 @@ read is **silently ignored** — a typo like `plugins.bitrouter-guardrail`
 (singular) drops the operator's declared block / redact patterns and the
 process starts anyway. Two places report it:
 
-- `bitrouter config validate` lists them under `unknown_plugins`. It does not
+- `bitrouter config validate` lists them under `ignored_config`. It does not
   fail validation — an ignored block is a misconfiguration, not a malformed
   config, and this command is CI-gating.
-- The daemon logs one WARN per unread id on every start. This is the path that
-  matters: validation is opt-in, the daemon always runs.
+- Every runtime surface logs one WARN per unread id on start: the daemon, and
+  `bitrouter acp serve|prompt` and `bitrouter chat`, none of which build the
+  daemon's `App` but all of which read the same config. This is the path that
+  matters: validation is opt-in, the runtime always runs.
 
 The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
 `bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a

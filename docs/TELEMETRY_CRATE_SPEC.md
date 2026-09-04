@@ -459,7 +459,7 @@ sequencing did not prevent.
   been removed` and one on the config key. D5's freeze applies to the first;
   the second names the key and must track it, because freezing an instruction
   that has become wrong is misdirection, not compatibility.
-- **`config validate` reports, never fails.** `unknown_plugins` is its own
+- **`config validate` reports, never fails.** `ignored_config` is its own
   field rather than another `warnings` entry (different shape, and a consumer
   already parses `warnings[].unset_env`), and `valid` is untouched: an ignored
   block is a misconfiguration, not a malformed config, and this command gates
@@ -793,10 +793,17 @@ running something.
   builds an `App`, so the one scenario D6 exists for — a stale key, no
   exporter, no error — stayed completely silent on a surface the skill
   documents as honouring the same telemetry config. Now emitted at the top of
-  `attach_observability`, where the subscriber is already installed. **Not
-  verified live**: the ACP path fails fast on routing preflight before a
-  session exists, so exercising it needs a working harness and credentials.
-  Verified by placement and by the shared function's tests only.
+  `acp_cli::build_observability`, where the subscriber is already installed.
+
+  **The first fix missed half the surface.** `build_observability` is reached
+  only by `chat`, `chat_piped` and `prompt`; `acp_cli::serve` — behind both
+  `bitrouter acp serve` and `bitrouter spawn --serve` — never calls it, so the
+  path the doc comment named by name stayed exactly as silent as before. It now
+  emits the same set itself, first thing, on the config as read. Pinned by
+  `tests/acp.rs::serve_warns_about_ignored_plugin_blocks`, which spawns
+  `acp serve --direct` with an unknown agent id: routing short-circuits and the
+  process exits right after the warnings, so no harness or credentials are
+  needed to observe them.
 
 - **The guard was blind one level down, on the natural migration path.** The
   id-level warning tells an operator to rename the block and nothing else. Doing
