@@ -42,7 +42,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use opentelemetry::context::FutureExt as _;
 use opentelemetry::propagation::Extractor;
-use opentelemetry::trace::{SpanKind, TraceContextExt as _, Tracer as _};
+use opentelemetry::trace::{SpanKind, Status, TraceContextExt as _, Tracer as _};
 use opentelemetry::{Context, KeyValue, global};
 
 use crate::otel::exporter::OtelExporter;
@@ -151,10 +151,29 @@ async fn server_span(
     // has generated anything. Ending here would make the SERVER span's
     // duration time-to-headers and leave its own `chat` child outliving it.
     // So the span rides the body and ends when the body does.
+    let status = response.status();
     cx.span().set_attribute(KeyValue::new(
         "http.response.status_code",
-        i64::from(response.status().as_u16()),
+        i64::from(status.as_u16()),
     ));
+    // HTTP semconv: a SERVER span MUST be `Error` for a 5xx and MUST be left
+    // `Unset` for a 4xx — a client sending a bad request is not this server
+    // failing, and marking it so would drown the error rate a backend computes
+    // from span status in ordinary 404s. Without this every ingress span
+    // exported as `Unset`, so a 500 was indistinguishable from a 200 to any
+    // consumer that filters on status rather than re-deriving it from the
+    // attribute.
+    if status.is_server_error() {
+        // `error.type` is the status code as a string: the semconv's fallback
+        // when no more specific classification is available, which is the case
+        // here — this layer sees a response, not the failure that produced it.
+        cx.span()
+            .set_attribute(KeyValue::new("error.type", status.as_u16().to_string()));
+        // Description left empty deliberately. The semconv says it SHOULD NOT
+        // repeat what `error.type` and `http.response.status_code` already
+        // carry.
+        cx.span().set_status(Status::error(""));
+    }
     let (parts, body) = response.into_parts();
     Response::from_parts(
         parts,
@@ -290,21 +309,26 @@ mod tests {
                 ))
             }
         };
-        let router = Router::new().route(
-            "/probe",
-            get(move || {
-                let seen = Arc::clone(&seen);
-                async move {
-                    tokio::task::yield_now().await;
-                    tokio::task::yield_now().await;
-                    let cx = Context::current();
-                    if let Ok(mut slot) = seen.lock() {
-                        *slot = Some(cx.span().span_context().clone());
+        let router = Router::new()
+            .route(
+                "/boom",
+                get(|| async { http::StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                "/probe",
+                get(move || {
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        tokio::task::yield_now().await;
+                        tokio::task::yield_now().await;
+                        let cx = Context::current();
+                        if let Ok(mut slot) = seen.lock() {
+                            *slot = Some(cx.span().span_context().clone());
+                        }
+                        "ok"
                     }
-                    "ok"
-                }
-            }),
-        );
+                }),
+            );
         wrapper(router)
     }
 
@@ -470,6 +494,88 @@ mod tests {
                 .iter()
                 .any(|span| span.span_kind == SpanKind::Server),
             "releasing the body ends the ingress span"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_error_marks_the_ingress_span_as_an_error() {
+        // Per the HTTP semconv a SERVER span whose response is 5xx carries
+        // `Status::Error` and an `error.type`. Before this the span recorded
+        // only `http.response.status_code`, so every ingress span exported as
+        // `Unset` and a backend's error rate — which reads span status — saw
+        // no failures at all.
+        let (tracer, provider, captured) = capturing_tracer();
+        let router = probe_router(tracer, Arc::new(Mutex::new(None)));
+
+        let response = router
+            .oneshot(
+                http::Request::builder()
+                    .uri("/boom")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        drop(response);
+        assert!(provider.force_flush().is_ok());
+
+        let spans = captured.lock().expect("captured").clone();
+        let server = spans
+            .iter()
+            .find(|span| span.span_kind == SpanKind::Server)
+            .expect("SERVER span exported");
+        assert!(
+            matches!(server.status, Status::Error { .. }),
+            "a 5xx must set the span status to error; got {:?}",
+            server.status
+        );
+        let error_type = server
+            .attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == "error.type")
+            .map(|kv| kv.value.clone())
+            .expect("`error.type` recorded on a 5xx");
+        assert_eq!(error_type, opentelemetry::Value::String("500".into()));
+    }
+
+    #[tokio::test]
+    async fn a_client_error_leaves_the_ingress_span_unset() {
+        // The other half of the semconv rule, and the one that is easy to get
+        // wrong in the direction that hurts: marking 4xx as an error would bury
+        // real failures under every 404 a scanner produces.
+        let (tracer, provider, captured) = capturing_tracer();
+        let router = probe_router(tracer, Arc::new(Mutex::new(None)));
+
+        let response = router
+            .oneshot(
+                http::Request::builder()
+                    .uri("/missing")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        drop(response);
+        assert!(provider.force_flush().is_ok());
+
+        let spans = captured.lock().expect("captured").clone();
+        let server = spans
+            .iter()
+            .find(|span| span.span_kind == SpanKind::Server)
+            .expect("SERVER span exported");
+        assert!(
+            matches!(server.status, Status::Unset),
+            "a 4xx must leave the span status unset; got {:?}",
+            server.status
+        );
+        assert!(
+            !server
+                .attributes
+                .iter()
+                .any(|kv| kv.key.as_str() == "error.type"),
+            "a 4xx must not carry `error.type`"
         );
     }
 

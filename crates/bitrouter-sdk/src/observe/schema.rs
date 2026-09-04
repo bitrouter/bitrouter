@@ -320,6 +320,12 @@ const SERVER_SPAN: SpanDef = SpanDef {
                    generation and a mid-stream disconnect still exports the status the head \
                    carried.",
         },
+        AttrDef {
+            key: "error.type",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "The status code as a string when the response was a 5xx, which is also when                    the span's own status is set to error. A 4xx leaves both unset: a malformed                    request is not a server failure.",
+        },
     ],
     events: &[],
 };
