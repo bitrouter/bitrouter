@@ -19,9 +19,9 @@ use rmcp::service::RequestContext;
 use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
+use crate::actions::route::{RouteInput, RouteQuery, RouteReport};
 use crate::actions::status::{StatusQuery, StatusReport};
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
-use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
 use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
 use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
 use crate::error::ToolError;
@@ -111,7 +111,7 @@ struct Caps {
     /// metering database (both injected app-side), a metered account's
     /// remaining credit off the cloud backend itself.
     status_query: Option<Arc<dyn StatusQuery>>,
-    routing: Option<Arc<dyn RoutingQuery>>,
+    routing: Option<Arc<dyn RouteQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
     /// The SEP-2640 skills surface (`skills/list` / `skills/get` plus
     /// `resources/*` over skill files). Contributes no tools — it is served as
@@ -160,8 +160,9 @@ const CAPABILITIES: &[CapSpec] = &[
         wired: |caps| caps.routing.is_some(),
         router: BitrouterMcp::routing_router,
         instructions: |_| {
-            "`route_preview` shows how a model/prompt would route (provider chain, \
-             policy decision, cost estimate) without sending anything."
+            "`route_preview` shows how a model/prompt would route — the effective model \
+             the policy table selects, the provider fallback chain, and the first hop's \
+             per-token rates — without sending anything."
                 .to_string()
         },
     },
@@ -300,8 +301,11 @@ impl BitrouterMcp {
 #[tool_router(router = routing_router)]
 impl BitrouterMcp {
     #[tool(
-        description = "Preview how BitRouter would route a model/prompt: resolved provider(s), \
-                       policy decision, and estimated cost. Read-only — nothing is sent upstream.",
+        description = "Preview how BitRouter would route a model/prompt: the effective model the \
+                       policy table selects (which can differ from the one requested), the \
+                       resolved provider fallback chain, the policy decision behind it, and the \
+                       first hop's per-token rates. Read-only — nothing is sent upstream, and \
+                       no credential is surfaced.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -311,9 +315,17 @@ impl BitrouterMcp {
     )]
     async fn route_preview(
         &self,
-        Parameters(args): Parameters<RoutePreviewArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.routing()?.preview(args).await))
+        Parameters(input): Parameters<RouteInput>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<RouteReport>, McpError> {
+        // `Json<RouteReport>` rather than a hand-built `CallToolResult`: that
+        // is what makes rmcp derive the tool's `output_schema` from the shared
+        // report type, which is the agreement `actions::ACTIONS` asserts
+        // against `bitrouter route --json`.
+        self.routing()?
+            .route(input)
+            .await
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -393,7 +405,7 @@ impl BitrouterMcp {
 
     port_accessor!(backend, dyn Backend, "completion backend");
     port_accessor!(status_query, dyn StatusQuery, "status capability");
-    port_accessor!(routing, dyn RoutingQuery, "routing capability");
+    port_accessor!(routing, dyn RouteQuery, "routing capability");
     port_accessor!(skills, dyn SkillsQuery, "skills capability");
     port_accessor!(skill_catalog, dyn SkillCatalog, "skills catalog");
 
@@ -451,7 +463,7 @@ impl Builder {
     }
 
     /// Wire the routing-introspection capability (the `route_preview` tool).
-    pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
+    pub fn routing(mut self, routing: Arc<dyn RouteQuery>) -> Self {
         self.caps.routing = Some(routing);
         self
     }
@@ -1104,9 +1116,17 @@ mod tests {
 
     struct StubRouting;
     #[async_trait::async_trait]
-    impl RoutingQuery for StubRouting {
-        async fn preview(&self, _: RoutePreviewArgs) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"provider_chain": []}))
+    impl RouteQuery for StubRouting {
+        async fn route(&self, input: RouteInput) -> Result<RouteReport, ToolError> {
+            Ok(RouteReport {
+                requested_model: input.model.clone(),
+                effective_model: input.model,
+                effective_effort: None,
+                resolved_via: crate::actions::route::ResolvedVia::Config,
+                policy_decision: None,
+                provider_chain: Vec::new(),
+                estimated_cost: None,
+            })
         }
     }
 

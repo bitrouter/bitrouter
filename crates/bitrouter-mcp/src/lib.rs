@@ -84,10 +84,10 @@ pub struct ServeOptions {
     /// the HTTP transport is multi-tenant and per-caller spend isn't
     /// what the local metering database holds).
     pub cost_footer: Option<std::sync::Arc<dyn server::CostFooter>>,
-    /// Optional routing-introspection port backing `route_preview` (stdio
-    /// transport only — it reads the serving machine's own routing table,
-    /// which is not what a multi-tenant HTTP caller is asking about).
-    pub routing: Option<std::sync::Arc<dyn capabilities::routing::RoutingQuery>>,
+    /// Optional `route` port backing `route_preview` (stdio transport only —
+    /// it reads the serving machine's own routing table, which is not what a
+    /// multi-tenant HTTP caller is asking about).
+    pub routing: Option<std::sync::Arc<dyn actions::route::RouteQuery>>,
     /// Optional `status` port. When unset, the backend's own
     /// [`status_port`](backend::Backend::status_port) is used — which is how
     /// the cloud profile reports its remaining credit. The local profile has no

@@ -8,4 +8,5 @@
 //! Only actions with more than one surface belong here; every other CLI command
 //! keeps its own report under [`crate::output::reports`].
 
+pub mod route;
 pub mod status;
