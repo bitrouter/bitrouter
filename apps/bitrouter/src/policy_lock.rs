@@ -2964,7 +2964,7 @@ impl ModelSelector for PolicyRuntime {
             let baseline_tier = router.eval_baseline_tier(&decision);
             let baseline_effort = baseline_tier
                 .as_deref()
-                .and_then(|tier| router.effort_of_tier(tier))
+                .and_then(|tier| decision.effort_of_tier(tier))
                 .or(input_effort);
             let owner = ctx.caller().user_id();
             let trajectory_request_id = trajectory
@@ -2982,16 +2982,17 @@ impl ModelSelector for PolicyRuntime {
                 request_key,
                 baseline_tier,
                 baseline_effort,
-                tier_efforts: router.effective_tier_efforts(input_effort),
+                tier_efforts: decision.effective_tier_efforts(input_effort),
                 preset: Some(policy_name.to_owned()),
                 projection,
                 candidate_tier: decision.selected_tier.clone(),
                 policy_digest: policy_digest.to_owned(),
                 experiment: decision.experiment.clone(),
+                route_measurement: decision.route_measurement.clone(),
                 policy: guard.clone(),
                 carries_tools: !ctx.prompt().tools.is_empty(),
-                tool_use_tier: router.tool_use_tier(),
-                tool_safe_tiers: router.tool_safe_tiers(),
+                tool_use_tier: decision.tool_use_tier(),
+                tool_safe_tiers: decision.tool_safe_tiers(),
             };
             let (correlated, guarded) = trajectory
                 .begin_guarded_request(

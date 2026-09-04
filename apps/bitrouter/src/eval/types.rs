@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 
 pub const EVAL_SCHEMA_VERSION: u32 = 1;
+pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +50,69 @@ pub struct EvalExperimentRef {
     pub challenger_propensity_ppm: u32,
 }
 
+/// One semantic policy action declared by the immutable routing snapshot.
+///
+/// Probabilities describe the logging policy before deterministic tool,
+/// progress, or continuation guards. The effective action remains
+/// [`EvalDecisionRef::selected_tier`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteActionCandidate {
+    pub tier: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
+    pub logging_probability_ppm: u32,
+}
+
+/// Replayable evidence for the semantic action distribution seen by one
+/// policy decision. This is diagnostic evidence and never controls routing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteDecisionMeasurement {
+    pub schema_version: u32,
+    pub logging_action_tier: String,
+    pub logging_action_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logging_action_effort: Option<ReasoningEffort>,
+    pub logging_action_probability_ppm: u32,
+    pub candidate_set_digest: String,
+    pub candidates: Vec<RouteActionCandidate>,
+}
+
+impl RouteDecisionMeasurement {
+    pub fn new(
+        logging_action_tier: impl Into<String>,
+        logging_action_model: impl Into<String>,
+        logging_action_effort: Option<ReasoningEffort>,
+        mut candidates: Vec<RouteActionCandidate>,
+    ) -> Result<Self> {
+        candidates.sort_by(|left, right| candidate_key(left).cmp(&candidate_key(right)));
+        let logging_action_tier = logging_action_tier.into();
+        let logging_action_model = logging_action_model.into();
+        let logging_action_probability_ppm = candidates
+            .iter()
+            .find(|candidate| {
+                candidate.tier == logging_action_tier
+                    && candidate.model == logging_action_model
+                    && candidate.effort == logging_action_effort
+            })
+            .map_or(0, |candidate| candidate.logging_probability_ppm);
+        let candidate_set_digest = route_candidate_set_digest(&candidates)?;
+        let measurement = Self {
+            schema_version: ROUTE_MEASUREMENT_SCHEMA_VERSION,
+            logging_action_tier,
+            logging_action_model,
+            logging_action_effort,
+            logging_action_probability_ppm,
+            candidate_set_digest,
+            candidates,
+        };
+        validate_route_measurement(&measurement)?;
+        Ok(measurement)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalDecisionRef {
@@ -65,6 +129,8 @@ pub struct EvalDecisionRef {
     pub policy_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<EvalExperimentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_measurement: Option<RouteDecisionMeasurement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +321,9 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
                 )
             }
         }
+        if let Some(measurement) = &decision.route_measurement {
+            validate_route_measurement_for_experiment(measurement, decision.experiment.as_ref())?;
+        }
     }
     for dimension in &subject.requested_dimensions {
         validate_metric_id(dimension)?;
@@ -285,6 +354,125 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
     let actual = evidence_digest(&subject.evidence)?;
     if actual != subject.evidence_digest {
         anyhow::bail!("subject evidence_digest does not match evidence items")
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_route_measurement(measurement: &RouteDecisionMeasurement) -> Result<()> {
+    if measurement.schema_version != ROUTE_MEASUREMENT_SCHEMA_VERSION {
+        anyhow::bail!("unsupported route measurement schema version")
+    }
+    if measurement.candidates.is_empty() || measurement.candidates.len() > 64 {
+        anyhow::bail!("route measurement must contain between 1 and 64 candidates")
+    }
+    validate_identifier(
+        &measurement.logging_action_tier,
+        "route_measurement.logging_action_tier",
+    )?;
+    validate_model_id(
+        &measurement.logging_action_model,
+        "route_measurement.logging_action_model",
+    )?;
+    validate_digest(
+        &measurement.candidate_set_digest,
+        "route_measurement.candidate_set_digest",
+    )?;
+
+    let mut previous = None;
+    let mut probability_sum = 0_u64;
+    let mut action_matches = 0_u8;
+    for candidate in &measurement.candidates {
+        validate_identifier(&candidate.tier, "route_measurement.candidate.tier")?;
+        validate_model_id(&candidate.model, "route_measurement.candidate.model")?;
+        if candidate.logging_probability_ppm > 1_000_000 {
+            anyhow::bail!("route candidate logging probability exceeds one million ppm")
+        }
+        probability_sum =
+            probability_sum.saturating_add(u64::from(candidate.logging_probability_ppm));
+        let key = candidate_key(candidate);
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            anyhow::bail!("route measurement candidates are not unique canonical order")
+        }
+        previous = Some(key);
+        if candidate.tier == measurement.logging_action_tier
+            && candidate.model == measurement.logging_action_model
+            && candidate.effort == measurement.logging_action_effort
+        {
+            action_matches = action_matches.saturating_add(1);
+            if candidate.logging_probability_ppm != measurement.logging_action_probability_ppm {
+                anyhow::bail!("route measurement action probability does not match candidate")
+            }
+        }
+    }
+    if probability_sum != 1_000_000 {
+        anyhow::bail!("route measurement probabilities must sum to one million ppm")
+    }
+    if action_matches != 1 || measurement.logging_action_probability_ppm == 0 {
+        anyhow::bail!("route measurement action must match one positive-probability candidate")
+    }
+    if route_candidate_set_digest(&measurement.candidates)? != measurement.candidate_set_digest {
+        anyhow::bail!("route measurement candidate set digest does not match candidates")
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_route_measurement_for_experiment(
+    measurement: &RouteDecisionMeasurement,
+    experiment: Option<&EvalExperimentRef>,
+) -> Result<()> {
+    validate_route_measurement(measurement)?;
+    let mut actual_positive = measurement
+        .candidates
+        .iter()
+        .map(|candidate| candidate.logging_probability_ppm)
+        .filter(|probability| *probability > 0)
+        .collect::<Vec<_>>();
+    actual_positive.sort_unstable();
+    let Some(experiment) = experiment else {
+        if actual_positive != [1_000_000] {
+            anyhow::bail!("route measurement without an experiment must be deterministic")
+        }
+        return Ok(());
+    };
+
+    let challenger = experiment.challenger_propensity_ppm;
+    let champion = 1_000_000_u32
+        .checked_sub(challenger)
+        .ok_or_else(|| anyhow::anyhow!("experiment challenger propensity exceeds one million"))?;
+    let expected_action = match experiment.arm {
+        ExperimentArm::Control => champion,
+        ExperimentArm::Challenger => challenger,
+    };
+    if measurement.logging_action_probability_ppm != expected_action {
+        anyhow::bail!("route measurement action probability contradicts experiment arm")
+    }
+    let mut expected_positive = [champion, challenger]
+        .into_iter()
+        .filter(|probability| *probability > 0)
+        .collect::<Vec<_>>();
+    expected_positive.sort_unstable();
+    if actual_positive != expected_positive {
+        anyhow::bail!("route measurement distribution contradicts two-arm experiment")
+    }
+    Ok(())
+}
+
+fn candidate_key(candidate: &RouteActionCandidate) -> (&str, &str, &str) {
+    (
+        candidate.tier.as_str(),
+        candidate.model.as_str(),
+        candidate.effort.map_or("inherit", ReasoningEffort::as_str),
+    )
+}
+
+fn route_candidate_set_digest(candidates: &[RouteActionCandidate]) -> Result<String> {
+    let targets = candidates.iter().map(candidate_key).collect::<Vec<_>>();
+    canonical_digest(&("bitrouter.route-candidate-set.v1", targets))
+}
+
+fn validate_model_id(value: &str, field: &str) -> Result<()> {
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+        anyhow::bail!("{field} must be a non-empty bounded model identifier")
     }
     Ok(())
 }
@@ -591,6 +779,7 @@ mod tests {
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
             experiment: None,
+            route_measurement: None,
         });
         assert!(validate_subject(&subject).is_err());
     }
@@ -609,6 +798,7 @@ mod tests {
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
             experiment: None,
+            route_measurement: None,
         };
         subject.decisions = vec![decision.clone(), decision];
 
@@ -653,6 +843,199 @@ mod tests {
                 "challenger_propensity_ppm": 100000
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn route_measurement_is_backward_compatible_and_canonical() -> anyhow::Result<()> {
+        let legacy = serde_json::json!({
+            "decision_id": "decision-1",
+            "policy": "auto",
+            "route_projection": "agent_route/v1|code:generation|implement|normal",
+            "request_key": "agent_route/v1|unknown|implement|normal",
+            "selected_tier": "balanced",
+            "baseline_tier": "balanced",
+            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        });
+        let old: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
+        assert_eq!(old.route_measurement, None);
+        assert_eq!(serde_json::to_value(old)?, legacy);
+
+        let candidates = vec![
+            RouteActionCandidate {
+                tier: "balanced".into(),
+                model: "bitrouter:balanced".into(),
+                effort: None,
+                logging_probability_ppm: 900_000,
+            },
+            RouteActionCandidate {
+                tier: "economy".into(),
+                model: "bitrouter:economy".into(),
+                effort: Some(ReasoningEffort::Low),
+                logging_probability_ppm: 100_000,
+            },
+        ];
+        let measurement = RouteDecisionMeasurement::new(
+            "economy",
+            "bitrouter:economy",
+            Some(ReasoningEffort::Low),
+            candidates,
+        )?;
+        let mut decision: EvalDecisionRef = serde_json::from_value(legacy)?;
+        decision.experiment = Some(EvalExperimentRef {
+            experiment_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            arm: ExperimentArm::Challenger,
+            assignment_unit: ExperimentAssignmentUnit::Task,
+            assignment_id_digest:
+                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
+            challenger_propensity_ppm: 100_000,
+        });
+        decision.route_measurement = Some(measurement.clone());
+        let encoded = serde_json::to_value(&decision)?;
+        assert_eq!(encoded["route_measurement"]["schema_version"], 1);
+        assert_eq!(
+            encoded["route_measurement"]["logging_action_probability_ppm"],
+            100_000
+        );
+        assert_eq!(
+            encoded["route_measurement"]["candidate_set_digest"],
+            measurement.candidate_set_digest
+        );
+
+        let mut subject = subject_fixture();
+        subject.decisions = vec![decision];
+        validate_subject(&subject)?;
+        Ok(())
+    }
+
+    #[test]
+    fn route_measurement_must_match_experiment_arm_and_distribution() -> anyhow::Result<()> {
+        let mut subject = subject_fixture();
+        let base = EvalDecisionRef {
+            decision_id: "decision-1".into(),
+            policy: "auto".into(),
+            route_projection: "agent_route/v1|code:generation|implement|normal".into(),
+            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            selected_tier: "economy".into(),
+            selected_effort: None,
+            baseline_tier: Some("strong".into()),
+            baseline_effort: None,
+            policy_digest: subject.policy_digest.clone(),
+            experiment: Some(EvalExperimentRef {
+                experiment_id: subject.policy_digest.clone(),
+                arm: ExperimentArm::Control,
+                assignment_unit: ExperimentAssignmentUnit::Task,
+                assignment_id_digest: subject.policy_digest.clone(),
+                challenger_propensity_ppm: 100_000,
+            }),
+            route_measurement: Some(RouteDecisionMeasurement::new(
+                "economy",
+                "bitrouter:economy",
+                None,
+                vec![
+                    RouteActionCandidate {
+                        tier: "economy".into(),
+                        model: "bitrouter:economy".into(),
+                        effort: None,
+                        logging_probability_ppm: 100_000,
+                    },
+                    RouteActionCandidate {
+                        tier: "strong".into(),
+                        model: "bitrouter:strong".into(),
+                        effort: None,
+                        logging_probability_ppm: 900_000,
+                    },
+                ],
+            )?),
+        };
+        subject.decisions = vec![base.clone()];
+        assert!(validate_subject(&subject).is_err());
+
+        let mut split = base;
+        split.experiment.as_mut().unwrap().arm = ExperimentArm::Challenger;
+        split.route_measurement = Some(RouteDecisionMeasurement::new(
+            "economy",
+            "bitrouter:economy",
+            None,
+            vec![
+                RouteActionCandidate {
+                    tier: "economy".into(),
+                    model: "bitrouter:economy".into(),
+                    effort: None,
+                    logging_probability_ppm: 100_000,
+                },
+                RouteActionCandidate {
+                    tier: "standard".into(),
+                    model: "bitrouter:standard".into(),
+                    effort: None,
+                    logging_probability_ppm: 200_000,
+                },
+                RouteActionCandidate {
+                    tier: "strong".into(),
+                    model: "bitrouter:strong".into(),
+                    effort: None,
+                    logging_probability_ppm: 700_000,
+                },
+            ],
+        )?);
+        subject.decisions = vec![split];
+        assert!(validate_subject(&subject).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn route_measurement_validation_rejects_forged_probability_evidence() -> anyhow::Result<()> {
+        let valid = RouteDecisionMeasurement::new(
+            "balanced",
+            "bitrouter:balanced",
+            None,
+            vec![
+                RouteActionCandidate {
+                    tier: "balanced".into(),
+                    model: "bitrouter:balanced".into(),
+                    effort: None,
+                    logging_probability_ppm: 750_000,
+                },
+                RouteActionCandidate {
+                    tier: "economy".into(),
+                    model: "bitrouter:economy".into(),
+                    effort: None,
+                    logging_probability_ppm: 250_000,
+                },
+            ],
+        )?;
+        let invalid = [
+            {
+                let mut value = valid.clone();
+                value.candidates[0].logging_probability_ppm = 750_001;
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value.candidates.swap(0, 1);
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value.candidates.push(value.candidates[0].clone());
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value.logging_action_probability_ppm = 1;
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value.candidate_set_digest = "sha256:invalid".into();
+                value
+            },
+        ];
+
+        for route_measurement in invalid {
+            assert!(validate_route_measurement(&route_measurement).is_err());
+        }
         Ok(())
     }
 

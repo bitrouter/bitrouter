@@ -180,6 +180,7 @@ fn build_settlement(
             structural,
             categorical,
             digests: BTreeMap::new(),
+            route_measurement: None,
         },
         captured_at: captured_at.clone(),
         content_digest: String::new(),
@@ -1500,6 +1501,7 @@ mod tests {
                 candidate_tier: Some("economy".into()),
                 policy_digest: POLICY_DIGEST.into(),
                 experiment: None,
+                route_measurement: None,
                 policy: ProgressGuardPolicy {
                     escalation_tier: "strong".into(),
                     protected_tiers: BTreeSet::from(["strong".into()]),
@@ -1578,6 +1580,7 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,

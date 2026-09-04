@@ -504,6 +504,15 @@ and challenger propensity. Evaluators must copy that object verbatim and must
 never invent or edit it. Optimizer cohort membership comes from this router
 evidence, not the evaluator-owned `cohort` string.
 
+Router-authored decisions may also contain `route_measurement`. This versioned
+object records every tier/model/effort target declared by the same immutable
+policy snapshot, the semantic action chosen before tool, progress, or
+continuation guards, and its logging probability in integer ppm. The ordinary
+`selected_*` fields remain the effective post-guard route. Deterministic routes
+use one million ppm; assigned experiments use the signed arm probabilities. If
+an experiment lacks a stable task or episode identity, the router records a
+deterministic champion action instead of inventing randomized evidence.
+
 The generic Eval Exchange and low-level `policy compile`, `policy diff`,
 `policy publish`, `policy rollback`, and `policy verify` commands remain
 available for independent evaluation, migration, audit, and operator-managed
@@ -742,6 +751,14 @@ broadcasts a task reward across the request set. Session/trial metadata and
 timestamps are benchmark diagnostics, not strict join keys. Reward-feedback
 admission also requires completed requests and authoritative settlement; it
 does not use diagnostic identity fields for learning.
+
+Bundles also write `routing-baselines.json` and embed the same report in
+`run-artifact.json`. For each compatible candidate-set digest, the report
+contains an always-tier control for every declared target and a deterministic,
+content-blind control with exactly the observed selected-tier counts. Only
+hashed decision identities are emitted. Legacy decisions without measurement
+are counted as exclusions. These controls measure routing allocation; they do
+not estimate the unexecuted models' quality or authorize a policy change.
 
 ---
 

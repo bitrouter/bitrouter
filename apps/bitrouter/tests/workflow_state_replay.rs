@@ -18,6 +18,7 @@ use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
+use bitrouter::workflow_state::classifier_baseline::ClassifierBaselineManifest;
 use bitrouter::workflow_state::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
 };
@@ -37,6 +38,7 @@ use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{
     ApiProtocol, NormalizedUsage, UsageOrigin, inbound_adapter_for,
 };
+use http::HeaderValue;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -59,6 +61,83 @@ fn fixture_exposes_policy_table_baseline_fingerprint() {
     let fixture = WorkflowTraceFixture::load_file(fixture_path("tool_followup.json")).unwrap();
     assert_eq!(fixture.baseline_fingerprint(), "after_bash");
     assert_eq!(fixture.expected.baseline_fingerprint, "after_bash");
+}
+
+#[test]
+fn classifier_research_slices_have_a_frozen_manifest() {
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let manifest = ClassifierBaselineManifest::from_fixtures(&fixtures).unwrap();
+    assert_eq!(manifest.fixture_count, 10);
+    for slice in ["english", "zh", "mixed_language", "short", "ood"] {
+        assert!(manifest.by_slice.get(slice).copied().unwrap_or_default() > 0);
+    }
+    for phase in [
+        "opening",
+        "post_read",
+        "post_mutation",
+        "failure",
+        "completion",
+    ] {
+        assert!(manifest.by_slice.get(phase).copied().unwrap_or_default() > 0);
+    }
+    assert_eq!(
+        manifest.dataset_digest,
+        "sha256:73f79630e9d092d05c57fc9545001ca43a05626d8422b1148b28f1d9c30907c6"
+    );
+    assert_eq!(manifest.current_predictor_exact_count, 6);
+    assert_eq!(manifest.current_predictor_mismatch_count, 4);
+}
+
+#[test]
+fn classifier_manifest_commits_every_wire_input_and_ignores_derived_prompt() {
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let base = fixtures
+        .into_iter()
+        .find(|fixture| !fixture.research_slices.is_empty())
+        .unwrap();
+    let original = ClassifierBaselineManifest::from_fixtures(std::slice::from_ref(&base))
+        .unwrap()
+        .dataset_digest;
+    let mut variants = Vec::new();
+
+    let mut harness = base.clone();
+    harness.harness = HarnessId::Unknown;
+    variants.push(harness);
+    let mut protocol = base.clone();
+    protocol.protocol = ProtocolKind::Unknown;
+    variants.push(protocol);
+    let mut headers = base.clone();
+    headers
+        .headers
+        .insert("x-phase0-digest", HeaderValue::from_static("changed"));
+    variants.push(headers);
+    let mut raw_body = base.clone();
+    raw_body.raw_body["phase0_digest"] = json!("changed");
+    variants.push(raw_body);
+    let mut canonical_prompt = base.clone();
+    canonical_prompt.canonical_prompt = Some(json!({"phase0_digest": "changed"}));
+    variants.push(canonical_prompt);
+    let mut derived_prompt = base.clone();
+    derived_prompt.prompt.model.push_str("-changed");
+    assert_eq!(
+        ClassifierBaselineManifest::from_fixtures(&[derived_prompt])
+            .unwrap()
+            .dataset_digest,
+        original
+    );
+    let mut expected = base.clone();
+    expected.expected.baseline_fingerprint.push_str("-changed");
+    variants.push(expected);
+    let mut slices = base;
+    slices.research_slices.insert("changed".into());
+    variants.push(slices);
+
+    for variant in variants {
+        let changed = ClassifierBaselineManifest::from_fixtures(&[variant])
+            .unwrap()
+            .dataset_digest;
+        assert_ne!(changed, original);
+    }
 }
 
 #[test]
@@ -431,6 +510,8 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         task_family_reason_codes: Vec::new(),
+        experiment: None,
+        route_measurement: None,
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -1278,19 +1359,19 @@ fn replay_summary_matches_current_experiment_fixture_set() {
         );
     }
     let summary = ReplayEvaluator.run(&fixtures);
-    assert_eq!(summary.total, 15, "{summary:#?}");
-    assert_eq!(summary.covered, 15, "{summary:#?}");
+    assert_eq!(summary.total, 25, "{summary:#?}");
+    assert_eq!(summary.covered, 25, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
-    assert_eq!(summary.baseline_bucket_count, 5, "{summary:#?}");
+    assert_eq!(summary.baseline_bucket_count, 6, "{summary:#?}");
     assert_eq!(summary.ir_bucket_count, 6, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
     assert_eq!(summary.ir_unknown_count, 0, "{summary:#?}");
-    assert_eq!(summary.model_ladder.flagship, 15, "{summary:#?}");
-    assert_eq!(summary.model_ladder.standard, 14, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_tool_safe, 15, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_fast, 7, "{summary:#?}");
+    assert_eq!(summary.model_ladder.flagship, 25, "{summary:#?}");
+    assert_eq!(summary.model_ladder.standard, 23, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_tool_safe, 25, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_fast, 12, "{summary:#?}");
 }
 
 #[test]
@@ -2000,6 +2081,7 @@ fn run_artifact_bundle_writes_fixed_benchmark_layout() {
     assert!(output_dir.join("benchmark-outcomes.jsonl").exists());
     assert!(output_dir.join("run-artifact.json").exists());
     assert!(output_dir.join("shadow-policy.json").exists());
+    assert!(output_dir.join("routing-baselines.json").exists());
 
     let archived = std::fs::read_to_string(output_dir.join("traces.jsonl")).unwrap();
     assert!(!archived.contains("brk_secret"), "{archived}");
@@ -2089,6 +2171,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         task_family_reason_codes: Vec::new(),
+        experiment: None,
+        route_measurement: None,
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -2130,6 +2214,15 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         Some(&1)
     );
     assert!(output_dir.join("policy-decisions.jsonl").exists());
+    assert!(output_dir.join("routing-baselines.json").exists());
+    assert_eq!(artifact.routing_baselines.eligible_decision_count, 0);
+    assert_eq!(
+        artifact
+            .routing_baselines
+            .excluded_by_reason
+            .get("missing_route_measurement"),
+        Some(&1)
+    );
 
     let run_artifact: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(output_dir.join("run-artifact.json")).unwrap(),
@@ -2328,6 +2421,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         task_family_reason_codes: Vec::new(),
+        experiment: None,
+        route_measurement: None,
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,
@@ -2465,6 +2560,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         prediction_confidence_kind: None,
         prediction_reason_codes: Vec::new(),
         task_family_reason_codes: Vec::new(),
+        experiment: None,
+        route_measurement: None,
         observed_route_projection: None,
         trajectory_episode_id: None,
         trajectory_sequence: None,

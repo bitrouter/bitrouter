@@ -1,0 +1,17 @@
+{
+  "id": "classifier-zh-opening-implement-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["zh", "opening"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [{"role": "user", "content": "修复解析器中的空指针问题，并补上回归测试。"}],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "implement", "next_action_class": "mutate", "route_risk": "normal"}
+  }
+}

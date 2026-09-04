@@ -312,6 +312,7 @@ fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRe
         baseline_effort,
         policy_digest,
         experiment,
+        route_measurement: event.evidence.route_measurement.clone(),
     }))
 }
 
@@ -548,6 +549,7 @@ mod tests {
     };
     use crate::eval::types::{
         EvalScope, EvalVerdict, ExperimentArm, ExperimentAssignmentUnit, MetricUnit,
+        RouteActionCandidate, RouteDecisionMeasurement,
     };
     use crate::trajectory::health::reduce;
     use crate::trajectory::types::{
@@ -889,6 +891,47 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn route_measurement_survives_trajectory_evaluation() -> anyhow::Result<()> {
+        let start = request_start(1, "start-measurement", "request-measurement", 20)?;
+        let mut route = typed_route(
+            std::slice::from_ref(&start),
+            2,
+            "route-measurement",
+            "request-measurement",
+            "agent_trace/v2|planning|normal",
+            "planning",
+            ("economy", false),
+        )?;
+        route.evidence.route_measurement = Some(RouteDecisionMeasurement::new(
+            "economy",
+            "vendor/economy",
+            None,
+            vec![
+                RouteActionCandidate {
+                    tier: "economy".into(),
+                    model: "vendor/economy".into(),
+                    effort: None,
+                    logging_probability_ppm: 1_000_000,
+                },
+                RouteActionCandidate {
+                    tier: "strong".into(),
+                    model: "vendor/strong".into(),
+                    effort: None,
+                    logging_probability_ppm: 0,
+                },
+            ],
+        )?);
+        resign(&mut route)?;
+
+        let decoded = decode_eval_decision(&route)?
+            .and_then(|decision| decision.route_measurement)
+            .ok_or_else(|| anyhow::anyhow!("route measurement must survive trajectory codec"))?;
+        assert_eq!(decoded.logging_action_tier, "economy");
+        assert_eq!(decoded.logging_action_probability_ppm, 1_000_000);
+        Ok(())
+    }
+
     fn interleaved_events() -> anyhow::Result<Vec<TrajectoryEvent>> {
         let start_a = request_start(1, "start-a", "request-a", 20)?;
         let route_a = typed_route(
@@ -1182,6 +1225,7 @@ mod tests {
                 structural,
                 categorical,
                 digests,
+                route_measurement: None,
             },
             captured_at: format!("2026-08-01T00:00:{:02}Z", sequence - 1),
             content_digest: String::new(),

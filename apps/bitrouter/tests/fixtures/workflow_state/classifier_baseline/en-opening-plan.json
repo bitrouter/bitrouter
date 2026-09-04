@@ -1,0 +1,17 @@
+{
+  "id": "classifier-en-opening-plan-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["english", "opening"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [{"role": "user", "content": "Inspect the routing architecture and propose a safe implementation plan with tests."}],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "orchestrate", "next_action_class": "reason_or_plan", "route_risk": "normal"}
+  }
+}

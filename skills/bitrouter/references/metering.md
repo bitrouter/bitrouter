@@ -145,6 +145,19 @@ admission additionally requires the exact request-ID joins, a completed
 request, and authoritative computed settlement; diagnostic identity fields do
 not participate in learning.
 
+The bundle writes `routing-baselines.json` in addition to the run artifact,
+trace, usage, outcome, decision, and shadow-policy files. Eligible policy
+decisions carry a versioned `route_measurement`: the complete semantic
+tier/model/effort candidate set, pre-guard logging action, and integer-ppm
+logging probabilities from one immutable policy snapshot. Effective
+`selected_*` fields can differ after safety or progress guards.
+
+Routing baselines are deterministic measurement controls. They are isolated by
+candidate-set digest, expose no raw request IDs, and include both every
+always-tier allocation and an exact share-matched content-blind allocation.
+They make no counterfactual quality claim; decisions without measurement are
+reported as excluded rather than silently synthesized.
+
 The in-memory analytical `build*` APIs may omit usage and decisions for
 extractor development. The `workflow-state bundle` command is benchmark-grade
 and fails closed when traces exist without usage evidence.

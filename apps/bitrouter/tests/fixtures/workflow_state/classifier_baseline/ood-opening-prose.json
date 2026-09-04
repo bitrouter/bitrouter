@@ -1,0 +1,17 @@
+{
+  "id": "classifier-ood-opening-prose-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["ood", "opening"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [{"role": "user", "content": "Compare two interpretations of the final scene in The Tempest."}],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "finalize", "next_action_class": "answer_or_summarize", "route_risk": "normal"}
+  }
+}

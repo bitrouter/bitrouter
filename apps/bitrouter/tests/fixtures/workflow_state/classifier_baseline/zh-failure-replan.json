@@ -1,0 +1,23 @@
+{
+  "id": "classifier-zh-failure-replan-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["zh", "failure"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {"role": "user", "content": "让解析器测试通过。"},
+      {"role": "assistant", "content": null, "tool_calls": [{"id": "test-1", "type": "function", "function": {"name": "Bash", "arguments": "{\"command\":\"cargo test\"}"}}]},
+      {"role": "tool", "tool_call_id": "test-1", "content": "错误：测试失败，空指针异常"},
+      {"role": "assistant", "content": null, "tool_calls": [{"id": "test-2", "type": "function", "function": {"name": "Bash", "arguments": "{\"command\":\"cargo test\"}"}}]},
+      {"role": "tool", "tool_call_id": "test-2", "content": "Process exited with code 1，测试再次失败"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "test",
+    "baseline_fingerprint": "after_Bash",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "orchestrate", "next_action_class": "reason_or_plan", "route_risk": "guarded"}
+  }
+}
