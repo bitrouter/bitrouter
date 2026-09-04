@@ -2762,6 +2762,60 @@ mod hop_tests {
         );
     }
 
+    /// The resource is stamped once per exporter rather than per span, so the
+    /// span-level conformance suite never sees it and `RESOURCE_ATTRIBUTES` was
+    /// the one part of the committed artifact with nothing checking it. Both
+    /// directions are asserted: the set is two keys, so unlike span attributes
+    /// it can be exercised completely.
+    #[test]
+    fn the_resource_conforms_to_the_committed_schema() {
+        use bitrouter_sdk::observe::schema::{Requirement, SCHEMA};
+
+        // Default config, so `resource_attributes` is empty and what remains
+        // is exactly what this crate stamps unconditionally.
+        let resource = build_resource(&OtelConfig::default());
+        let emitted: Vec<String> = resource.iter().map(|(key, _)| key.to_string()).collect();
+        assert!(
+            !emitted.is_empty(),
+            "conformance over an empty resource passes vacuously"
+        );
+
+        for key in &emitted {
+            let declared = SCHEMA
+                .resource_attributes
+                .iter()
+                .find(|attr| attr.key == key)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the resource carries `{key}`, which otel::schema does not declare —                          declare it (and regenerate crates/bitrouter-sdk/span-schema.json) or                          stop stamping it"
+                    )
+                });
+            let value = resource
+                .get(&opentelemetry::Key::from(key.clone()))
+                .expect("a key the resource just yielded");
+            assert!(
+                bitrouter_sdk::observe::schema::value_type_matches(
+                    declared.ty,
+                    observed_type(&value)
+                ),
+                "the resource emits `{key}` as {}, but otel::schema declares {:?}",
+                observed_type(&value),
+                declared.ty
+            );
+        }
+        for attr in SCHEMA
+            .resource_attributes
+            .iter()
+            .filter(|attr| matches!(attr.requirement, Requirement::Required))
+        {
+            assert!(
+                emitted.iter().any(|key| key == attr.key),
+                "the resource is missing `{}`, which otel::schema declares as required",
+                attr.key
+            );
+        }
+    }
+
     /// Check every exported span against `otel::schema`.
     ///
     /// Three assertions, and the asymmetry between them is deliberate:

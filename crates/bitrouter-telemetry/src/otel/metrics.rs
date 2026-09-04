@@ -59,6 +59,25 @@ impl OtelMetrics {
             .with_resource(resource)
             .build();
 
+        Ok(Self::from_provider(
+            provider,
+            api_key_limiter,
+            user_id_limiter,
+        ))
+    }
+
+    /// Register the instruments on an already-built provider.
+    ///
+    /// Split from [`OtelMetrics::new`] so the reader is a parameter rather
+    /// than a hard-wired OTLP `PeriodicReader`: the conformance test below
+    /// drives a real request lifecycle through a capturing exporter and checks
+    /// what came out against `bitrouter_sdk::observe::schema`, which is not
+    /// possible against a provider that can only talk to a collector.
+    fn from_provider(
+        provider: SdkMeterProvider,
+        api_key_limiter: Arc<CardinalityLimiter>,
+        user_id_limiter: Arc<CardinalityLimiter>,
+    ) -> Self {
         // wire-visible: do not rename — the meter name is exported as the
         // instrumentation scope on every metric point, so alerting rules and
         // dashboards filter on it. It is independent of the crate that hosts
@@ -95,7 +114,7 @@ impl OtelMetrics {
             .with_unit("1")
             .build();
 
-        Ok(Self {
+        Self {
             provider,
             request_counter,
             latency_histogram,
@@ -104,7 +123,7 @@ impl OtelMetrics {
             stream_parts_counter,
             api_key_limiter,
             user_id_limiter,
-        })
+        }
     }
 
     /// Record a completed request.
@@ -272,5 +291,250 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
 
         assert!(request_duration_seconds(&ctx) > 0.0);
+    }
+
+    // ── Schema conformance ───────────────────────────────────────────────────
+
+    /// One exported instrument, flattened to the parts the schema declares.
+    #[derive(Debug)]
+    struct CapturedMetric {
+        name: String,
+        instrument: &'static str,
+        unit: String,
+        attribute_keys: Vec<String>,
+    }
+
+    /// Captures every exported metric in-process, the way `http_layer`'s
+    /// `CapturingProcessor` captures spans: assertions read the SDK's own data
+    /// model rather than decoding OTLP wire bytes.
+    #[derive(Debug, Clone)]
+    struct CapturingMetricExporter {
+        captured: Arc<std::sync::Mutex<Vec<CapturedMetric>>>,
+    }
+
+    /// The instrument kind, spelled as `otel::schema` spells it, plus every
+    /// attribute key on every data point.
+    fn kind_and_attribute_keys<T>(
+        data: &opentelemetry_sdk::metrics::data::MetricData<T>,
+    ) -> (&'static str, Vec<String>) {
+        use opentelemetry_sdk::metrics::data::MetricData;
+        match data {
+            MetricData::Sum(sum) => (
+                "counter",
+                sum.data_points()
+                    .flat_map(|point| point.attributes().map(|kv| kv.key.to_string()))
+                    .collect(),
+            ),
+            MetricData::Histogram(histogram) => (
+                "histogram",
+                histogram
+                    .data_points()
+                    .flat_map(|point| point.attributes().map(|kv| kv.key.to_string()))
+                    .collect(),
+            ),
+            MetricData::Gauge(_) => ("gauge", Vec::new()),
+            MetricData::ExponentialHistogram(_) => ("exponential_histogram", Vec::new()),
+        }
+    }
+
+    impl opentelemetry_sdk::metrics::exporter::PushMetricExporter for CapturingMetricExporter {
+        async fn export(
+            &self,
+            metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+            let mut guard = match self.captured.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            for scope in metrics.scope_metrics() {
+                for metric in scope.metrics() {
+                    let (instrument, attribute_keys) = match metric.data() {
+                        AggregatedMetrics::F64(data) => kind_and_attribute_keys(data),
+                        AggregatedMetrics::U64(data) => kind_and_attribute_keys(data),
+                        AggregatedMetrics::I64(data) => kind_and_attribute_keys(data),
+                    };
+                    guard.push(CapturedMetric {
+                        name: metric.name().to_string(),
+                        instrument,
+                        unit: metric.unit().to_string(),
+                        attribute_keys,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+
+        fn shutdown_with_timeout(
+            &self,
+            _timeout: Duration,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+
+        fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
+            opentelemetry_sdk::metrics::Temporality::Cumulative
+        }
+    }
+
+    /// A context carrying everything the conditional dimensions key off, so one
+    /// lifecycle exercises the widest attribute set the recorder can produce.
+    fn fully_attributed_context() -> PipelineContext {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let request =
+            PipelineRequest::new("test-model", CallerContext::new("api-key", "user"), prompt);
+        let mut ctx = PipelineContext::new(request);
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: "openai".into(),
+            model_id: "test-model".into(),
+            account_label: Some("primary".into()),
+            result: GenerateResult {
+                content: Vec::new(),
+                usage: Some(bitrouter_sdk::language_model::Usage {
+                    prompt_tokens: 11,
+                    completion_tokens: 7,
+                    ..Default::default()
+                }),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            request_duration_ms: 42,
+            upstream_duration_ms: Some(40),
+            server_tool_calls: Vec::new(),
+        });
+        ctx
+    }
+
+    /// The metrics half of the committed schema had no enforcement at all:
+    /// `SCHEMA.metrics` declared five instruments and their dimensions while
+    /// this module hardcoded both, so a rename here — the thing the
+    /// `wire-visible-names` invariant says breaks every dashboard silently —
+    /// would have passed every gate and left `span-schema.json` promising a
+    /// series nobody emits. This is the span suite's rule applied to metrics,
+    /// and it runs in both directions because, unlike span attributes, the
+    /// instrument set is small enough to exercise completely in one lifecycle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn emitted_metrics_conform_to_the_committed_schema() {
+        use bitrouter_sdk::observe::schema::{Instrument, Requirement, SCHEMA};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reader = PeriodicReader::builder(
+            CapturingMetricExporter {
+                captured: Arc::clone(&captured),
+            },
+            ProcessorRuntime::new(),
+        )
+        // Long enough that the only export is the one `shutdown` forces, so
+        // the capture is a single deterministic snapshot.
+        .with_interval(Duration::from_secs(3600))
+        .build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let metrics = OtelMetrics::from_provider(
+            provider,
+            Arc::new(CardinalityLimiter::new(16)),
+            Arc::new(CardinalityLimiter::new(16)),
+        );
+
+        let ctx = fully_attributed_context();
+        metrics.record_request(&ctx, &RequestOutcome::Completed);
+        // The error counter only moves on a failure, and `bitrouter.errors` is
+        // declared, so without this the "every declared metric was emitted"
+        // half would fail on a real gap in the drive rather than a real gap in
+        // the schema.
+        metrics.record_request(
+            &ctx,
+            &RequestOutcome::Failed(bitrouter_sdk::error::BitrouterError::Unauthorized(
+                "test".into(),
+            )),
+        );
+        metrics.record_stream_part(&StreamPart::TextEnd { id: "0".into() });
+        metrics.shutdown();
+
+        let captured = match captured.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        assert!(
+            !captured.is_empty(),
+            "conformance over an empty metric set passes vacuously"
+        );
+
+        for metric in captured.iter() {
+            let def = SCHEMA
+                .metrics
+                .iter()
+                .find(|def| def.name == metric.name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "instrument `{}` is exported but not declared in otel::schema — \
+                         instrument names are wire contract (`wire-visible-names`); declare it \
+                         and regenerate crates/bitrouter-sdk/span-schema.json, or stop emitting \
+                         it",
+                        metric.name
+                    )
+                });
+            let declared_kind = match def.instrument {
+                Instrument::Counter => "counter",
+                Instrument::Histogram => "histogram",
+            };
+            assert_eq!(
+                metric.instrument, declared_kind,
+                "`{}` is exported as a {} but otel::schema declares a {declared_kind} — the \
+                 kind decides what a backend may ask of the series",
+                metric.name, metric.instrument
+            );
+            assert_eq!(
+                metric.unit, def.unit,
+                "`{}` is exported with unit `{}` but otel::schema declares `{}`",
+                metric.name, metric.unit, def.unit
+            );
+            for key in &metric.attribute_keys {
+                assert!(
+                    def.dimensions.iter().any(|dim| dim.key == key),
+                    "`{}` carries dimension `{key}`, which otel::schema does not declare on it \
+                     — every dimension is a cardinality decision, so adding one is a schema \
+                     change",
+                    metric.name
+                );
+            }
+            for dim in def
+                .dimensions
+                .iter()
+                .filter(|dim| matches!(dim.requirement, Requirement::Required))
+            {
+                assert!(
+                    metric.attribute_keys.iter().any(|key| key == dim.key),
+                    "`{}` is missing dimension `{}`, which otel::schema declares as required",
+                    metric.name,
+                    dim.key
+                );
+            }
+        }
+
+        for def in SCHEMA.metrics {
+            assert!(
+                captured.iter().any(|metric| metric.name == def.name),
+                "otel::schema declares `{}` but a full request lifecycle emitted no such \
+                 instrument — a declared-but-dead series is what the committed artifact \
+                 promises to anyone implementing against it",
+                def.name
+            );
+        }
     }
 }
