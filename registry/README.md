@@ -26,7 +26,8 @@ Maintainers curate which versioned model families BitRouter follows in
 `model-discovery.yaml`. Within those explicitly selected families, the daily
 registry sync uses OpenRouter's public `GET /api/v1/models` catalog to keep the
 canonical list current: it retains the three newest version numbers and every
-variant belonging to those versions. OpenRouter routing aliases such as
+variant belonging to those versions. A family may set its own `retain_versions`
+when a longer compatibility window is required. OpenRouter routing aliases such as
 `:batch`, `:free`, and `~...-latest` are not canonical models.
 Explicit production-health retirements live in the same file as
 `retired_models`; these tombstones override discovery while an upstream catalog

@@ -105,16 +105,18 @@ struct ModelDiscoveryFile {
 struct ModelDiscoveryRule {
     key: String,
     pattern: String,
+    #[serde(default)]
+    retain_versions: Option<usize>,
 }
 
 struct CompiledDiscoveryRule {
     key: String,
     regex: Regex,
+    retain_versions: usize,
 }
 
 struct CompiledModelDiscovery {
     source_url: String,
-    retain_versions: usize,
     deprecation_days: u64,
     retired_models: HashSet<String>,
     families: Vec<CompiledDiscoveryRule>,
@@ -124,12 +126,14 @@ struct CompiledModelDiscovery {
 struct ClassifiedModel {
     family: String,
     version: String,
+    retain_versions: usize,
 }
 
 #[derive(Default)]
 struct ModelDiscoveryPlan {
     additions: Vec<CanonicalModel>,
     schedules: BTreeMap<String, String>,
+    cancellations: HashSet<String>,
     removals: HashSet<String>,
 }
 
@@ -137,6 +141,7 @@ struct ModelDiscoveryPlan {
 struct ModelDiscoveryReport {
     added: Vec<String>,
     scheduled: Vec<(String, String)>,
+    cancelled: Vec<String>,
     removed: Vec<(String, Vec<String>)>,
 }
 
@@ -198,8 +203,17 @@ fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
         bail!("{}: source_url must be an HTTPS URL", path.display());
     }
 
+    let default_retain_versions = config.retain_versions;
     let mut families = Vec::with_capacity(config.families.len());
     for family in config.families {
+        let retain_versions = family.retain_versions.unwrap_or(default_retain_versions);
+        if retain_versions == 0 {
+            bail!(
+                "{}: retain_versions for {} must be greater than zero",
+                path.display(),
+                family.key
+            );
+        }
         let regex = Regex::new(&family.pattern)
             .with_context(|| format!("{}: invalid pattern for {}", path.display(), family.key))?;
         if regex.capture_names().all(|name| name != Some("version")) {
@@ -220,6 +234,7 @@ fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
         families.push(CompiledDiscoveryRule {
             key: family.key,
             regex,
+            retain_versions,
         });
     }
 
@@ -234,7 +249,6 @@ fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
     }
     let discovery = CompiledModelDiscovery {
         source_url: config.source_url,
-        retain_versions: config.retain_versions,
         deprecation_days: config.deprecation_days,
         retired_models,
         families,
@@ -270,7 +284,11 @@ impl CompiledModelDiscovery {
                 Some(series) => rule.key.replace("{series}", series.as_str()),
                 None => rule.key.clone(),
             };
-            found = Some(ClassifiedModel { family, version });
+            found = Some(ClassifiedModel {
+                family,
+                version,
+                retain_versions: rule.retain_versions,
+            });
         }
         Ok(found)
     }
@@ -297,9 +315,10 @@ async fn sync_openrouter_models(
         if write { "WRITE" } else { "dry-run" }
     );
     println!(
-        "add {}; schedule {}; remove {} canonical model(s)",
+        "add {}; schedule {}; cancel deprecation {}; remove {} canonical model(s)",
         report.added.len(),
         report.scheduled.len(),
+        report.cancelled.len(),
         report.removed.len()
     );
     for id in &report.added {
@@ -307,6 +326,9 @@ async fn sync_openrouter_models(
     }
     for (id, date) in &report.scheduled {
         println!("  ~ {id} (remove on {date})");
+    }
+    for id in &report.cancelled {
+        println!("  = {id} (deprecation cancelled)");
     }
     for (id, providers) in &report.removed {
         println!("  - {id} (providers: {})", providers.join(", "));
@@ -333,6 +355,7 @@ fn plan_openrouter_models(
     let mut candidates = Vec::new();
     let mut seen_ids = HashSet::new();
     let mut version_dates: BTreeMap<(String, String), i64> = BTreeMap::new();
+    let mut retention_by_family = BTreeMap::new();
     for model in catalog.data {
         if model.id.contains(':') {
             continue;
@@ -341,6 +364,7 @@ fn plan_openrouter_models(
         let Some(classified) = discovery.classify(&model.id)? else {
             continue;
         };
+        record_family_retention(&mut retention_by_family, &classified)?;
         if !valid_canonical_id(&model.id) {
             bail!(
                 "OpenRouter returned invalid canonical model id '{}'",
@@ -376,6 +400,7 @@ fn plan_openrouter_models(
         let Some(classified) = discovery.classify(&model.id)? else {
             continue;
         };
+        record_family_retention(&mut retention_by_family, &classified)?;
         let introduced = model
             .release_date
             .as_deref()
@@ -398,11 +423,14 @@ fn plan_openrouter_models(
     }
     let mut retained = HashSet::new();
     for (family, versions) in &mut versions_by_family {
+        let retain_versions = retention_by_family
+            .get(family)
+            .with_context(|| format!("missing retention policy for model family '{family}'"))?;
         versions.sort_by(|a, b| {
             b.1.cmp(&a.1)
                 .then_with(|| compare_version_numbers(&b.0, &a.0))
         });
-        for (version, _) in versions.iter().take(discovery.retain_versions) {
+        for (version, _) in versions.iter().take(*retain_versions) {
             retained.insert((family.clone(), version.clone()));
         }
     }
@@ -417,6 +445,20 @@ fn plan_openrouter_models(
 
     let today_text = today.format("%Y-%m-%d").to_string();
     for model in loaded.models() {
+        if discovery.retired_models.contains(&model.id) {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        let classified = discovery.classify(&model.id)?;
+        let is_retained = classified.as_ref().is_some_and(|classified| {
+            retained.contains(&(classified.family.clone(), classified.version.clone()))
+        });
+        if is_retained {
+            if model.deprecation_date.is_some() {
+                plan.cancellations.insert(model.id.clone());
+            }
+            continue;
+        }
         if model
             .deprecation_date
             .as_deref()
@@ -425,16 +467,7 @@ fn plan_openrouter_models(
             plan.removals.insert(model.id.clone());
             continue;
         }
-        if discovery.retired_models.contains(&model.id) {
-            plan.removals.insert(model.id.clone());
-            continue;
-        }
-        let Some(classified) = discovery.classify(&model.id)? else {
-            continue;
-        };
-        if !retained.contains(&(classified.family, classified.version))
-            && model.deprecation_date.is_none()
-        {
+        if classified.is_some() && model.deprecation_date.is_none() {
             plan.schedules
                 .insert(model.id.clone(), removal_date.clone());
         }
@@ -449,6 +482,25 @@ fn plan_openrouter_models(
     }
     plan.additions.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(plan)
+}
+
+fn record_family_retention(
+    retention_by_family: &mut BTreeMap<String, usize>,
+    classified: &ClassifiedModel,
+) -> Result<()> {
+    if let Some(existing) = retention_by_family.get(&classified.family) {
+        if *existing != classified.retain_versions {
+            bail!(
+                "model discovery family '{}' has conflicting retain_versions values: {} and {}",
+                classified.family,
+                existing,
+                classified.retain_versions
+            );
+        }
+    } else {
+        retention_by_family.insert(classified.family.clone(), classified.retain_versions);
+    }
+    Ok(())
 }
 
 fn compare_version_numbers(a: &str, b: &str) -> std::cmp::Ordering {
@@ -529,6 +581,7 @@ fn report_for_model_discovery(
             .iter()
             .map(|(id, date)| (id.clone(), date.clone()))
             .collect(),
+        cancelled: plan.cancellations.iter().cloned().collect(),
         removed: Vec::new(),
     };
     for id in &plan.removals {
@@ -543,6 +596,7 @@ fn report_for_model_discovery(
     }
     report.added.sort();
     report.scheduled.sort();
+    report.cancelled.sort();
     report.removed.sort_by(|a, b| a.0.cmp(&b.0));
     report
 }
@@ -574,6 +628,7 @@ fn apply_model_discovery_plan(
             .with_context(|| format!("reading {}", model_file.path.display()))?;
         let mut raw = original.clone();
         raw = remove_model_items(&raw, "", &plan.removals);
+        raw = remove_canonical_deprecation_dates(&raw, &plan.cancellations);
         raw = insert_canonical_deprecation_dates(&raw, &plan.schedules);
         if let Some(additions) = additions_by_vendor.remove(vendor) {
             append_canonical_models(&mut raw, &additions)?;
@@ -692,6 +747,31 @@ fn insert_canonical_deprecation_dates(raw: &str, schedules: &BTreeMap<String, St
     updated
 }
 
+fn remove_canonical_deprecation_dates(raw: &str, cancellations: &HashSet<String>) -> String {
+    if cancellations.is_empty() {
+        return raw.to_string();
+    }
+    let mut current_id = None;
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(id) = trimmed.strip_prefix("- id: ") {
+            current_id = Some(id);
+        } else if trimmed.starts_with("  deprecation_date:")
+            && current_id.is_some_and(|id| cancellations.contains(id))
+        {
+            ranges.push((offset, offset + line.len()));
+        }
+        offset += line.len();
+    }
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
 fn append_canonical_models(raw: &mut String, additions: &[CanonicalModel]) -> Result<()> {
     if !raw.is_empty() && !raw.ends_with('\n') {
         raw.push('\n');
@@ -748,6 +828,8 @@ fn write_model_discovery_report(path: &Path, report: &ModelDiscoveryReport) -> R
             writeln!(out, "- `{id}` — removal date: {date}")?;
         }
     }
+    out.push_str("\n### Deprecation cancelled\n\n");
+    render_report_ids(&mut out, &report.cancelled)?;
     out.push_str("\n### Removed\n\n");
     if report.removed.is_empty() {
         out.push_str("None.\n");
@@ -4202,6 +4284,18 @@ api_base: https://api.acme.test/v1
             assert_eq!(classified.family, family, "{id}");
             assert_eq!(classified.version, version, "{id}");
         }
+        for (id, expected) in [
+            ("anthropic/claude-opus-4.6", 4),
+            ("google/gemini-3.1-pro-preview", 5),
+            ("qwen/qwen3.5-27b", 4),
+            ("x-ai/grok-4.20", 4),
+            ("openai/gpt-5.6-sol", 3),
+        ] {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert_eq!(classified.retain_versions, expected, "{id}");
+        }
         for alias in [
             "openai/gpt-5.6-sol:batch",
             "~anthropic/claude-opus-latest",
@@ -4228,7 +4322,6 @@ api_base: https://api.acme.test/v1
         let loaded = load_registry(&root)?;
         let discovery = CompiledModelDiscovery {
             source_url: "https://example.test/models".to_string(),
-            retain_versions: 3,
             deprecation_days: 30,
             retired_models: HashSet::new(),
             families: vec![CompiledDiscoveryRule {
@@ -4236,6 +4329,7 @@ api_base: https://api.acme.test/v1
                 regex: Regex::new(
                     r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
                 )?,
+                retain_versions: 3,
             }],
         };
         let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
@@ -4274,6 +4368,71 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn family_retention_override_cancels_existing_deprecations() -> Result<()> {
+        let root = test_root("model-discovery-retention-override");
+        write(
+            &root,
+            "registry/models/x-ai.yaml",
+            r#"
+- id: x-ai/grok-4.20
+  deprecation_date: 2026-10-05
+- id: x-ai/grok-4.20-multi-agent
+  deprecation_date: 2026-10-05
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+                retain_versions: 4,
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.20-multi-agent", "name": "Grok 4.20 Multi", "created": 500},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert!(plan.schedules.is_empty());
+        assert_eq!(
+            plan.cancellations,
+            HashSet::from([
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ])
+        );
+        let report = report_for_model_discovery(&loaded, &plan);
+        assert_eq!(
+            report.cancelled,
+            vec![
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ]
+        );
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+        let raw = fs::read_to_string(root.join("registry/models/x-ai.yaml"))?;
+        assert!(!raw.contains("deprecation_date:"));
+        Ok(())
+    }
+
+    #[test]
     fn retired_models_still_occupy_the_retained_version_window() -> Result<()> {
         let root = test_root("model-discovery-retired-window");
         write(
@@ -4286,7 +4445,6 @@ api_base: https://api.acme.test/v1
         let loaded = load_registry(&root)?;
         let discovery = CompiledModelDiscovery {
             source_url: "https://example.test/models".to_string(),
-            retain_versions: 3,
             deprecation_days: 30,
             retired_models: HashSet::from(["x-ai/grok-4.5".to_string()]),
             families: vec![CompiledDiscoveryRule {
@@ -4294,6 +4452,7 @@ api_base: https://api.acme.test/v1
                 regex: Regex::new(
                     r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
                 )?,
+                retain_versions: 3,
             }],
         };
         let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
@@ -4361,6 +4520,7 @@ api_base: https://api.{provider}.test/v1
         let plan = ModelDiscoveryPlan {
             additions: Vec::new(),
             schedules: BTreeMap::from([("acme/new-2".to_string(), "2026-10-05".to_string())]),
+            cancellations: HashSet::new(),
             removals: HashSet::from(["acme/old-1".to_string()]),
         };
         let report = report_for_model_discovery(&loaded, &plan);
