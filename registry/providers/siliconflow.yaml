@@ -21,8 +21,28 @@ models:
         cache_read: 0.145
       output_tokens:
         text: 3.48
+  # Verified 2026-09-05 against the live catalog and official launch pricing:
+  # https://www.siliconflow.com/blog/deepseek-v4-pro-0813-now-live-on-siliconflow-enhanced-agent-capabilities-for-production-workflows
+  - id: deepseek/deepseek-v4-pro-0813
+    provider_model_id: deepseek-ai/DeepSeek-V4-Pro-0813
+    pricing:
+      input_tokens:
+        no_cache: 1.32
+        cache_read: 0.44
+      output_tokens:
+        text: 3.96
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek-ai/DeepSeek-V4-Flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  # Verified 2026-09-05 against the live catalog and official launch pricing:
+  # https://www.siliconflow.com/blog/deepseek-v4-flash-0731-now-live-on-siliconflow
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-ai/DeepSeek-V4-Flash-0731
     pricing:
       input_tokens:
         no_cache: 0.14
