@@ -1181,112 +1181,6 @@
       "release_date": "2026-07-24"
     },
     {
-      "id": "anthropic/claude-sonnet-4.5",
-      "input_modalities": [
-        "file",
-        "image",
-        "text"
-      ],
-      "knowledge_cutoff": "2025-01-31",
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 64000,
-      "name": "Anthropic: Claude Sonnet 4.5",
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "anthropic",
-          "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "azure",
-          "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "provider": "claude-code",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "github-copilot",
-          "provider_model_id": "claude-sonnet-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "anthropic/claude-sonnet-4.5"
-        }
-      ],
-      "release_date": "2025-09-29"
-    },
-    {
       "description": "Anthropic's Claude Sonnet 4.6.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-4.6",
@@ -3909,6 +3803,7 @@
       "release_date": "2026-06-01"
     },
     {
+      "deprecation_date": "2026-10-05",
       "family": "kimi-k2",
       "id": "moonshotai/kimi-k2.6",
       "input_modalities": [
@@ -4976,6 +4871,7 @@
       "release_date": "2026-03-17"
     },
     {
+      "deprecation_date": "2026-10-05",
       "family": "gpt",
       "id": "openai/gpt-5.5",
       "input_modalities": [
@@ -5175,79 +5071,6 @@
         }
       ],
       "release_date": "2026-04-23"
-    },
-    {
-      "id": "openai/gpt-5.5-pro",
-      "input_modalities": [
-        "file",
-        "image",
-        "text"
-      ],
-      "knowledge_cutoff": "2025-12-01",
-      "max_input_tokens": 1050000,
-      "max_output_tokens": 128000,
-      "name": "OpenAI: GPT-5.5 Pro",
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 30.0
-            },
-            "output_tokens": {
-              "text": 180.0
-            }
-          },
-          "provider": "openai",
-          "provider_model_id": "gpt-5.5-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "responses",
-          "provider": "openai-codex",
-          "provider_model_id": "gpt-5.5-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 30.0,
-              "no_cache": 30.0
-            },
-            "output_tokens": {
-              "text": 180.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "gpt-5.5-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 30.0
-            },
-            "output_tokens": {
-              "text": 180.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "openai/gpt-5.5-pro"
-        }
-      ],
-      "release_date": "2026-04-24"
     },
     {
       "family": "gpt",
@@ -6311,6 +6134,7 @@
       "release_date": "2026-02-23"
     },
     {
+      "deprecation_date": "2026-10-05",
       "description": "Qwen3.6 open-source native vision-language model (27B).",
       "family": "qwen3.6",
       "id": "qwen/qwen3.6-27b",
@@ -6412,6 +6236,7 @@
       "release_date": "2026-04-22"
     },
     {
+      "deprecation_date": "2026-10-05",
       "description": "Qwen3.6 open-source native vision-language MoE (35B total, 3B active).",
       "family": "qwen3.6",
       "id": "qwen/qwen3.6-35b-a3b",
@@ -6525,6 +6350,7 @@
       "release_date": "2026-04-17"
     },
     {
+      "deprecation_date": "2026-10-05",
       "family": "qwen3.6",
       "id": "qwen/qwen3.6-flash",
       "input_modalities": [
@@ -6645,135 +6471,6 @@
         }
       ],
       "release_date": "2026-04-27"
-    },
-    {
-      "id": "qwen/qwen3.6-plus",
-      "input_modalities": [
-        "image",
-        "text",
-        "video"
-      ],
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 65536,
-      "name": "Qwen: Qwen3.6 Plus",
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 2.0
-                },
-                "output_tokens": {
-                  "text": 6.0
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "alibaba",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "alibaba_cn",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "qwen3.6-plus"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "qwen3.6-plus"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_write": 0.40625,
-              "no_cache": 0.325
-            },
-            "output_tokens": {
-              "text": 1.95
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "qwen/qwen3.6-plus"
-        }
-      ],
-      "release_date": "2026-04-02"
     },
     {
       "id": "qwen/qwen3.7-flash",
@@ -8706,6 +8403,7 @@
       "release_date": "2025-12-23"
     },
     {
+      "deprecation_date": "2026-10-05",
       "family": "glm",
       "id": "z-ai/glm-5.1",
       "input_modalities": [

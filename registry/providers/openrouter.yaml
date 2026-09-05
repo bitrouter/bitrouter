@@ -505,13 +505,6 @@ models:
         cache_write: 0.041667
       output_tokens:
         text: 3.75
-  - id: openai/gpt-5.5-pro
-    provider_model_id: openai/gpt-5.5-pro
-    pricing:
-      input_tokens:
-        no_cache: 30
-      output_tokens:
-        text: 180
   - id: openai/gpt-5.6-luna-pro
     provider_model_id: openai/gpt-5.6-luna-pro
     pricing:

@@ -1,7 +1,7 @@
 # OpenRouter model catalog API:
 # https://openrouter.ai/docs/api/api-reference/models/get-models
 source_url: https://openrouter.ai/api/v1/models
-retain_versions: 3
+retain_versions: 2
 deprecation_days: 30
 # Explicit retirements override discovery while upstream catalogs still list a
 # model. Keep the reason beside each tombstone so it can be revisited safely.

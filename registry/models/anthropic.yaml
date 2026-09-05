@@ -115,15 +115,3 @@
   max_input_tokens: 1000000
   max_output_tokens: 128000
   release_date: 2026-09-01
-- id: anthropic/claude-sonnet-4.5
-  name: 'Anthropic: Claude Sonnet 4.5'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 64000
-  release_date: 2025-09-29
-  knowledge_cutoff: 2025-01-31

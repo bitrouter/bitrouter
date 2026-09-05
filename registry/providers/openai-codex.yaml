@@ -79,8 +79,6 @@ models:
     provider_model_id: gpt-5.4-mini
     reasoning_effort: *gpt_54_effort
     capabilities: [reasoning, tools]
-  - id: openai/gpt-5.5-pro
-    provider_model_id: gpt-5.5-pro
   - id: openai/gpt-6-astra
     provider_model_id: gpt-6-astra
 status: active

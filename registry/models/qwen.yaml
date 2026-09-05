@@ -1,4 +1,5 @@
 - id: qwen/qwen3.6-27b
+  deprecation_date: 2026-10-05
   name: 'Qwen: Qwen3.6 27B'
   description: Qwen3.6 open-source native vision-language model (27B).
   input_modalities:
@@ -12,6 +13,7 @@
   open_weights: true
   family: qwen3.6
 - id: qwen/qwen3.6-35b-a3b
+  deprecation_date: 2026-10-05
   name: 'Qwen: Qwen3.6 35B-A3B'
   description: Qwen3.6 open-source native vision-language MoE (35B total, 3B active).
   input_modalities:
@@ -120,6 +122,7 @@
   open_weights: false
   family: qwen3.8
 - id: qwen/qwen3.6-flash
+  deprecation_date: 2026-10-05
   name: 'Qwen: Qwen3.6 Flash'
   input_modalities:
   - text
@@ -132,17 +135,6 @@
   knowledge_cutoff: 2025-04
   open_weights: false
   family: qwen3.6
-- id: qwen/qwen3.6-plus
-  name: 'Qwen: Qwen3.6 Plus'
-  input_modalities:
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 65536
-  release_date: 2026-04-02
 - id: qwen/qwen3.7-flash
   name: 'Qwen: Qwen3.7 Flash'
   input_modalities:

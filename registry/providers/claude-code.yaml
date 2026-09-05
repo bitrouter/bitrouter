@@ -72,8 +72,6 @@ models:
     capabilities: [reasoning]
   - id: anthropic/claude-fable-5.1
     provider_model_id: claude-fable-5-1
-  - id: anthropic/claude-sonnet-4.5
-    provider_model_id: claude-sonnet-4-5
 status: active
 weight: 1
 community: false
