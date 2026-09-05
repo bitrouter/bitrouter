@@ -1,19 +1,24 @@
 //! `BitrouterMcp` — the rmcp origin server handler. One handler assembles its
 //! profiles from named `#[tool_router]` blocks: a **public** profile
-//! (`complete`, plus `list_models` and `status` wherever those ports are wired,
-//! all HTTP-safe), the stdio **router** profile (that plus `route_preview`),
-//! and the **skills** origin profile. The
+//! (`list_models` and `status`, wherever those ports are wired — both
+//! HTTP-safe), the stdio **router** profile (that plus `route_preview`), and
+//! the **skills** origin profile. The
 //! [`Builder`] merges only the routers whose capability is wired, so an
 //! unwired capability's tools are never registered — a public HTTP client
 //! can't so much as see `route_preview`.
+//!
+//! Every tool here is control or introspection. There is no inference tool:
+//! running a completion goes through the daemon's HTTP API
+//! (`/v1/messages`, `/v1/chat/completions`), which is the transport built for
+//! it — streaming, the full parameter surface, and the metering path included.
 
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, ErrorData, GetMeta,
-    ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
+    ClientJsonRpcMessage, ClientRequest, ErrorData, GetMeta, ProtocolVersion, RequestId,
+    ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::Transport;
@@ -25,7 +30,7 @@ use crate::actions::skills::{
     SkillDetail, SkillsGetArgs, SkillsQuery, SkillsReport, SkillsSearchArgs,
 };
 use crate::actions::status::{StatusQuery, StatusReport};
-use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
+use crate::backend::{Backend, CallerAuth};
 use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
 use crate::error::ToolError;
 use bitrouter_sdk::mcp::skills::{
@@ -57,58 +62,21 @@ fn parse_bearer(value: &str) -> Option<&str> {
         .filter(|token| !token.is_empty())
 }
 
-/// One-line cost annotator appended to tool results — the origin
-/// server's slice of the agent-facing cost feed. Injected by the
-/// embedding binary, which owns metering-database access; this crate
-/// stays storage-agnostic. `None` means stay silent.
-#[async_trait::async_trait]
-pub trait CostFooter: Send + Sync {
-    /// The line to append to a successful tool result, or `None`.
-    async fn line(&self) -> Option<String>;
-}
-
-/// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
-/// plus `footer` when given, `Err`→error text. The one shaping path for the
-/// completion tool; the footer choice stays explicit at the call site
-/// (`complete` is a spend-feed event and passes one).
-fn serialize_tool_result<T: serde::Serialize>(
-    result: Result<T, BackendError>,
-    footer: Option<ContentBlock>,
-) -> CallToolResult {
-    match result {
-        Ok(v) => match serde_json::to_string(&v) {
-            Ok(json) => {
-                let mut contents = vec![ContentBlock::text(json)];
-                if let Some(footer) = footer {
-                    contents.push(footer);
-                }
-                CallToolResult::success(contents)
-            }
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
-                "serialization error: {e}"
-            ))]),
-        },
-        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
-    }
-}
-
 /// The capability ports plus their port-adjacent state, declared once and
 /// shared between [`Builder`] (which fills it) and the built handler (which
 /// reads it) — a capability is never a pair of parallel field declarations.
 #[derive(Clone, Default)]
 struct Caps {
-    backend: Option<Arc<dyn Backend>>,
-    /// The `status` action's port. Separate from `backend` because the two
-    /// answer different questions from different places: a local daemon's
-    /// liveness comes off the control socket and its spend off the local
-    /// metering database (both injected app-side), a metered account's
-    /// remaining credit off the cloud backend itself.
+    /// The `status` action's port. Which side fills it depends on the
+    /// deployment: a local daemon's liveness comes off the control socket and
+    /// its spend off the local metering database (both injected app-side), a
+    /// metered account's remaining credit off the cloud backend itself.
     status_query: Option<Arc<dyn StatusQuery>>,
-    /// The `list_models` action's port. Separate from `backend` for the same
-    /// reason as `status_query`: on stdio + local the catalog comes off the
-    /// daemon's control socket (with a static-config fallback that answers
-    /// with no daemon at all), while a `--local-url` or cloud client gets the
-    /// backend's own `GET /v1/models`.
+    /// The `list_models` action's port. Filled on the same terms as
+    /// `status_query`: on stdio + local the catalog comes off the daemon's
+    /// control socket (with a static-config fallback that answers with no
+    /// daemon at all), while a `--local-url` or cloud client gets the backend's
+    /// own `GET /v1/models`.
     models_query: Option<Arc<dyn ModelsQuery>>,
     routing: Option<Arc<dyn RouteQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
@@ -132,19 +100,18 @@ struct CapSpec {
     instructions: fn(&Caps) -> String,
 }
 
+/// What every profile says about itself, before any capability adds its own
+/// guidance. Kept separate from [`CAPABILITIES`] because it describes the
+/// server rather than a tool: a profile with nothing but the SEP-2640 skills
+/// catalog wired registers no tools at all and still has to introduce itself.
+const BASE_INSTRUCTIONS: &str = "BitRouter origin MCP server — control and \
+     introspection. It runs no inference: send completions to the daemon's \
+     HTTP API (`/v1/messages`, `/v1/chat/completions`) instead.";
+
 /// The tool-contributing capabilities, in registration + instruction order.
-/// State-only capabilities (the transport-side cost footer, the SEP-2640 skill
-/// catalog) contribute no router and stay plain fields.
+/// State-only capabilities (the SEP-2640 skill catalog) contribute no router
+/// and stay plain fields.
 const CAPABILITIES: &[CapSpec] = &[
-    CapSpec {
-        wired: |caps| caps.backend.is_some(),
-        router: BitrouterMcp::completion_router,
-        instructions: |_| {
-            "BitRouter origin MCP server. Use `complete` to run a completion \
-             through it."
-                .to_string()
-        },
-    },
     CapSpec {
         wired: |caps| caps.models_query.is_some(),
         router: BitrouterMcp::models_router,
@@ -191,59 +158,7 @@ const CAPABILITIES: &[CapSpec] = &[
 #[derive(Clone)]
 pub struct BitrouterMcp {
     caps: Caps,
-    cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CompleteArgs {
-    /// Routable model name (from `list_models`).
-    pub model: String,
-    /// Chat messages, OpenAI shape: `[{"role":"user","content":"…"}]`.
-    pub messages: Vec<serde_json::Value>,
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f64>,
-    pub system: Option<String>,
-}
-
-// ── the public profile: completion tools (guarded on `self.backend`) ──
-#[tool_router(router = completion_router)]
-impl BitrouterMcp {
-    #[tool(
-        description = "Route a completion through BitRouter and return the full result.",
-        annotations(
-            read_only_hint = false,
-            // Additive, not destructive: it spends credits and appends to the
-            // metering log, but destroys nothing. Each call bills again, so
-            // never idempotent; open-world because it reaches upstream LLMs.
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    async fn complete(
-        &self,
-        Parameters(args): Parameters<CompleteArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        let backend = self.backend()?;
-        let caller = caller_from_extensions(&ctx.extensions);
-        let req = CompleteRequest {
-            model: args.model,
-            messages: args.messages,
-            max_tokens: args.max_tokens,
-            temperature: args.temperature,
-            system: args.system,
-        };
-        let result = backend.complete(&caller, req).await;
-        // A completion is a spend event → successful results carry the footer.
-        let footer = if result.is_ok() {
-            self.footer_content().await
-        } else {
-            None
-        };
-        Ok(serialize_tool_result(result, footer))
-    }
 }
 
 // ── the `list_models` action (guarded on `self.caps.models_query`) ──
@@ -272,10 +187,7 @@ impl BitrouterMcp {
         let caller = caller_from_extensions(&ctx.extensions);
         // `Json<ModelsReport>` rather than a `CallToolResult`: that is what
         // makes rmcp derive the tool's `output_schema` from the shared report
-        // type, which is the agreement `actions::ACTIONS` asserts. No spend
-        // footer either — listing models is not a spend event, unlike
-        // `complete` (intentional asymmetry; `status` carries spend as typed
-        // data instead).
+        // type, which is the agreement `actions::ACTIONS` asserts.
         self.models_query()?
             .list_models(&caller)
             .await
@@ -311,11 +223,9 @@ impl BitrouterMcp {
         // is what makes rmcp derive the tool's `output_schema` from the shared
         // report type, which is the agreement `actions::ACTIONS` asserts.
         //
-        // Structured content leaves no room beside it for the free-text spend
-        // footer `complete` carries, and it does not need one: the footer's
-        // content is `StatusReport::spend`, typed rather than prose, and it is
-        // richer there — `unpriced` and the remaining cap have no line in a
-        // one-sentence footer.
+        // Spend rides along as typed data under `StatusReport::spend` rather
+        // than as a free-text footer, which is strictly richer: `unpriced` and
+        // the remaining cap have no line in a one-sentence footer.
         self.status_query()?
             .status(&caller)
             .await
@@ -444,39 +354,23 @@ impl BitrouterMcp {
         self.tool_router.list_all()
     }
 
-    /// Attach a cost annotator; its line is appended to successful
-    /// `complete` results as a second content item.
-    pub fn with_cost_footer(mut self, footer: Arc<dyn CostFooter>) -> Self {
-        self.cost_footer = Some(footer);
-        self
-    }
-
-    port_accessor!(backend, dyn Backend, "completion backend");
     port_accessor!(status_query, dyn StatusQuery, "status capability");
     port_accessor!(models_query, dyn ModelsQuery, "list_models capability");
     port_accessor!(routing, dyn RouteQuery, "routing capability");
     port_accessor!(skills, dyn SkillsQuery, "skills capability");
     port_accessor!(skill_catalog, dyn SkillCatalog, "skills catalog");
 
-    /// The extra content item for a successful result, when a footer is
-    /// attached and has something to say.
-    async fn footer_content(&self) -> Option<ContentBlock> {
-        let footer = self.cost_footer.as_ref()?;
-        footer.line().await.map(ContentBlock::text)
-    }
-
-    /// Server instructions, composed by walking [`CAPABILITIES`] — the same
-    /// table `build()` merges routers from, so a client is told about exactly
-    /// the tools it can call (the public HTTP profile gets only the completion
-    /// base; the stdio router profile adds the `route_preview` guidance, and
-    /// the skills origin server its own).
+    /// Server instructions: [`BASE_INSTRUCTIONS`], then a fragment per wired
+    /// capability, walking [`CAPABILITIES`] — the same table `build()` merges
+    /// routers from, so a client is told about exactly the tools it can call
+    /// (the public HTTP profile gets the introspection pair; the stdio router
+    /// profile adds the `route_preview` guidance, and the skills origin server
+    /// its own).
     fn instructions(&self) -> String {
-        let mut s = String::new();
+        let mut s = BASE_INSTRUCTIONS.to_string();
         for spec in CAPABILITIES {
             if (spec.wired)(&self.caps) {
-                if !s.is_empty() {
-                    s.push(' ');
-                }
+                s.push(' ');
                 s.push_str(&(spec.instructions)(&self.caps));
             }
         }
@@ -493,12 +387,6 @@ pub struct Builder {
 }
 
 impl Builder {
-    /// Wire completion against a ready-made backend.
-    pub fn completion(mut self, backend: Arc<dyn Backend>) -> Self {
-        self.caps.backend = Some(backend);
-        self
-    }
-
     /// Wire the `status` action's port (the `status` tool).
     pub fn status(mut self, status: Arc<dyn StatusQuery>) -> Self {
         self.caps.status_query = Some(status);
@@ -545,9 +433,6 @@ impl Builder {
         }
         BitrouterMcp {
             caps: self.caps,
-            // The footer is attached later, transport-side, via
-            // `with_cost_footer` (stdio only) — never through the builder.
-            cost_footer: None,
             tool_router,
         }
     }
@@ -823,18 +708,18 @@ async fn require_bearer(
 }
 
 /// Build the `/mcp-control` axum router for `backend`, optionally gated by the
-/// pre-auth bearer middleware. HTTP is the public profile: completion only.
+/// pre-auth bearer middleware. HTTP is the public profile: whatever the backend
+/// itself can answer about its own deployment, and nothing else.
 ///
-/// That coupling is a crate-level invariant, deliberately: the remaining
-/// non-completion tools are semantically bound to one machine (`route_preview`
-/// resolves against the serving host's own config and control socket;
-/// `skills_search`/`skills_get` read its installed-skills root), so no
-/// multi-tenant HTTP profile may carry them. Should a remote client ever need
-/// that *read-only* introspection surface without a stdio pipe, this is the
-/// single function to change — take a handler factory, keep the profile
-/// strictly loopback and incompatible with the cloud backend, and prefer
-/// modeling that read-only data as MCP resources over widening the tool
-/// surface.
+/// That coupling is a crate-level invariant, deliberately: the remaining tools
+/// are semantically bound to one machine (`route_preview` resolves against the
+/// serving host's own config and control socket; `skills_search`/`skills_get`
+/// read its installed-skills root), so no multi-tenant HTTP profile may carry
+/// them. Should a remote client ever need more of that *read-only*
+/// introspection surface without a stdio pipe, this is the single function to
+/// change — take a handler factory, keep the profile strictly loopback and
+/// incompatible with the cloud backend, and prefer modeling that read-only data
+/// as MCP resources over widening the tool surface.
 ///
 /// The invariant is load-bearing for a second reason. Under SEP-2567 a peer
 /// negotiating `2026-07-28` is **always served statelessly**, regardless of
@@ -865,10 +750,11 @@ fn build_http_router(
 
 /// The whole HTTP tool surface, in one function so a test can assert it.
 ///
-/// Completion, plus `list_models` and `status` where the backend itself can
-/// answer them (its own `GET /v1/models`; the cloud account's remaining credit,
-/// read with the caller's own bearer). Nothing else: the host-bound tools stay
-/// off this transport, per the invariant above.
+/// `list_models` and `status`, where the backend itself can answer them (its
+/// own `GET /v1/models`; the cloud account's remaining credit, read with the
+/// caller's own bearer). Nothing else: the host-bound tools stay off this
+/// transport, per the invariant above, and there is no inference tool on any
+/// transport.
 /// [`http_profile`] for the crate's own profile tests, which live in `lib.rs`
 /// (they compare it against [`crate::stdio_profile`], and only one of the two
 /// can be module-private).
@@ -878,7 +764,7 @@ pub(crate) fn http_profile_for_test(backend: Arc<dyn Backend>) -> BitrouterMcp {
 }
 
 fn http_profile(backend: Arc<dyn Backend>) -> BitrouterMcp {
-    let mut builder = BitrouterMcp::builder().completion(backend.clone());
+    let mut builder = BitrouterMcp::builder();
     if let Some(models) = backend.clone().models_port() {
         builder = builder.models(models);
     }
@@ -966,20 +852,10 @@ fn malformed_inline_opener(
     (!missing.is_empty()).then(|| (request.id.clone(), missing))
 }
 
-/// Serve `server` over stdio until the client disconnects. `cost_footer`, when
-/// given, annotates successful `complete` results with one spend line (the
-/// HTTP transport is multi-tenant and gets no footer). `status` needs no
-/// footer: it reports the same spend as typed structured content.
-pub async fn serve_stdio(
-    server: BitrouterMcp,
-    cost_footer: Option<Arc<dyn CostFooter>>,
-) -> anyhow::Result<()> {
+/// Serve `server` over stdio until the client disconnects.
+pub async fn serve_stdio(server: BitrouterMcp) -> anyhow::Result<()> {
     use rmcp::ServiceExt;
     use rmcp::transport::async_rw::AsyncRwTransport;
-    let server = match cost_footer {
-        Some(footer) => server.with_cost_footer(footer),
-        None => server,
-    };
     let mut transport =
         AsyncRwTransport::<RoleServer, _, _>::new_server(tokio::io::stdin(), tokio::io::stdout());
     let first = loop {
@@ -1080,7 +956,7 @@ mod tests {
     use super::*;
     use crate::actions::models::ModelsSource;
     use crate::actions::status::{Spend, SpendLimit};
-    use crate::backend::{BackendError, CallerAuth, CompleteResponse, Usage};
+    use crate::backend::CallerAuth;
     use bitrouter_sdk::language_model::routing::ModelInfo;
 
     #[test]
@@ -1119,21 +995,6 @@ mod tests {
     struct StubBackend;
     #[async_trait::async_trait]
     impl Backend for StubBackend {
-        async fn complete(
-            &self,
-            _: &CallerAuth,
-            _: CompleteRequest,
-        ) -> Result<CompleteResponse, BackendError> {
-            Ok(CompleteResponse {
-                content: "ok".into(),
-                model: "m".into(),
-                usage: Usage {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                },
-                finish_reason: "stop".into(),
-            })
-        }
         /// Answers `status` itself, standing in for the cloud backend — which
         /// is the only shape in which the HTTP profile carries the tool.
         fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
@@ -1159,13 +1020,6 @@ mod tests {
     struct StatuslessBackend;
     #[async_trait::async_trait]
     impl Backend for StatuslessBackend {
-        async fn complete(
-            &self,
-            _: &CallerAuth,
-            _: CompleteRequest,
-        ) -> Result<CompleteResponse, BackendError> {
-            Err(BackendError::Transport("stub".into()))
-        }
         fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
             None
         }
@@ -1308,14 +1162,14 @@ mod tests {
     #[test]
     fn skills_extension_is_declared_only_when_a_catalog_is_wired() {
         let without = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .build();
         let caps = without.get_info().capabilities;
         assert!(caps.extensions.is_none(), "no catalog, no extension");
         assert!(caps.resources.is_none(), "no catalog, no resources");
 
         let with = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .skill_catalog(Arc::new(StubCatalog))
             .build();
         let caps = with.get_info().capabilities;
@@ -1338,7 +1192,6 @@ mod tests {
     #[test]
     fn skill_catalog_adds_no_tools_and_leaves_skills_tools_alone() {
         let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .skills(Arc::new(StubSkills))
             .skill_catalog(Arc::new(StubCatalog))
             .build();
@@ -1353,17 +1206,19 @@ mod tests {
 
     #[test]
     fn public_profile_advertises_exactly_the_wired_tools() {
-        let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
-            .build();
-        // `list_models` and `status` are each their own capability now: a wired
-        // completion backend does not imply either port.
-        assert_eq!(tool_names(&server), ["complete"]);
+        // Nothing wired, nothing registered — every tool is a capability's, and
+        // there is no always-present tool left to stand in for a profile.
+        let bare = BitrouterMcp::builder().build();
+        assert!(tool_names(&bare).is_empty());
         let with_models = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .models(Arc::new(StubBackend))
             .build();
-        assert_eq!(tool_names(&with_models), ["complete", "list_models"]);
+        assert_eq!(tool_names(&with_models), ["list_models"]);
+        let with_both = BitrouterMcp::builder()
+            .models(Arc::new(StubBackend))
+            .status(Arc::new(StubBackend))
+            .build();
+        assert_eq!(tool_names(&with_both), ["list_models", "status"]);
     }
 
     /// The drift phase 2 removes, asserted at the tool boundary: a model served
@@ -1392,18 +1247,18 @@ mod tests {
         assert!(report.filtered(Some("nobody")).models.is_empty());
     }
 
-    /// Invariant: the HTTP profile is completion plus, at most, `list_models`
-    /// and `status` — only what the backend itself can answer for its own
-    /// deployment. It
+    /// Invariant: the HTTP profile is at most `list_models` and `status` —
+    /// only what the backend itself can answer for its own deployment. It
     /// must never carry the host-bound tools — `route_preview` resolves against
     /// the serving machine's own config and control socket, and the skills
     /// tools read its installed-skills root, so neither means anything to a
-    /// multi-tenant caller.
+    /// multi-tenant caller. Nor may it regrow an inference tool: this transport
+    /// is not what completions go over.
     #[test]
     fn http_profile_never_carries_host_bound_tools() {
         assert_eq!(
             tool_names(&http_profile(Arc::new(StubBackend))),
-            ["complete", "list_models", "status"]
+            ["list_models", "status"]
         );
         // A backend with no status of its own gets no `status` tool rather than
         // a fabricated one: the local daemon's liveness is a control-socket
@@ -1411,7 +1266,7 @@ mod tests {
         // so `list_models` stays.
         assert_eq!(
             tool_names(&http_profile(Arc::new(StatuslessBackend))),
-            ["complete", "list_models"]
+            ["list_models"]
         );
     }
 
@@ -1442,7 +1297,6 @@ mod tests {
     #[test]
     fn status_tool_advertises_the_shared_report_schema() {
         let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .status(Arc::new(StubBackend))
             .build();
         let tool = server
@@ -1465,10 +1319,11 @@ mod tests {
 
     #[test]
     fn public_profile_never_exposes_the_host_bound_tools() {
-        // The safety boundary: a completion-only client must not even see
-        // the tools that resolve against the serving machine.
+        // The safety boundary: a public client must not even see the tools
+        // that resolve against the serving machine.
         let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
+            .status(Arc::new(StubBackend))
             .build();
         let names = tool_names(&server);
         for hidden in ["route_preview", "skills_search", "skills_get"] {
@@ -1482,10 +1337,10 @@ mod tests {
     #[test]
     fn routing_capability_adds_route_preview() {
         let public = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .build();
         let with_routing = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .build();
         assert_eq!(
@@ -1496,35 +1351,33 @@ mod tests {
     }
 
     #[test]
-    fn router_profile_is_completion_plus_route_preview() {
-        // What `bitrouter mcp serve --transport stdio --backend local` wires.
+    fn router_profile_is_the_introspection_pair_plus_route_preview() {
+        // What `bitrouter mcp serve --transport stdio --backend local` wires
+        // (before the skills ports, which every stdio profile adds on top).
         let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .models(Arc::new(StubBackend))
             .status(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .build();
         assert_eq!(
             tool_names(&server),
-            ["complete", "list_models", "route_preview", "status"]
+            ["list_models", "route_preview", "status"]
         );
     }
 
     #[test]
     fn annotations_classify_the_tool_surface() {
-        // The full surface: every tool declares explicit annotations, the
-        // read-only set is exactly the introspection tools, and `complete` —
-        // the only tool that reaches an upstream LLM — is the only open-world
-        // one. Nothing left on this surface is destructive.
+        // The full surface: every tool declares explicit annotations, and the
+        // whole of it is read-only introspection — nothing destructive, and
+        // nothing open-world, because no tool here reaches an upstream LLM.
         let server = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .models(Arc::new(StubBackend))
             .status(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))
             .build();
         let tools = server.tool_router.list_all();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 5);
         for tool in &tools {
             assert!(
                 tool.annotations.is_some(),
@@ -1550,28 +1403,27 @@ mod tests {
                 "skills_search",
                 "status",
             ],
-            "the read-only set is exactly the introspection tools"
+            "every tool on this surface is read-only introspection"
         );
         assert!(
             with_hint(|a| a.destructive_hint).is_empty(),
             "nothing on the router/skills surface is destructive"
         );
-        assert_eq!(
-            with_hint(|a| a.open_world_hint),
-            ["complete"],
-            "open-world = reaches upstream LLMs"
+        assert!(
+            with_hint(|a| a.open_world_hint).is_empty(),
+            "open-world would mean reaching an upstream LLM, which no tool here does"
         );
     }
 
     #[test]
     fn instructions_reflect_the_wired_capabilities() {
-        // The public profile advertises only the completion base — no guidance
-        // for tools a completion-only client couldn't call.
+        // The public profile advertises only what it wired — no guidance for
+        // tools an HTTP client couldn't call.
         let public = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .models(Arc::new(StubBackend))
             .build()
             .instructions();
+        assert!(public.starts_with("BitRouter origin MCP server"));
         assert!(public.contains("list_models"));
         for absent in ["route_preview", "skills_search"] {
             assert!(
@@ -1581,7 +1433,6 @@ mod tests {
         }
 
         let wired = BitrouterMcp::builder()
-            .completion(Arc::new(StubBackend))
             .models(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))

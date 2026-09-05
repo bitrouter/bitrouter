@@ -16,9 +16,10 @@
 //! store rather than the config — the `claude-code` and `google-ai`
 //! subscription providers — the way the daemon does at start-up; see
 //! `commands::resolve_static`.)
-//! It matters more here than for `route_preview`, because `complete` on the
-//! same MCP server goes to that daemon: a catalog that disagreed with it would
-//! be telling an agent it can route something the next call refuses.
+//! It matters more here than for `route_preview`, because that daemon is what
+//! serves the request an agent makes after reading this list (over its HTTP
+//! inference API): a catalog that disagreed with it would be telling an agent
+//! it can route something the next call refuses.
 //!
 //! The fallback is what buys the phase its headline: with no daemon running at
 //! all, `list_models` still answers — from config, and it says so.

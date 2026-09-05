@@ -1,6 +1,10 @@
 //! BitRouter's action contract, plus its MCP binding — exposing BitRouter's
-//! own tools (`complete` / `list_models` / `status` / `route_preview`, plus
-//! the skills pair) over stdio and streamable HTTP.
+//! own tools (`list_models` / `status` / `route_preview`, plus the skills
+//! pair) over stdio and streamable HTTP.
+//!
+//! The surface is control and introspection only. Inference is not on it:
+//! completions go to the daemon's HTTP API (`/v1/messages`,
+//! `/v1/chat/completions`), which is the transport built for them.
 //!
 //! Distinct from the MCP *gateway* in `bitrouter-sdk::mcp`, which proxies
 //! *upstream* MCP servers. This crate is the *origin* server for BitRouter's
@@ -80,10 +84,6 @@ pub struct ServeOptions {
     pub cloud_token: Option<String>,
     /// HTTP bind address (only for `Transport::Http`). Default `127.0.0.1:4357`.
     pub bind: String,
-    /// Optional spend annotator for tool results (stdio transport only —
-    /// the HTTP transport is multi-tenant and per-caller spend isn't
-    /// what the local metering database holds).
-    pub cost_footer: Option<std::sync::Arc<dyn server::CostFooter>>,
     /// Optional `route` port backing `route_preview` (stdio transport only —
     /// it reads the serving machine's own routing table, which is not what a
     /// multi-tenant HTTP caller is asking about).
@@ -116,12 +116,13 @@ pub struct ServeOptions {
     pub skill_catalog: Option<std::sync::Arc<dyn capabilities::skill_catalog::SkillCatalog>>,
 }
 
-/// Run the MCP server to completion: the router profile (completion, plus
-/// `route_preview`, `skills_search`/`skills_get` and the SEP-2640 catalog when
-/// their ports are wired — which the embedding binary does for every stdio
-/// profile). The narrow `--backend skills` gateway-subprocess profile is still
-/// assembled directly through [`server::BitrouterMcp::builder`].
-pub async fn serve(mut opts: ServeOptions) -> anyhow::Result<()> {
+/// Run the MCP server to completion: the router profile (`list_models` and
+/// `status`, plus `route_preview`, `skills_search`/`skills_get` and the
+/// SEP-2640 catalog when their ports are wired — which the embedding binary
+/// does for every stdio profile). The narrow `--backend skills`
+/// gateway-subprocess profile is still assembled directly through
+/// [`server::BitrouterMcp::builder`].
+pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     let backend = server::build_backend(
         opts.backend,
         opts.transport,
@@ -130,10 +131,7 @@ pub async fn serve(mut opts: ServeOptions) -> anyhow::Result<()> {
         opts.cloud_token.as_deref(),
     )?;
     match opts.transport {
-        Transport::Stdio => {
-            let cost_footer = opts.cost_footer.take();
-            server::serve_stdio(stdio_profile(backend, opts), cost_footer).await
-        }
+        Transport::Stdio => server::serve_stdio(stdio_profile(backend, opts)).await,
         Transport::Http => {
             let require_auth = matches!(opts.backend, BackendKind::Cloud);
             // Without the auth middleware (local backend), a non-loopback bind
@@ -161,7 +159,7 @@ fn stdio_profile(
     backend: std::sync::Arc<dyn backend::Backend>,
     opts: ServeOptions,
 ) -> server::BitrouterMcp {
-    let mut builder = server::BitrouterMcp::builder().completion(backend.clone());
+    let mut builder = server::BitrouterMcp::builder();
     // The injected port wins: on the local profile it is the control socket,
     // which knows the pid and the socket path the backend's `/v1/*` client
     // never could.
@@ -187,7 +185,7 @@ fn stdio_profile(
 mod profile_tests {
     use super::*;
     use crate::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
-    use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse};
+    use crate::backend::Backend;
     use crate::error::ToolError;
     use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult};
     use std::sync::Arc;
@@ -220,19 +218,12 @@ mod profile_tests {
         }
     }
 
-    /// A backend that cannot complete anything — the tool *surface* is what
+    /// A backend that hands over no port at all — the tool *surface* is what
     /// these assertions are about, not what a call returns.
     struct StubBackend;
 
     #[async_trait::async_trait]
     impl Backend for StubBackend {
-        async fn complete(
-            &self,
-            _: &CallerAuth,
-            _: CompleteRequest,
-        ) -> Result<CompleteResponse, BackendError> {
-            Err(BackendError::Transport("stub".into()))
-        }
         fn status_port(self: Arc<Self>) -> Option<Arc<dyn actions::status::StatusQuery>> {
             None
         }
@@ -249,7 +240,6 @@ mod profile_tests {
             cloud_url: "https://api.bitrouter.ai".into(),
             cloud_token: None,
             bind: "127.0.0.1:4357".into(),
-            cost_footer: None,
             routing: None,
             status: None,
             models: None,

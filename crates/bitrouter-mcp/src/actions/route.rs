@@ -18,7 +18,8 @@ use crate::error::ToolError;
 /// what `bitrouter route` builds from its own flags).
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct RouteInput {
-    /// The model selector to resolve (as you'd pass to `complete`).
+    /// The model selector to resolve (as you'd send to the daemon's
+    /// `/v1/chat/completions`).
     pub model: String,
     /// Optional prompt text. Used to derive the agent-loop step the policy
     /// table keys on; omit for a bare model resolution.
@@ -239,7 +240,7 @@ pub struct RouteReport {
 
 /// The `route` port.
 ///
-/// No `CallerAuth`: unlike `status` or `complete`, this reaches no upstream and
+/// No `CallerAuth`: unlike `status`, this reaches no upstream and
 /// reads no per-caller state — it resolves *this machine's* routing table,
 /// which is also why the tool is fenced out of the multi-tenant HTTP profile.
 #[async_trait::async_trait]

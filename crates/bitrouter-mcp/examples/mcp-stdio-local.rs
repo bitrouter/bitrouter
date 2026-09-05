@@ -114,7 +114,7 @@ async fn serve_skills() -> anyhow::Result<()> {
     let server = BitrouterMcp::builder()
         .skill_catalog(Arc::new(FixtureCatalog))
         .build();
-    bitrouter_mcp::server::serve_stdio(server, None).await
+    bitrouter_mcp::server::serve_stdio(server).await
 }
 
 #[derive(Clone, Copy)]
@@ -250,14 +250,13 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
-    // One `LocalBackend`, wired as both the completion backend and the
-    // `list_models` port — the shape the shipping stdio profile has, minus the
-    // control-socket models port the CLI injects on top.
+    // One `LocalBackend`, wired as the `list_models` port — the shape the
+    // shipping stdio profile has, minus the control-socket models port the CLI
+    // injects on top.
     let backend = Arc::new(LocalBackend::new("http://127.0.0.1:4356"));
     let server = BitrouterMcp::builder()
-        .completion(backend.clone())
         .models(backend)
         .status(Arc::new(FixtureStatus))
         .build();
-    bitrouter_mcp::server::serve_stdio(server, None).await
+    bitrouter_mcp::server::serve_stdio(server).await
 }

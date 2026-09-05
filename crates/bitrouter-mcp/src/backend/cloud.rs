@@ -1,14 +1,13 @@
 //! `CloudBackend` — thin reqwest client against BitRouter Cloud
-//! (`https://api.bitrouter.ai`) with a bearer token. v1 takes the token
-//! explicitly; auto-reading the stored OAuth credential is v1.x.
+//! (`https://api.bitrouter.ai`) with a bearer token, serving `list_models` off
+//! `GET /v1/models` and `status` off `GET /v1/billing/balance`. v1 takes the
+//! token explicitly; auto-reading the stored OAuth credential is v1.x.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{
-    Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse, ModelsEnvelope, Usage,
-};
+use super::{Backend, BackendError, CallerAuth, ModelsEnvelope};
 use crate::actions::models::{ModelsQuery, ModelsReport};
 use crate::actions::status::{Spend, SpendLimit, StatusQuery, StatusReport};
 use crate::error::ToolError;
@@ -71,72 +70,6 @@ impl CloudBackend {
 
 #[async_trait]
 impl Backend for CloudBackend {
-    async fn complete(
-        &self,
-        caller: &CallerAuth,
-        req: CompleteRequest,
-    ) -> Result<CompleteResponse, BackendError> {
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let mut body = serde_json::json!({ "model": req.model, "messages": req.messages });
-        if let Some(m) = req.max_tokens {
-            body["max_tokens"] = m.into();
-        }
-        if let Some(t) = req.temperature {
-            body["temperature"] = t.into();
-        }
-        if let Some(s) = req.system {
-            // OpenAI's contract carries the system prompt as a leading
-            // system-role message, not a top-level field (see `LocalBackend`).
-            if let Some(arr) = body["messages"].as_array_mut() {
-                arr.insert(0, serde_json::json!({ "role": "system", "content": s }));
-            }
-        }
-        let bearer = self.resolve_bearer(caller)?;
-        let resp = self
-            .authed(bearer, self.http.post(&url).json(&body))
-            .send()
-            .await
-            .map_err(|e| BackendError::Transport(e.to_string()))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(BackendError::Upstream {
-                status: status.as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            });
-        }
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| BackendError::Decode(e.to_string()))?;
-        let choice = v
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .ok_or_else(|| BackendError::Decode("no choices in response".into()))?;
-        Ok(CompleteResponse {
-            content: choice
-                .pointer("/message/content")
-                .and_then(|c| c.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-            finish_reason: choice
-                .get("finish_reason")
-                .and_then(|f| f.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-            usage: Usage {
-                input_tokens: v
-                    .pointer("/usage/prompt_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0),
-                output_tokens: v
-                    .pointer("/usage/completion_tokens")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0),
-            },
-            model: req.model,
-        })
-    }
-
     /// The cloud account's credits are exactly what this backend is positioned
     /// to answer — it holds the base URL and resolves the caller's own bearer —
     /// so it hands itself over as the `status` port.

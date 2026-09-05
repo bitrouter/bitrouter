@@ -2218,29 +2218,6 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
 
 // ===== `bitrouter mcp …` (origin MCP server: serve / install) =====
 
-/// `CostFooter` over the local metering database: the origin MCP server
-/// appends this spend line to `complete` / `status` results so
-/// in-session model arbitrage stays cost-visible to the calling agent.
-struct LocalCostFooter {
-    source: bitrouter::paths::ConfigSource,
-}
-
-#[async_trait::async_trait]
-impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
-    async fn line(&self) -> Option<String> {
-        use bitrouter::metering::store::TimeWindow;
-        let store = bitrouter::metering::reader::open_readonly(&self.source).await?;
-        let today = store.spend_summary(TimeWindow::Today).await.ok()?;
-        (today.requests > 0).then(|| {
-            format!(
-                "bitrouter: spend today {} ({} requests)",
-                bitrouter::metering::fmt_usd(today.spend_micro_usd),
-                today.requests
-            )
-        })
-    }
-}
-
 /// The two skills ports, over the shared root resolution.
 ///
 /// `SkillsRoot::mcp_scope` is what makes an MCP client see the user-global
@@ -2294,7 +2271,6 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 let (skills, catalog) = skills_ports()?;
                 return bitrouter_mcp::server::serve_stdio(
                     server.skills(skills).skill_catalog(catalog).build(),
-                    None,
                 )
                 .await;
             }
@@ -2316,8 +2292,9 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                     "note: --token/BITROUTER_TOKEN is ignored for --transport http (multi-tenant; each client sends its own Authorization)"
                 );
             }
-            // The spend footer only makes sense where the local metering
-            // database *is* the caller's spend: stdio → local daemon.
+            // The socket-backed action ports below only make sense where this
+            // process can read the daemon's control socket and the local
+            // metering database: stdio → local daemon.
             let local_stdio = matches!(
                 (transport, backend),
                 (
@@ -2328,14 +2305,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             let source = local_stdio
                 .then(|| bitrouter::paths::resolve_config(None).ok())
                 .flatten();
-            let cost_footer: Option<std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>> =
-                source.clone().map(|source| {
-                    std::sync::Arc::new(LocalCostFooter { source })
-                        as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
-                });
-            // The three socket-backed action ports below all ride the same
-            // pairing as the spend footer — stdio → local daemon — and all
-            // read the same control socket, resolved once here. Lenient on
+            // All three read the same control socket, resolved once here. Lenient on
             // purpose (`resolve_client_socket`, not `_from`): a config file
             // that fails to parse still yields the default socket path, so a
             // daemon that is up keeps answering while the file on disk is
@@ -2376,16 +2346,16 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             });
             // `status` over the control socket: only this process can read
             // it, and only it knows the pid, the models count and the provider
-            // set. It takes the same config source as the spend footer, so the
-            // tool reports the *same* metering database the footer reads — the
-            // whole point of putting spend in the report.
+            // set. The config source resolves the local metering database, so
+            // the tool's `spend` block is the same ledger `bitrouter status`
+            // and `bitrouter cost` read.
             let status = socket.map(|socket| {
                 std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
                     socket, source,
                 ))
                     as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
             });
-            // Skills on **stdio**, whichever completion backend is in use.
+            // Skills on **stdio**, whichever backend is in use.
             //
             // The two `mcp serve` profiles used to be disjoint: only
             // `--backend skills` wired them, and `mcp install` writes
@@ -2415,7 +2385,6 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 cloud_url,
                 cloud_token,
                 bind,
-                cost_footer,
                 routing,
                 status,
                 models,
@@ -5860,29 +5829,10 @@ mod tests {
         use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
         use bitrouter_mcp::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
-        use bitrouter_mcp::backend::{
-            Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse,
-        };
+        use bitrouter_mcp::backend::CallerAuth;
         use bitrouter_mcp::error::ToolError;
 
         struct Stub;
-
-        #[async_trait::async_trait]
-        impl Backend for Stub {
-            async fn complete(
-                &self,
-                _: &CallerAuth,
-                _: CompleteRequest,
-            ) -> std::result::Result<CompleteResponse, BackendError> {
-                Err(BackendError::Transport("stub".into()))
-            }
-            fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
-                None
-            }
-            fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>> {
-                None
-            }
-        }
 
         #[async_trait::async_trait]
         impl ModelsQuery for Stub {
@@ -5930,7 +5880,6 @@ mod tests {
         }
 
         bitrouter_mcp::server::BitrouterMcp::builder()
-            .completion(Arc::new(Stub))
             .models(Arc::new(Stub))
             .status(Arc::new(Stub))
             .routing(Arc::new(Stub))
@@ -5990,6 +5939,12 @@ mod tests {
     /// no schema yet (the unmigrated actions) have no agreement to check —
     /// but the test says how many it did check, so a table that had silently
     /// lost every schema could not pass by skipping everything.
+    ///
+    /// The migration backlog is empty today: every row carries a schema, so
+    /// every row is checked. `output_schema` stays `Option` because a *new*
+    /// tool needs a row from the moment it is registered, which is generally
+    /// before its report type is shared — and this test's `continue` is what
+    /// lets that row exist without a fabricated agreement.
     #[test]
     fn every_actions_row_matches_its_tools_output_schema() {
         let tools = every_tool().tools();
