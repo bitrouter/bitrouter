@@ -944,6 +944,136 @@ the argument-grammar problem, it relocates it to the port's signature.** If
 BitRouter's `SessionActions::run(id, args)` takes an untyped string, it inherits
 this bug the day a second argument appears.
 
+#### 6.9.4 ACP's own position on command ownership
+
+This is the item that decides [§9](#9-the-mechanism), so it is sourced from the
+protocol repository rather than the rendered site. Quotations are from
+[`docs/protocol/v1/slash-commands.mdx`](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/slash-commands.mdx)
+and its v2 sibling, read on 2026-09-05.
+
+**The ownership question has an unambiguous answer, stated in the first
+sentence:**
+
+> *"**Agents** can advertise a set of slash commands that users can invoke."*
+
+and reinforced at the invocation end:
+
+> *"Commands are included as regular user messages in prompt requests… **The
+> Agent recognizes the command prefix and processes it accordingly.**"*
+
+**What the page does not contain is as load-bearing as what it does.** Read in
+full, across both protocol versions, there is:
+
+- no client→agent command advertisement, and no client-command capability;
+- no origin, owner, or provenance field on `AvailableCommand` — it is
+  `{name, description, input?}` and nothing else;
+- no namespace and no collision rule, in either version;
+- no invocation method. `available_commands_update` is a notification;
+  `session/prompt` is the only channel a command can travel on.
+
+⇒ **Finding 11. ACP specifies command ownership one way — the agent owns
+commands, the client renders and forwards them — and specifies nothing at all
+about a third party in the middle.** BitRouter is that third party. There is no
+conformant reading of the specification in which a middlebox contributes
+commands to the list it forwards; there is only a reading in which it *is* the
+agent, which is true of BitRouter's controller and false of the harness behind
+it. That is [§9 objection 1](#a-ride-availablecommandsupdate) restated from the
+protocol's side rather than from BitRouter's, and it is the single strongest
+reason not to take option A.
+
+**v2 exists, and it changes exactly one thing here.** The spec was measured
+against schema 1.7 ([§1](#1-verified-starting-state)); `docs/protocol/v2/` is now
+in the tree. Its migration table records the delta in one line: *"`available_
+commands_update` | **Kept.** Command `input` now carries a required `type`
+discriminator"*. `AvailableCommandInput` becomes a tagged union whose only
+stable member is `type: "text"` with the same `hint`, plus an extension rule:
+
+> *"Custom input types **MUST** begin with `_`; unknown non-underscore input
+> types are reserved for future ACP variants. Clients that cannot render an
+> input specification should preserve it when storing, replaying, **proxying, or
+> forwarding** command metadata, and otherwise display the command without
+> structured input."*
+
+Two consequences, and the second is the one to act on:
+
+1. **§9 objection 2 weakens slightly but does not fall.** A `_bitrouter/…`
+   input type is now a sanctioned way to declare a richer argument shape on a
+   command entry, so "one `hint` string and nothing else" is no longer the whole
+   story. It is still true that *stable* ACP declares strictly less than Emacs,
+   Vim, tmux or Claude Code, and still true that inventing a private input type
+   is inventing a grammar — but the protocol now has a door for it, and
+   `codex-acp` is already using the neighbouring `_meta.commandAction` door
+   ([§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero)).
+2. **The "proxying, or forwarding" clause is addressed to BitRouter's exact
+   position** and imposes a duty: a middlebox must **preserve** command metadata
+   it does not understand. That is an argument for BitRouter forwarding the
+   harness's `available_commands_update` untouched, which is what
+   [phase 0](#phase-0--the-discoverability-defect-no-design-required) already
+   does by rendering BitRouter's own commands as a separate labelled group. The
+   design was right for a reason it did not know about.
+
+**ACP's answer to "the interactive layer needs a model picker" is not a command,
+and this is new information for [D8](#d8--route-overloading) and
+[§9](#9-the-mechanism).** The question was raised as
+[agentclientprotocol#77](https://github.com/agentclientprotocol/agent-client-protocol/issues/77)
+(*"Extend ACP to allow other features like /slashcommands"*, 2025-09-09, closed),
+by a maintainer of a multi-provider Gemini CLI fork who wanted `/profile load
+<name>` and `/model <name>` to work inside Zed. `ConradIrwin`, replying as a
+repository contributor:
+
+> *"I think selecting the provider/model is a **concrete enough concept we
+> should have our own types for it** (in the Zed UI, it's a separate dropdown)."*
+
+and, on the slash-command route:
+
+> *"I guess slash commands in general we have some experimental support for for
+> Claude… Right now all our setup/config is done out of band in JSON files."*
+
+The issue was closed with *"Slash Commands and Session Modes are now stable"*,
+and the model question moved to its own thread. What it became is
+`session/set_config_option` and the `configOptions` list, which in v2 absorbed
+modes entirely (*"`current_mode_update` — **Removed**. Modes are config options"*).
+The stable schema now carries, as a first-class typed selector:
+
+```json
+{ "configId": "model", "name": "Model", "category": "model",
+  "type": "select", "currentValue": "model-1", "options": [ … ] }
+```
+
+⇒ **Finding 12. The protocol deliberately routes model and mode selection
+*away* from the command channel and into a typed, categorised config option that
+the client renders as a picker — and an ACP maintainer said so explicitly while
+declining the slash-command version of the request.** BitRouter's `/route` is
+that request, exactly: a session-scoped selection among models, currently
+implemented as a private `_bitrouter/route/*` extension because this spec's §1
+measurement predates knowing that `category: "model"` exists in the standard
+surface.
+
+**This does not change §9's recommendation, and it is important to say why
+not.** `configOptions` is an *agent→client* declaration: the agent offers the
+options, the client shows a picker, the client calls `session/set_config_option`.
+BitRouter's controller is the agent in that relationship, so it *could* advertise
+its route as `configId: "route", category: "model"` and get the TUI's picker for
+free — but only for the picker. `status`, `models` and the route *preview* are
+reads with reports, not selections among enumerated values, and none of them
+fits a `select`. So the honest reading is: **§9's option C remains right for the
+four read commands, and a fifth option now exists for `route/set` alone** —
+retire the private extension in favour of the standard config-option channel.
+That is a real design question this spec did not previously know to ask, and it
+is recorded as [D11](#d11--should-routeset-become-an-acp-config-option) rather
+than decided here.
+
+**One further v2 signal about who contributes what.** v2 removes
+`clientCapabilities.terminal`, `fs/*` and the `terminal/*` methods, with a stated
+rationale: *"Clients that want to expose file access, unsaved editor state, or
+command execution to agents should do so by providing an **MCP server** to the
+session."* The protocol's answer to "the client-side wants to contribute
+capability" is MCP, not commands — and BitRouter already ships an MCP surface
+over the same `ACTIONS` rows ([§10](#10-source-of-truth)). The two halves of the
+answer are consistent: commands belong to the agent, contributed capability
+belongs on MCP, and nothing in ACP is shaped like "a middlebox adds a slash
+command".
+
 ---
 
 ## 7. The membership rule
@@ -1838,6 +1968,48 @@ Two consequences, and the second matters more than the first:
 This also removes the last reason to keep the door open on B "in case a GUI
 appears": if one ever does, it consumes the same ACP surface `chat` does, and
 the question reopens then with a real consumer to design against.
+
+### D11 — should `route/set` become an ACP config option?
+
+Raised by [§6.9.4](#694-acps-own-position-on-command-ownership), and not
+previously on this list because §1's measurement predated it. ACP carries a
+first-class, typed `configOptions` channel — `{configId, name, category,
+type: "select", currentValue, options[]}` with `category: "model"` as a defined
+value — and `session/set_config_option` to write it. v2 folded session modes
+into it entirely. An ACP contributor declined the slash-command version of
+exactly this request with *"selecting the provider/model is a concrete enough
+concept we should have our own types for it"*
+([#77](https://github.com/agentclientprotocol/agent-client-protocol/issues/77)).
+
+BitRouter's controller **is** the ACP agent the TUI talks to, so it could
+advertise the session's route as a config option and get the client's picker
+for free, on the standard surface, instead of the private
+`_bitrouter/route/*` extension it uses today.
+
+- **(a) Keep `_bitrouter/route/*`.** It is implemented, tested, capability-gated
+  per method, and carries a report shape (`RouteSetResponse`) that a
+  `select` cannot express — a route lease is not a value chosen from an
+  enumeration, it is a request the daemon may refuse
+  ([`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §1, phase 5).
+- **(b) Move to `configOptions`.** Standard surface, no extension to version,
+  and any ACP client — not just BitRouter's own TUI — gets a route picker.
+- **(c) Both**: advertise the config option for the picker, keep the extension
+  method for the report.
+
+**Recommendation: (a) for now, and re-open when a second ACP client exists.**
+(b)'s benefit is entirely "other clients get it", which is
+[D10](#d10--is-there-a-first-party-gui-over-acp-serve)'s absent consumer wearing
+different clothes; and `configOptions` has no slot for "the daemon refused your
+lease, here is why", which is the case the picker most needs to render
+correctly today. But this is a genuinely closer call than D10 was, because
+unlike option B in §9 the channel already exists and costs no new protocol. It
+should not be decided silently.
+
+**This decision does not touch the four read commands.** `status`, `models`,
+`route <model>` (preview) and `/commands` are reports, not selections among
+enumerated values; nothing in `configOptions` fits them, and
+[§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended)
+remains the mechanism for those regardless of how D11 goes.
 
 ---
 
