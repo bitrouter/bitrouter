@@ -1074,6 +1074,149 @@ answer are consistent: commands belong to the agent, contributed capability
 belongs on MCP, and nothing in ACP is shaped like "a middlebox adds a slash
 command".
 
+#### 6.9.5 What recurs in set C, across four harnesses
+
+[§7](#7-the-membership-rule)'s R1–R5 were derived from BitRouter's own
+constraints and then checked against the general-tool survey. This is the same
+check against the peer group, and it is the closest thing to an *empirical*
+basis the rule has. Every entry below is a command that exists interactively and
+has no headless twin in that harness.
+
+| Category | Claude Code | Codex | OpenCode | psql / k9s ([§6.2](#62-psql-the-interactive-layers-vocabulary-is-mostly-net-new)) |
+|---|---|---|---|---|
+| **Renderer / display** | fullscreen, transcript | `theme`, `pets`, `statusline`, `title`, `raw`, `vim`, `keymap` | `/themes`, `/details`, `/thinking`, `/editor` | psql `\pset`-family beyond the flags |
+| **Conversation buffer** | `/compact`, `/context`, `/clear` | `compact`, `recap`, `clear`, `new`, `copy`, `diff` | `/compact`, `/undo`, `/redo`, `/new` | psql `\e`, `\p`, `\r`, `\s` |
+| **Permission / approval** | `/permissions` | `permissions`, `approve` | — (config only) | — |
+| **Config editing** | `/config`, `/hooks` | `experimental`, `memories`, `hooks`, `debug-config` | `/connect` | — |
+| **Session / model switching** | `/model`, `/cd`, `/add-dir` | `model`, `personality`, `plan`, `side`, `cd`, `mention` | `/sessions`, `/models`, `/share` | k9s `:xray`, `:pulses` |
+| **Session lifecycle in place** | — | `quit`, `exit`, `logout`, `stop` | `/exit` | psql `\q` |
+
+Four categories recur in **all four** harnesses: renderer verbs, conversation-
+buffer verbs, session/model switching, and lifecycle-in-place. Permission and
+config editing recur in three of four.
+
+⇒ **Finding 13. Set C's membership is not arbitrary and it is not per-project.
+Every recurring category is a verb whose *subject is the session's own
+apparatus* — the renderer, the buffer, the pending permission, the next turn's
+model — none of which exists outside a live session.** That is R1 restated from
+observation instead of derivation, and it is the same criterion §6.2 extracted
+from psql's `\e`/`\r`. R1 can now be described as measured across six tools in
+two generations rather than reasoned from BitRouter's shape.
+
+**Two corrections to the rule fall out of the table.**
+
+- **Permission and approval belong in set C by nature, not by exception.** Two of
+  the four harnesses put an interactive permission verb there and none has a
+  headless command twin — the headless answer is always a *policy stated up
+  front* (Claude Code's `--permission-mode` / `--allowedTools`, Codex's
+  `--sandbox` / `--full-auto`, OpenCode's `--auto`). [§6.10](#610-the-in-repo-precedent-866)
+  is BitRouter arriving at the same answer independently, and R3 should be read
+  as consistent with it rather than as forbidding it.
+- **Config editing is set C in the harnesses and set B here, and that difference
+  is deliberate.** Three of four harnesses expose an interactive config editor;
+  R3 forbids one outright, following `OBSERVABILITY_TUI_SPEC.md` §14's *"never
+  writes config"*. The peer group is evidence that the *demand* is real, not that
+  the rule is wrong — §14's rule exists because the previous TUI died of exactly
+  this accretion ([§5](#5-the-prior-record-and-what-parity-would-reverse)). Worth
+  knowing that BitRouter is the outlier; not worth changing on that basis.
+
+#### 6.9.6 Argument grammar, as four harnesses actually solved it
+
+[D9](#d9--argument-grammar) was, before this survey, an invented choice between
+`split_whitespace`, clap re-entry, and pickers. None of the four does clap
+re-entry. Here is what they do:
+
+| Harness | Grammar | Declaration on the entry |
+|---|---|---|
+| Claude Code | `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, and **named** `$name` args declared in frontmatter | `arguments: [issue, branch]` plus `argument-hint` for autocomplete |
+| Codex TUI | name, then the rest of the line, hand-parsed per command | `supports_inline_args() -> bool` — a **boolean**, 20 of 59 |
+| `codex-acp` | `text.slice(1).split(/\s+/)`, `rest` hand-parsed per command, per-command usage errors | ACP's `input.hint`, plus `_meta.commandAction` for typed actions |
+| OpenCode | `$ARGUMENTS` and `$1..$N` substituted into the command's template | `hints: string[]`, **derived by regex over the template body** |
+
+Three observations, in ascending order of usefulness:
+
+1. **Nobody re-enters their own argument parser.** D9 option (b) has no adopters
+   in the peer group, which is weak evidence but all there is.
+2. **Everybody declares argument shape on the registry entry**, which is
+   [§6.5](#65-every-registry-declares-which-callers-may-reach-an-entry)'s finding
+   holding without exception in the newer generation. The declarations range from
+   a bare boolean (Codex) to named typed arguments (Claude Code); OpenCode's is
+   the interesting middle — `hints` is *computed from the body*, so the entry
+   cannot declare an argument the template does not use.
+3. **The two harnesses with a real grammar are the two whose commands are
+   prompt templates.** `$ARGUMENTS` and `$1` are substitutions into text, which
+   is a grammar you get for free when the command *is* text. BitRouter's commands
+   are not text — they are typed calls returning typed reports — so this is the
+   one place the peer group's answer does **not** transfer, and D9 cannot borrow
+   it.
+
+⇒ **Finding 14. D9's recommendation (defer, lean toward pickers, declare the
+argument kind on the row rather than writing a parser per command) survives the
+survey unchanged, and gains one concrete warning:** OpenCode's shared port takes
+`arguments` as a single joined string and its CLI hand-quotes argv back into
+that string ([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)).
+**Whatever `SessionActions::run` takes, it must not be one string.** A `Vec<String>`
+or a typed per-action request costs nothing today and forecloses the one bug the
+only shared-port implementation in the field actually has.
+
+### 6.10 The in-repo precedent (#866)
+
+`feat(acp): headless permission policy and output formats` (#866, `878178a4`)
+landed on `main` on 2026-09-05, **after** [§1](#1-verified-starting-state) was
+measured. §1 is therefore stale in one respect that matters, and the correction
+is favourable: BitRouter has already shipped [§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended),
+once, for one verb.
+
+Verified in the tree, not from the changelog alone:
+
+| Claim | Evidence |
+|---|---|
+| A new module holds the wire half of the session's effects | `apps/bitrouter/src/chat/effects.rs`, 140 lines, new in `878178a4` |
+| Three loops now run it | its module doc: *"The interactive loop, the piped loop, and the headless `acp prompt` loop used to each hand-roll the wire half… `Wire` is that half, written once, so a permission answered by a keystroke and one answered by a headless policy reach the agent through the same code."* |
+| The decision itself is shared, not just the plumbing | `bitrouter_tui::permission::Policy` decides; `machine::decide` turns the decision into the same `Effect::Resolve` a keystroke produces |
+| The guard was extended to cover it | *"The chat guard test scans the new file"* — `chat/effects.rs` names the ACP client and nothing else; the daemon, config and metering remain unnameable |
+| The maintainer's own framing | CHANGELOG: *"…reaches the agent through one shared interpreter (`chat/effects.rs`) that the interactive TUI, the piped `chat`, and `acp prompt` all run — **the first session-verb parity between the terminal and the headless CLI**."* |
+| And the framing in the commit body | *"This is the cheap half of TUI/headless parity, modelled on acpx's surface, with no session persistence and no daemon change."* |
+
+⇒ **Finding 15. The mechanism this spec recommends is not a proposal; it is the
+pattern the repository chose the week the spec was written, for the one verb
+where the pressure was highest.** Three things about how it was done are worth
+carrying into [§14](#14-phases) unchanged:
+
+1. **It moved in the direction §6.8 says is cheap.** Permission answering was a
+   set-C verb — a keystroke on a live session — and #866 gave it a headless
+   twin. It did *not* take a CLI leaf and give it a keystroke. Every parity move
+   in the peer group runs the same way ([§6.9.1](#691-claude-code--a-documented-terminal-only-class-and-a-shared-class-that-is-not-commands)'s
+   `claude mcp login`, added to escape the `/mcp` panel), and it is the direction
+   with the asymmetric payoff: it closes an automation dead end rather than a
+   discoverability gap.
+2. **The headless twin is a *policy*, not a command.** `--deny-all`,
+   `--approve-reads`, `--approve-all`, `--permission-policy` — the caller states
+   a rule up front rather than answering prompts one at a time. That is exactly
+   what all four harnesses do with permissions
+   ([§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses)), and it is the
+   reason the parity was achievable at all: the two surfaces do not share a
+   *command*, they share an **interpreter**, and each surface feeds it in the
+   idiom it can express. P1's *"where both surfaces can express it"* is doing
+   real work here and should not be dropped as hedging.
+3. **The shared interpreter was placed where the wall already allowed it.**
+   `chat/effects.rs` sits inside `chat/`, names only the ACP client, and is
+   scanned by the same guard — [§4 cause (c)](#4-root-cause--why-103-versus-2)'s
+   "add a declared channel, don't lower a wall", executed. `SessionActions`
+   ([§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended))
+   is the same move one seam further out, and #866 is evidence that the seam
+   holds under a real feature rather than a sketch.
+
+**One consequence for [D10](#d10--is-there-a-first-party-gui-over-acp-serve) and
+the C-versus-B argument.** §9 conceded that C's guarantee is conventional where
+B's is structural, and D10 left that risk unpriced. #866 is the first data point
+on it: the shared interpreter was written *because* the headless path had already
+drifted — the module doc says so in as many words, *"the headless one had
+drifted: it could only ever deny."* The drift is real and it happens, and the
+thing that caught it was a person noticing, not a test. That is an argument for
+treating guard **A1** as load-bearing exactly as D10 says, and a small argument
+for building it before the fourth surface rather than after.
+
 ---
 
 ## 7. The membership rule
