@@ -1342,6 +1342,59 @@ enum AcpCmd {
         /// The prompt text to send.
         text: String,
     },
+    /// List the slash commands a session offers, and who answers each.
+    ///
+    /// Opens a session, waits briefly for the agent to advertise its
+    /// commands, prints the list, and tears the session down. **No prompt is
+    /// sent.** The session is a fresh one, so this reports what a session with
+    /// this agent *would* offer — it cannot report on a `bitrouter chat`
+    /// already running elsewhere.
+    Commands {
+        /// Agent id — a bundled-catalog id or an entry under `agents:`.
+        #[arg(long)]
+        agent: String,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// How long to wait for the agent's command list, in milliseconds.
+        ///
+        /// An agent that has not answered by then is reported as not having
+        /// answered — distinct from one that answered with an empty list.
+        #[arg(long, value_name = "MS", default_value_t = 2000)]
+        wait_ms: u64,
+        /// Show only the commands one source answers.
+        #[arg(long, value_enum)]
+        source: Option<CommandSourceArg>,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+/// `--source` as clap spells it.
+///
+/// A separate enum from [`bitrouter_mcp::actions::commands::CommandSource`]
+/// so that the wire type owes clap nothing: the report is a schema shared with
+/// the MCP surface, and a `ValueEnum` derive on it would make a CLI concern
+/// part of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum CommandSourceArg {
+    /// BitRouter's own commands.
+    Bitrouter,
+    /// Prompt-expansion commands from the config.
+    Config,
+    /// Commands the agent advertises.
+    Agent,
+}
+
+impl From<CommandSourceArg> for bitrouter_mcp::actions::commands::CommandSource {
+    fn from(arg: CommandSourceArg) -> Self {
+        match arg {
+            CommandSourceArg::Bitrouter => Self::Bitrouter,
+            CommandSourceArg::Config => Self::Config,
+            CommandSourceArg::Agent => Self::Agent,
+        }
+    }
 }
 
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -1731,7 +1784,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Skills { action } => bitrouter::skills::cli::run(action, output),
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
-        Command::Acp { cmd } => acp_cmd(cmd).await,
+        Command::Acp { cmd } => acp_cmd(cmd, output).await,
         Command::Chat {
             agent,
             turn_timeout,
@@ -4927,7 +4980,7 @@ async fn run_launch(
 
 // ===== `bitrouter acp …` (per-session ACP substrate) =====
 
-async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
+async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
         AcpCmd::Serve {
             agent,
@@ -4975,6 +5028,30 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             };
             let tally = bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
             exit_with(tally.exit_code())
+        }
+        AcpCmd::Commands {
+            agent,
+            routing,
+            wait_ms,
+            source: only,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options: bitrouter::acp_cli::launch_options(None),
+                routing,
+            };
+            let mut report = bitrouter::acp_cli::commands(ctx, wait_ms).await?;
+            if let Some(only) = only {
+                let only = only.into();
+                report.commands.retain(|row| row.source == only);
+            }
+            output.emit(&report)?;
+            Ok(())
         }
     }
 }

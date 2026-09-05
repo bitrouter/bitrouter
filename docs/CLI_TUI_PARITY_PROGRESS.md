@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T7
+Task: T8
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -19,7 +19,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T4 — SessionPorts, /status, G4, G5, A1
 - [x] T5 — /models and /preview
 - [x] T6 — CommandsReport and its builder
-- [ ] T7 — bitrouter acp commands, /commands through the shared report
+- [x] T7 — bitrouter acp commands, /commands through the shared report
 - [ ] T8 — the prompt-expansion registry
 - [ ] T9 — acceptance sweep
 
@@ -154,6 +154,30 @@ Consecutive non-green iterations on this task: 0
 
   The rendering is deliberately tab-free, with a test pinning it — the direct
   consequence of what T5 found.
+
+- **T7** — `bitrouter acp commands` leaf, `/commands` on the shared report,
+  `commands_received` on the journal, `hint` carried through `translate.rs`,
+  and T3's scaffolding renderer deleted (77 lines + 78 of its tests, whose
+  coverage moved to `commands_report` in T6). 3046 tests pass — five fewer
+  than T6 by exactly those deleted renderer tests. All four table guards pass;
+  `acp commands --help` resolves.
+
+  Three judgment calls:
+
+  1. The raw-update subscription is opened **before** `new_session`, not
+     after. An agent that advertises immediately would otherwise race it and
+     be reported as silent — which is the very distinction `received` exists
+     to draw, so the obvious ordering would have made the flag lie.
+  2. `--source` has its own clap enum rather than a `ValueEnum` derive on
+     `CommandSource`. The report is a schema shared with the MCP surface;
+     a CLI concern does not belong in it.
+  3. `render/session.rs`'s module doc claimed it renders
+     `AvailableCommandsUpdate` "on request" — true when T3 wrote it, false
+     once the rendering moved app-side. Corrected.
+
+  Process note: a piped `cargo build ... | grep | head` reported `rc=0` while
+  masking a real compile error. Count `^error` lines; do not read the exit
+  code through a pipe.
 
 ## Blocked
 

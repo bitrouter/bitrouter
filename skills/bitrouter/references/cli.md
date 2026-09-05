@@ -212,7 +212,9 @@ rendered once, on request, and never held or polled; `/models [provider]` and
 `/preview <model>` print what `bitrouter models` and `bitrouter route` print;
 `/route` opens the route picker; `/route reset` drops
 the session's route lease so the daemon's default applies again; `/commands`
-(alias `/help`) lists everything the session offers — BitRouter's own commands
+(alias `/help`, headless twin `bitrouter acp commands --agent <id>`, which opens
+its own session to ask and so cannot report on one already running) lists
+everything the session offers — BitRouter's own commands
 first, then the agent's. A local name wins over an agent command of the same
 name, and the shadowed one is listed and marked rather than hidden. A command
 whose requirement is unmet is listed with the reason and answers with it.

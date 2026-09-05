@@ -541,6 +541,14 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 | `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
 | `/help` | The same list. An alias for `/commands`. |
 
+`/commands` reports three outcomes for the agent's half of the list, because
+they mean different things: the commands it advertised, *"advertises no
+commands"* when it answered with an empty list, and *"had not sent its command
+list yet"* when it had not answered at all. `bitrouter acp commands --agent
+<id>` prints the same report headlessly — it opens a session of its own to ask,
+so it describes what a session with that agent **would** offer rather than one
+already running elsewhere.
+
 BitRouter's commands are listed **above** the agent's, and a name BitRouter
 answers wins: if the agent advertises a command of the same name, `/commands`
 lists it marked *shadowed* rather than dropping it, so which half of the list

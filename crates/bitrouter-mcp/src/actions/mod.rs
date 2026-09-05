@@ -226,13 +226,17 @@ pub const ACTIONS: &[ActionSpec] = &[
         // it cannot report on the session the TUI is in — which is why the row
         // is `SessionBound` even once that leaf exists.
         id: "commands",
-        cli_leaf: None,
+        cli_leaf: Some("acp commands"),
         mcp_tool: None,
         tui_command: Some("commands"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::SessionBound,
-        output_schema: None,
+        output_schema: Some(|| {
+            rmcp::handler::server::tool::schema_for_output::<commands::CommandsReport>()
+                .as_ref()
+                .clone()
+        }),
     },
     ActionSpec {
         // The route picker. No CLI leaf: naming another process's session

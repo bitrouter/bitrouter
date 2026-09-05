@@ -1820,6 +1820,88 @@ async fn chat_piped(
 /// `result`/`schema_ok` (+ `raw` on failure) fields. `options.policy` answers
 /// the harness's permission requests; the tally returned is what the caller
 /// exits with.
+/// List what a session with this agent offers, and tear it down.
+///
+/// A fresh session, deliberately: nothing can name a `bitrouter chat` running
+/// in another terminal, so this reports what a session with this agent *would*
+/// offer rather than what one already open is offering. That is the same
+/// limitation the row's `SessionBound` reach records.
+///
+/// No prompt is sent. The only thing waited on is the agent's own
+/// `available_commands_update`, and `wait_ms` bounds that wait — an agent that
+/// says nothing in time is reported as not having answered, which is a
+/// different answer from an empty list.
+pub async fn commands(
+    ctx: SpawnContext<'_>,
+    wait_ms: u64,
+) -> Result<bitrouter_mcp::actions::commands::CommandsReport> {
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    let routed = apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
+
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Subscribed before the session opens, so an agent that advertises its
+    // commands immediately is not raced.
+    let mut updates = session.client.subscribe_raw_updates();
+    if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
+        let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+            unauthenticated_message(agent_id, session.client.auth_methods())
+        } else {
+            "opening the harness session".to_string()
+        };
+        session.shutdown().await;
+        return Err(error.context(context));
+    }
+
+    let mut advertised = Vec::new();
+    let mut received = false;
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(wait_ms));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            // The last update wins: the list is a replacement, not a delta.
+            update = updates.next() => match update {
+                Some(agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate(
+                    update,
+                )) => {
+                    advertised = update.available_commands;
+                    received = true;
+                }
+                Some(_) => continue,
+                // The stream ended; nothing more will arrive, so stop waiting.
+                None => break,
+            },
+            () = &mut deadline => break,
+        }
+    }
+
+    let report = crate::actions::commands::commands_report(
+        &crate::actions::session::offered_commands(&session.client),
+        &advertised,
+        received,
+    );
+    session.shutdown().await;
+    Ok(report)
+}
+
 pub async fn prompt<W>(
     ctx: SpawnContext<'_>,
     text: &str,

@@ -360,10 +360,20 @@ async fn drive(
                 // journal that holds the agent's own command list and the
                 // machine never reads the journal.
                 Effect::Notice(Notice::Commands) => {
-                    view.notice_lines(bitrouter_tui::render::session::commands(
-                        &state.commands,
-                        bitrouter_tui::view::lock(&shared).commands(),
-                    ));
+                    // The same function and the same renderer the headless
+                    // leaf uses, so the two cannot describe one session
+                    // differently.
+                    let report = {
+                        let journal = bitrouter_tui::view::lock(&shared);
+                        crate::actions::commands::commands_report(
+                            &state.commands,
+                            journal.commands(),
+                            journal.commands_received(),
+                        )
+                    };
+                    let rendered = crate::output::Output::new(crate::output::Format::Human)
+                        .render_to_vec(&report);
+                    view.notice_lines(bitrouter_tui::render::session::plain_lines(&rendered));
                 }
                 // One renderer for all three surfaces. `render_to_vec` hard-codes
                 // `Theme::none()`, so no escape sequence can reach the
