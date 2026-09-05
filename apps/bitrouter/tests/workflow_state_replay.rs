@@ -96,11 +96,13 @@ fn classifier_bakeoff_rejects_an_empty_research_set() {
 }
 
 #[test]
-fn classifier_bakeoff_emits_an_uncalibrated_scorecard_baseline() {
-    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
-    let first = ClassifierBakeoffArtifact::build(&fixtures, None).unwrap();
-    let second = ClassifierBakeoffArtifact::build(&fixtures, None).unwrap();
+fn classifier_bakeoff_emits_an_uncalibrated_scorecard_baseline() -> anyhow::Result<()> {
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root())?;
+    let first = ClassifierBakeoffArtifact::build(&fixtures, None)?;
+    let second = ClassifierBakeoffArtifact::build(&fixtures, None)?;
     assert_eq!(first, second);
+    assert_eq!(first.schema_version, 2);
+    assert_eq!(first.report.schema_version, 2);
     assert_eq!(first.report.total_count, 10);
     assert_eq!(first.report.accepted_count, 1);
     assert_eq!(first.report.task_family.exact_count, 2);
@@ -110,6 +112,14 @@ fn classifier_bakeoff_emits_an_uncalibrated_scorecard_baseline() {
     assert_eq!(first.report.all_heads_exact_count, 1);
     assert!(first.report.calibration.is_none());
     assert!(first.report.ood_detection.is_none());
+    let wire = serde_json::to_value(&first)?;
+    assert!(wire["report"].get("decision_weighted_loss").is_none());
+    assert!(wire["report"]["slices"]["zh"]["accepted_error_risk_ppm"].is_null());
+    assert_eq!(
+        wire["report"]["classification_surrogate_loss"]["normalized_loss_ppm"],
+        900_000
+    );
+    Ok(())
 }
 
 #[test]
