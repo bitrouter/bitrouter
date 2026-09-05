@@ -37,7 +37,7 @@ pub enum AcpTransport {
 /// One configured upstream ACP agent, as written in `bitrouter.yaml` under
 /// `agents:`.
 ///
-/// The same `name` is what every `bitrouter acp` subcommand addresses an
+/// The same `name` is what every `bro acp` subcommand addresses an
 /// agent by, and what [`AcpAgentConfig::validate`] constrains.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AcpAgentConfig {

@@ -1,4 +1,4 @@
-//! On-disk credentials for `bitrouter cloud` authentication.
+//! On-disk credentials for `bro cloud` authentication.
 //!
 //! Single JSON file at `<data-dir>/account-credentials.json`. The file
 //! is owner-only (mode `0o600` on Unix) — these tokens grant access to
@@ -34,7 +34,7 @@ pub struct Credentials {
     /// `Authorization: Bearer <access_token>` (RFC 6750 §2.1).
     pub access_token: String,
     /// RFC 6749 §1.5 refresh token. Optional — the AS may decline to
-    /// issue one, or `bitrouter cloud login` may have been run with a
+    /// issue one, or `bro cloud login` may have been run with a
     /// scope the AS refuses to refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
@@ -129,7 +129,7 @@ pub enum CredentialKind {
     ApiKey,
 }
 
-/// A credential persisted by `bitrouter cloud login`.
+/// A credential persisted by `bro cloud login`.
 ///
 /// New files use a tagged representation. Deserialization also accepts the
 /// original untagged OAuth object so existing logins continue to work.
@@ -378,7 +378,12 @@ impl CredentialsStore {
         let credential = self
             .current
             .as_ref()
-            .context("no stored credentials — run `bitrouter cloud login` first")?
+            .with_context(|| {
+                format!(
+                    "no stored credentials — run `{} cloud login` first",
+                    bitrouter_sdk::invocation::name()
+                )
+            })?
             .clone();
         let creds = match credential {
             StoredCredential::ApiKey { api_key, .. } => return Ok(api_key),
@@ -388,12 +393,16 @@ impl CredentialsStore {
             return Ok(creds.access_token);
         }
         let metadata = metadata.context("OAuth metadata is required to refresh this credential")?;
-        let refresh_token = creds.refresh_token.as_deref().context(
-            "access token expired and no refresh token is stored — run `bitrouter cloud login`",
-        )?;
+        let refresh_token = creds.refresh_token.as_deref().with_context(|| {
+            format!(
+                "access token expired and no refresh token is stored — run `{} cloud login`",
+                bitrouter_sdk::invocation::name()
+            )
+        })?;
         if !creds.refresh_token_usable() {
             anyhow::bail!(
-                "refresh token has itself expired — run `bitrouter cloud login` to re-authenticate"
+                "refresh token has itself expired — run `{} cloud login` to re-authenticate",
+                bitrouter_sdk::invocation::name()
             );
         }
         let token_set = flow::refresh(

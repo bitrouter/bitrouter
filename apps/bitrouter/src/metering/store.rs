@@ -342,7 +342,7 @@ pub struct RequestRow {
     ///
     /// `None` when capture is off (it defaults to off and is restart-only),
     /// when the request predates it, or when the ledger is unreadable. This
-    /// is the thread from a settled request to `bitrouter trajectory
+    /// is the thread from a settled request to `bro trajectory
     /// inspect`, which is otherwise reachable only by an episode id nothing
     /// hands out.
     pub episode_id: Option<String>,
@@ -549,7 +549,7 @@ impl MeteringStore {
 
     /// The newest `limit` settled requests within `window`, newest first —
     /// the live view's request stream. `launch_id` scopes it to one
-    /// `bitrouter launch` session; `None` is every caller.
+    /// `bro launch` session; `None` is every caller.
     ///
     /// Descending with a `LIMIT` on purpose. [`Self::export_usage`] is an
     /// unbounded ascending scan, which is right for a one-shot export and
@@ -685,7 +685,7 @@ impl MeteringStore {
         Ok(rows.into_iter().map(MeteringUsageRecord::from).collect())
     }
 
-    /// Spend + request count for exactly one `bitrouter launch` session.
+    /// Spend + request count for exactly one `bro launch` session.
     ///
     /// This is the query the time-window heuristic could never be: two agents
     /// running side by side each see their own spend, on a default

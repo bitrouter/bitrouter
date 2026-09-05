@@ -79,7 +79,7 @@ pub struct Config {
     /// single-shot.
     pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
-    /// `bitrouter agents` CLI (list / check / install). Empty by default.
+    /// `bro agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::transport::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
@@ -802,13 +802,13 @@ pub struct ServerConfig {
     ///
     /// `RUST_LOG` overrides this when set, following the Rust convention. The
     /// filter is resolved once at startup, so changing it needs a restart —
-    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
+    /// `bro reload` will not pick it up. Applies to `bro serve`
     /// (and therefore `start`); other subcommands install their subscriber
     /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
     /// SDK-level flag: when `true`, credential-less requests are admitted with
     /// a synthesised local caller. Code default is **`false`** — only the
-    /// config file produced by `bitrouter init` writes `true`.
+    /// config file produced by `bro init` writes `true`.
     pub skip_auth: bool,
 }
 
@@ -1393,7 +1393,7 @@ pub struct VariantConfig {
 ///
 /// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
 /// comment is left literal and never looked up — so a commented-out example
-/// (e.g. the `bitrouter init` starter config) that references an unset variable
+/// (e.g. the `bro init` starter config) that references an unset variable
 /// does not break loading. A `#` begins a comment only when it is at the start
 /// of a line or preceded by whitespace and is not inside a quoted scalar
 /// (matching YAML), so URL fragments (`host/p#x`) and quoted `#` stay literal
@@ -1502,7 +1502,7 @@ where
 /// Replace every `${VAR}` occurrence with the value of environment variable
 /// `VAR`. An undefined variable is an error. Used by the config loader.
 /// Reads via [`env_lookup`] so daemon-side overrides (installed by the
-/// CLI's `bitrouter reload`) take precedence over the live process env.
+/// CLI's `bro reload`) take precedence over the live process env.
 pub fn substitute_env(input: &str) -> Result<String> {
     substitute_with(input, env_lookup)
 }
@@ -1839,7 +1839,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// left as-is with a WARN — discovery never aborts startup.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
-/// unreachable provider can't stall a `bitrouter reload` for the OS-level
+/// unreachable provider can't stall a `bro reload` for the OS-level
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {

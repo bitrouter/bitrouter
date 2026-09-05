@@ -12,6 +12,7 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
@@ -82,7 +83,7 @@ pub struct Assembled {
     /// In-memory API-principal-scoped ACP route leases.
     pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
-    /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
+    /// caller (the daemon) so `bro reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
@@ -113,7 +114,7 @@ pub struct Assembled {
     /// concrete handle to swap a freshly built spec into it, because the
     /// transform itself cannot be re-registered on a built `App`.
     pub policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
-    /// Snapshot provider for `bitrouter observe status`. When the OTel
+    /// Snapshot provider for `bro observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
     pub observe: Arc<dyn ObserveStatusProvider>,
@@ -276,7 +277,7 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 
 /// The `plugins.*` keys in `config` that this binary does not read, sorted.
 ///
-/// Pure so `bitrouter config validate` can report the same set the daemon
+/// Pure so `bro config validate` can report the same set the daemon
 /// warns about, without building an `App`.
 pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
@@ -292,11 +293,11 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
 /// Collected in [`build_app_with_path`] so it covers every daemon start rather
-/// than only `bitrouter config validate` — validation is opt-in and the daemon
+/// than only `bro config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bitrouter config validate` reports the same set from a
+/// Public because `bro config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
 pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
@@ -318,12 +319,12 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 
 /// [`ignored_config_file_warnings`] plus the environment ones.
 ///
-/// The split is what `bitrouter config validate` needs: it validates a *file*,
+/// The split is what `bro config validate` needs: it validates a *file*,
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because `bitrouter acp serve|prompt|chat` never builds an `App`: it
+/// Public because `bro acp serve|prompt|chat` never builds an `App`: it
 /// takes its exporter straight from
 /// `build_otel_exporter_standalone_with_credentials`, which reads the same
 /// config. A guard covering only the daemon would leave those surfaces exactly
@@ -366,7 +367,7 @@ pub async fn build_app(config: &Config) -> Result<Assembled> {
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
-/// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
+/// table's `reload()` (driven by `bro reload` / `SIGHUP`) can re-read it.
 pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
@@ -535,9 +536,10 @@ pub async fn build_app_with_path(
                             .await;
                             if source.is_none() && warn_if_unmet {
                                 tracing::warn!(
-                                    "telemetry: attribution=account but no signed-in session is \
-                                     available — exporting anonymously (sign in with \
-                                     `bitrouter cloud login`)"
+                                    "telemetry: attribution=account but no signed-in session \
+                                     is available — exporting anonymously (sign in with `{} \
+                                     cloud login`)",
+                                    invocation::name()
                                 );
                             }
                             source
@@ -1219,7 +1221,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bitrouter cloud login` with a
+/// hosted gateway; OAuth from `bro cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
@@ -1418,7 +1420,7 @@ enum BearerPlan {
     StaticOnly,
 }
 
-/// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
+/// Build the OTel exporter for **out-of-daemon** surfaces (`bro acp
 /// serve|prompt`). Same config resolution as the daemon path (the telemetry
 /// opt-in, the `otel:` block, env vars), including the live account-bearer
 /// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
@@ -1444,7 +1446,8 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
                     "telemetry: attribution=account but no signed-in session is available — \
-                     exporting anonymously (sign in with `bitrouter cloud login`)"
+                     exporting anonymously (sign in with `{} cloud login`)",
+                    invocation::name()
                 );
             }
             source
@@ -1596,7 +1599,7 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bitrouter cloud login` session (or an explicit
+    /// Account-attributed when a `bro cloud login` session (or an explicit
     /// `bearer_token`) is available; anonymous otherwise. The default — signing
     /// in upgrades attribution automatically, with no config change.
     #[default]

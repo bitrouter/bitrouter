@@ -320,7 +320,7 @@ fn env_substitution_skips_full_line_comments() {
 
 #[test]
 fn env_substitution_skips_indented_comments() {
-    // Mirrors the `bitrouter init` starter config: a commented example deep in
+    // Mirrors the `bro init` starter config: a commented example deep in
     // the file referencing an unset var must not break loading.
     let yaml = "providers:\n  # opencode: { key: \"${OPENCODE_KEY_A}\" }\n  openai: {}";
     let out = substitute_with(yaml, |_| None).unwrap();

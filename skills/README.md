@@ -24,8 +24,8 @@ skills/bitrouter/
     └── harness-*.md
 ```
 
-A CLI-only activation runbook: probe, install, drive `bitrouter init --yes`,
-resolve credentials, wire the harness with `bitrouter launch`, verify a routed
+A CLI-only activation runbook: probe, install, drive `bro init --yes`,
+resolve credentials, wire the harness with `bro launch`, verify a routed
 request. Deeper CLI surface, cloud onboarding, provider config, migration off
 other gateways, diagnostics, and durable per-harness wiring live in `references/`.
 
@@ -80,9 +80,9 @@ cp -r skills/run-bitrouter-benchmark      ~/.claude/skills/
 cp -r skills/evaluating-bitrouter-routes  ~/.claude/skills/
 ```
 
-Once installed, `bitrouter mcp serve --backend skills` serves them to any MCP
+Once installed, `bro mcp serve --backend skills` serves them to any MCP
 client over SEP-2640 (`skills/list`, `skills/get`, `resources/read`), and
-`bitrouter skills list` shows what is installed.
+`bro skills list` shows what is installed.
 
 ## Editing conventions
 

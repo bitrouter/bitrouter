@@ -497,7 +497,7 @@ against the tree:
 
 | Claim | Reality |
 |---|---|
-| Its only consumer is being dissolved | It never was the only one, and the surviving consumer is `bitrouter launch`: since #749 removed the control tower, `spawn.rs` builds the gateway servers and hands them to `Harness::launch_overlay`, which injects them into every harness that has a mechanism (claude, codex, opencode, hermes) |
+| Its only consumer is being dissolved | It never was the only one, and the surviving consumer is `bro launch`: since #749 removed the control tower, `spawn.rs` builds the gateway servers and hands them to `Harness::launch_overlay`, which injects them into every harness that has a mechanism (claude, codex, opencode, hermes) |
 | "The HTTP surface exists before the stdio one goes" | It does not. `InstalledSkillCatalog` is wired only into the stdio `--backend skills` path; `assemble.rs` never references it, and the aggregate `/mcp` proxies configured upstreams only — **there is no HTTP path to the daemon's own installed skills** |
 
 Removing the injection today would therefore be a straight capability loss for
@@ -531,7 +531,7 @@ Decided against per spec §12 — these are closed decisions, not a backlog.
   that fixing it also requires re-keying `RmcpExecutor`'s connection pool, which
   today keys by server name alone.
 - **Signed or attested skills.**
-- **Package-manager surface for `bitrouter skills`** — **removed** (D5).
+- **Package-manager surface for `bro skills`** — **removed** (D5).
   `skills list` and `skills init` remain; external skill installers populate
   the filesystem.
 

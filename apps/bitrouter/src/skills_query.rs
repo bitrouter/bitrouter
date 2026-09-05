@@ -1,5 +1,5 @@
 //! The skills-introspection adapter — the app side of the `skills_search` /
-//! `skills_get` tools served by `bitrouter mcp serve --backend skills`.
+//! `skills_get` tools served by `bro mcp serve --backend skills`.
 //!
 //! Implements `bitrouter-mcp`'s
 //! [`SkillsQuery`] port over

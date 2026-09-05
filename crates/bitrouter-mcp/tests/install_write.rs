@@ -17,6 +17,6 @@ fn install_writes_and_merges_existing_file() {
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
     assert_eq!(doc["k"], 1);
     assert_eq!(doc["mcpServers"]["keep"]["command"], "y");
-    assert_eq!(doc["mcpServers"]["bitrouter"]["command"], "bitrouter");
+    assert_eq!(doc["mcpServers"]["bitrouter"]["command"], "bro");
     let _ = std::fs::remove_dir_all(&dir);
 }

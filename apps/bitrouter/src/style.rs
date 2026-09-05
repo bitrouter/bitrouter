@@ -66,7 +66,7 @@ impl Palette {
     }
 
     /// Pick the palette appropriate for stdout (used by status / other
-    /// structured-report surfaces). Piping `bitrouter status > file`
+    /// structured-report surfaces). Piping `bro status > file`
     /// strips colour automatically via [`IsTerminal`].
     pub fn for_stdout() -> Self {
         if no_color() || !std::io::stdout().is_terminal() {

@@ -98,7 +98,7 @@ impl CliReport for DaemonActionReport {
     }
 }
 
-/// Result of `bitrouter status`. Exit code stays 0 whether running or stopped —
+/// Result of `bro status`. Exit code stays 0 whether running or stopped —
 /// "stopped" is an answer, not a failure.
 #[derive(Serialize)]
 pub struct StatusReport {
@@ -150,7 +150,10 @@ impl CliReport for StatusReport {
         } else {
             h.status_block(Health::Down, "bitrouter is stopped")?;
             h.field("socket", &self.socket)?;
-            h.note("Run `bitrouter start` to launch the daemon.")
+            h.note(&format!(
+                "Run `{} start` to launch the daemon.",
+                bitrouter_sdk::invocation::name()
+            ))
         }
     }
 }
@@ -163,7 +166,7 @@ pub struct RouteHopView {
     pub protocol: String,
 }
 
-/// Result of `bitrouter route <model>`.
+/// Result of `bro route <model>`.
 #[derive(Serialize)]
 pub struct RouteReport {
     pub model: String,

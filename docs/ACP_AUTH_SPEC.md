@@ -18,7 +18,7 @@ It does **not** supersede [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md).
 The controller's forwarding contract, capability gating, and session ownership
 are unchanged; this adds one client-side capability and one client-side flow.
 It does not change how the daemon acquires provider credentials, and it does
-not change `bitrouter launch`.
+not change `bro launch`.
 
 ---
 
@@ -27,7 +27,7 @@ not change `bitrouter launch`.
 **The protocol declares how a harness is authenticated; BitRouter stops
 guessing.**
 
-Today `bitrouter providers login claude-code` hardcodes the knowledge that the
+Today `bro providers login claude-code` hardcodes the knowledge that the
 Claude Code harness is authenticated by running `claude auth login`. ACP
 stabilized a mechanism for the harness to declare that itself — a `terminal`
 authentication method carrying the arguments and environment to relaunch the
@@ -48,7 +48,7 @@ Two things follow, and they are separable:
 | axis | who authenticates to whom | carried by |
 |---|---|---|
 | **A — agent auth** | harness ↔ its own upstream (`claude-code-acp` ↔ Anthropic) | ACP `initialize.authMethods`, `authenticate`, and the `terminal` method |
-| **B — routing auth** | daemon ↔ an upstream provider | provider credentials from `bitrouter providers login`; no ACP participant owns them |
+| **B — routing auth** | daemon ↔ an upstream provider | provider credentials from `bro providers login`; no ACP participant owns them |
 
 Axis A is what this spec moves onto the protocol. Axis B is not moving: no ACP
 participant owns the daemon's upstream credential, and a harness routed through
@@ -103,7 +103,7 @@ fourth property: promising a mode whose mechanism can be withdrawn.
   token.
 - **Driving the interaction over the protocol.** ACP carries no channel for a
   browser redirect or a pasted code, by design. This spec does not invent one.
-- **`bitrouter launch`.** It holds no ACP connection, so the protocol cannot be
+- **`bro launch`.** It holds no ACP connection, so the protocol cannot be
   its source of truth. Its auth story stays what it is.
 - **Axis B credential acquisition.** `providers login <id>` for a *provider*
   keeps its current shape; only the harness-login special case (§8.3) changes.
@@ -206,7 +206,7 @@ This is the whole of the blocking defect. No dependency changes.
 
 ### 5.3 What the defects cost, observed
 
-A `bitrouter chat claude-acp` against an unauthenticated harness renders
+A `bro chat claude-acp` against an unauthenticated harness renders
 nothing and reports `cost unreported`, while the harness retries an upstream
 401 behind the scenes with exponential backoff. The renderer is honest — it has
 received no message and no priced usage — but the person is told neither which

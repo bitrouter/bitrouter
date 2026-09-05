@@ -12,7 +12,7 @@ If `ANTHROPIC_API_KEY` is in your environment, no config file needed.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-bitrouter start
+bro start
 ```
 
 ```python
@@ -40,12 +40,12 @@ Bedrock API key:
 ```bash
 export AWS_BEARER_TOKEN_BEDROCK=...    # generate a Bedrock API key in the AWS console
 export AWS_REGION=us-west-2            # optional; defaults to us-east-1
-bitrouter reload                       # or restart
-bitrouter providers list               # aws-bedrock → ACTIVE
+bro reload                       # or restart
+bro providers list               # aws-bedrock → ACTIVE
 ```
 
 Claude models on Bedrock route as e.g. `anthropic/claude-opus-4.8`
-(`bitrouter models --provider aws-bedrock` is authoritative). Native-Converse-only
+(`bro models --provider aws-bedrock` is authoritative). Native-Converse-only
 features (cross-region inference profiles, Bedrock Guardrails, structured outputs)
 are not served through this surface.
 
@@ -102,9 +102,9 @@ Once you're proxying through BitRouter, the same daemon can serve the **OpenAI**
 ## Verify
 
 ```bash
-bitrouter start
-bitrouter providers list                  # anthropic active: yes
-bitrouter route anthropic/claude-sonnet-4-5
+bro start
+bro providers list                  # anthropic active: yes
+bro route anthropic/claude-sonnet-4-5
 
 curl http://localhost:4356/v1/messages \
   -H "Content-Type: application/json" \

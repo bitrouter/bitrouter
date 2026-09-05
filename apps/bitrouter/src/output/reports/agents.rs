@@ -29,7 +29,7 @@ pub struct AgentRegistryRow {
     pub description: String,
 }
 
-/// Result of `bitrouter agents list`. `registry` is present only with
+/// Result of `bro agents list`. `registry` is present only with
 /// `--remote` (the fetched ACP registry).
 #[derive(Serialize)]
 pub struct AgentsListReport {
@@ -64,7 +64,10 @@ impl CliReport for AgentsListReport {
             }
             h.table(&t)?;
             h.line("")?;
-            h.line("  install a stub with: bitrouter agents install <id>")?;
+            h.line(&format!(
+                "  install a stub with: {} agents install <id>",
+                bitrouter_sdk::invocation::name()
+            ))?;
         }
         Ok(())
     }
@@ -81,7 +84,7 @@ pub struct AgentCheckRow {
     pub error: Option<String>,
 }
 
-/// Result of `bitrouter agents check`.
+/// Result of `bro agents check`.
 #[derive(Serialize)]
 pub struct AgentsCheckReport {
     pub agents: Vec<AgentCheckRow>,
@@ -103,7 +106,7 @@ impl CliReport for AgentsCheckReport {
     }
 }
 
-/// Result of `bitrouter agents install <id>` — the paste-able YAML stub.
+/// Result of `bro agents install <id>` — the paste-able YAML stub.
 #[derive(Serialize)]
 pub struct AgentInstallReport {
     pub id: String,

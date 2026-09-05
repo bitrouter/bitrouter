@@ -1,4 +1,4 @@
-//! The app half of `bitrouter chat` — everything the renderer cannot own.
+//! The app half of `bro chat` — everything the renderer cannot own.
 //!
 //! `bitrouter-tui` draws; it does not read. Keys, raw mode, and the session's
 //! lifetime belong here, because they are properties of *this* process rather
@@ -32,10 +32,10 @@
 //! `-echo` and `-icanon`, and the shell must still echo what you type:
 //!
 //! ```text
-//! bitrouter chat <agent>   # then Ctrl-D at the prompt   → stty -a | grep -o '\-\?echo'
-//! bitrouter chat <agent>   # then Ctrl-C at the prompt   → stty -a | grep -o '\-\?echo'
-//! bitrouter chat <agent> & ; kill -TERM %1               → stty -a | grep -o '\-\?echo'
-//! bitrouter chat <agent> & ; kill -HUP  %1               → stty -a | grep -o '\-\?echo'
+//! bro chat <agent>   # then Ctrl-D at the prompt   → stty -a | grep -o '\-\?echo'
+//! bro chat <agent>   # then Ctrl-C at the prompt   → stty -a | grep -o '\-\?echo'
+//! bro chat <agent> & ; kill -TERM %1               → stty -a | grep -o '\-\?echo'
+//! bro chat <agent> & ; kill -HUP  %1               → stty -a | grep -o '\-\?echo'
 //! ```
 //!
 //! The panic exit has no keystroke to trigger it; it is covered by

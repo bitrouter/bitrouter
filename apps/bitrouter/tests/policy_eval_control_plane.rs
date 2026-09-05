@@ -79,7 +79,7 @@ presets:
     .document;
     std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args([
             "policy",
             "publish",
@@ -429,7 +429,7 @@ fn publish_command(
     candidate_path: &std::path::Path,
     config_path: &std::path::Path,
 ) -> anyhow::Result<std::process::Output> {
-    Ok(std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    Ok(std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args([
             "policy",
             "publish",

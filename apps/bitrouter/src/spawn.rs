@@ -1,7 +1,7 @@
-//! `bitrouter launch` — launch a coding-agent harness (Claude Code, Codex, …)
+//! `bro launch` — launch a coding-agent harness (Claude Code, Codex, …)
 //! as an interactive native-TUI child process. Routed harnesses are pointed at
 //! the local BitRouter daemon; own-auth harnesses launch directly. This is the
-//! interactive surface; headless ACP sub-agents are `bitrouter spawn` (see
+//! interactive surface; headless ACP sub-agents are `bro spawn` (see
 //! [`crate::acp_cli`]). Both draw their routing knowledge from the shared
 //! [`crate::harness`] catalog.
 //!
@@ -25,7 +25,7 @@
 //! ambiguity about which flags belong to which program:
 //!
 //! ```text
-//!   bitrouter launch --agent claude [bitrouter opts] -- <args forwarded to claude>
+//!   bro launch --agent claude [bitrouter opts] -- <args forwarded to claude>
 //! ```
 //!
 //! Everything after `--` is handed to the agent binary verbatim.
@@ -53,6 +53,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bitrouter_sdk::error::BitrouterError;
+use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -105,7 +106,7 @@ pub struct AgentSpec {
     pub binary: &'static str,
 }
 
-/// Resolve a `bitrouter launch --agent` value to its catalog harness. Accepts
+/// Resolve a `bro launch --agent` value to its catalog harness. Accepts
 /// the interactive binary name (`claude`, `codex`, `opencode`, `pi`) and the
 /// catalog id (`claude-acp`, `pi-acp`, …). An unknown value is a caller
 /// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
@@ -140,7 +141,7 @@ fn harness_id(h: &crate::harness::Harness) -> &'static str {
     h.interactive_binary.unwrap_or(h.id)
 }
 
-/// What `bitrouter launch` injects into the child process. The env/args come
+/// What `bro launch` injects into the child process. The env/args come
 /// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::RoutingOverlay), so the
 /// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,10 +152,10 @@ pub struct ChildLaunch {
     pub args_prefix: Vec<String>,
 }
 
-/// Resolve the gateway bearer credential for a `bitrouter launch` child by
+/// Resolve the gateway bearer credential for a `bro launch` child by
 /// precedence: a token the user already exported for the harness →
 /// `BITROUTER_API_KEY` → a freshly minted per-launch token (valid under
-/// `skip_auth: true`, the `bitrouter init` default; the harness merely needs
+/// `skip_auth: true`, the `bro init` default; the harness merely needs
 /// *some* credential to start).
 ///
 /// The last rung used to be a fixed placeholder. Minting a unique token there
@@ -237,7 +238,7 @@ pub struct SpawnCheckRow {
     pub message: String,
 }
 
-/// Result of `bitrouter spawn --check`.
+/// Result of `bro spawn --check`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpawnCheckReport {
     pub agent: String,
@@ -319,7 +320,7 @@ pub struct Prepared<'a> {
     pub session_start: chrono::DateTime<chrono::Utc>,
 }
 
-/// Run `bitrouter launch`: [`prepare`] the child, then run it with the
+/// Run `bro launch`: [`prepare`] the child, then run it with the
 /// terminal inherited. On success this **does not return** — it exits the
 /// process with the agent's exit code, the way a launcher like
 /// `git <subcommand>` propagates its child's status.
@@ -354,9 +355,10 @@ pub async fn prepare<'a>(
         if !conflicts.is_empty() {
             anyhow::bail!(
                 "codex forwarded config flags ({}) can override BitRouter's one-shot provider \
-                 injection. Remove those -c/--config flags and run `bitrouter launch --agent \
-                 codex --check` to inspect the route before launching.",
-                conflicts.join(", ")
+                 injection. Remove those -c/--config flags and run `{cli} launch --agent codex \
+                 --check` to inspect the route before launching.",
+                conflicts.join(", "),
+                cli = invocation::name()
             );
         }
     }
@@ -994,7 +996,7 @@ fn rewrite_host(host: &str) -> &str {
 }
 
 /// True when `listen` binds a loopback / wildcard address — i.e. a daemon on
-/// *this* host that `bitrouter spawn` may auto-start. A remote or LAN host is
+/// *this* host that `bro spawn` may auto-start. A remote or LAN host is
 /// someone else's daemon, which we can only warn about. Exact-match only:
 /// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
 /// the warn path — the fail-safe direction (never a wrong auto-start).
@@ -1181,8 +1183,8 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Ensure `agent`'s binary is installed — locating it on `PATH` (+
 /// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bitrouter spawn` and
-/// `bitrouter providers login claude-code` (which needs the `claude` CLI to
+/// and return its path. Shared by `bro spawn` and
+/// `bro providers login claude-code` (which needs the `claude` CLI to
 /// sign the user in) so both go through one detect-and-install path.
 pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
     let spec = agent.spec();
@@ -1305,9 +1307,10 @@ fn warn_if_daemon_unreachable(listen: &str) {
         let p = Palette::for_stderr();
         eprintln!(
             "{cyan}note:{reset} no BitRouter daemon appears to be listening on {probe} — \
-             start one with `bitrouter start` (the agent will fail to reach it otherwise).",
+             start one with `{cli} start` (the agent will fail to reach it otherwise).",
             cyan = p.cyan,
             reset = p.reset,
+            cli = invocation::name(),
         );
     }
 }

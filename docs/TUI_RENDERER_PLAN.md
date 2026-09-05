@@ -154,7 +154,7 @@ renderer and are worth having even if §19.1 goes the other way.
   - Files: `apps/bitrouter/src/acp_cli.rs`
   - Do: gate `chat` on `std::io::stdout().is_terminal()`. When false, fall back
     to plain line output with no cursor control and no raw mode.
-  - Done when: `bitrouter chat <agent> < /dev/null | cat` emits no escape
+  - Done when: `bro chat <agent> < /dev/null | cat` emits no escape
     sequences.
   - Verify: `cargo nextest run -p bitrouter 2>&1 | tail -5`
   - Commit: `fix(chat): degrade to plain output when not a tty`
@@ -268,7 +268,7 @@ left the old stack intact.
     permission — cost still via the crate's `cost.rs`. Drop
     the turn-end `flush()`. Route `log_tail` to a direct stdout write after
     teardown (spec §10).
-  - Done when: `bitrouter chat` renders a session with in-place tool-call
+  - Done when: `bro chat` renders a session with in-place tool-call
     updates, and `rg -n 'bitrouter_tui::(transcript|viewport)' apps/bitrouter/src`
     returns nothing.
   - Verify: `cargo nextest run --all-features 2>&1 | tail -15`
@@ -387,7 +387,7 @@ Work through Phase 1 of docs/TUI_RENDERER_PLAN.md following its §A loop protoco
 **Phase 2**
 
 ```
-Work through Phase 2 of docs/TUI_RENDERER_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 2.1-2.7 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing. Everything in this phase is ADDITIVE: the shipping renderer must still be Transcript + Inline when the phase ends, and `bitrouter chat` must behave exactly as it does today. Do not modify apps/bitrouter/src/acp_cli.rs. Before task 2.4, confirm the §19.2 diff decision is recorded in §C.1 — if it is not, print BLOCKED and stop. Never use #[allow], .unwrap, .expect or panic!. Print the full Phase 2 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 40 turns.
+Work through Phase 2 of docs/TUI_RENDERER_PLAN.md following its §A loop protocol: one task per turn, first unchecked task whose dependencies are met, tick its checkbox and commit. Done when tasks 2.1-2.7 are checked AND the final turn shows `cargo nextest run --all-features`, `cargo clippy --all-features`, and `cargo fmt -- --check` all passing. Everything in this phase is ADDITIVE: the shipping renderer must still be Transcript + Inline when the phase ends, and `bro chat` must behave exactly as it does today. Do not modify apps/bitrouter/src/acp_cli.rs. Before task 2.4, confirm the §19.2 diff decision is recorded in §C.1 — if it is not, print BLOCKED and stop. Never use #[allow], .unwrap, .expect or panic!. Print the full Phase 2 checklist and a `PLAN STATUS:` line every turn, and paste each Verify command's real output — do not summarise it. Stop after 40 turns.
 ```
 
 **Phase 3**

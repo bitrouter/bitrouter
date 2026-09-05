@@ -1,4 +1,4 @@
-//! `bitrouter status --requests` — what the router has actually done.
+//! `bro status --requests` — what the router has actually done.
 //!
 //! # Why this is a report and not a printer
 //!
@@ -118,7 +118,7 @@ pub struct RequestView {
     pub error: Option<String>,
     /// The trajectory episode this request belongs to, or `null`.
     ///
-    /// This is the thread onward: `bitrouter trajectory inspect <episode_id>`
+    /// This is the thread onward: `bro trajectory inspect <episode_id>`
     /// reads the structural record. `null` is the common case — capture
     /// defaults to off — and it means "there is nothing further to read",
     /// which is exactly what a caller needs to know before trying.
@@ -161,7 +161,7 @@ impl RequestView {
     }
 }
 
-/// Result of `bitrouter status --requests`.
+/// Result of `bro status --requests`.
 ///
 /// Deliberately not `Default`: `scope` would come back `""`, a report
 /// claiming no scope at all, which is the one thing this surface must never
@@ -248,14 +248,17 @@ impl RequestsReport {
         match (&self.daemon, self.mode) {
             (Some(d), _) => format!("live · pid {} · {} · {} models", d.pid, d.listen, d.models),
             (None, Mode::HistoryOnly) => "history only — daemon not running".to_string(),
-            (None, _) => "nothing recorded yet — try bitrouter serve".to_string(),
+            (None, _) => format!(
+                "nothing recorded yet — try {} serve",
+                bitrouter_sdk::invocation::name()
+            ),
         }
     }
 
     /// The rollup, scope included.
     ///
     /// `unreported` rather than `$0.00` when nothing in the window carries
-    /// charge evidence. This is the rule `bitrouter chat`'s cost line already
+    /// charge evidence. This is the rule `bro chat`'s cost line already
     /// keeps — *a client that cannot see a price has not observed a free
     /// turn* — and the two surfaces contradicted each other until it did.
     fn rollup(&self) -> String {
@@ -511,7 +514,7 @@ mod tests {
         assert_ne!(cells[5], "$0.00");
     }
 
-    /// `bitrouter chat` renders an unscoped cost as `unreported`. This surface
+    /// `bro chat` renders an unscoped cost as `unreported`. This surface
     /// showed `$0.00` for the same condition until the two were reconciled.
     #[test]
     fn a_window_with_no_charge_evidence_reports_unreported() {
@@ -589,7 +592,7 @@ mod tests {
         let fresh = report(None, Vec::new());
         assert_eq!(fresh.mode, Mode::Empty);
         assert!(
-            fresh.headline().contains("bitrouter serve"),
+            fresh.headline().contains("bro serve"),
             "an empty view must say what to do, not just show nothing"
         );
     }

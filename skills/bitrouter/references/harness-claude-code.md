@@ -6,14 +6,14 @@ Wire Anthropic's Claude Code CLI to route its model calls through BitRouter at `
 
 ## Prerequisites
 
-- BitRouter installed (`bitrouter --version`). The daemon does **not** need to be pre-started for the `spawn` path — it auto-starts.
+- BitRouter installed (`bro --version`). The daemon does **not** need to be pre-started for the `spawn` path — it auto-starts.
 - Claude Code installed and authenticated normally at least once.
 
-## Preferred launch path: `bitrouter launch`
+## Preferred launch path: `bro launch`
 
 ```bash
-bitrouter launch -a claude
-bitrouter launch -a claude -- -p "summarize this repo"
+bro launch -a claude
+bro launch -a claude -- -p "summarize this repo"
 ```
 
 Reversible, per-process, and config-file-free: `spawn` launches Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, `spawn` auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. After the session exits, `spawn` prints a one-line spend summary for the wrapped run.
@@ -30,7 +30,7 @@ export ANTHROPIC_AUTH_TOKEN="bitrouter-local"   # placeholder; fine under skip_a
 Facts that matter (verified against `apps/bitrouter/src/spawn.rs`):
 
 - **`ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.** Claude Code sends `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer …` — the credential BitRouter validates. `ANTHROPIC_API_KEY` would be sent as `x-api-key` instead, and in a BYOK setup that variable typically holds your *upstream* Anthropic provider key, which is not a valid BitRouter inbound credential. `spawn` always sets both variables explicitly (never inherit-only) for exactly this reason.
-- **Token precedence** (`spawn`): an `ANTHROPIC_AUTH_TOKEN` you already exported → `BITROUTER_API_KEY` → the `bitrouter-local` placeholder. The placeholder works with the `skip_auth: true` default from `bitrouter init`; flip `skip_auth: false` and mint a `brvk_*` key (`bitrouter key sign --user <id>`) for multi-tenant setups.
+- **Token precedence** (`spawn`): an `ANTHROPIC_AUTH_TOKEN` you already exported → `BITROUTER_API_KEY` → the `bitrouter-local` placeholder. The placeholder works with the `skip_auth: true` default from `bro init`; flip `skip_auth: false` and mint a `brvk_*` key (`bro key sign --user <id>`) for multi-tenant setups.
 - **Durable setup:** put the two exports in your shell profile, or in the `env` block of `~/.claude/settings.json`. Show the user the diff before writing settings files — never edit them silently.
 
 ## Model selection
@@ -38,7 +38,7 @@ Facts that matter (verified against `apps/bitrouter/src/spawn.rs`):
 Claude Code sends bare Anthropic model ids (`claude-sonnet-4-6`, `claude-haiku-4-5`). BitRouter's routing table resolves bare ids through its fallback chain — confirm with:
 
 ```bash
-bitrouter route claude-sonnet-4-6
+bro route claude-sonnet-4-6
 ```
 
 If a bare id doesn't resolve in your config, alias it in `bitrouter.yaml`:
@@ -52,8 +52,8 @@ models:
 ## Verify
 
 ```bash
-bitrouter launch -a claude -- --version     # binary + wiring sanity
-echo "say hi" | bitrouter launch -a claude  # one-shot through the router
+bro launch -a claude -- --version     # binary + wiring sanity
+echo "say hi" | bro launch -a claude  # one-shot through the router
 tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
 ```
 

@@ -13,8 +13,8 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP, with its billing wire type kept local        |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
-| `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
+| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bro chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
+| `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
 
@@ -24,10 +24,10 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 
 | Interface                 | Where it lives                                                                                            | Entry point              |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
-| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
-| **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
-| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the manager-facing server, `client` the one ACP client (transport-generic, driven on the caller's runtime, and the only speaker of `_bitrouter/route/*`), `up` the agent-process transport, `translate` the typed view of `session/update` that `acp prompt`'s NDJSON publishes. There is one stack: `chat`, piped `chat` and `acp prompt` are all consumers of `client`, differing in what they do with the update stream rather than in how they speak ACP. Subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
-| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
+| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bro serve`        |
+| **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bro mcp serve`    |
+| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the manager-facing server, `client` the one ACP client (transport-generic, driven on the caller's runtime, and the only speaker of `_bitrouter/route/*`), `up` the agent-process transport, `translate` the typed view of `session/update` that `acp prompt`'s NDJSON publishes. There is one stack: `chat`, piped `chat` and `acp prompt` are all consumers of `client`, differing in what they do with the update stream rather than in how they speak ACP. Subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bro acp serve`    |
+| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bro chat`         |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -83,7 +83,7 @@ The last surface short of this was `status --watch`, a self-refreshing ratatui
 table over daemon-wide request rows. It could not move to `bitrouter-tui` —
 those rows come from the metering store and cover every caller, most of which
 never speak ACP, so importing them would have put a daemon-wide model inside a
-session-scoped crate. It was removed instead, and `bitrouter status --requests`
+session-scoped crate. It was removed instead, and `bro status --requests`
 reports the same data through the ordinary CLI report layer
 (`apps/bitrouter/src/output/reports/requests.rs`) — JSON by default, `--human`
 for the table, and no terminal code anywhere in it.
@@ -98,7 +98,7 @@ over, and which runtime it has — so the pump stays in the app
 `bitrouter-tui` therefore depends on no async runtime at all, and
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
-| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
+| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
 
 The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate while both ACP and the API ride inside the SDK, and only the CLI lives in the binary itself.
 
@@ -184,13 +184,13 @@ When a subcommand doesn't pass `-c <path>`, the binary walks a fixed order (see 
 2. **`./bitrouter.yaml`** in the current directory.
 3. **`$BITROUTER_HOME/bitrouter.yaml`** — if the env var is set, that file must exist.
 4. **`~/.bitrouter/bitrouter.yaml`** — used if present.
-5. **Zero-config in-memory defaults** — when nothing above exists. No file is written; `bitrouter init` is the explicit way to scaffold one.
+5. **Zero-config in-memory defaults** — when nothing above exists. No file is written; `bro init` is the explicit way to scaffold one.
 
 The daemon `chdir`s into the bitrouter home (the config file's directory, or `~/.bitrouter` for zero-config) on startup, so relative paths in the config — `database.url`, `server.control_socket` — and the socket / pid / log all resolve against one stable location.
 
 ### Zero-config and the provider catalog
 
-In zero-config mode `bitrouter_providers::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bitrouter providers login <provider>`.
+In zero-config mode `bitrouter_providers::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bro providers login <provider>`.
 
 ## HTTP Server Surface
 
@@ -215,7 +215,7 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 `bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `eval` / `optimize` / `trajectory` / `providers` / `agents` / `launch` / `spawn` / `cloud` / `skills` / `mcp` / `workflow-state` / `update` / `acp`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. `launch` runs a harness as an interactive native TUI; `spawn` (and its `acp serve|prompt` aliases) runs one as a headless ACP sub-agent. See `apps/bitrouter/src/main.rs`.
 
-### Observability surface (`bitrouter status --requests`)
+### Observability surface (`bro status --requests`)
 
 One surface, and no module of its own. `RequestsReport`
 (`apps/bitrouter/src/output/reports/requests.rs`) is an ordinary `CliReport`:
@@ -231,7 +231,7 @@ Its signal arm moved to `chat/signals.rs`, next to its only caller.
 `apps/bitrouter` no longer depends on `ratatui`; `crates/bitrouter-tui` owns
 drawn terminal UI for ACP chat.
 
-The hosted mode `bitrouter launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
+The hosted mode `bro launch --tui` and its VT emulator (`tui/host.rs`, `tui/term.rs`, `tui/pty.rs`, `tui/conformance.rs`, `tui/fixtures/`) are **deleted**, along with the fidelity matrix that gated them and the `alacritty_terminal` / `portable-pty` / `termwiz` / `wezterm-input-types` dependencies. See [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) for the reasoning and for what replaces it — an inline-viewport ACP client rather than a terminal emulator.
 
 `spawn::prepare` still builds the child once and `exec_inherited` runs it; the `Prepared` seam is kept independent of hosting.
 

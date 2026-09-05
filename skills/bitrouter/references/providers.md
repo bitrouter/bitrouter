@@ -20,18 +20,18 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `azure` | `AZURE_OPENAI_API_KEY` | Bearer | Azure OpenAI `/openai/v1` surface; set `AZURE_OPENAI_RESOURCE` to your resource name (unset ⇒ provider inactive). Entra ID tokens also work as the bearer |
 | `vertex` | `VERTEX_EXPRESS_API_KEY` | Header `x-goog-api-key` | Vertex AI, currently **Express Mode only** → **Gemini models only** (no Claude/Llama/Mistral), global endpoint (region ignored). Partner models are commented out in the registry entry pending service-account OAuth support |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bitrouter providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
-| `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
-| `supergrok` | — (local OAuth) | SuperGrok subscription | `bitrouter providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
-| `google-ai` | — (local OAuth) | Google AI (Antigravity) subscription | `bitrouter providers login google-ai`; imports the `agy` CLI keyring session, custom cloudcode-pa protocol, distinct from `google` API-key billing. Unofficial — uses your own Google account |
+| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bro providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
+| `github-copilot` | — (local OAuth) | Device flow | `bro providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bro providers login openai-codex` |
+| `supergrok` | — (local OAuth) | SuperGrok subscription | `bro providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
+| `google-ai` | — (local OAuth) | Google AI (Antigravity) subscription | `bro providers login google-ai`; imports the `agy` CLI keyring session, custom cloudcode-pa protocol, distinct from `google` API-key billing. Unofficial — uses your own Google account |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
 the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
-`openai-codex`, `supergrok`, `google-ai`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
+`openai-codex`, `supergrok`, `google-ai`) are enabled by `bro providers login`, not an env var. **First run with no network
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
 shorthand needs one prior successful fetch. Startup still succeeds.
@@ -78,7 +78,7 @@ Rules:
   provider's declared env var. No key ⇒ not enabled. Declare the provider
   explicitly with `api_key: ${MY_VAR}` to override the env-var name. A
   `local_oauth` / `local_pkce` provider is not env-gated — it activates after
-  `bitrouter providers login <provider>`.
+  `bro providers login <provider>`.
 - **Full catalog via the sync channel.** A provider may declare an `auto_sync`
   feed (the channel the registry itself syncs from). BitRouter reads the same
   channel to pull the provider's **full** catalog beyond the registry seed
@@ -286,7 +286,7 @@ mcp_servers:
       args: ["mcp-server-git"]
 ```
 
-Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bitrouter tools list` / `bitrouter tools status` / `bitrouter tools discover <name>`. To find servers without hand-writing the block: `bitrouter mcp search <query>` / `bitrouter mcp list` browse the official MCP registry (with an install-support column), and `bitrouter mcp add <name>` prints a reviewed stub to paste under `mcp_servers:`.
+Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bro tools list` / `bro tools status` / `bro tools discover <name>`. To find servers without hand-writing the block: `bro mcp search <query>` / `bro mcp list` browse the official MCP registry (with an install-support column), and `bro mcp add <name>` prints a reviewed stub to paste under `mcp_servers:`.
 
 ## Server tools (router-executed)
 
@@ -298,7 +298,7 @@ server_tools:
   max_iterations: 10         # optional; max tool rounds per request (default 10)
 ```
 
-Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. This is the inverse of `bitrouter mcp serve` (which makes BitRouter an MCP *server*): here BitRouter is an MCP *client* consuming those tools inside the request loop.
+Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. This is the inverse of `bro mcp serve` (which makes BitRouter an MCP *server*): here BitRouter is an MCP *client* consuming those tools inside the request loop.
 
 ### Model-backed server tools (advisor / sub-agent / fusion)
 
@@ -389,14 +389,14 @@ The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, `opencode`,
 it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
 `@bitrouter/pi` provider so pi's own model calls route back through the daemon.
 
-`bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
+`bro agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bro agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bro agents check` verifies each configured agent answers `initialize`.
 
 Agents declared here are referenced by `--agent <id>` when launching an ACP
 controller. A manager (GUI, AI agent, or editor) spawns one process per harness
 connection; that connection may carry multiple harness-native sessions:
 
 ```bash
-bitrouter acp serve --agent claude [--config PATH]
+bro acp serve --agent claude [--config PATH]
 ```
 
 The manager initializes first. BitRouter relays its capabilities to the harness,
@@ -410,18 +410,18 @@ Codex `-c` arguments.
 Every session ID and lifecycle operation remains harness-native. The controller
 stores neither transcripts nor a second session catalog, and it exits when the
 manager disconnects. For a one-shot turn on the same controller,
-`bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See
+`bro acp prompt --agent claude <text>` streams NDJSON to stdout. See
 `references/sessions.md` for the complete ownership boundary.
 
 ## Apply changes
 
 ```bash
-bitrouter reload                      # hot-reload running daemon
+bro reload                      # hot-reload running daemon
 # SIGHUP also reloads daemon-side config, but does not forward new shell env vars
-# or `bitrouter restart` for a clean cycle
+# or `bro restart` for a clean cycle
 ```
 
-`reload` also re-pushes the current shell's provider env vars into the daemon, so an `export OPENAI_API_KEY=new...; bitrouter reload` sequence rotates the key live.
+`reload` also re-pushes the current shell's provider env vars into the daemon, so an `export OPENAI_API_KEY=new...; bro reload` sequence rotates the key live.
 
 ## What's not supported (don't suggest these)
 
@@ -431,5 +431,5 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `strategy: conditional` with `prompt_tokens` rules — not parsed.
 - `strategy: least_cost` — not parsed.
 - `safety_settings`, `features.computer_use`, `features.json_mode` provider blocks — not parsed.
-- `bitrouter providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers login`, and `providers logout`.
-- `bitrouter config reload/show` — `config validate` exists for CI-safe validation; use `bitrouter reload` for the daemon.
+- `bro providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers login`, and `providers logout`.
+- `bro config reload/show` — `config validate` exists for CI-safe validation; use `bro reload` for the daemon.

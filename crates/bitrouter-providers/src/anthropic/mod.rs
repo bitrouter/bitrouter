@@ -95,9 +95,11 @@ impl AuthApplier for AnthropicApiKeyApplier {
                 if inline.is_empty() {
                     return Err(BitrouterError::Upstream {
                         status: 401,
-                        message: "no anthropic credential — set ANTHROPIC_API_KEY or store an \
-                             Anthropic API key with `bitrouter providers login anthropic`"
-                            .into(),
+                        message: format!(
+                            "no anthropic credential — set ANTHROPIC_API_KEY or store an \
+                             Anthropic API key with `{} providers login anthropic`",
+                            bitrouter_sdk::invocation::name()
+                        ),
                     });
                 }
                 inline.to_string()
@@ -209,7 +211,7 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter providers login anthropic"),
+            msg.contains("bro providers login anthropic"),
             "expected helpful hint, got: {msg}"
         );
     }

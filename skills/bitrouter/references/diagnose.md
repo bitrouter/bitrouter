@@ -1,21 +1,21 @@
 # Diagnose
 
-Real diagnostic flow against the v1 binary. There is no `bitrouter doctor` — diagnostics are composed from `status`, `route`, `models`, `providers list`, and the log file.
+Real diagnostic flow against the v1 binary. There is no `bro doctor` — diagnostics are composed from `status`, `route`, `models`, `providers list`, and the log file.
 
-> **Work one hypothesis at a time.** After each change, re-run `bitrouter status` and the command that originally failed. Don't try the next fix until you've confirmed the current one didn't resolve it — shotgunning multiple changes makes it impossible to attribute the eventual success and often introduces new failures.
+> **Work one hypothesis at a time.** After each change, re-run `bro status` and the command that originally failed. Don't try the next fix until you've confirmed the current one didn't resolve it — shotgunning multiple changes makes it impossible to attribute the eventual success and often introduces new failures.
 
 ## First six checks
 
 ```bash
-bitrouter --version                           # 1. installed?
-bitrouter status                              # 2. daemon running?
-bitrouter providers list                      # 3. providers configured + active?
-bitrouter models                              # 4. routing table populated?
-bitrouter route openai/gpt-4o                 # 5. one specific model resolves?
+bro --version                           # 1. installed?
+bro status                              # 2. daemon running?
+bro providers list                      # 3. providers configured + active?
+bro models                              # 4. routing table populated?
+bro route openai/gpt-4o                 # 5. one specific model resolves?
 tail -n 80 ~/.bitrouter/bitrouter.log         # 6. recent daemon output
 ```
 
-`bitrouter status` prints `bitrouter is stopped` (exit 0) when no daemon answers the control socket — that's the answer to the question, not a failure. Look at the log next.
+`bro status` prints `bitrouter is stopped` (exit 0) when no daemon answers the control socket — that's the answer to the question, not a failure. Look at the log next.
 
 ## Symptom: "command not found" after install
 
@@ -60,13 +60,13 @@ State under `~/.bitrouter/` survives uninstall — `rm -rf ~/.bitrouter` for a c
 ## Symptom: daemon won't start
 
 ```bash
-bitrouter start
+bro start
 # error: bitrouter is already running (pid 12345); use `restart` or `stop` first
 ```
 
-A live daemon already holds the socket. Either `bitrouter restart` or `bitrouter stop && bitrouter start`. The `start` path automatically cleans up stale pid files when no process matches.
+A live daemon already holds the socket. Either `bro restart` or `bro stop && bro start`. The `start` path automatically cleans up stale pid files when no process matches.
 
-If the daemon exits within 250ms of spawn, `bitrouter start` quotes the failure log tail back to stderr — read it. Common causes:
+If the daemon exits within 250ms of spawn, `bro start` quotes the failure log tail back to stderr — read it. Common causes:
 
 - **Port collision.** `lsof -i :4356` to see what's bound. Edit `server.listen` to a free port, restart.
 - **Config parse error.** The log tail shows the YAML line; fix and retry.
@@ -79,17 +79,17 @@ curl -v http://localhost:4356/health      # daemon health
 curl -v http://localhost:4356/v1/models   # routing table over HTTP
 ```
 
-If `bitrouter status` says running but curl fails:
+If `bro status` says running but curl fails:
 
 - **Wrong port.** Old skill versions said 8787 — the real default is **4356**.
-- **`0.0.0.0` vs `127.0.0.1`.** `bitrouter init` writes `127.0.0.1:4356` for safety. Code default for `ServerConfig` is `0.0.0.0:4356`. Both serve localhost clients — but if the client is in a container/VM hitting the host, you need `0.0.0.0`.
+- **`0.0.0.0` vs `127.0.0.1`.** `bro init` writes `127.0.0.1:4356` for safety. Code default for `ServerConfig` is `0.0.0.0:4356`. Both serve localhost clients — but if the client is in a container/VM hitting the host, you need `0.0.0.0`.
 - **Firewall.** macOS: `sudo pfctl -d` to test (temporary). Linux: `sudo ufw allow 4356`.
 
 ## Symptom: provider errors at request time
 
 ```bash
-bitrouter providers list                  # ACTIVE column
-bitrouter route openai/gpt-4o             # does the chain resolve?
+bro providers list                  # ACTIVE column
+bro route openai/gpt-4o             # does the chain resolve?
 ```
 
 If `ACTIVE` is `no` for a registry provider, its env var wasn't set when the daemon started — or its OAuth token is missing (`github-copilot`). Two fixes:
@@ -97,11 +97,11 @@ If `ACTIVE` is `no` for a registry provider, its env var wasn't set when the dae
 ```bash
 # A) re-export and hot-reload (no restart needed)
 export OPENAI_API_KEY=sk-...
-bitrouter reload
+bro reload
 
 # B) for github-copilot, run the device flow
-bitrouter providers login github-copilot
-bitrouter reload
+bro providers login github-copilot
+bro reload
 ```
 
 If the upstream itself is the problem, test it directly:
@@ -114,30 +114,30 @@ curl https://api.openai.com/v1/models \
 ## Symptom: "model not found"
 
 ```bash
-bitrouter models                          # what's actually routable
-bitrouter models --provider openai        # filter
-bitrouter route <exact model id>          # resolution + chain
+bro models                          # what's actually routable
+bro models --provider openai        # filter
+bro route <exact model id>          # resolution + chain
 ```
 
-Canonical model identifiers are slash-form ids such as **`openai/gpt-4o`**. A colon-form id such as **`openrouter:openai/gpt-4o`** is a deliberate provider pin: it routes directly through the named provider when that provider is active. The exact canonical id strings come from the registry or your config's `models:` list — `bitrouter models` is authoritative.
+Canonical model identifiers are slash-form ids such as **`openai/gpt-4o`**. A colon-form id such as **`openrouter:openai/gpt-4o`** is a deliberate provider pin: it routes directly through the named provider when that provider is active. The exact canonical id strings come from the registry or your config's `models:` list — `bro models` is authoritative.
 
-**Bare Anthropic ids** (`claude-sonnet-4-6`, sent by Claude Code and by anything speaking the Anthropic shape) resolve through the routing table's fallback chain rather than by exact match. `bitrouter route claude-sonnet-4-6` shows what they land on; if that is not what you want, alias the id explicitly under `models:` in `bitrouter.yaml`.
+**Bare Anthropic ids** (`claude-sonnet-4-6`, sent by Claude Code and by anything speaking the Anthropic shape) resolve through the routing table's fallback chain rather than by exact match. `bro route claude-sonnet-4-6` shows what they land on; if that is not what you want, alias the id explicitly under `models:` in `bitrouter.yaml`.
 
 ## Symptom: env var change didn't propagate
 
 ```bash
 export OPENAI_API_KEY=sk-new-...
-bitrouter reload          # re-pushes provider env vars into daemon
+bro reload          # re-pushes provider env vars into daemon
 ```
 
-`reload` snapshots every env-var-credentialed provider's value from your shell and hands them to the daemon. SIGHUP reloads daemon-side config, but it cannot forward newly exported shell variables. If `bitrouter reload` does not pick up the new value, restart: `bitrouter restart`.
+`reload` snapshots every env-var-credentialed provider's value from your shell and hands them to the daemon. SIGHUP reloads daemon-side config, but it cannot forward newly exported shell variables. If `bro reload` does not pick up the new value, restart: `bro restart`.
 
 ## Symptom: MCP / ACP not working
 
 ```bash
-bitrouter tools status              # MCP server liveness + latency
-bitrouter tools list                # advertised tools
-bitrouter agents check              # spawn each ACP agent, verify `initialize`
+bro tools status              # MCP server liveness + latency
+bro tools list                # advertised tools
+bro agents check              # spawn each ACP agent, verify `initialize`
 ```
 
 `tools status` shows per-server latency or the error inline. `agents check` will exit with a non-success row when an ACP agent's stdio bridge fails — check that the `command` / `args` in your `agents:` config resolve on PATH (`npx`, `uvx`, etc.).
@@ -157,33 +157,33 @@ Compare to a direct upstream call. If `/health` is fast but completions are slow
 
 ```
 ~/.bitrouter/
-├── bitrouter.yaml         # if you ran `bitrouter init`
+├── bitrouter.yaml         # if you ran `bro init`
 ├── bitrouter.db           # sqlite, virtual keys + metering
 ├── bitrouter.sock         # daemon control socket
 ├── bitrouter.pid          # daemon pid (best-effort, cleaned on graceful exit)
 └── bitrouter.log          # stdout+stderr of the detached daemon
 ```
 
-Per-provider OAuth tokens (github-copilot today) live under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The BitRouter Cloud session created by `bitrouter cloud login` lives at `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). On macOS both default to `~/Library/Application Support/bitrouter/`.
+Per-provider OAuth tokens (github-copilot today) live under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The BitRouter Cloud session created by `bro cloud login` lives at `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). On macOS both default to `~/Library/Application Support/bitrouter/`.
 
-If `bitrouter cloud whoami` shows an expired token and the refresh exchange fails (network outage, server-side revocation), the fix is to re-run `bitrouter cloud login`. Re-login is idempotent — it overwrites the existing credentials file in place.
+If `bro cloud whoami` shows an expired token and the refresh exchange fails (network outage, server-side revocation), the fix is to re-run `bro cloud login`. Re-login is idempotent — it overwrites the existing credentials file in place.
 
-If provider inference attempts OAuth refresh even though `BITROUTER_API_KEY` is set, first verify the daemon process inherited the variable and is running a build where explicit target keys take precedence. Restart after changing the variable. A correctly inherited explicit key bypasses `account-credentials.json` entirely; `bitrouter cloud whoami` still reports the separate management-login identity and is not an inference-auth check.
+If provider inference attempts OAuth refresh even though `BITROUTER_API_KEY` is set, first verify the daemon process inherited the variable and is running a build where explicit target keys take precedence. Restart after changing the variable. A correctly inherited explicit key bypasses `account-credentials.json` entirely; `bro cloud whoami` still reports the separate management-login identity and is not an inference-auth check.
 
 ## Clean reset
 
 ```bash
-bitrouter stop || true
+bro stop || true
 rm -rf ~/.bitrouter
 # reinstall is not required — state was the only thing wiped
-bitrouter start
+bro start
 ```
 
 ## Observability snapshot
 
 ```bash
-bitrouter observe status            # OTel exporter wired? endpoint? cardinality?
-bitrouter observe status --json     # machine-readable
+bro observe status            # OTel exporter wired? endpoint? cardinality?
+bro observe status --json     # machine-readable
 ```
 
 `compiled: no` means the binary was built without the OTel feature — install from a release build, not a custom `cargo install --no-default-features` invocation.

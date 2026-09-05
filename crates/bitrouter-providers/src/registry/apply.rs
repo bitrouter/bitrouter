@@ -80,7 +80,7 @@ pub async fn load_or_cached(registry: &RegistryConfig) -> Option<RegistryData> {
 
 /// Read the disk-cached registry **without** touching the network. Returns
 /// `None` when no readable cache exists. Used by the synchronous CLI paths (the
-/// onboarding env-var hint, `bitrouter reload`'s env snapshot) that need the provider
+/// onboarding env-var hint, `bro reload`'s env snapshot) that need the provider
 /// list but cannot await a fetch — on a never-fetched host they simply fall
 /// back to the compiled-in cloud gateway only.
 pub fn cached_registry() -> Option<RegistryData> {
@@ -108,7 +108,7 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
 
 /// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
 /// against the environment (via [`env_lookup`], so the env overrides a
-/// `bitrouter reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
+/// `bro reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
 /// carries no default — the provider then can't form a valid base URL. Used
 /// for the parameterised big-cloud bases (Bedrock `${AWS_REGION}`, Azure
 /// `${AZURE_OPENAI_RESOURCE}`); a fixed base has no `${...}` and passes through
@@ -136,7 +136,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         // personal subscription). Implanting it into a provider the operator
         // *fully hand-declared* (its own models AND its own credential) silently
         // demotes it from routable to explicit-route-only, so the daemon 404s a
-        // canonical id that the local `bitrouter models` resolver — which does
+        // canonical id that the local `bro models` resolver — which does
         // not run this merge — reports as routable. A full manual declaration is
         // the operator's opt-in, so leave its class unset: it ranks last and
         // joins the cascade like any user-declared provider. Stub declarations
@@ -198,7 +198,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     }
 
     // Not in the config. OAuth / native providers are never auto-added (they
-    // need a local `bitrouter providers login`); an env-keyed provider is
+    // need a local `bro providers login`); an env-keyed provider is
     // auto-added only when its credential is present (principle #5).
     let Some(var) = provider.env_credential_var() else {
         return;
@@ -500,7 +500,7 @@ mod tests {
         // own credential) must keep `class: None`, so it joins the canonical
         // auto-cascade instead of being demoted to explicit-route-only. Without
         // this, the daemon (which runs the merge) 404s a canonical id that the
-        // local `bitrouter models` resolver (which does not) reports routable.
+        // local `bro models` resolver (which does not) reports routable.
         let mut sub = provider("mysub");
         sub.billing = Billing::Subscription;
         let hand_models = build_models(&sub);

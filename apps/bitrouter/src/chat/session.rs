@@ -1,4 +1,4 @@
-//! The interactive half of `bitrouter chat` — the view, the loop, and the keys.
+//! The interactive half of `bro chat` — the view, the loop, and the keys.
 //!
 //! `acp_cli` launches the session and decides its routing; from the moment
 //! there is a controlled session and a terminal to draw it on, everything is

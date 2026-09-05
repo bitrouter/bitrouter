@@ -105,7 +105,7 @@ jobs:
             flags: --lib
           - target: bin
             build_jobs: "1"
-            flags: --bin bitrouter
+            flags: --bin bro
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

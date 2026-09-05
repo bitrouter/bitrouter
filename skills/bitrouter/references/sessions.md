@@ -6,7 +6,7 @@ How BitRouter's ACP surfaces divide ownership. For CLI flags see
 
 ## One controller, three drivers
 
-`bitrouter acp serve` is a connection-level ACP controller:
+`bro acp serve` is a connection-level ACP controller:
 
 ```text
 manager -- ACP --> BitRouter controller -- ACP --> one harness process
@@ -20,7 +20,7 @@ Every manager-visible `sessionId` is the opaque ID returned by the harness.
 BitRouter does not generate an alias, store a session catalog or transcript,
 or read Claude/Codex session files.
 
-`bitrouter acp prompt` runs the **same controller**, in-process: it launches the
+`bro acp prompt` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
 duplex channel as that controller's own manager. Session identity is therefore
 harness-native there too — there is no `record_id` alias. What `prompt` adds on
@@ -28,7 +28,7 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bitrouter chat` drives the same in-process controller through the same
+`bro chat` drives the same in-process controller through the same
 client, with two additions: it declares a route namespace over the local
 daemon socket (so its traffic meters by controller instance, and the
 controller decorates `usage_update` with attributed cost), and its `/route`
@@ -40,10 +40,10 @@ or FIFO turn queue on any path.
 
 ```bash
 # Manager-driven, multiple native sessions on one harness connection
-bitrouter acp serve --agent <id> [--config PATH]
+bro acp serve --agent <id> [--config PATH]
 
 # Equivalent umbrella command
-bitrouter spawn <id> --serve [routing flags]
+bro spawn <id> --serve [routing flags]
 ```
 
 Stdout is ACP JSON-RPC and logs go to stderr. The manager sends `initialize`

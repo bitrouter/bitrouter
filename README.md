@@ -124,6 +124,11 @@ cargo install bitrouter
 
 </details>
 
+Every installer puts the CLI on your `PATH` as **`bro`**. The product, the
+crate, the npm package, `bitrouter.yaml`, and every `BITROUTER_*` env var keep
+the BitRouter name. Installers also create a deprecated `bitrouter` symlink onto
+`bro`; it prints a one-line notice on stderr and is removed in 1.0.0.
+
 ## Quick Start
 
 BitRouter is a local proxy between your agent and every LLM provider. One env-var swap — no harness changes required:
@@ -141,35 +146,35 @@ BitRouter runs as a local daemon — start it with your own keys or a Cloud sign
 
 ```bash
 export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GEMINI_API_KEY also work
-bitrouter start                 # proxy running at http://localhost:4356
+bro start                 # proxy running at http://localhost:4356
 ```
 
 **Or sign in to BitRouter Cloud** — use browser OAuth interactively or store an existing API key in CI:
 
 ```bash
-bitrouter cloud login           # RFC 8628 device flow against api.bitrouter.ai
-bitrouter cloud login --api-key "$BITROUTER_API_KEY"  # non-interactive CI login
-bitrouter start                 # `bitrouter` provider auto-enables once signed in
+bro cloud login           # RFC 8628 device flow against api.bitrouter.ai
+bro cloud login --api-key "$BITROUTER_API_KEY"  # non-interactive CI login
+bro start                 # `bitrouter` provider auto-enables once signed in
 ```
 
 The same credential also drives a [`gh api`](https://cli.github.com/manual/gh_api)-style raw client—no daemon required:
 
 ```bash
-bitrouter cloud api /v1/models
-bitrouter cloud api /v1/chat/completions --input request.json
+bro cloud api /v1/models
+bro cloud api /v1/chat/completions --input request.json
 ```
 
-Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bitrouter init` (writes `./bitrouter.yaml`).
+Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bro init` (writes `./bitrouter.yaml`).
 
 ```bash
-bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --requests             # settled requests + spend
-bitrouter route <model>                 # trace how a model name resolves
-bitrouter key sign --user <id>          # mint a scoped brvk_ API key
-bitrouter cloud keys list               # manage API keys
-bitrouter cloud usage                   # inspect spend and tokens
-bitrouter cloud billing balance         # check credits
-bitrouter cloud api /v1/models          # call Cloud APIs directly
+bro start / stop / restart        # daemon lifecycle
+bro status --requests             # settled requests + spend
+bro route <model>                 # trace how a model name resolves
+bro key sign --user <id>          # mint a scoped brvk_ API key
+bro cloud keys list               # manage API keys
+bro cloud usage                   # inspect spend and tokens
+bro cloud billing balance         # check credits
+bro cloud api /v1/models          # call Cloud APIs directly
 ```
 
 See [`docs/CLI.md`](docs/CLI.md) for the full command reference, flags, and config resolution.
@@ -191,8 +196,8 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 Use BitRouter from any MCP client — it exposes `complete`, `list_models`, and `status` as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers):
 
 ```bash
-bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
-bitrouter mcp install --client claude  # print the Claude/Cursor mcpServers config block
+bro mcp serve                    # stdio → local daemon at 127.0.0.1:4356
+bro mcp install --client claude  # print the Claude/Cursor mcpServers config block
 ```
 
 Add `--transport http` to target the multi-tenant cloud backend.
@@ -233,7 +238,7 @@ actually resolves. Full catalog in [`registry/`](registry/).
 ## Harness integrations
 
 BitRouter runs *under* Claude Code, Codex, and the rest — not instead of them.
-Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` for OpenAI-compatible clients or `ANTHROPIC_BASE_URL=http://localhost:4356` for Anthropic-compatible clients. For catalog harnesses with an interactive binary, `bitrouter launch` starts the harness's own native TUI without editing its config files. Routed harnesses start with traffic pointed at the daemon; own-auth harnesses start directly and say so in the startup line.
+Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` for OpenAI-compatible clients or `ANTHROPIC_BASE_URL=http://localhost:4356` for Anthropic-compatible clients. For catalog harnesses with an interactive binary, `bro launch` starts the harness's own native TUI without editing its config files. Routed harnesses start with traffic pointed at the daemon; own-auth harnesses start directly and say so in the startup line.
 
 | Name | Launch behavior |
 | ---- | ----------- |
@@ -247,7 +252,7 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the 
 
 Routing and gateway injection are per-harness promises, so the table calls out the maintained mechanisms instead of implying one universal redirect path.
 
-Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Headless ACP sub-agents use `bro spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
 

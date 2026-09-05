@@ -12,8 +12,11 @@ rust-version.workspace = true
 name = "bitrouter"
 path = "src/lib.rs"
 
+# The CLI is invoked as `bro`. The package, the library, and the product
+# keep the `bitrouter` name; installers add a deprecated `bitrouter` alias
+# (see `[dist.bin-aliases]` in `dist-workspace.toml`).
 [[bin]]
-name = "bitrouter"
+name = "bro"
 path = "src/main.rs"
 
 [dependencies]

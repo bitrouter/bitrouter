@@ -1191,7 +1191,7 @@ mod tests {
 
     #[test]
     fn router_profile_is_completion_plus_route_preview() {
-        // What `bitrouter mcp serve --transport stdio --backend local` wires.
+        // What `bro mcp serve --transport stdio --backend local` wires.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))

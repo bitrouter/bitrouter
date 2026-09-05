@@ -1,4 +1,4 @@
-//! `bitrouter tools` — introspection over the configured MCP servers.
+//! `bro tools` — introspection over the configured MCP servers.
 //!
 //! Three verbs:
 //! - `list` — aggregate `tools/list` across every server in `mcp_servers`.
@@ -19,7 +19,7 @@ use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 use bitrouter_sdk::mcp::transport::McpTransport;
 use bitrouter_sdk::mcp::{Executor, McpRequest, McpTarget};
 
-/// One row in `bitrouter tools list`.
+/// One row in `bro tools list`.
 #[derive(Debug, Clone)]
 pub struct ServerTools {
     /// The server id (matches the `mcp_servers` key in `bitrouter.yaml`).
@@ -37,7 +37,7 @@ pub struct ToolSummary {
     pub description: String,
 }
 
-/// One row in `bitrouter tools status`.
+/// One row in `bro tools status`.
 #[derive(Debug, Clone)]
 pub struct ServerStatus {
     /// The server id.
@@ -51,7 +51,7 @@ pub struct ServerStatus {
     pub outcome: Result<Duration, String>,
 }
 
-/// `bitrouter tools list` — aggregate `tools/list` across every configured
+/// `bro tools list` — aggregate `tools/list` across every configured
 /// MCP server. Errors from one server don't stop the rest.
 pub async fn list(config: &Config) -> Vec<ServerTools> {
     let executor = RmcpExecutor::new();
@@ -82,7 +82,7 @@ pub async fn list(config: &Config) -> Vec<ServerTools> {
     out
 }
 
-/// `bitrouter tools status` — health-check each configured server with a
+/// `bro tools status` — health-check each configured server with a
 /// `tools/list` round-trip. Wall-clock latency surfaced for operators
 /// triaging slow upstreams.
 pub async fn status(config: &Config) -> Vec<ServerStatus> {
@@ -115,7 +115,7 @@ pub async fn status(config: &Config) -> Vec<ServerStatus> {
     out
 }
 
-/// `bitrouter tools discover <server>` — connect to one server and emit a
+/// `bro tools discover <server>` — connect to one server and emit a
 /// commented YAML stub that previews its tool surface. Output is meant to
 /// be piped into / pasted under a `mcp_servers:` entry.
 pub async fn discover(config: &Config, server: &str) -> Result<String, String> {

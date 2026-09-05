@@ -105,8 +105,12 @@ where
 }
 
 /// BitRouter — an LLM API router.
+// The doc comment above is clap's `about`, so it stays one line. `name` below
+// is only the compile-time default: `parse_cli` overrides it (and `bin_name`)
+// with the basename `argv[0]` actually carried, so help and usage print
+// whichever of `bro` / `bitrouter` the user typed.
 #[derive(Parser)]
-#[command(name = "bitrouter", version, about)]
+#[command(name = bitrouter_sdk::invocation::DEFAULT, version, about)]
 struct Cli {
     /// Force JSON output (the default; agent-native). Conflicts with `--human`.
     #[arg(short = 'j', long, global = true, conflicts_with = "human")]
@@ -118,7 +122,7 @@ struct Cli {
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
     /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
-    /// the wizard when unconfigured, a one-line status + `bitrouter launch`
+    /// the wizard when unconfigured, a one-line status + `bro launch`
     /// hint when configured.
     #[command(subcommand)]
     command: Option<Command>,
@@ -132,11 +136,11 @@ enum Command {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Spawn `bitrouter serve` as a detached background process.
+    /// Spawn `bro serve` as a detached background process.
     Start {
         /// Path to `bitrouter.yaml` (passed through to the child).
         #[arg(short, long)]
@@ -164,7 +168,7 @@ enum Command {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Explicit control socket path. Overrides the config-derived path.
@@ -294,7 +298,7 @@ enum Command {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Show only models declared by this provider.
@@ -356,10 +360,10 @@ enum Command {
     /// Launch a coding-agent harness as an interactive native-TUI child. Routed
     /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
     /// launch directly and are not redirected. The human drives the harness's
-    /// own TUI directly (use `bitrouter spawn` for headless ACP sub-agents).
-    /// Follows `cargo run`'s separator convention: bitrouter options come
+    /// own TUI directly (use `bro spawn` for headless ACP sub-agents).
+    /// Follows `cargo run`'s separator convention: bro options come
     /// before `--`, everything after `--` is forwarded to the agent verbatim,
-    /// e.g. `bitrouter launch -a codex -- --search`.
+    /// e.g. `bro launch -a codex -- --search`.
     ///
     /// Harnesses that route by env/args (claude, codex) are launched without
     /// touching any config file. Those that route by synthesized config
@@ -368,7 +372,7 @@ enum Command {
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bitrouter init`). A missing `claude` / `codex`
+    /// default written by `bro init`). A missing `claude` / `codex`
     /// binary is offered for install via its official native installer; other
     /// harnesses report their own install command instead.
     Launch {
@@ -422,7 +426,7 @@ enum Command {
     /// `-p "<text>"` streams one prompt as NDJSON then exits; `--serve`
     /// speaks ACP over stdio for a GUI/manager; `--check` preflights the route.
     /// Pass `--direct` to bypass daemon routing. (For an interactive native TUI
-    /// use `bitrouter launch`.)
+    /// use `bro launch`.)
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
@@ -478,7 +482,7 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Deprecated: the interactive form `spawn --agent <claude|codex>`
-        /// (also `-a`) moved to `bitrouter launch`. Kept as a migration alias.
+        /// (also `-a`) moved to `bro launch`. Kept as a migration alias.
         #[arg(long = "agent", short = 'a', hide = true, value_enum)]
         legacy_agent: Option<bitrouter::spawn::SpawnAgent>,
         /// Deprecated (`--agent` path only): forwarded to `launch`.
@@ -513,7 +517,7 @@ enum Command {
         #[command(subcommand)]
         action: WorkflowStateAction,
     },
-    /// Update the installed `bitrouter` binary in place to the latest release.
+    /// Update the installed `bro` binary in place to the latest release.
     /// Follows prereleases by default while pre-1.0. For Homebrew / `cargo
     /// install` installs it prints the right upgrade command instead.
     Update {
@@ -820,12 +824,12 @@ enum McpAction {
     /// pointer.
     Add {
         /// Registry name, e.g. `com.pulsemcp/remote-filesystem` (see
-        /// `bitrouter mcp search` / `bitrouter mcp list`).
+        /// `bro mcp search` / `bro mcp list`).
         name: String,
     },
 }
 
-/// Wire transport for `bitrouter mcp serve`.
+/// Wire transport for `bro mcp serve`.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum McpTransport {
     /// Newline-delimited JSON-RPC over stdio (local clients launch this).
@@ -847,7 +851,7 @@ enum McpBackend {
     Skills,
 }
 
-/// MCP client targeted by `bitrouter mcp install`.
+/// MCP client targeted by `bro mcp install`.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum McpClient {
     Claude,
@@ -885,7 +889,7 @@ enum AgentsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -894,7 +898,7 @@ enum AgentsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -902,7 +906,7 @@ enum AgentsAction {
     /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
     /// ACP registry (`npx`/`uvx` distributions only).
     Install {
-        /// Agent id (see `bitrouter agents list` / `list --remote`).
+        /// Agent id (see `bro agents list` / `list --remote`).
         id: String,
     },
 }
@@ -930,7 +934,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -939,7 +943,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -951,7 +955,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1232,7 +1236,7 @@ enum ProviderAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
+        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1243,7 +1247,7 @@ enum ProviderAction {
     /// paste; `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the
     /// GitHub device flow; everything else accepts a pasted API key. Logging
     /// in to the built-in `bitrouter` provider runs the same cloud sign-in as
-    /// `bitrouter cloud login`.
+    /// `bro cloud login`.
     Login {
         /// Provider id (e.g. `claude-code`, `openai-codex`, `bitrouter`).
         provider: String,
@@ -1264,7 +1268,7 @@ enum ProviderAction {
         #[arg(long, value_name = "KEY", conflicts_with_all = ["import_existing", "no_browser", "key_stdin"])]
         api_key: Option<String>,
         /// Read the API key from stdin (one line) instead of prompting — for
-        /// pipelines, e.g. `printf %s "$KEY" | bitrouter providers login openai
+        /// pipelines, e.g. `printf %s "$KEY" | bro providers login openai
         /// --key-stdin`.
         #[arg(long, conflicts_with_all = ["import_existing", "no_browser"])]
         key_stdin: bool,
@@ -1286,7 +1290,7 @@ enum AcpCmd {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
-        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// config entry; `bro spawn <agent> --check` previews whether it
         /// will route or run direct.
         #[arg(long)]
         agent: String,
@@ -1311,7 +1315,7 @@ enum AcpCmd {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
-        /// config entry; `bitrouter spawn <agent> --check` previews whether it
+        /// config entry; `bro spawn <agent> --check` previews whether it
         /// will route or run direct.
         #[arg(long)]
         agent: String,
@@ -1338,6 +1342,40 @@ enum AcpCmd {
 }
 
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// The retired invocation. Installers keep it as a symlink onto `bro`; reaching
+/// the binary through it earns one deprecation line on stderr.
+const DEPRECATED_INVOCATION: &str = "bitrouter";
+
+/// Parse `argv` with the program name clap prints taken from `argv[0]` rather
+/// than the derive attribute, so `bro --help` and `bitrouter --help` each show
+/// the name that was actually typed — in the usage line and in every
+/// subcommand's usage line, which clap derives from `bin_name`.
+///
+/// Errors (including `--help` / `--version`, which clap models as errors) exit
+/// through `clap::Error::exit`, matching what `Parser::parse` would have done.
+fn parse_cli(invoked: &'static str) -> Cli {
+    use clap::{CommandFactory, FromArgMatches};
+
+    let matches = Cli::command().name(invoked).bin_name(invoked).get_matches();
+    match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    }
+}
+
+/// One line on **stderr** — never stdout, which carries the result envelope —
+/// when the binary was reached through the retired `bitrouter` name.
+fn warn_deprecated_invocation() {
+    let p = bitrouter::style::Palette::for_stderr();
+    eprintln!(
+        "{cyan}note:{reset} `{old}` is now `{new}`. This alias is removed in 1.0.0.",
+        cyan = p.cyan,
+        reset = p.reset,
+        old = DEPRECATED_INVOCATION,
+        new = bitrouter_sdk::invocation::DEFAULT,
+    );
+}
 
 fn main() {
     let worker = std::thread::Builder::new()
@@ -1366,8 +1404,16 @@ async fn async_main() {
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
     // result (this match) goes to stdout in the selected format, so
-    // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
-    let cli = Cli::parse();
+    // `bro <cmd> 2>/dev/null | jq` always sees one clean JSON value.
+    //
+    // Recorded before anything renders: every hint in the workspace asks
+    // `invocation::name()` what to tell the operator to type, and the answer is
+    // whichever of `bro` / `bitrouter` this process was launched as.
+    let invoked = bitrouter_sdk::invocation::record_argv0();
+    if invoked == DEPRECATED_INVOCATION {
+        warn_deprecated_invocation();
+    }
+    let cli = parse_cli(invoked);
     let raw_cloud_api = matches!(
         &cli.command,
         Some(Command::Cloud {
@@ -1621,15 +1667,17 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     anyhow::bail!(
                         "`--agent` selects the deprecated interactive launcher; it cannot be \
                          combined with a positional agent id, `-p`, or `--serve`. Use \
-                         `bitrouter launch --agent {}` for the TUI, or drop `--agent` to spawn \
+                         `{cli} launch --agent {}` for the TUI, or drop `--agent` to spawn \
                          an ACP sub-agent.",
-                        legacy.spec().id
+                        legacy.spec().id,
+                        cli = bitrouter_sdk::invocation::name()
                     );
                 }
                 eprintln!(
-                    "note: `bitrouter spawn --agent` is deprecated — use \
-                     `bitrouter launch --agent {}` (this alias will be removed).",
-                    legacy.spec().id
+                    "note: `{cli} spawn --agent` is deprecated — use \
+                     `{cli} launch --agent {}` (this alias will be removed).",
+                    legacy.spec().id,
+                    cli = bitrouter_sdk::invocation::name()
                 );
                 let opts = bitrouter::spawn::SpawnOptions {
                     agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
@@ -1646,8 +1694,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             let Some(agent) = agent else {
                 anyhow::bail!(
                     "spawn: provide an agent id and a mode, e.g. \
-                     `bitrouter spawn claude-acp -p \"summarize README\"`, \
-                     `bitrouter spawn codex-acp --serve`, or `--check`."
+                     `{cli} spawn claude-acp -p \"summarize README\"`, \
+                     `{cli} spawn codex-acp --serve`, or `--check`.",
+                    cli = bitrouter_sdk::invocation::name()
                 );
             };
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -1772,7 +1821,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     }
 }
 
-// ===== `bitrouter config …` (config tooling) =====
+// ===== `bro config …` (config tooling) =====
 
 async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     match action {
@@ -2208,7 +2257,7 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
     }
 }
 
-// ===== `bitrouter mcp …` (origin MCP server: serve / install) =====
+// ===== `bro mcp …` (origin MCP server: serve / install) =====
 
 /// `CostFooter` over the local metering database: the origin MCP server
 /// appends this spend line to `complete` / `status` results so
@@ -2311,7 +2360,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             // the same pairing as the spend footer: stdio → local daemon. It
             // prefers the live daemon's view (subscription providers, reloads)
             // and falls back to static config when the control socket is
-            // unreachable — the same order `bitrouter route` uses. Best-effort
+            // unreachable — the same order `bro route` uses. Best-effort
             // throughout: an unreadable config just means no `route_preview`
             // tool, never a failed `mcp serve`.
             let routing: Option<
@@ -2408,7 +2457,7 @@ fn mcp_registry_report(
 ///
 /// Loading the YAML is **best-effort**: a broken or env-var-incomplete
 /// config falls back to the default socket name in the same directory.
-/// That keeps `bitrouter status` answerable in exactly the state where
+/// That keeps `bro status` answerable in exactly the state where
 /// the user most wants to ask (config can't load → daemon can't be
 /// running → "stopped"). The "real" config error still surfaces the
 /// next time the user runs `serve` / `start`.
@@ -2631,7 +2680,7 @@ fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
 ///
 /// This is the one path with a config in hand, so it is where
 /// `server.log_level` takes effect. Resolution happens once here — a later
-/// `bitrouter reload` re-reads the config but cannot re-install the
+/// `bro reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 fn init_serve_tracing_subscriber(
     exporter: Option<&bitrouter_telemetry::otel::OtelExporter>,
@@ -2850,10 +2899,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     );
 
     // SIGHUP triggers a config reload — reload should be available via either
-    // `bitrouter reload` (the control endpoint) *or* a HUP signal. Same fan-out
+    // `bro reload` (the control endpoint) *or* a HUP signal. Same fan-out
     // as the Reload command — every reloadable subsystem. SIGHUP is Unix-only;
     // on Windows there is no equivalent, so the HUP future stays pending and
-    // reload is reached exclusively through `bitrouter reload`.
+    // reload is reached exclusively through `bro reload`.
     let hup_reloader = reloader.clone();
     let hup = async move {
         #[cfg(unix)]
@@ -2883,7 +2932,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
     };
 
-    // Termination signals end the loop the same way `bitrouter stop` does — so
+    // Termination signals end the loop the same way `bro stop` does — so
     // the shutdown path below (observe flush, pid-file cleanup) runs in every
     // graceful termination mode. On Unix that's SIGINT (ctrl-C) and SIGTERM
     // (systemd / `kill`); on Windows it's the console control events
@@ -3055,7 +3104,7 @@ fn announce_zero_config(
 /// Multi-line guidance shown when zero-config detects no credential of any
 /// kind. The recommendation chain is intentional:
 ///
-///   1. `bitrouter cloud login` — one OAuth account, every supported model.
+///   1. `bro cloud login` — one OAuth account, every supported model.
 ///   2. `BITROUTER_API_KEY` — long-lived `brk_…` key, same coverage.
 ///   3. Any upstream provider the user already pays for, locally.
 ///
@@ -3111,8 +3160,9 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  1. Sign in to BitRouter Cloud — one account covers every model:");
     eprintln!();
-    eprintln!("       bitrouter cloud login");
-    eprintln!("       bitrouter cloud --help        # manage keys, usage, policies, billing");
+    let cli = bitrouter_sdk::invocation::name();
+    eprintln!("       {cli} cloud login");
+    eprintln!("       {cli} cloud --help        # manage keys, usage, policies, billing");
     eprintln!();
     eprintln!("  2. Or paste a BitRouter API key:");
     eprintln!();
@@ -3120,9 +3170,9 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  3. Or use a provider you already pay for, locally:");
     eprintln!();
-    eprintln!("       bitrouter providers login claude-code     # Claude Pro/Max subscription");
-    eprintln!("       bitrouter providers login github-copilot  # GitHub Copilot subscription");
-    eprintln!("       bitrouter providers login openai-codex    # ChatGPT subscription");
+    eprintln!("       {cli} providers login claude-code     # Claude Pro/Max subscription");
+    eprintln!("       {cli} providers login github-copilot  # GitHub Copilot subscription");
+    eprintln!("       {cli} providers login openai-codex    # ChatGPT subscription");
     eprintln!();
     eprintln!("     …or set an API-key env var:");
     eprintln!();
@@ -3280,7 +3330,7 @@ async fn restart(
 async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // Snapshot every env-var-credentialed built-in provider's key from
     // *this* (CLI) process and hand them to the daemon along with the
-    // reload command, so `export OPENAI_API_KEY=…; bitrouter reload`
+    // reload command, so `export OPENAI_API_KEY=…; bro reload`
     // propagates the new value into the running daemon instead of
     // requiring a full stop+start. The daemon writes them into its
     // env-override map before re-parsing config / re-running
@@ -3335,7 +3385,7 @@ async fn status(socket: &Path) -> Result<StatusReport> {
 /// the daemon is misbehaving, so it must never wait on one.
 const REQUESTS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
 
-/// `bitrouter status --requests` — the settled-request table.
+/// `bro status --requests` — the settled-request table.
 ///
 /// Never fails: every source degrades to absence, because a monitoring view
 /// that errors out is worse than one reporting less. The store opens read-only
@@ -4521,7 +4571,8 @@ fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result
     match source {
         bitrouter::paths::ConfigSource::File(path) => Ok(path),
         bitrouter::paths::ConfigSource::Default { .. } => anyhow::bail!(
-            "routing policies require a file-backed bitrouter.yaml; run `bitrouter init` first"
+            "routing policies require a file-backed bitrouter.yaml; run `{} init` first",
+            bitrouter_sdk::invocation::name()
         ),
     }
 }
@@ -4626,8 +4677,9 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             if provider == "bitrouter" {
                 if import_existing || no_browser {
                     anyhow::bail!(
-                        "`bitrouter providers login bitrouter` uses BitRouter Cloud OAuth; \
-                         --import-existing/--no-browser apply to upstream provider logins"
+                        "`{} providers login bitrouter` uses BitRouter Cloud OAuth; \
+                         --import-existing/--no-browser apply to upstream provider logins",
+                        bitrouter_sdk::invocation::name()
                     );
                 }
                 // A supplied key seeds the cloud credential the same way
@@ -4765,7 +4817,7 @@ async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
     }
 }
 
-/// `bitrouter observe status` — ask the running daemon for the OTel
+/// `bro observe status` — ask the running daemon for the OTel
 /// exporter snapshot, pretty-print (or JSON-dump) the result. When no
 /// daemon is reachable, fall back to a "stopped" report that still
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
@@ -4884,7 +4936,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     }
 }
 
-/// Shared body for `bitrouter launch` and the deprecated `spawn --agent`
+/// Shared body for `bro launch` and the deprecated `spawn --agent`
 /// alias: resolve config, then either preflight (`--check`) or exec the
 /// interactive harness with its traffic routed through the daemon.
 async fn run_launch(
@@ -4907,7 +4959,7 @@ async fn run_launch(
     }
 }
 
-// ===== `bitrouter acp …` (per-session ACP substrate) =====
+// ===== `bro acp …` (per-session ACP substrate) =====
 
 async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
     match cmd {

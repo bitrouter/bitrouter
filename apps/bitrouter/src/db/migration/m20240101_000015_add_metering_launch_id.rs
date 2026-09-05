@@ -1,6 +1,6 @@
 //! Add the per-launch attribution dimension to OSS metering (#795).
 //!
-//! Nullable by design: only requests whose credential `bitrouter launch`
+//! Nullable by design: only requests whose credential `bro launch`
 //! minted carry a launch, and every other caller — a direct API client, a
 //! spawned sub-agent, an editor plugin — must keep recording sanely with the
 //! column simply unset.

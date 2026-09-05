@@ -78,7 +78,7 @@ Keep raw private materials outside this object.
 Seal a JSON or YAML draft locally:
 
 ```bash
-bitrouter eval subject seal subject-draft.yaml --output subject.json
+bro eval subject seal subject-draft.yaml --output subject.json
 ```
 
 The command sorts evidence by `evidence_id`, calculates BitRouter's canonical
@@ -209,12 +209,12 @@ operator action and does not consult an authority binding.
 Use these CLI operations:
 
 ```bash
-bitrouter eval subject seal subject-draft.json --output subject.json
-bitrouter eval subject put subject.json --config bitrouter.yaml
-bitrouter eval subject get eval-1 --config bitrouter.yaml
-bitrouter eval subject list --config bitrouter.yaml
-bitrouter eval result submit result.json --config bitrouter.yaml
-bitrouter eval status --config bitrouter.yaml
+bro eval subject seal subject-draft.json --output subject.json
+bro eval subject put subject.json --config bitrouter.yaml
+bro eval subject get eval-1 --config bitrouter.yaml
+bro eval subject list --config bitrouter.yaml
+bro eval result submit result.json --config bitrouter.yaml
+bro eval status --config bitrouter.yaml
 ```
 
 The authenticated REST equivalents are:
@@ -249,7 +249,7 @@ authority, kind mismatch, metric scope, or disallowed hard violation. A
 conflict with an equal or higher authority becomes `disputed`; do not average
 verdicts. The evaluator stops at admission in every state: never freeze,
 compile, diff, publish, or invoke `optimize run`. A later explicit
-`bitrouter optimize run` is separate authorization for one autonomous
+`bro optimize run` is separate authorization for one autonomous
 controller step and needs no evaluator review or publication approval.
 
 ## Complete multi-decision example
@@ -285,7 +285,7 @@ submit-ready result.
 ```
 
 ```bash
-bitrouter eval subject seal subject-draft.json --output subject.json
+bro eval subject seal subject-draft.json --output subject.json
 ```
 
 ```json

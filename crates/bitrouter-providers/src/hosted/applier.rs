@@ -16,8 +16,11 @@ use super::account::manager::{CredentialError, CredentialManager, CredentialSour
 pub const PROVIDER_ID: &str = "bitrouter";
 
 /// Onboarding text for callers without a configured hosted credential.
-pub fn onboarding_hint() -> &'static str {
-    "no BitRouter Cloud credential — run `bitrouter cloud login` or set BITROUTER_API_KEY=brk_…"
+pub fn onboarding_hint() -> String {
+    format!(
+        "no BitRouter Cloud credential — run `{} cloud login` or set BITROUTER_API_KEY=brk_…",
+        bitrouter_sdk::invocation::name()
+    )
 }
 
 /// Request-time authentication for the hosted BitRouter provider.

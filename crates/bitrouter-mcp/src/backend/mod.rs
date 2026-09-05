@@ -90,7 +90,10 @@ pub struct CallerAuth {
 /// Errors surfaced to the MCP client as tool failures.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
-    #[error("daemon not reachable at {0} — run `bitrouter start`")]
+    #[error(
+        "daemon not reachable at {0} — run `{cli} start`",
+        cli = bitrouter_sdk::invocation::name()
+    )]
     DaemonUnreachable(String),
     #[error("upstream returned {status}: {body}")]
     Upstream { status: u16, body: String },

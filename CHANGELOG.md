@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (CLI): the invocation is now `bro`.** `bitrouter <cmd>` becomes
+  `bro <cmd>`. Only the invocation changed — the product, the crate, the npm
+  package, the Homebrew tap, `bitrouter.yaml`, `~/.bitrouter`, every
+  `BITROUTER_*` env var, the `brk_` key prefix, and the `io.bitrouter.observe`
+  / `bitrouter` telemetry identifiers all keep their names. Installers (shell,
+  PowerShell, npm, Homebrew) additionally create a **`bitrouter` symlink** onto
+  `bro`, so an existing invocation keeps working; reaching the binary through it
+  prints one line to **stderr** —
+  ``note: `bitrouter` is now `bro`. This alias is removed in 1.0.0.`` — and
+  nothing else changes, so `bro <cmd> 2>/dev/null | jq .` still yields exactly
+  one clean JSON value. Help, usage, and every "run `… <subcommand>`" hint print
+  whichever name was typed, derived from `argv[0]`. The alias is deprecated and
+  is **removed in 1.0.0**; it is installer-created only, and release archives
+  ship `bro` alone. Docs, the `/bitrouter` skill, and the Claude Code / Codex
+  plugin manifests are `bro`-only.
+
 - **Headless permissions and formats for `acp prompt` / `spawn -p`.** A
   headless run used to deny every `session/request_permission`; now the caller
   states the rule: `--deny-all` (still the default), `--approve-reads` (the ACP

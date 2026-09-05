@@ -16,7 +16,7 @@
       ]
     },
     "AcpAgentConfig": {
-      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what every `bitrouter acp` subcommand addresses an\nagent by, and what [`AcpAgentConfig::validate`] constrains.",
+      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what every `bro acp` subcommand addresses an\nagent by, and what [`AcpAgentConfig::validate`] constrains.",
       "properties": {
         "name": {
           "description": "Agent id. Non-empty; no `/`.",
@@ -1371,12 +1371,12 @@
         },
         "log_level": {
           "default": "info",
-          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bitrouter reload` will not pick it up. Applies to `bitrouter serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
+          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bro reload` will not pick it up. Applies to `bro serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string"
         },
         "skip_auth": {
           "default": false,
-          "description": "SDK-level flag: when `true`, credential-less requests are admitted with\na synthesised local caller. Code default is **`false`** — only the\nconfig file produced by `bitrouter init` writes `true`.",
+          "description": "SDK-level flag: when `true`, credential-less requests are admitted with\na synthesised local caller. Code default is **`false`** — only the\nconfig file produced by `bro init` writes `true`.",
           "type": "boolean"
         }
       },
@@ -1943,7 +1943,7 @@
         "$ref": "#/$defs/AcpAgentConfig"
       },
       "default": {},
-      "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bitrouter agents` CLI (list / check / install). Empty by default.",
+      "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bro agents` CLI (list / check / install). Empty by default.",
       "type": "object"
     },
     "continuation": {

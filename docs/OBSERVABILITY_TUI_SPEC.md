@@ -1,9 +1,9 @@
-# Spec: the observability TUI — `bitrouter status --watch` and `launch --tui`
+# Spec: the observability TUI — `bro status --watch` and `launch --tui`
 
 > **SUPERSEDED 2026-08-16 — the live view is gone.** The `launch --tui` half was
 > already superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The
 > `status --watch` half is now superseded too: the self-refreshing ratatui table
-> this spec designs was removed, and `bitrouter status --requests` prints the
+> this spec designs was removed, and `bro status --requests` prints the
 > same snapshot as text. §6's argument against a cargo feature is retained and
 > still correct, but it no longer applies to `ratatui` — `apps/bitrouter` does
 > not depend on it at all, which is a stronger version of the same goal.
@@ -19,13 +19,13 @@ superseded** · Author: Claude (with Spikel) · Date: 2026-08-10
 Issues: #782 (hosted bar) · #797 (live view) · #795 (attribution) · #796 (startup line)
 Supersedes the CLI framing of #782 (`bitrouter top`, `bitrouter tui` deprecation).
 
-> **This spec is historical.** Everything about `bitrouter status --watch` — §1,
+> **This spec is historical.** Everything about `bro status --watch` — §1,
 > §§4–8, §10.1, §13.2–13.3 — describes the removed ratatui live view. The
 > shipped status implementation is the `Snapshot` data layer rendered by
-> `bitrouter status --requests`; see [`CLI.md`](CLI.md) and
+> `bro status --requests`; see [`CLI.md`](CLI.md) and
 > [`DEVELOPMENT.md`](DEVELOPMENT.md).
 >
-> Everything about `bitrouter launch --tui` — the hosted mode, the emulator,
+> Everything about `bro launch --tui` — the hosted mode, the emulator,
 > the PTY host, the pinned status bar, and the fidelity matrix that gated them
 > — is **superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md)**. The flag,
 > `tui/{host,pty,term,conformance}.rs`, `tui/fixtures/`,
@@ -45,20 +45,20 @@ Two surfaces, one implementation:
 
 | Surface | What it is | Issue |
 |---|---|---|
-| `bitrouter status --watch` | a live, self-refreshing view of the gateway | #797 |
-| `bitrouter launch --tui` | a harness hosted in an emulator with that view's status bar pinned underneath | #782 |
+| `bro status --watch` | a live, self-refreshing view of the gateway | #797 |
+| `bro launch --tui` | a harness hosted in an emulator with that view's status bar pinned underneath | #782 |
 
 ---
 
 ## 1. Motivation
 
-`bitrouter status` answers "is the daemon up" in two lines. Nothing answers the
+`bro status` answers "is the daemon up" in two lines. Nothing answers the
 question a user actually has while an agent is running: **what is it doing right
 now, and what is it costing me?**
 
 There is, today, **no local spend surface at all** beyond the one-line exit
 summary `launch` prints when a harness quits
-([spawn.rs:390](../apps/bitrouter/src/spawn.rs:390)). `bitrouter workflow-state
+([spawn.rs:390](../apps/bitrouter/src/spawn.rs:390)). `bro workflow-state
 metering-usage` exists but is a benchmark-bundle exporter — it demands an
 explicit `--database-url` and writes JSONL to a file. The one machine-wide spend
 readout, `fleet_cost`, lived in `fleet_mcp.rs` and was deleted with the
@@ -105,28 +105,28 @@ plain command, since it does not need to be live to be useful.
 
 ## 3. CLI surface
 
-### 3.1 `bitrouter status --watch`
+### 3.1 `bro status --watch`
 
 ```
-bitrouter status [--watch] [-c <config>] [--socket <path>]
+bro status [--watch] [-c <config>] [--socket <path>]
 ```
 
 `--watch` / `-w` upgrades the existing one-shot into the live view. **Bare
-`bitrouter status` is byte-identical to today** — it stays a script-parseable
+`bro status` is byte-identical to today** — it stays a script-parseable
 probe that works when the daemon is down.
 
 - Non-tty stdout with `--watch` → print **one** snapshot as a table and exit,
-  honoring the existing `--json` / `--human` output mode. `bitrouter status
+  honoring the existing `--json` / `--human` output mode. `bro status
   --watch --json | jq` must work; refusing to run without a tty would be the
   worse default.
 - Rejected: `bitrouter top` (accurate for v1's stream, misleading the moment it
   manages anything) and making bare `status` interactive on a tty (the surprise
   runs the wrong way — a tty check protects scripts, not people).
 
-### 3.2 `bitrouter launch --tui`
+### 3.2 `bro launch --tui`
 
 ```
-bitrouter launch -a <harness> [--tui] [--model <id>] … [-- <agent args>]
+bro launch -a <harness> [--tui] [--model <id>] … [-- <agent args>]
 ```
 
 - `--tui` is **opt-in** and stays opt-in until it clears the gate in §12 —
@@ -376,9 +376,9 @@ by an empty list:
 |---|---|---|
 | up | any | `● live` |
 | down | has rows | `○ history only — daemon not running` |
-| down | none/absent | `○ nothing recorded yet — try bitrouter serve` |
+| down | none/absent | `○ nothing recorded yet — try bro serve` |
 
-## 8. `bitrouter status --watch`
+## 8. `bro status --watch`
 
 ### 8.1 Layout
 
@@ -418,7 +418,7 @@ verbs — is dead orchestration; its shell is not).
 |---|---|
 | `↑`/`↓`, `j`/`k` | move cursor (pins auto-follow off) |
 | `g`/`G` | top / live edge (re-arms auto-follow) |
-| `r` | **runs `bitrouter reload`** |
+| `r` | **runs `bro reload`** |
 | `e` | **opens `$EDITOR` on `bitrouter.yaml`, then reloads on exit** |
 | `q`, `Ctrl-C` | quit |
 | `?` | help |
@@ -436,7 +436,7 @@ The rule:
 > terminal.**
 
 This is not a restriction on the management story — it is how the management
-story gets to be good. `bitrouter providers login <id>` already **is** the
+story gets to be good. `bro providers login <id>` already **is** the
 credential editor, with per-provider methods auto-derived from the catalog
 (Claude Code session adoption, ChatGPT PKCE, GitHub device flow, API-key paste),
 writing to `bitrouter_providers::oauth::credential_store::Credential` — **not**
@@ -451,7 +451,7 @@ that can reach a panic dump or the log.
 For non-credential config, `e` → `$EDITOR` → `reload` is likewise the correct
 answer, not a cop-out: `bitrouter.yaml` is hand-maintained and commented, and a
 TUI that round-trips it through serde_yaml **will silently delete every
-comment**. Note that even `bitrouter init`, which does own a config writer,
+comment**. Note that even `bro init`, which does own a config writer,
 refuses to overwrite an existing config without `--force`.
 
 **`lifecycle::suspend()`** is the primitive: leave alt screen, restore cooked
@@ -459,7 +459,7 @@ mode, run the child on the real tty, re-enter, force a redraw. ~40 lines given
 lifecycle is already factored out, and the same shape as hosting a child — which
 makes it unusually cheap for this codebase specifically.
 
-## 9. `bitrouter launch --tui`
+## 9. `bro launch --tui`
 
 > **§§9–12 are superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md).** The flag
 > and every file described here are deleted. Kept as the record of a reversed
@@ -809,7 +809,7 @@ would have been an unused field.
   `created_at`, `latency_ms`, and `estimated_charge_micro_usd`.
 - `get_total_rate` counts every caller, not one `api_key_id` (§7.2).
 - `--tui` + `--check` rejected at parse time; `--tui` without a tty rejected.
-- Bare `bitrouter status` output unchanged — a golden test, since this is the
+- Bare `bro status` output unchanged — a golden test, since this is the
   compatibility promise `--watch` is built on.
 - `status --watch` non-tty emits one snapshot and exits 0 under both `--json`
   and `--human`.
