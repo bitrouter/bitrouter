@@ -44,6 +44,7 @@
   open_weights: false
   family: gpt
 - id: openai/gpt-5.4-mini
+  deprecation_date: 2026-10-05
   name: 'OpenAI: GPT-5.4 Mini'
   input_modalities:
   - text
@@ -57,6 +58,7 @@
   open_weights: false
   family: gpt-mini
 - id: openai/gpt-5.4
+  deprecation_date: 2026-10-05
   name: 'OpenAI: GPT-5.4'
   input_modalities:
   - text
@@ -70,6 +72,7 @@
   open_weights: false
   family: gpt
 - id: openai/gpt-5.5
+  deprecation_date: 2026-10-05
   name: 'OpenAI: GPT-5.5'
   input_modalities:
   - text
@@ -82,3 +85,61 @@
   knowledge_cutoff: 2025-12-01
   open_weights: false
   family: gpt
+- id: openai/gpt-5.6-luna-pro
+  name: 'OpenAI: GPT-5.6 Luna Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-07-09
+  knowledge_cutoff: 2026-02-16
+- id: openai/gpt-5.6-sol-pro
+  name: 'OpenAI: GPT-5.6 Sol Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-07-09
+  knowledge_cutoff: 2026-02-16
+- id: openai/gpt-5.6-terra-pro
+  name: 'OpenAI: GPT-5.6 Terra Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-07-09
+  knowledge_cutoff: 2026-02-16
+- id: openai/gpt-6-astra
+  name: 'OpenAI: GPT-6 Astra'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-04
+- id: openai/gpt-6-astra-pro
+  name: 'OpenAI: GPT-6 Astra Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-04

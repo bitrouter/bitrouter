@@ -53,22 +53,6 @@ status: active
 weight: 1
 submitted_at: 2026-07-06
 models:
-  - id: google/gemini-3.1-flash-lite-preview
-    provider_model_id: gemini-3.1-flash-lite-preview
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 1.5
-  - id: google/gemini-3.1-pro-preview
-    provider_model_id: gemini-3.1-pro-preview
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-      output_tokens:
-        text: 12
   - id: google/gemini-3.5-flash
     provider_model_id: gemini-3.5-flash
     pricing:
@@ -85,6 +69,22 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 7.5
+  - id: google/gemini-3.7-flash
+    provider_model_id: gemini-3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 3.75
+  - id: google/gemini-3.8-flash
+    provider_model_id: gemini-3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 3.75
 auto_sync:
   feed: models_dev
   key: google-vertex

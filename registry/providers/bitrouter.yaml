@@ -119,27 +119,6 @@ models:
         cache_read: 0.003625
       output_tokens:
         text: 0.87
-  - id: google/gemini-3.1-flash-lite-preview
-    provider_model_id: google/gemini-3.1-flash-lite-preview
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 1.5
-  - id: google/gemini-3.1-pro-preview
-    provider_model_id: google/gemini-3.1-pro-preview
-    reasoning_effort: &gemini_pro_effort
-      levels: [low, medium, high]
-      default: high
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-      output_tokens:
-        text: 12
   - id: google/gemini-3.5-flash
     provider_model_id: google/gemini-3.5-flash
     reasoning_effort: &gemini_flash_effort

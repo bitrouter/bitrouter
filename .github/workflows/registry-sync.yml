@@ -38,7 +38,8 @@ jobs:
 
       - name: Sync deterministic registry feeds
         run: |
-          cargo run -p dist-helper -- registry sync --write
+          cargo run -p dist-helper -- registry sync --write \
+            --report target/registry-sync-lifecycle.md
 
       - name: Install agentic sync tools
         run: |
@@ -103,14 +104,16 @@ jobs:
             exit 0
           fi
 
-          cat > /tmp/registry-sync-pr.md <<'EOF'
-          ## What changed
+          cp target/registry-sync-lifecycle.md /tmp/registry-sync-pr.md
+          cat >> /tmp/registry-sync-pr.md <<'EOF'
+
+          ## Provider feed sync
 
           Automated source registry sync from provider `auto_sync` feeds.
 
           ## Validation
 
-          - `cargo run -p dist-helper -- registry sync --write`
+          - `cargo run -p dist-helper -- registry sync --write --report target/registry-sync-lifecycle.md`
           - `cargo run -p dist-helper -- registry agentic-prompt`
           - `codex --search exec ... < target/registry-agentic-sync.md`
           - `cargo run -p dist-helper -- registry build`
