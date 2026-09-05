@@ -835,6 +835,115 @@ corroboration of §9's rejection rather than a reason to revisit it, and it make
 collision rule is not a theoretical gap, it has already been filled twice,
 differently.
 
+#### 6.9.3 OpenCode — the one that got closest, and the inversion that did it
+
+OpenCode is the answer to *"has anyone actually built this?"*, and the answer is
+**yes, partially, and by inverting the dependency the same way tmux does.** It is
+the most valuable finding in this subsection and the only one that argues
+*against* any part of this spec.
+
+Counted from [`sst/opencode`](https://github.com/sst/opencode) at the default
+branch (`dev`) on 2026-09-05, plus the published CLI and TUI references:
+
+| Measure | Value | Source |
+|---|---|---|
+| Top-level CLI commands | **~24** (28 files, some shared helpers) | [`packages/opencode/src/cli/cmd/`](https://github.com/sst/opencode/tree/dev/packages/opencode/src/cli/cmd) — counted files; leaf count is higher (`auth`, `agent`, `mcp`, `github`, `session`, `db`, `debug` are namespaces) |
+| TUI built-in slash commands | **17** | [opencode.ai/docs/tui](https://opencode.ai/docs/tui/) — counted rows, aliases folded in |
+| Built-ins in the **server** command registry | **2** (`init`, `review`) | `Default` in [`packages/opencode/src/command/index.ts`](https://github.com/sst/opencode/blob/dev/packages/opencode/src/command/index.ts) |
+| Registry entries beyond those two | every user `command` config entry, every MCP prompt, every skill | same file: `source: "command" \| "mcp" \| "skill"` |
+
+**The mechanism, which is the point.** OpenCode's server exposes a method whose
+entire job is invoking a command by name, and the headless CLI is one of its two
+callers. From [`packages/opencode/src/cli/cmd/run.ts`](https://github.com/sst/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts),
+whose header comment says it *"Also supports `--command` for slash-command
+execution"*:
+
+```ts
+.option("command", { describe: "the command to run, use message for args", type: "string" })
+…
+if (args.command) {
+  const result = await client.session.command({
+    sessionID, agent, model: args.model,
+    command: args.command,          // the command name
+    arguments: message,             // everything else, as one string
+    variant: args.variant,
+  })
+```
+
+So `opencode run --command review HEAD~1` and typing `/review HEAD~1` in the TUI
+reach the **same** `session.command` endpoint with the same two fields. That is
+not name parity; it is dispatch parity, and it is the only instance of it found
+in an agent harness.
+
+⇒ **Finding 10. Parity is achievable in this field, and the way to get it is
+[§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)'s
+inversion: put the command registry underneath both surfaces and make the
+headless CLI a client of it, rather than making the interactive layer mirror a
+CLI.** OpenCode's registry lives in the server package, not the TUI package;
+`session.command` is a server method; the TUI and `opencode run` are peers over
+it. tmux's result reproduced, twenty-five years later, in a coding agent.
+
+**And it is still not full parity, in both directions.** All three sets are
+non-empty:
+
+```
+A. both surfaces              B. CLI-only                 C. TUI-only
+──────────────────            ───────────                 ───────────
+init, review, and every       serve, web, attach, auth,   compact, details,
+user / MCP / skill command    agent, github, mcp, stats,  editor, exit, help,
+— shared through              import, session, upgrade,   new, redo, undo,
+session.command               uninstall, pr, plugin, db,  sessions, share,
+                              debug, acp, account,        unshare, themes,
+2 built-ins + N user          providers, generate, tui    thinking, connect
+                              ~22                         ~15
+```
+
+Set C survives even here, and its membership is the tell: `/editor`, `/themes`,
+`/thinking`, `/details`, `/exit`, `/help` are **renderer** verbs. They cannot be
+headless because there is no renderer to address. That is [§6.2](#62-psql-the-interactive-layers-vocabulary-is-mostly-net-new)'s
+finding reproduced in the newest tool in the survey: the interactive layer keeps
+a private vocabulary about *itself*, and no amount of registry sharing removes
+it.
+
+**Two name pairs that are not action pairs**, matching Claude Code's `doctor`
+case: `opencode export` *"Export session data as JSON"* against `/export`
+*"Export current conversation to Markdown and open in your default editor"*; and
+`opencode models` against `/models`, where the CLI prints a filtered list and the
+TUI opens a picker. Both are shared names with different outputs and neither goes
+through `session.command`. **In every harness surveyed, the shared names that
+were not built on a shared port have drifted** — which is the empirical form of
+P1's insistence on *"the same typed report"*.
+
+**The collision rule is documented and it is the opposite of `codex-acp`'s.**
+[opencode.ai/docs/commands](https://opencode.ai/docs/commands/): *"Custom
+commands can override built-in commands. If you define a custom command with the
+same name, it will override the built-in command."* Last-writer-wins, user beats
+built-in. `codex-acp` seeds built-ins first and skips colliding skills —
+first-writer-wins, built-in beats user ([§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero)).
+Claude Code publishes a four-level precedence table
+([§6.7](#67-acp-specifically)). Three harnesses, three different answers, and the
+protocol they share has none — which is why [§9 option A](#a-ride-availablecommandsupdate)
+would be inventing one in a field spelled *"commands the agent can execute"*.
+
+**The one thing OpenCode's design costs, and it is the cost §6.6 predicted.**
+`run.ts` rebuilds the argument string by hand before sending it:
+
+```ts
+let message = [...args.message, ...(args["--"] || [])]
+  .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
+  .join(" ")
+```
+
+An argv array is re-joined into one string with hand-rolled quoting, because
+`session.command`'s `arguments` field is a single string. That is
+[§6.6](#66-the-shell-out-escape-hatch-universal-and-its-failure-modes-are-documented)'s
+quoting failure mode — lazygit's `| quote` filter, gh-dash's path mangling —
+appearing inside the *shared port*, not at a shell boundary. **The lesson for
+[D9](#d9--argument-grammar) is precise: a shared dispatch port does not remove
+the argument-grammar problem, it relocates it to the port's signature.** If
+BitRouter's `SessionActions::run(id, args)` takes an untyped string, it inherits
+this bug the day a second argument appears.
+
 ---
 
 ## 7. The membership rule
