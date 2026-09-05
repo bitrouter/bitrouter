@@ -158,15 +158,6 @@ models:
         cache_write: 0
       output_tokens:
         text: 4.4
-  - id: qwen/qwen3.6-max-preview
-    provider_model_id: qwen3.6-max-preview
-    pricing:
-      input_tokens:
-        no_cache: 1.3
-        cache_read: 0.13
-        cache_write: 1.625
-      output_tokens:
-        text: 7.8
   - id: qwen/qwen3.8-flash
     provider_model_id: qwen3.8-flash
     pricing:

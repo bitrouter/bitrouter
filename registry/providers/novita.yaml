@@ -140,13 +140,6 @@ models:
         cache_read: 0.135
       output_tokens:
         text: 1
-  - id: deepseek/deepseek-v3.2-exp
-    provider_model_id: deepseek/deepseek-v3.2-exp
-    pricing:
-      input_tokens:
-        no_cache: 0.27
-      output_tokens:
-        text: 0.41
   - id: qwen/qwen3.5-35b-a3b
     provider_model_id: qwen/qwen3.5-35b-a3b
     pricing:

@@ -174,21 +174,6 @@ models:
         no_cache: 0.929
       output_tokens:
         text: 3.858
-  - id: deepseek/deepseek-v3.2-exp
-    provider_model_id: deepseek-v3-2-exp
-    pricing:
-      input_tokens:
-        no_cache: 0.287
-      output_tokens:
-        text: 0.431
-  - id: qwen/qwen3.6-max-preview
-    provider_model_id: qwen3.6-max-preview
-    pricing:
-      input_tokens:
-        no_cache: 1.32
-        cache_read: 0.132
-      output_tokens:
-        text: 7.9
   - id: qwen/qwen3.7-flash
     provider_model_id: qwen3.7-flash
     pricing:
