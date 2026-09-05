@@ -1,6 +1,7 @@
 # Spec: one actions table — stopping CLI, MCP, and TUI from drifting apart
 
-Status: **phases 0–4 implemented; 5 proposed** · Author: Claude (with Spikel)
+Status: **phases 0–4 implemented; 5 proposed; `complete` removed, not
+deferred** · Author: Claude (with Spikel)
 · Date: 2026-09-04
 · Issue: [#868](https://github.com/bitrouter/bitrouter/issues/868)
 · Refs: [#863](https://github.com/bitrouter/bitrouter/issues/863) (open),
@@ -62,6 +63,18 @@ wire alignment is recorded in the phase below and in `CHANGELOG.md`. The lesson
 for later phases is narrow but real: an action whose report is *also* somebody
 else's wire format has a second source of truth, and unifying our surfaces over
 a stale one would have made both of them wrong together.
+
+**Decision note, `complete` (2026-09-05).** The
+["Deferred — `complete`"](#removed--complete) section below argued that
+`complete` should eventually be port-ified so `Backend` could be deleted. That
+premise is **wrong and has been reversed by the maintainer**: `complete` was
+**removed** from the MCP server on `claude/mcp-drop-complete`. MCP is a control
+and introspection surface; running a completion is what the daemon's HTTP
+inference API is for, and that API is untouched. Everything in this spec that
+said a thing "closes when `complete` is port-ified" is corrected in place —
+those things closed by deletion instead, except the one that did not:
+`Backend` **survives**, because `multitenant_http.rs` (invariant 1) pins its
+name. The section is rewritten to record what actually happened.
 
 Both phases independently reached for a provenance field on their report —
 `ModelsReport::resolved_via: ModelsSource` and `RouteReport::resolved_via:
@@ -217,6 +230,13 @@ remotable action going uninventoried, but until a shared report replaces the two
 hand-written shapes there is no schema to hold the surfaces to. Each `None` is
 one of the phases below.
 
+**[corrected post-implementation, 2026-09-05]** The backlog is now empty:
+phases 1–4 unified four rows and the fifth, `complete`, was removed rather than
+unified, so every row in `ACTIONS` carries a real schema. `output_schema` stays
+`Option` regardless — §5 obliges a *new* tool to have a row from the moment it
+is registered, which is generally before its report type is shared. Emptying
+the backlog is not abolishing it.
+
 ## 4. Where the shared types live
 
 `apps/bitrouter` depends on `bitrouter-mcp`; the reverse edge would be a cycle.
@@ -337,6 +357,13 @@ consequences it did not predict:
   CloudBackend` crate-side, a real deviation from rule 2 of §3. It is consistent
   with `complete`/`list_models` still being reqwest there, and it closes when
   `complete` is port-ified.
+  - **[corrected post-implementation, 2026-09-05]** It does not close. Removing
+    `complete` removed the *comparison*, not the deviation: `impl StatusQuery
+    for CloudBackend` is still crate-side, because `GET /v1/billing/balance`
+    against somebody else's account is the right answer for that deployment and
+    there is nothing app-side to move it to (the same argument §10 records for
+    `list_models`). The deviation is permanent while the HTTP profile is
+    assembled from an `Arc<dyn Backend>` alone.
 - **~~Regression: `status` loses the cost footer.~~ Resolved by the spend
   reshape.** `Json<T>` produces structured content with no room for a second
   free-text block, so the prose spend line stopped riding along (`complete`
@@ -346,6 +373,12 @@ consequences it did not predict:
   one-sentence footer. No `#[tool(output_schema = …)]` with a hand-built
   `CallToolResult` is needed. `docs/CLI.md`, the skill, and the code comment all
   say this now.
+  - **[corrected post-implementation, 2026-09-05]** The footer no longer exists
+    anywhere. `complete` was its only consumer, so removing that tool made
+    `CostFooter`, `BitrouterMcp::with_cost_footer`, `ServeOptions::cost_footer`
+    and app-side `LocalCostFooter` dead surface, and invariant 5 says dead
+    surface goes. `serve_stdio` takes the handler alone. `StatusReport::spend`
+    is the whole spend surface an MCP client sees.
 - **Regression: HTTP + local loses `status` entirely.** That path *was* the fake
   `/v1/models` check; nothing can replace it from a `--local-url` client, which
   has no control socket. Documented in the same three places.
@@ -403,6 +436,14 @@ decision:
     standalone answers resolve the config the way the daemon does. What the
     live table still has over the projection is `reload`s and the start-up
     state of the daemon that is actually serving `complete`.
+  - **[corrected post-implementation, 2026-09-05]** The framing "disagree with
+    the `complete` sitting next to it on the same server" no longer applies —
+    there is no `complete` on the server. The **decision is unchanged**: the
+    daemon is still the thing that will serve the request an agent makes after
+    reading `list_models` (over the HTTP inference API rather than over MCP),
+    so a static projection is still neither a subset nor a superset of what
+    that daemon accepts, and the 2-versus-10 measurement still holds. The
+    argument moved one hop; it did not weaken.
 - **The report needed `resolved_via`.** `ModelsReport { models }` alone cannot
   say which of two materially different views answered, and "what a running
   router will accept" versus "what this config would accept" is exactly the
@@ -423,9 +464,19 @@ decision:
   be a regression rather than an honest absence. `Backend` is therefore left with
   `complete` plus two port accessors, not `complete` alone; it collapses when
   `complete` is port-ified.
+  - **[corrected post-implementation, 2026-09-05]** It does not collapse. With
+    `complete` removed, `Backend` is the two port accessors and nothing else —
+    a pure handover trait — and it stays, because invariant 1 pins its name
+    (and `serve_http_on`'s signature) in `multitenant_http.rs`. The sentence
+    was right that `complete` was the last method with a body; it was wrong to
+    assume losing that method would let the trait go.
 - Also deleted: `Builder::completion_local`, whose only caller was the stdio test
   fixture and which wired a `LocalBackend` as *just* the completion backend —
   misleading now that the same backend also answers `list_models`.
+  - **[corrected post-implementation, 2026-09-05]** Its replacement,
+    `Builder::completion`, is deleted too. The stdio fixture now wires the same
+    `LocalBackend` as the `list_models` port alone, which is all it ever
+    needed.
 
 ### Phase 3 — `route` / `route_preview`
 
@@ -616,15 +667,73 @@ a `directoryRead: true` we deliberately do not declare.
   `dist-helper` generation earns its keep for a 200-entry registry, not a
   6-row table.
 
-### Deferred — `complete`
+### Removed — `complete`
 
-`complete` has no CLI twin, so it gains nothing from the table today. Its own
-problems are real (`LocalBackend`/`CloudBackend` near-duplicates, `stream` not
-exposed, every parameter beyond `model`/`messages`/`max_tokens`/`temperature`/
-`system` dropped) but they are a *completion* problem, not a drift problem.
-Port-ifying it is the last thing that lets `Backend` be deleted, and it should
-be its own issue once phases 1–2 have proven the port shape against
-multi-tenant HTTP.
+> **[corrected post-implementation, 2026-09-05]** This section was titled
+> *Deferred — `complete`* and argued for port-ifying it later. The original
+> reasoning is kept below; the decision that overrode it follows. The heading
+> changed, so the anchor did too — nothing linked to the old one.
+
+*Original reasoning.* `complete` has no CLI twin, so it gains nothing from the
+table today. Its own problems are real (`LocalBackend`/`CloudBackend`
+near-duplicates, `stream` not exposed, every parameter beyond
+`model`/`messages`/`max_tokens`/`temperature`/`system` dropped) but they are a
+*completion* problem, not a drift problem. Port-ifying it is the last thing that
+lets `Backend` be deleted, and it should be its own issue once phases 1–2 have
+proven the port shape against multi-tenant HTTP.
+
+**Decided by the maintainer, 2026-09-05: `complete` is removed, not
+port-ified.** Both halves of the original reasoning were answered by the same
+observation, which the spec never made: the list of problems above is not a
+backlog, it is the shape of a tool that should not exist. Streaming absent, the
+parameter surface truncated, two near-duplicate reqwest clients — every one of
+those is a re-implementation of something the daemon's HTTP inference API
+(`/v1/messages`, `/v1/chat/completions`) already does completely. MCP is
+BitRouter's **control and introspection** surface; inference is a transport
+question, and BitRouter already ships the transport. Port-ifying `complete`
+would have moved a second, worse inference path app-side rather than deleting
+it. The HTTP API is untouched: it is the product, and the only thing that
+changed is that MCP stops offering a lossy second door to it.
+
+What that resolves, and what it does not:
+
+- **The `Backend` collapse this section predicted does not happen.** Invariant 1
+  pins `serve_http_on(Arc<dyn Backend>, …)`, `Backend`, `CloudBackend` and
+  `CloudAuth` by name in `tests/multitenant_http.rs`. `Backend` therefore
+  survives — as a **pure port-handover trait**: `status_port` + `models_port`,
+  no method that does anything. It answers one question, "which deployment is
+  this server serving", and exists because the HTTP profile is assembled from an
+  `Arc<dyn Backend>` and nothing else, so a backend that cannot hand a port over
+  cannot keep its tool. Absent that test it would be a candidate for deletion in
+  favour of passing the two `Option<Arc<dyn …>>` ports to `serve_http_on`
+  directly; with it, the trait is the seam and the honest description of it is
+  "vestigial but load-bearing".
+- **The two reqwest clients stay, smaller.** `impl ModelsQuery for
+  {Local,Cloud}Backend` and `impl StatusQuery for CloudBackend` are the crate's
+  remaining HTTP, and §10's correction already records why: `GET /v1/models`
+  against the caller's own deployment *is* the right answer there, with nothing
+  app-side to move it to. `Backend::complete` and the
+  `CompleteRequest`/`CompleteResponse`/`Usage` types went with the tool.
+- **The cost footer went too.** `CostFooter`, `BitrouterMcp::with_cost_footer`,
+  `ServeOptions::cost_footer` and app-side `LocalCostFooter` existed only to
+  annotate successful `complete` results — phase 1's note already recorded that
+  `status` neither has nor needs one. With the only consumer gone they are dead
+  surface (invariant 5), so they are deleted; `serve_stdio` takes the handler
+  alone. Spend still reaches an agent, as `StatusReport::spend`.
+- **`ACTIONS` loses its only schema-less row.** Every remaining row carries a
+  real `output_schema`, so `every_actions_row_matches_its_tools_output_schema`
+  now checks all five rather than four of six. `output_schema` stays `Option`:
+  §5 obliges a *new* tool to have a row from the moment it is registered, which
+  is generally before its report type is shared. The backlog is empty, not
+  abolished.
+- **`cli_leaf: None` still means something.** `skills_get` is also a
+  one-surface row (§6 phase 4 explains why adding `bitrouter skills show` for
+  the table's sake would be dead surface), so
+  `every_actions_row_resolves_to_a_cli_leaf` still has a row to skip and still
+  asserts the four leaves that do resolve.
+- **Streaming is no longer out of scope, it is out of the crate.** §11's
+  "streaming `complete`" line is moot: the streaming inference surface is the
+  daemon's, and always was.
 
 ## 7. Invariants the refactor must not break
 
@@ -656,6 +765,12 @@ multi-tenant HTTP.
 | First PR includes "`route_preview` and `route` share one fallback and one report type" | That is phase 3, after the contract exists | Sharing a report type *is* the framework; doing it ad-hoc would produce a seventh bespoke shape |
 | Generate the README tool table (dist-helper does this for the registry) | A test that the README matches; generation only if the table grows | Six rows |
 | Replace `Backend` with ports (including `complete`) | `status` / `list_models` now; `complete` deferred to its own issue | `complete` is the only tool with no CLI twin and the only one where the cloud profile carries real weight |
+
+**[corrected post-implementation, 2026-09-05]** The last row's verdict is
+superseded: `complete` was **removed**, not deferred and not port-ified, and
+`Backend` was *not* replaced by ports — it became one (`status_port` +
+`models_port`), kept alive by invariant 1. See
+[Removed — `complete`](#removed--complete).
 
 ## 9. Open decisions
 
@@ -858,6 +973,13 @@ routing-table generation only if it shows up.**
     the surface an agent reads is one shared type. The same applies to `status`,
     where phase 1 already recorded it. Both close when `complete` is port-ified
     and `Backend` goes away.
+    - **[corrected post-implementation, 2026-09-05]** Neither closes, and the
+      last sentence was wrong twice: `complete` was removed rather than
+      port-ified, and `Backend` did **not** go away — invariant 1 pins it. The
+      two reqwest calls are permanent for as long as the HTTP profile is built
+      from an `Arc<dyn Backend>` alone, which is the same invariant. What the
+      criterion actually holds is what the correction above already says: no
+      second implementation, one shared type per action.
 - `cargo nextest run --all-features`, `cargo clippy --all-features`,
   `cargo fmt -- --check` clean; `skills/bitrouter/` updated in the same PRs.
 
@@ -869,3 +991,6 @@ routing-table generation only if it shows up.**
 - The TUI's data model. Its session-only charter (`ACP_TUI_SPEC.md` §8.3) is
   unchanged; only the daemon's answer to `route/list` gets stricter.
 - Streaming `complete`, and the cloud profile's placement.
+  - **[corrected post-implementation, 2026-09-05]** The first half is moot:
+    `complete` is gone, and the streaming inference surface is the daemon's
+    HTTP API, where it always was.

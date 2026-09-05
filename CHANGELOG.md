@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (MCP):** the origin MCP server's `complete` tool is **removed**.
+  MCP is BitRouter's control and introspection surface; running a completion is
+  what the daemon's HTTP inference API is for. Use it instead — it is the
+  transport built for inference, and it always had the surface the tool did
+  not: streaming, the full parameter set, and the metering path.
+
+  ```jsonc
+  // before — MCP tools/call
+  { "name": "complete",
+    "arguments": { "model": "openai/gpt-4o",
+                   "messages": [{ "role": "user", "content": "hi" }] } }
+  ```
+
+  ```bash
+  # after — the daemon's HTTP API (OpenAI-shaped; /v1/messages is the
+  # Anthropic-shaped twin)
+  curl http://127.0.0.1:4356/v1/chat/completions \
+    -H 'content-type: application/json' \
+    -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+  ```
+
+  What remains on `bitrouter mcp serve` is `list_models`, `status`,
+  `route_preview` and the skills pair: what is routable, where it would go, and
+  what it has cost. The stdio profile is now `list_models` + `status` +
+  `route_preview` + `skills_search` + `skills_get`; the HTTP profile is
+  `list_models`, plus `status` where the backend can answer it.
+
+  The one-line spend footer went with it. It only ever rode successful
+  `complete` results; `status` reports the same figure as typed structured
+  content under `spend`, from the same metering database, with `unpriced` and
+  the remaining cap a footer had no room for.
+
+  **Breaking (Rust API):** `bitrouter_mcp::backend::Backend::complete` and the
+  `CompleteRequest` / `CompleteResponse` / `Usage` types are gone; `Backend` is
+  now a pure port-handover trait (`status_port` + `models_port`). Also removed:
+  `server::Builder::completion`, `server::CostFooter`,
+  `BitrouterMcp::with_cost_footer`, `server::CompleteArgs`, and
+  `ServeOptions::cost_footer`. `server::serve_stdio` loses its `cost_footer`
+  parameter and now takes the handler alone. `serve_http_on`, `CloudBackend`
+  and `CloudAuth` are unchanged.
+
 - **Breaking (MCP wire, SEP-2640):** the skills extension's `resources` field
   now matches the specification the MCP Core Maintainers **accepted on
   2026-09-03**. BitRouter previously implemented an earlier draft and emitted
@@ -174,7 +215,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     metered account's remaining credit). It is no longer served on HTTP +
     local — nothing on that transport can read the daemon's control socket —
     and no longer carries the free-text spend footer, which is now the typed
-    `spend` block (`complete` keeps its footer).
+    `spend` block (the footer is gone from the server entirely — see the
+    `complete` removal above).
 
 - `bitrouter status --json` gains `providers[]` (the distinct providers
   behind the routable models) and `spend`; `bitrouter models --json` gains
@@ -188,8 +230,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (Rust API):** `bitrouter_mcp::backend::{ModelInfo, StatusInfo,
   ProviderStatus}` and `Backend::{list_models, status}` are gone; `Backend`
   gains `status_port` / `models_port` (`Option<Arc<dyn StatusQuery>>` /
-  `Option<Arc<dyn ModelsQuery>>`), `Builder::completion_local` is replaced by
-  `completion(Arc<LocalBackend>)` + `models(...)`, and `ServeOptions` gains
+  `Option<Arc<dyn ModelsQuery>>`), `Builder::completion_local` is gone (its
+  `models(...)` half is what survives — see the `complete` removal above), and
+  `ServeOptions` gains
   `status` and `models`. `bitrouter_sdk::language_model::routing::ModelInfo`
   is the element type of the shared report and now derives `JsonSchema`,
   `PartialEq` and `Eq`.

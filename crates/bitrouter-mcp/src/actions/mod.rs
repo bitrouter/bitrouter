@@ -42,15 +42,19 @@ pub struct ActionSpec {
     /// `None` is the migration backlog, not an exemption. The row still has to
     /// exist — that is what stops a remotable action going uninventoried — but
     /// until a shared report type replaces the two hand-written shapes, there
-    /// is no schema to hold the two surfaces to.
+    /// is no schema to hold the two surfaces to. It stays `Option` because §5
+    /// obliges a *new* tool to have a row from the moment it is registered,
+    /// which is generally before its report type is shared; the backlog is
+    /// empty today, so every row below carries a real schema.
     pub output_schema: Option<fn() -> rmcp::model::JsonObject>,
 }
 
 /// Every action BitRouter answers on more than one surface.
 ///
-/// A tool without a row here fails the guard test. Rows whose `output_schema`
-/// is `None` are inventoried but not yet unified; each is one phase of
-/// `docs/ACTIONS_SPEC.md`.
+/// A tool without a row here fails the guard test. Running a completion is not
+/// among them and has no row: MCP is a control and introspection surface, and
+/// inference goes over the daemon's HTTP API (`/v1/messages`,
+/// `/v1/chat/completions`).
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         id: "status",
@@ -61,14 +65,6 @@ pub const ACTIONS: &[ActionSpec] = &[
                 .as_ref()
                 .clone()
         }),
-    },
-    ActionSpec {
-        // No CLI twin: running a completion is what the daemon's HTTP API is
-        // for. Inventoried anyway — it is remotable, so it must be listed.
-        id: "complete",
-        cli_leaf: None,
-        mcp_tool: Some("complete"),
-        output_schema: None,
     },
     ActionSpec {
         id: "list_models",

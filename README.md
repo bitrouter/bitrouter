@@ -188,7 +188,7 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 
 ### MCP
 
-Use BitRouter from any MCP client — it exposes `complete`, `list_models`, and `status` as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers):
+Use BitRouter from any MCP client — it exposes `list_models`, `status`, `route_preview` and the skills pair as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers). Control and introspection only: completions go to the HTTP API below.
 
 ```bash
 bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
