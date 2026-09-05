@@ -1494,7 +1494,11 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // which it does only with a local control binding. Said here, before raw
     // mode, because a cooked newline in a raw terminal does not return the
     // carriage.
-    if crate::chat::session::can_reroute(&session.client) {
+    let commands = crate::actions::session::offered_commands(&session.client);
+    if commands
+        .iter()
+        .any(|command| command.action == "route_set" && command.unavailable.is_none())
+    {
         eprintln!("chat: type /route to change the route mid-session.");
     }
     eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
@@ -1504,6 +1508,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         observability.recorder,
         routed.via.clone(),
+        commands,
     )
     .await;
 
@@ -1773,6 +1778,7 @@ async fn chat_piped(
         &ids.acp_session_id,
         agent_id,
         observability.recorder,
+        crate::actions::session::offered_commands(&session.client),
     )
     .await;
 

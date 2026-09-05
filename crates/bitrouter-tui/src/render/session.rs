@@ -61,30 +61,79 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
     ])
 }
 
-/// The agent's own slash commands.
+/// What this session offers: BitRouter's own commands, then the agent's.
 ///
 /// Listed when asked for rather than kept on screen: the list is static for
 /// most of a session and long for some agents, and rows on screen are rows the
 /// transcript does not get.
-pub fn commands(commands: &[AvailableCommand]) -> Vec<Line<'static>> {
-    if commands.is_empty() {
-        return vec![Line::from(Span::styled(
+///
+/// Two groups rather than one merged list, because the two are answered by
+/// different things and a reader who types `/status` should be able to see
+/// which one will get it. An agent command whose name BitRouter also uses is
+/// listed and marked shadowed rather than dropped: the agent did advertise it,
+/// and hiding it would make the resolver's precedence invisible.
+pub fn commands(
+    bitrouter: &[crate::machine::Command],
+    agent: &[AvailableCommand],
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if !bitrouter.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("bitrouter · {}", bitrouter.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.extend(bitrouter.iter().map(|command| {
+            let mut spans = vec![
+                Span::styled(
+                    format!("  /{}", command.name),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(format!("  {}", command.summary)),
+            ];
+            // A control that cannot act says why, in place, rather than being
+            // greyed out or absent.
+            if let Some(reason) = command.unavailable {
+                spans.push(Span::styled(
+                    format!(" — {reason}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        }));
+    }
+    if agent.is_empty() {
+        lines.push(Line::from(Span::styled(
             "this agent advertises no commands",
             Style::default().fg(Color::DarkGray),
-        ))];
+        )));
+        return lines;
     }
-    let mut lines = vec![Line::from(Span::styled(
-        format!("commands · {}", commands.len()),
+    lines.push(Line::from(Span::styled(
+        format!("agent · {}", agent.len()),
         Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    lines.extend(commands.iter().map(|command| {
-        Line::from(vec![
+    )));
+    lines.extend(agent.iter().map(|command| {
+        let shadowed = bitrouter
+            .iter()
+            .any(|ours| ours.name == command.name.as_str());
+        let mut spans = vec![
             Span::styled(
                 format!("  /{}", command.name),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(if shadowed {
+                    Color::DarkGray
+                } else {
+                    Color::Cyan
+                }),
             ),
             Span::raw(format!("  {}", command.description)),
-        ])
+        ];
+        if shadowed {
+            spans.push(Span::styled(
+                " — shadowed by BitRouter's",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        Line::from(spans)
     }));
     lines
 }
@@ -320,17 +369,30 @@ mod tests {
         assert!(out.contains("· delete the old renderer (low)"), "{out:?}");
     }
 
+    /// One BitRouter command, offered and runnable.
+    fn ours(name: &'static str, action: &'static str) -> crate::machine::Command {
+        crate::machine::Command {
+            name,
+            action,
+            summary: "does a thing",
+            unavailable: None,
+        }
+    }
+
     /// `AvailableCommandsUpdate` renders — the surface that matters most,
     /// because `/route` is ours and everything else the agent offers was
     /// invisible.
     #[test]
     fn available_commands_render_with_their_descriptions() {
-        let rendered = commands(&[
-            AvailableCommand::new("compact", "summarize the conversation"),
-            AvailableCommand::new("init", "write an AGENTS.md"),
-        ]);
+        let rendered = commands(
+            &[],
+            &[
+                AvailableCommand::new("compact", "summarize the conversation"),
+                AvailableCommand::new("init", "write an AGENTS.md"),
+            ],
+        );
         let out = text(&rendered);
-        assert!(out.contains("commands · 2"), "{out:?}");
+        assert!(out.contains("agent · 2"), "{out:?}");
         assert!(
             out.contains("/compact  summarize the conversation"),
             "{out:?}"
@@ -342,7 +404,47 @@ mod tests {
     /// over nothing.
     #[test]
     fn no_commands_says_so() {
-        assert!(text(&commands(&[])).contains("no commands"));
+        assert!(text(&commands(&[], &[])).contains("no commands"));
+    }
+
+    /// BitRouter's own come first and are labelled as ours, so a reader can
+    /// see which half of the list answers a name.
+    #[test]
+    fn bitrouter_commands_are_listed_above_the_agents() {
+        let out = text(&commands(
+            &[ours("route", "route_set")],
+            &[AvailableCommand::new("compact", "summarize")],
+        ));
+        let mine = out.find("bitrouter · 1").expect("our heading");
+        let theirs = out.find("agent · 1").expect("their heading");
+        assert!(mine < theirs, "ours must be listed first: {out:?}");
+    }
+
+    /// A command that cannot act says why, in place — listed, never dead.
+    #[test]
+    fn an_unavailable_command_is_listed_with_its_reason() {
+        let mut gated = ours("route", "route_set");
+        gated.unavailable = Some("this session cannot be rerouted");
+        let out = text(&commands(&[gated], &[]));
+        assert!(out.contains("/route"), "{out:?}");
+        assert!(out.contains("cannot be rerouted"), "{out:?}");
+    }
+
+    /// An agent command BitRouter also answers is shown, and marked, because
+    /// the alternative is precedence the reader cannot see.
+    #[test]
+    fn a_shadowed_agent_command_is_marked_not_dropped() {
+        let out = text(&commands(
+            &[ours("status", "status")],
+            &[
+                AvailableCommand::new("status", "the agent's own status"),
+                AvailableCommand::new("compact", "summarize"),
+            ],
+        ));
+        assert!(out.contains("the agent's own status"), "listed: {out:?}");
+        assert!(out.contains("shadowed"), "and marked: {out:?}");
+        let shadow_marks = out.matches("shadowed").count();
+        assert_eq!(shadow_marks, 1, "only the clashing one: {out:?}");
     }
 
     /// `CurrentModeUpdate` renders, in the footer.

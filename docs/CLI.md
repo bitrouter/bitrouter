@@ -534,7 +534,16 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 | Input | Effect |
 |---|---|
 | `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
-| `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
+| `/route reset` | Drop this session's route lease, so the daemon's own choice applies again. The footer stops naming a route. |
+| `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
+| `/help` | The same list. An alias for `/commands`. |
+
+BitRouter's commands are listed **above** the agent's, and a name BitRouter
+answers wins: if the agent advertises a command of the same name, `/commands`
+lists it marked *shadowed* rather than dropping it, so which half of the list
+answers a name is visible rather than inferred. A command the session cannot
+run — `/route` under `--direct` — is still listed, with the reason, and typing
+it answers with that reason rather than failing.
 
 **The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
 

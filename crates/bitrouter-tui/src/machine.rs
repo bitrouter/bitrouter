@@ -67,10 +67,96 @@ const NO_TURN: &str = "permission denied: no turn is running";
 const ROUTE_UNCHANGED: &str = "route unchanged";
 /// What the session says when the daemon suggested nothing to choose between.
 const NO_ROUTES: &str = "no routes to choose between";
-/// What the session says when `/route` is typed at a session that has no route
-/// control to reach.
-const NOT_ROUTABLE: &str = "this session cannot be rerouted (the controller advertises no route \
-                            control: running direct, or without a trusted local daemon binding)";
+/// What the session says when a route lease is dropped and the daemon's own
+/// default takes over again.
+const ROUTE_RESET: &str = "route reset to the daemon's default";
+
+/// One of BitRouter's own slash commands, as the reducer needs to know it.
+///
+/// Built by the app from the `ACTIONS` rows that carry a `tui_command`; the
+/// reducer never sees the table, so it cannot offer a command the table does
+/// not have. That is the whole of the coupling: this crate depends on nothing
+/// of BitRouter's, so the set of commands is data handed in, exactly as
+/// `routable` was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command {
+    /// The words after the slash, space-separated: `"status"`, `"route reset"`.
+    pub name: &'static str,
+    /// The `ACTIONS` row id, matched by the reducer only for the ids in
+    /// [`REDUCER_OWNED`].
+    pub action: &'static str,
+    /// One line for `/commands`.
+    pub summary: &'static str,
+    /// `Some(reason)` when the row's requirement is unmet in this session. The
+    /// command is still listed — with the reason — and typing it answers with
+    /// the reason instead of running. Absent, never dead.
+    pub unavailable: Option<&'static str>,
+}
+
+/// The rows the reducer dispatches itself rather than handing to the app,
+/// because each needs reducer-owned state — the journal's command list, or the
+/// picker's phase.
+///
+/// A guard asserts every entry is a row id that carries a `tui_command`.
+pub const REDUCER_OWNED: &[&str] = &["commands", "route_set", "route_reset"];
+
+/// Names that mean another command. A guard asserts no alias is itself a
+/// `tui_command`, so an alias can never shadow a real name.
+pub const ALIASES: &[(&str, &str)] = &[("help", "commands")];
+
+/// What a submitted line turned out to be.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Resolution {
+    /// A BitRouter command the reducer runs itself.
+    Owned {
+        /// The `ACTIONS` row id.
+        action: &'static str,
+        /// The rest of the line, whitespace-split — never one string.
+        args: Vec<String>,
+    },
+    /// A listed BitRouter command this session cannot run, and why.
+    Unavailable(&'static str),
+    /// Not ours — a prompt, including any command the agent advertises.
+    Prompt(String),
+}
+
+/// Resolve one submitted line against the commands this session offers.
+///
+/// Precedence is fixed here and nowhere else: a two-word BitRouter name, then a
+/// one-word one, then an alias, then the agent. Local wins, which is why an
+/// agent that advertises `/status` is shadowed rather than obeyed — `/commands`
+/// says so rather than the shadowing being silent.
+///
+/// A free function over a slice, not a method, so the piped loop and the
+/// headless one-shot path can run the same resolution the terminal does.
+pub fn resolve(commands: &[Command], line: &str) -> Resolution {
+    let line = line.trim();
+    let Some(rest) = line.strip_prefix('/') else {
+        return Resolution::Prompt(line.to_string());
+    };
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    // Longest name first, so `/route reset` is not `/route` with an argument.
+    for take in [2, 1] {
+        let Some(head) = words.get(..take) else {
+            continue;
+        };
+        let typed = head.join(" ");
+        let name = ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == typed)
+            .map_or(typed.as_str(), |(_, target)| *target);
+        if let Some(command) = commands.iter().find(|candidate| candidate.name == name) {
+            if let Some(reason) = command.unavailable {
+                return Resolution::Unavailable(reason);
+            }
+            return Resolution::Owned {
+                action: command.action,
+                args: words[take..].iter().map(|word| word.to_string()).collect(),
+            };
+        }
+    }
+    Resolution::Prompt(line.to_string())
+}
 
 /// What the session is doing, and therefore what a key means.
 #[derive(Debug)]
@@ -95,11 +181,12 @@ pub struct State {
     /// How many prompts this session has sent, so two in a row cannot merge
     /// into one run in the journal.
     pub prompts: usize,
-    /// Whether the controller advertised both `_bitrouter/route/list` and
-    /// `_bitrouter/route/set` for this session. A controller with no trusted
-    /// local binding advertises neither, and `/route` then says so rather than
-    /// opening a picker that cannot act.
-    pub routable: bool,
+    /// BitRouter's own commands, in `/commands` order.
+    ///
+    /// Replaces the old `routable` flag: whether `/route` can act is now one
+    /// entry's `unavailable`, which generalises to every command without the
+    /// reducer growing a flag per capability.
+    pub commands: Vec<Command>,
     /// Questions the agent has asked and nobody has answered yet.
     ///
     /// A deque rather than a slot: the flat loop polls the permission stream
@@ -112,14 +199,25 @@ pub struct State {
 
 impl State {
     /// A session at an idle prompt, having sent nothing.
-    pub fn new(routable: bool) -> Self {
+    pub fn new(commands: Vec<Command>) -> Self {
         Self {
             phase: Phase::Idle,
             editor: Editor::default(),
             prompts: 0,
-            routable,
+            commands,
             queued: VecDeque::new(),
         }
+    }
+
+    /// Is this row offered *and* runnable here?
+    ///
+    /// Replaces the two reads of `routable`. A command that is listed with a
+    /// reason is offered but not runnable, so this is the question every gate
+    /// asks.
+    pub fn available(&self, action: &str) -> bool {
+        self.commands
+            .iter()
+            .any(|command| command.action == action && command.unavailable.is_none())
     }
 
     /// Is a turn in flight? The driver's tick arm is gated on this: an idle
@@ -147,9 +245,10 @@ pub enum Action {
     Permission(Prompt),
     /// `_bitrouter/route/list` came back, or failed with a rendered message.
     Routes(Result<Routes, String>),
-    /// `_bitrouter/route/set` came back, carrying the route now actually in
-    /// force — never the one that was asked for.
-    Routed(Result<String, String>),
+    /// `_bitrouter/route/set` or `/reset` came back, carrying the route now
+    /// actually in force — never the one that was asked for. `Ok(None)` is the
+    /// lease being gone, so the daemon's own default applies.
+    Routed(Result<Option<String>, String>),
     /// The prompt turn settled, one way or the other.
     TurnEnded(Result<StopReason, String>),
 }
@@ -204,6 +303,8 @@ pub enum Effect {
     ListRoutes,
     /// Ask for this route to be installed.
     SetRoute(String),
+    /// Drop this session's route lease, so the daemon's default applies again.
+    ResetRoute,
     /// The route the footer names for the rest of the session — the one the
     /// daemon confirmed.
     RouteInForce(Option<String>),
@@ -239,7 +340,7 @@ pub fn step(state: &mut State, action: Action) -> Vec<Effect> {
 }
 
 /// Answer this request with the given outcome.
-fn resolve(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
+fn answer_with(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
     Effect::Resolve {
         id: prompt.id().to_string(),
         outcome,
@@ -255,7 +356,7 @@ fn resolve(prompt: &Prompt, outcome: RequestPermissionOutcome) -> Effect {
 /// the agent heard (see [`Prompt::answer`]).
 pub fn decide(policy: &Policy, prompt: &Prompt) -> (Decision, Effect) {
     let (decision, outcome) = prompt.answer(policy.decide(prompt));
-    (decision, resolve(prompt, outcome))
+    (decision, answer_with(prompt, outcome))
 }
 
 /// Leave whatever phase is current, answering every question it holds, and
@@ -270,10 +371,10 @@ fn abandon(state: &mut State) -> (Phase, Vec<Effect>) {
     let phase = std::mem::replace(&mut state.phase, Phase::Idle);
     let mut effects = Vec::new();
     if let Phase::Answering(prompt) = &phase {
-        effects.push(resolve(prompt, prompt.unanswered()));
+        effects.push(answer_with(prompt, prompt.unanswered()));
     }
     for prompt in std::mem::take(&mut state.queued) {
-        effects.push(resolve(&prompt, prompt.unanswered()));
+        effects.push(answer_with(&prompt, prompt.unanswered()));
     }
     if !effects.is_empty() {
         effects.push(Effect::ShowPermission(None));
@@ -382,30 +483,46 @@ fn submit(state: &mut State) -> Vec<Effect> {
     // The last turn's word stands until this one starts, so a stop reason is
     // readable for as long as the reader is deciding what to say next.
     let mut effects = vec![Effect::Echo, Effect::ClearNotice];
-    // A line of exactly `/commands` lists what the agent itself offers. Ours
-    // are hardcoded; the agent's arrive on `AvailableCommandsUpdate`.
-    if line.trim() == "/commands" {
-        effects.push(Effect::Notice(Notice::Commands));
-        effects.push(Effect::Paint(Trigger::Key));
-        return effects;
-    }
-    // A line of exactly `/route` opens the picker — when there is a route
-    // surface to open it against.
-    if line.trim() == "/route" {
-        if state.routable {
-            effects.push(Effect::ListRoutes);
-        } else {
-            effects.push(Effect::Notice(Notice::Say(NOT_ROUTABLE.to_string())));
-            effects.push(Effect::Paint(Trigger::Key));
+    match resolve(&state.commands, &line) {
+        Resolution::Owned {
+            action: "commands", ..
+        } => {
+            effects.push(Effect::Notice(Notice::Commands));
         }
-        return effects;
+        Resolution::Owned {
+            action: "route_set",
+            ..
+        } => {
+            effects.push(Effect::ListRoutes);
+            return effects;
+        }
+        Resolution::Owned {
+            action: "route_reset",
+            ..
+        } => {
+            effects.push(Effect::ResetRoute);
+            return effects;
+        }
+        // `REDUCER_OWNED` names the ids matched above, and a guard pins the
+        // two together. An id arriving here is a command list the app built
+        // wrongly, and is said as such rather than silently sent as a prompt.
+        Resolution::Owned { action, .. } => {
+            effects.push(Effect::Notice(Notice::Say(format!(
+                "`{action}` is marked reducer-owned but has no reducer arm"
+            ))));
+        }
+        Resolution::Unavailable(reason) => {
+            effects.push(Effect::Notice(Notice::Say(reason.to_string())));
+        }
+        Resolution::Prompt(prompt) => {
+            state.prompts = state.prompts.saturating_add(1);
+            state.phase = Phase::Turn;
+            effects.push(Effect::Prompt {
+                line: prompt,
+                nth: state.prompts,
+            });
+        }
     }
-    state.prompts = state.prompts.saturating_add(1);
-    state.phase = Phase::Turn;
-    effects.push(Effect::Prompt {
-        line,
-        nth: state.prompts,
-    });
     effects.push(Effect::Paint(Trigger::Key));
     effects
 }
@@ -465,7 +582,7 @@ fn answering_key(state: &mut State, prompt: Prompt, event: &Event) -> Vec<Effect
     // Answering does **not** cancel the turn: the agent asked mid-turn and
     // carries on with the answer.
     vec![
-        resolve(&prompt, outcome),
+        answer_with(&prompt, outcome),
         next_question(state),
         Effect::Notice(Notice::Say(said.to_string())),
         Effect::Paint(Trigger::Permission),
@@ -553,7 +670,7 @@ fn permission(state: &mut State, prompt: Prompt) -> Vec<Effect> {
         quiet => {
             state.phase = quiet;
             vec![
-                resolve(&prompt, prompt.unanswered()),
+                answer_with(&prompt, prompt.unanswered()),
                 Effect::Notice(Notice::Say(NO_TURN.to_string())),
                 Effect::Paint(Trigger::Permission),
             ]
@@ -577,10 +694,13 @@ fn routes(state: &mut State, listed: Result<Routes, String>) -> Vec<Effect> {
             ];
         }
     };
-    // `routable` is the gate, asked again here so there is no way to draw a
-    // picker without answering it.
-    let Some(picker) = Picker::open(state.routable, &listed.available, listed.current.as_deref())
-    else {
+    // The gate is asked again here so there is no way to draw a picker without
+    // answering it.
+    let Some(picker) = Picker::open(
+        state.available("route_set"),
+        &listed.available,
+        listed.current.as_deref(),
+    ) else {
         return vec![
             Effect::Notice(Notice::Say(NO_ROUTES.to_string())),
             Effect::Paint(Trigger::Key),
@@ -591,15 +711,22 @@ fn routes(state: &mut State, listed: Result<Routes, String>) -> Vec<Effect> {
     vec![Effect::Modal(Some(row)), Effect::Paint(Trigger::Key)]
 }
 
-/// `_bitrouter/route/set` came back. What it *confirmed* is what is reported,
-/// never what was asked for: `set` can legitimately refuse.
-fn routed(installed: Result<String, String>) -> Vec<Effect> {
+/// `_bitrouter/route/set` or `/reset` came back. What it *confirmed* is what is
+/// reported, never what was asked for: `set` can legitimately refuse.
+fn routed(installed: Result<Option<String>, String>) -> Vec<Effect> {
     match installed {
-        Ok(in_force) => vec![
+        Ok(Some(in_force)) => vec![
             // The footer names the route for the rest of the session, not just
             // for this frame.
             Effect::RouteInForce(Some(in_force.clone())),
             Effect::Notice(Notice::Say(format!("route: {in_force}"))),
+            Effect::Paint(Trigger::Key),
+        ],
+        // The lease is gone, so the footer must stop naming a route: what is in
+        // force is whatever the daemon decides per turn.
+        Ok(None) => vec![
+            Effect::RouteInForce(None),
+            Effect::Notice(Notice::Say(ROUTE_RESET.to_string())),
             Effect::Paint(Trigger::Key),
         ],
         Err(message) => vec![
@@ -637,6 +764,33 @@ mod tests {
 
     fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
         PermissionOption::new(PermissionOptionId::new(id), id, kind)
+    }
+
+    /// The command list the app hands a session, as these tests need it: the
+    /// three BitRouter commands, with the two route verbs gated the way a
+    /// controller with — or without — route control would gate them.
+    fn commands_for(routable: bool) -> Vec<Command> {
+        let unavailable = (!routable).then_some("this session cannot be rerouted");
+        vec![
+            Command {
+                name: "commands",
+                action: "commands",
+                summary: "list the commands this session offers",
+                unavailable: None,
+            },
+            Command {
+                name: "route",
+                action: "route_set",
+                summary: "choose the route for the rest of the session",
+                unavailable,
+            },
+            Command {
+                name: "route reset",
+                action: "route_reset",
+                summary: "drop the route lease",
+                unavailable,
+            },
+        ]
     }
 
     /// A question offering allow / always / reject, in that order.
@@ -700,6 +854,7 @@ mod tests {
                 Effect::Cancel => "cancel",
                 Effect::ListRoutes => "list-routes",
                 Effect::SetRoute(_) => "set-route",
+                Effect::ResetRoute => "reset-route",
                 Effect::RouteInForce(_) => "route-in-force",
                 Effect::Exit => "exit",
             })
@@ -723,7 +878,7 @@ mod tests {
 
     /// A session in each phase, built the same way every test builds one.
     fn in_phase(phase: &str) -> State {
-        let mut state = State::new(true);
+        let mut state = State::new(commands_for(true));
         state.phase = match phase {
             "turn" => Phase::Turn,
             "answering" => Phase::Answering(question("r1")),
@@ -1085,7 +1240,7 @@ mod tests {
                     available: vec!["@balanced".to_string()],
                     current: None,
                 })),
-                Action::Routed(Ok("@balanced".to_string())),
+                Action::Routed(Ok(Some("@balanced".to_string()))),
                 Action::TurnEnded(Ok(StopReason::EndTurn)),
                 Action::TurnEnded(Err("the harness died".to_string())),
             ]
@@ -1111,7 +1266,7 @@ mod tests {
     /// the notice cleared out of the way first.
     #[test]
     fn a_submitted_line_becomes_a_numbered_turn() {
-        let mut state = State::new(true);
+        let mut state = State::new(commands_for(true));
         // Enter on nothing types nothing and sends nothing.
         assert!(matches!(state.phase, Phase::Idle));
         let _ = step(&mut state, Action::Key(press(KeyCode::Enter)));
@@ -1139,12 +1294,91 @@ mod tests {
         }
     }
 
+    /// Precedence, stated once and asserted here: the longest BitRouter name
+    /// wins, an alias reaches its target, an unmet requirement answers with its
+    /// reason, and anything else is the agent's business untouched.
+    #[test]
+    fn the_resolver_reads_the_longest_name_first_then_aliases_then_the_agent() {
+        let offered = commands_for(true);
+        assert_eq!(
+            resolve(&offered, "/route reset"),
+            Resolution::Owned {
+                action: "route_reset",
+                args: Vec::new()
+            },
+            "`/route reset` is one two-word name, not `/route` with an argument"
+        );
+        assert_eq!(
+            resolve(&offered, "/route"),
+            Resolution::Owned {
+                action: "route_set",
+                args: Vec::new()
+            },
+            "the one-word name is still reachable once the two-word one misses"
+        );
+        assert_eq!(
+            resolve(&offered, "/help"),
+            Resolution::Owned {
+                action: "commands",
+                args: Vec::new()
+            },
+            "an alias reaches its target"
+        );
+        assert_eq!(
+            resolve(&offered, "/plan ship it"),
+            Resolution::Prompt("/plan ship it".to_string()),
+            "a command we do not offer is the agent's, and is passed through whole"
+        );
+        assert_eq!(
+            resolve(&offered, "hello"),
+            Resolution::Prompt("hello".to_string()),
+            "a bare line is a prompt"
+        );
+        // Arguments are split, never handed over as one string.
+        assert_eq!(
+            resolve(&offered, "/route  us-east   fast "),
+            Resolution::Owned {
+                action: "route_set",
+                args: vec!["us-east".to_string(), "fast".to_string()]
+            }
+        );
+        // A listed-but-unrunnable command answers with its reason.
+        match resolve(&commands_for(false), "/route") {
+            Resolution::Unavailable(reason) => {
+                assert!(reason.contains("cannot be rerouted"), "got `{reason}`")
+            }
+            other => panic!("expected the reason, got {other:?}"),
+        }
+    }
+
+    /// `/route reset` drops the lease, and what comes back clears the footer
+    /// rather than naming a route nothing is holding.
+    #[test]
+    fn resetting_the_route_clears_what_the_footer_names() {
+        let mut state = State::new(commands_for(true));
+        for c in "/route reset".chars() {
+            let _ = step(&mut state, Action::Key(press(KeyCode::Char(c))));
+        }
+        let effects = step(&mut state, Action::Key(press(KeyCode::Enter)));
+        assert_eq!(
+            effects_of(&effects),
+            ["echo", "clear-notice", "reset-route"]
+        );
+
+        let effects = step(&mut state, Action::Routed(Ok(None)));
+        assert_eq!(effects_of(&effects), ["route-in-force", "notice", "paint"]);
+        assert!(
+            matches!(effects.first(), Some(Effect::RouteInForce(None))),
+            "a dropped lease must stop the footer naming a route"
+        );
+    }
+
     /// `/route` is gated on the capability the controller advertised, and the
     /// answer when it is absent is a sentence rather than a dead picker.
     #[test]
     fn route_needs_the_capability_the_controller_advertised() {
         for (routable, expected) in [(true, "list-routes"), (false, "notice")] {
-            let mut state = State::new(routable);
+            let mut state = State::new(commands_for(routable));
             for c in "/route".chars() {
                 let _ = step(&mut state, Action::Key(press(KeyCode::Char(c))));
             }
@@ -1158,7 +1392,7 @@ mod tests {
     /// open over, and that a selection is an *attempt* rather than a change.
     #[test]
     fn the_picker_opens_chooses_and_reports_what_was_confirmed() {
-        let mut state = State::new(true);
+        let mut state = State::new(commands_for(true));
         let effects = step(
             &mut state,
             Action::Routes(Ok(Routes {
@@ -1180,7 +1414,10 @@ mod tests {
 
         // What the daemon confirmed is what the footer names — which need not
         // be what was asked for.
-        let effects = step(&mut state, Action::Routed(Ok("@balanced".to_string())));
+        let effects = step(
+            &mut state,
+            Action::Routed(Ok(Some("@balanced".to_string()))),
+        );
         assert_eq!(effects_of(&effects), ["route-in-force", "notice", "paint"]);
         assert!(effects.iter().any(
             |effect| matches!(effect, Effect::RouteInForce(Some(route)) if route == "@balanced")
@@ -1199,7 +1436,7 @@ mod tests {
     #[test]
     fn no_routes_and_no_capability_both_mean_no_picker() {
         for (routable, available) in [(true, Vec::new()), (false, vec!["@balanced".to_string()])] {
-            let mut state = State::new(routable);
+            let mut state = State::new(commands_for(routable));
             let effects = step(
                 &mut state,
                 Action::Routes(Ok(Routes {
@@ -1212,7 +1449,7 @@ mod tests {
         }
 
         // And a list that never came back says why, without a picker.
-        let mut state = State::new(true);
+        let mut state = State::new(commands_for(true));
         let effects = step(&mut state, Action::Routes(Err("the daemon is gone".into())));
         assert_eq!(effects_of(&effects), ["notice", "paint"]);
         assert_eq!(phase_of(&state), "idle");

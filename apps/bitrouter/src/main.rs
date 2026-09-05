@@ -5887,6 +5887,71 @@ mod tests {
             .build()
     }
 
+    /// Every command a session can offer is a row, and every row it names is
+    /// reachable.
+    ///
+    /// Lives here rather than beside the table because it is the only place
+    /// that can see `bitrouter_tui::machine` and `bitrouter_mcp::actions`
+    /// together: the TUI crate depends on nothing of BitRouter's, so the two
+    /// halves of this agreement meet only in the app that wires them.
+    #[test]
+    fn every_tui_command_has_an_actions_row() {
+        use bitrouter_mcp::actions::ACTIONS;
+        use bitrouter_tui::machine::{ALIASES, REDUCER_OWNED};
+
+        let named: Vec<&str> = ACTIONS.iter().filter_map(|row| row.tui_command).collect();
+
+        // 1. The reducer claims only ids the table has, and only ones a
+        //    session can actually type.
+        for owned in REDUCER_OWNED {
+            let row = ACTIONS.iter().find(|row| &row.id == owned);
+            match row {
+                Some(row) => assert!(
+                    row.tui_command.is_some(),
+                    "`{owned}` is dispatched by the reducer but its row carries no \
+                     `tui_command`, so nothing can reach it"
+                ),
+                None => panic!(
+                    "`{owned}` is dispatched by the reducer but is not an `ACTIONS` row. \
+                     Known rows: {:?}",
+                    ACTIONS.iter().map(|row| row.id).collect::<Vec<_>>()
+                ),
+            }
+        }
+
+        // 2. Two rows cannot answer to one name; the resolver would reach
+        //    whichever came first and the other would be unreachable.
+        for (index, name) in named.iter().enumerate() {
+            assert!(
+                !named[index + 1..].contains(name),
+                "two rows both claim `/{name}`; a name reaches one action"
+            );
+        }
+
+        // 3. An alias points at a real name and is not itself one, so an alias
+        //    can never shadow a command.
+        for (alias, target) in ALIASES {
+            assert!(
+                named.contains(target),
+                "alias `/{alias}` points at `{target}`, which no row offers"
+            );
+            assert!(
+                !named.contains(alias),
+                "`/{alias}` is both an alias and a command's own name"
+            );
+        }
+
+        // 4. Every offered row has a line of help. The reducer renders
+        //    `summary` unconditionally, so a missing arm is a blank row.
+        for row in ACTIONS.iter().filter(|row| row.tui_command.is_some()) {
+            assert!(
+                !bitrouter::actions::session::summary_for(row.id).is_empty(),
+                "`{}` is offered in a session but `summary_for` has no arm for it",
+                row.id
+            );
+        }
+    }
+
     /// Every remotable action must be inventoried. A tool added to the origin
     /// server without an `ACTIONS` row fails here.
     #[test]

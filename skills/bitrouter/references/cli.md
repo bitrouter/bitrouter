@@ -206,7 +206,12 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 
 Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
 
-**In-session commands**: `/route` opens the route picker; `/commands` lists the slash commands the agent itself advertises.
+**In-session commands**: `/route` opens the route picker; `/route reset` drops
+the session's route lease so the daemon's default applies again; `/commands`
+(alias `/help`) lists everything the session offers — BitRouter's own commands
+first, then the agent's. A local name wins over an agent command of the same
+name, and the shadowed one is listed and marked rather than hidden. A command
+whose requirement is unmet is listed with the reason and answers with it.
 
 **A scrolled-off row can be stale**: rows are repainted only while they are on screen, so a tool call that scrolls away mid-run keeps the status it had when it left. The renderer will not clear your scrollback to fix that. `Ctrl-L` repaints what is on screen.
 

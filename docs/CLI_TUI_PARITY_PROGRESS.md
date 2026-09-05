@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T3
+Task: T4
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -15,7 +15,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T0 — preflight and branch
 - [x] T1 — ActionSpec columns, enums, eight rows, G2, G3
 - [x] T2 — G6, the HTTP profile guard read from the table
-- [ ] T3 — the resolver, /commands, /help, /route reset
+- [x] T3 — the resolver, /commands, /help, /route reset
 - [ ] T4 — SessionPorts, /status, G4, G5, A1
 - [ ] T5 — /models and /preview
 - [ ] T6 — CommandsReport and its builder
@@ -62,6 +62,36 @@ Consecutive non-green iterations on this task: 0
   `bitrouter-tui` -> `apps/bitrouter` boundary. `State::new`'s signature change
   leaves the workspace red between sub-steps 2 and 7 — that is expected, and
   nothing may be committed until sub-step 10 is green. Expect 2-4 iterations.
+
+- **T3** — `bitrouter-tui` half complete: `Command`,
+  `REDUCER_OWNED`, `ALIASES`, `Resolution`, `resolve`, `State.commands`,
+  `State::available`, `Effect::ResetRoute`, widened `Action::Routed`, the
+  rewritten `submit`, the grouped renderer, and the picker gate reading
+  `available("route_set")`. 153 tests pass. App half wired: `actions/session.rs`
+  with `offered_commands`/`summary_for`, the `ResetRoute` wire arm, `run` and
+  `chat_plain` taking the command list, `can_reroute` deleted.
+
+  Two things the spec did not foresee, both resolved in-tree:
+
+  Phase 0 is complete. 3039 tests pass (+6 over T2: two resolver tests, three
+  renderer tests, G1). All four G1 clauses provoked and each named the
+  offender. `bitrouter-tui` gained no BitRouter dependency (invariant 1) and
+  `multitenant_http.rs` is unchanged (invariant 3).
+
+  1. `machine.rs` already had a private `fn resolve(prompt, outcome) -> Effect`
+     (permission answering, 5 call sites), colliding with the dispatcher the
+     spec names `resolve`. The private helper is renamed `answer_with`; the
+     public name is the spec's. `answer` alone was tried first and collided
+     again with a local binding at what is now `machine.rs:564`.
+  2. A blunt `\banswer\(` regex also rewrote the `Prompt::answer` *method* at
+     the `decide` call site. Caught by the compiler, but it is the same class
+     of error as the T1 provocation no-op: a text substitution that matches
+     more than intended. Prefer anchored multi-line replacements with a
+     count assertion over word-boundary regexes.
+  3. G1 lives in `main.rs`, which is the *binary* root, so it reaches the
+     library as `bitrouter::actions::session`, not `crate::actions::session`.
+  4. `State::new` is called in `drive`, not `run`, so the command list is
+     threaded through both.
 
 ## Blocked
 

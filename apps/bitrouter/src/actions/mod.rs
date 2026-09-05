@@ -10,5 +10,6 @@
 
 pub mod models;
 pub mod route;
+pub mod session;
 pub mod skills;
 pub mod status;
