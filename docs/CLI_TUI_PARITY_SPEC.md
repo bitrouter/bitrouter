@@ -935,6 +935,14 @@ CLI.** OpenCode's registry lives in the server package, not the TUI package;
 `session.command` is a server method; the TUI and `opencode run` are peers over
 it. tmux's result reproduced, twenty-five years later, in a coding agent.
 
+**[Decided by the maintainer, 2026-09-05 — BitRouter takes this inversion.]**
+The registry goes underneath both surfaces and the headless CLI becomes a client
+of the same dispatch. What is *not* taken is the openness that the table two rows
+above measures — OpenCode's registry is open data tagged with `source`, and
+`ACTIONS` stays a closed `const` table with exhaustive guards. The decision, and
+what the closedness costs [D2](#d2--the-user-configured-escape-hatch), are in
+[D12](#d12--take-693s-inversion).
+
 **And it is still not full parity, in both directions.** All three sets are
 non-empty:
 
@@ -1644,6 +1652,17 @@ C's conceded weakness: the module doc records that *"the headless one had
 drifted: it could only ever deny"* — the drift this option risks is not
 hypothetical, it had already happened, and a person caught it rather than a test.
 
+**[Strengthened by D12, 2026-09-05.]** The maintainer has taken
+[§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)'s
+inversion ([D12](#d12--take-693s-inversion)), which raises this option's bar. C
+as written above shares an *implementation*: the leaf and the port both call
+`actions::status`. The inversion additionally makes [§10](#10-source-of-truth)'s
+`ACTIONS` the **dispatcher** — a name resolves to a row and the row runs — so
+`submit()`'s string compare becomes a table lookup (which is what **G1** wanted
+anyway) and no second name-resolution path is written for a headless caller. It
+adds no protocol and no new surface; it is the same port with the lookup moved
+into the table.
+
 **Why this satisfies the walls rather than lowering them.** `chat/`'s guard test
 forbids naming `crate::daemon`, `control_socket`, `LocalControllerBinding` and
 friends. A `dyn SessionActions` it is *handed* names none of them; it is exactly
@@ -2163,6 +2182,19 @@ forever ([lazygit #3651](https://github.com/jesseduffield/lazygit/issues/3651)).
 The natural trigger is the first request for a seventh command that fails R1 but
 that the user legitimately wants.
 
+**[Re-priced by D12, 2026-09-05.]** [D12](#d12--take-693s-inversion) takes
+[§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)'s
+inversion — the registry underneath both surfaces — but explicitly **not**
+OpenCode's openness. That makes D2 cheaper to build (a name-dispatching table has
+an insertion point; today's string compare does not) and **more expensive to
+allow**: the guards in [§13](#13-the-guards) are exhaustive because the table is
+closed, and a row that exists only at runtime cannot be covered by any of them.
+Admitting user rows forks the registry into a guarded half and an unguarded one,
+and every guarantee in [§3](#3-the-goal-restated) then applies only to the first.
+That, rather than the subprocess plumbing, is now the leading argument against
+D2. The recommendation is unchanged; the reason is stronger. Full statement in
+D12.
+
 ### D3 — `reload`
 
 `bitrouter reload` fails R1 (daemon-wide) and R5 (no inverse), but it is the one
@@ -2401,6 +2433,82 @@ should not be decided silently.
 enumerated values; nothing in `configOptions` fits them, and
 [§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended)
 remains the mechanism for those regardless of how D11 goes.
+
+### D12 — take §6.9.3's inversion?
+
+**[Decided by the maintainer, 2026-09-05 — take it.]** The command registry sits
+**underneath both surfaces**. The headless CLI is a client of the same dispatch
+the interactive TUI uses, exactly as OpenCode's `session.command` is
+([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it),
+finding 10), as tmux's `cmd_entry` table is
+([§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)),
+and as `chat/effects.rs` already is for permission answering
+([§6.10](#610-the-in-repo-precedent-866), finding 15). The interactive layer does
+not mirror a CLI; both surfaces resolve a name against one table and run one
+implementation.
+
+**What this settles that §9 did not.** §9 option C shares an *implementation* —
+`SessionActions::status` and the `status` CLI leaf both call `actions::status`.
+The inversion is stronger: it makes [§10](#10-source-of-truth)'s `ACTIONS` the
+**dispatcher**, not just the inventory. A name resolves to a row; the row runs.
+Concretely, `machine.rs:375`'s `if line.trim() == "/commands"` becomes a table
+lookup, which is what guard **G1** was already asking for, and the headless
+`--command <name>` entry point that OpenCode's `run.ts` exposes becomes
+*available* rather than absent. It is not thereby *scheduled*: nothing today asks
+for `bitrouter chat --command status`, and building it before something does is
+CLAUDE.md rule 4. What the decision fixes is the direction — when a headless
+caller wants a session verb, it goes through the table, and no second dispatcher
+is written for it.
+
+**What is explicitly *not* taken with it: the openness.** OpenCode's registry is
+**open data**. Its `Default` map holds two built-ins (`init`, `review`); every
+other entry is discovered at runtime — every user `command` config entry, every
+MCP prompt, every skill — and each carries a `source: "command" | "mcp" |
+"skill"` tag because the set is not knowable at compile time. `ACTIONS` is the
+opposite: a **closed `const` table** whose guard tests are *exhaustive over it*
+([§13](#13-the-guards)). That closedness is not incidental. It is what lets a
+guard assert **tool ⇒ row** today and **leaf ⇒ row** tomorrow, and it is what
+buys P1's *"the same typed report"*. OpenCode has no such guard, and the two
+shared *names* that bypassed `session.command` — `export` and `models` — drifted
+into different actions on the two surfaces
+([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)).
+**The inversion is taken for the dispatch; the openness is not taken at all.**
+
+**How that lands on [D2](#d2--the-user-configured-escape-hatch), which is the
+decision it moves.** D2 is the user-configured escape hatch — a `bitrouter.yaml`
+block binding a name to an argv array. Under OpenCode's model D2 would be *free*:
+a user command is just another registry row with `source: "command"`, dispatched
+by the same port, because the registry was open by design. Taking the inversion
+without the openness changes D2's cost in two directions at once, and both should
+be written down before anyone reads "we took the inversion" as "D2 got cheaper":
+
+1. **Cheaper to build.** A table that dispatches by name has an obvious insertion
+   point that today's `if line == "/route"` does not. The plumbing D2 was
+   deferred over is now half-present.
+2. **More expensive to allow, and this is the part that decides it.** The guards
+   are exhaustive *because* the table is closed. A user-supplied row exists only
+   at runtime, so **no guard can cover it** — not G1's dispatch/list agreement,
+   not A1's three-surface byte comparison, not P2's "has a row, a shared type,
+   and a guard". Admitting user rows therefore forks the registry into a closed
+   set the guards are exhaustive over and an open set they are silent about, and
+   every guarantee in [§3](#3-the-goal-restated) applies only to the first. That
+   fork is the real price of D2, it was not visible before this decision, and it
+   is a better argument against D2 than the subprocess-plumbing objection D2
+   currently leads with.
+
+**D2's recommendation is unchanged — "no, for now"** — but its reasoning is now
+sharper: the objection is not that the mechanism is missing, it is that the
+mechanism's value comes from being closed. If D2 is ever taken, the honest form
+is OpenCode's: an explicit `source` tag on every row, so that a reader and a
+guard can both tell which half of the table they are looking at.
+
+**One thing the inversion does not change.** Set C survives it. OpenCode built
+the sharpest shared dispatch in the peer group and still has ~15 TUI-only
+commands, all renderer and buffer verbs
+([§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses)). Inversion is a claim
+about *where the registry lives*, not a claim that the two surfaces end up with
+the same rows — which is [§3](#3-the-goal-restated)'s P1/P2 split restated, and
+the reason P2 exists separately from P1.
 
 ---
 
