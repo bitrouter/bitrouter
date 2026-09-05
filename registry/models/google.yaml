@@ -1,4 +1,5 @@
 - id: google/gemini-3.1-flash-lite-preview
+  deprecation_date: 2026-10-05
   name: 'Google: Gemini 3.1 Flash Lite Preview'
   input_modalities:
   - text
@@ -12,6 +13,7 @@
   open_weights: false
   family: gemini-flash-lite
 - id: google/gemini-3.1-pro-preview
+  deprecation_date: 2026-10-05
   name: 'Google: Gemini 3.1 Pro Preview'
   input_modalities:
   - text
@@ -25,6 +27,7 @@
   open_weights: false
   family: gemini-pro
 - id: google/gemini-3.5-flash
+  deprecation_date: 2026-10-05
   name: 'Google: Gemini 3.5 Flash'
   input_modalities:
   - text
@@ -55,3 +58,29 @@
   knowledge_cutoff: 2026-03
   open_weights: false
   family: gemini-flash
+- id: google/gemini-3.7-flash
+  name: 'Google: Gemini 3.7 Flash'
+  input_modalities:
+  - audio
+  - file
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 65536
+  release_date: 2026-08-13
+- id: google/gemini-3.8-flash
+  name: 'Google: Gemini 3.8 Flash'
+  input_modalities:
+  - audio
+  - file
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 65536
+  release_date: 2026-09-02

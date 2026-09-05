@@ -75,6 +75,10 @@ models:
     provider_model_id: glm-5.3-flash
   - id: x-ai/grok-4.6
     provider_model_id: grok-4.6
+  - id: deepseek/deepseek-v4-flash-vision-exp
+    provider_model_id: deepseek-v4-flash-vision-exp
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen3.8-flash
 status: active
 auto_sync:
   feed: models_dev

@@ -63,3 +63,33 @@
   release_date: 2026-08-13
   open_weights: false
   family: deepseek-thinking
+- id: deepseek/deepseek-v3.1-terminus
+  name: 'DeepSeek: DeepSeek V3.1 Terminus'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 163840
+  max_output_tokens: 32768
+  release_date: 2025-09-22
+  knowledge_cutoff: 2025-03-31
+- id: deepseek/deepseek-v3.2-exp
+  name: 'DeepSeek: DeepSeek V3.2 Exp'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 163840
+  max_output_tokens: 65536
+  release_date: 2025-09-29
+  knowledge_cutoff: 2025-07-31
+- id: deepseek/deepseek-v4-flash-vision-exp
+  name: 'DeepSeek: DeepSeek V4 Flash Vision Exp'
+  input_modalities:
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 384000
+  release_date: 2026-08-21

@@ -137,6 +137,22 @@ models:
       - reasoning
       - structured_outputs
       - tools
+  - id: openai/gpt-5.5-pro
+    provider_model_id: gpt-5.5-pro
+    pricing:
+      input_tokens:
+        no_cache: 30
+      output_tokens:
+        text: 180
+  - id: openai/gpt-6-astra
+    provider_model_id: gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
 status: active
 weight: 1
 submitted_at: 2026-05-25

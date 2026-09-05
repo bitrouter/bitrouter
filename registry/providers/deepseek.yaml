@@ -46,6 +46,14 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: deepseek/deepseek-v4-flash-vision-exp
+    provider_model_id: deepseek-v4-flash-vision-exp
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
 status: active
 weight: 1
 submitted_at: 2026-05-25
