@@ -3,6 +3,8 @@
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
 · Branch: `claude/cli-tui-parity-spec`
 · Measured at `43ae57d8` (`claude/actions-table-phase04`)
+· Peer-group research and the #866 amendment added 2026-09-05
+([§6.9](#69-the-agent-harness-peer-group), [§6.10](#610-the-in-repo-precedent-866))
 · Refs: [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) (phases 0–4 implemented),
 [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §2/§8.3/§9,
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) §14,
@@ -34,6 +36,12 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
    `aws-shell` — are the only obituaries in the set
    ([§6.1](#61-nobody-achieved-parity-and-the-two-who-tried-are-dead),
    [§6.3](#63-hub-the-only-rigorous-post-mortem-of-a-parity-layer)).
+   **[Amended post-research.]** The coding-agent peer group agrees — none of the
+   four surveyed has parity, and Codex has *no* shared dispatch at all — but
+   **OpenCode got substantially closer than any tool in §6.1**, by putting the
+   command registry on the server and making `opencode run --command` a client
+   of it. Parity is reachable in this field; it is reachable only by inversion
+   ([§6.9](#69-the-agent-harness-peer-group), findings 8 and 10).
 4. The topology is **three disjoint sets**, not a subset with a gap. BitRouter
    already has a set-C member — `route/set`, a session-scoped write with no
    headless subject — and the current rules call it a violation
@@ -110,6 +118,15 @@ claims below correct the brief that commissioned this spec; those are marked
 | A session with `--direct` or an explicit `--base-url` gets **no binding**, so the controller advertises nothing and `/route` is absent rather than dead | [`acp_cli.rs:1025`](../apps/bitrouter/src/acp_cli.rs:1025) |
 | `CliReport` renders to a **byte stream** with an ANSI `Theme`, not to `ratatui` lines | [`output/mod.rs`](../apps/bitrouter/src/output/mod.rs) `render(&self, h: &mut Human) -> io::Result<()>`; `render_to_vec` already exists as the palette-free seam |
 | `ratatui` is deliberately **not** a dependency of `apps/bitrouter` | `TUI_RENDERER_SPEC.md` implementation note (2026-08-24) |
+
+**[Corrected post-research, 2026-09-05.]** This table was measured before
+`878178a4` (#866) landed on `main`, and one row is now understated: the claim
+that no BitRouter surface shares an interpreter between the terminal and the
+headless CLI is **no longer true**. `apps/bitrouter/src/chat/effects.rs` is
+[§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended)
+shipped for one verb — permission answering — and the interactive TUI, the piped
+`chat`, and `acp prompt` all run it. See [§6.10](#610-the-in-repo-precedent-866)
+for the verification and for what it settles.
 
 ---
 
@@ -228,6 +245,15 @@ and `\r` have no flags (they edit a query buffer that only exists in a session)
 and k9s's `:xray` has no `kubectl` twin. Inventing `bitrouter acp route set
 --session <id>` to close the "gap" would be new surface nothing asked for.
 
+**[Corroborated post-research.]** All four coding-agent harnesses surveyed in
+[§6.9](#69-the-agent-harness-peer-group) have the same three-set shape, and one
+of them makes the point sharply in the other direction: **Codex's set A is
+empty.** 59 interactive commands, 29 CLI subcommands, nine names on both sides
+and not one line of shared dispatch — the whole slash-command registry lives in
+`codex-rs/tui/` and `codex exec` cannot reach any of it
+([§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero)).
+A subset-with-a-gap model cannot describe that at all.
+
 So, replacing *"every headless CLI command has the same interactive TUI
 command"*:
 
@@ -343,8 +369,11 @@ line than "never" and will need a test to mean anything (see
 ## 6. What other tools did
 
 Researched from primary sources — maintainer statements, source, and issue
-threads, not blog roundups. Six findings changed this design; they are marked
-**⇒**. The rest is corroboration.
+threads, not blog roundups. Findings that changed this design are marked **⇒**;
+the rest is corroboration. §6.1–§6.8 survey general developer tools (findings
+1–6); [§6.9](#69-the-agent-harness-peer-group) surveys the coding-agent peer
+group (findings 7–14) and [§6.10](#610-the-in-repo-precedent-866) records the
+in-repo precedent (finding 15).
 
 ### 6.1 Nobody achieved parity, and the two who tried are dead
 
@@ -1242,6 +1271,21 @@ interactive surface **iff**:
   inventory contains its inverse. (`route/set` passes: `route/reset` exists.
   Nothing else currently passes.)
 
+**[Corroborated post-research.]** R1 was derived from BitRouter's shape and then
+checked against the peer group.
+[§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses) tabulates every
+interactive-only command in Claude Code, Codex, OpenCode and the §6.2 cohort:
+four categories recur in all four harnesses — renderer verbs, conversation-buffer
+verbs, session/model switching, and lifecycle-in-place — and every one of them is
+a verb whose subject is *the session's own apparatus*. That is R1, measured
+rather than reasoned. Two adjustments the table implies, neither of which changes
+the clauses: permission and approval sit in set C by nature in every harness (and
+their headless twin is always a *policy stated up front*, which is precisely what
+#866 shipped — [§6.10](#610-the-in-repo-precedent-866)); and interactive config
+editing is set C in three of four harnesses and is forbidden here by R3, so
+BitRouter is the deliberate outlier. The demand is real; §14's rule is the answer
+anyway, for the reason §5 records.
+
 **Why R5 rather than "writes need a confirmation."** Confirmation is a UI
 affordance and it is worth having ([§11](#11-reads-versus-writes)), but it is not
 a membership criterion — every destructive CLI command could grow a confirmation
@@ -1386,6 +1430,24 @@ BitRouter from `codex-acp`:
    supplies none, and inventing one inside a field spelled "commands the agent
    can execute" is the wrong place to put it.
 
+**[Corroborated post-research, and the corroboration is unusually direct.]** The
+current `codex-acp` — development having moved from `zed-industries/codex-acp`,
+now archived, to `agentclientprotocol/codex-acp` — has had to hand-write every
+one of the three things objection 1–3 said ACP does not supply: a prompt-stream
+string matcher (`parseCommand()`: first text block, `startsWith("/")`, split on
+`/\s+/`, hand-parse the rest), a namespace (skills advertised under a `$` sigil,
+with `if (commandName.startsWith("$")) return {handled: false}` as the forwarding
+rule), and a collision rule (`Map`-seeded built-ins, colliding skills skipped) —
+plus an `_meta.commandAction` side-channel for the typed actions
+`AvailableCommand` cannot express. Its collision rule is the **opposite** of
+OpenCode's documented one. Details and quotations:
+[§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero),
+[§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it).
+And the protocol's own text settles ownership — *"**Agents** can advertise a set
+of slash commands"*, with no client-command capability, origin field, namespace,
+or collision rule in either v1 or v2
+([§6.9.4](#694-acps-own-position-on-command-ownership)).
+
 What *should* ride that channel is nothing of ours. It is the agent's list, and
 [phase 0](#phase-0--the-discoverability-defect-no-design-required) keeps it
 that way by rendering our commands as a **separate, labelled group** with a
@@ -1436,6 +1498,18 @@ apps/bitrouter/src/chat/session.rs
 `ModelsReport`, `RouteReport` — and its implementation is
 `apps/bitrouter/src/actions/{status,models,route}.rs`, the *same functions* the
 CLI leaf and the MCP tool call. Not a copy: the same call.
+
+**[This is no longer a proposal.]** #866 (`878178a4`) shipped exactly this shape
+for one verb the week the spec was written: `apps/bitrouter/src/chat/effects.rs`
+is one interpreter that the interactive TUI, the piped `chat`, and `acp prompt`
+all run, placed inside `chat/` and scanned by the same guard. The CHANGELOG calls
+it *"the first session-verb parity between the terminal and the headless CLI."*
+Verification, and the three properties of how it was done that
+[§14](#14-phases) should copy, are in
+[§6.10](#610-the-in-repo-precedent-866). It also supplies the first evidence on
+C's conceded weakness: the module doc records that *"the headless one had
+drifted: it could only ever deny"* — the drift this option risks is not
+hypothetical, it had already happened, and a person caught it rather than a test.
 
 **Why this satisfies the walls rather than lowering them.** `chat/`'s guard test
 forbids naming `crate::daemon`, `control_socket`, `LocalControllerBinding` and
@@ -2027,6 +2101,20 @@ it as a defect is what would produce (b), and (b) is new surface nothing asked
 for (CLAUDE.md 4). (c) will not survive contact — `/route` is typed at a prompt
 and is a command by any reading.
 
+**[Corroborated post-research, with one new data point about the trigger.]** Set
+C survives in all four coding-agent harnesses, including OpenCode — the one that
+built a genuinely shared dispatch port — and its members there are renderer and
+buffer verbs that cannot be headless because there is no renderer to address
+([§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses)). More useful for this
+decision: Claude Code shows what makes a set-C verb acquire a CLI leaf, and it is
+not symmetry. `claude mcp login <name>` is documented as running an MCP server's
+OAuth flow *"without opening the interactive `/mcp` panel"* — the leaf exists
+because the modal was blocking automation
+([§6.9.1](#691-claude-code--a-documented-terminal-only-class-and-a-shared-class-that-is-not-commands)).
+Expect the same trigger here: if `route/set` ever needs a headless twin it will
+be because a script could not get past the picker, and that is the moment to
+revisit (b) — not before.
+
 The weakening is small and it keeps §14's actual purpose. Read the rule's own
 justification: *"Accretion now requires adding a CLI command first — **which gets
 normal review**. This is the gate the old TUI lacked: its verbs existed nowhere
@@ -2050,6 +2138,18 @@ exactly the kind of thing that produces a mis-press.
 the drift this whole document is about. (b) costs one more command name and keeps
 every name meaning one thing.
 
+**[Reinforced post-research.]** Two harnesses ship a shared *name* whose two
+members are different actions, and both are documented as deliberate:
+`claude doctor` is read-only while `/doctor` *"can also apply fixes"*, and
+`opencode export` writes JSON while `/export` writes Markdown and opens an
+editor. In every harness surveyed, **the shared names that were not built on a
+shared port have drifted**
+([§6.9.1](#691-claude-code--a-documented-terminal-only-class-and-a-shared-class-that-is-not-commands),
+[§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)).
+That is the failure (a) and (c) would import, observed twice rather than
+predicted once. Note also that [D11](#d11--should-routeset-become-an-acp-config-option)
+may remove the write side of this question entirely.
+
 ### D9 — argument grammar
 
 When a command needs more than one argument, what parses it?
@@ -2072,6 +2172,21 @@ Vim's `-complete=buffer`, tmux's `args_parse.cb`, Claude Code's `argument-hint`
 plus named `arguments`. That is (c) with a declaration instead of bespoke code
 per command, and it is the form to reach for if a fourth command needs arguments.
 It is also the field that triggers the table fork in [§10](#10-source-of-truth).
+
+**[Corroborated and sharpened post-research.]** The coding-agent peer group
+answers the same way and adds one warning
+([§6.9.6](#696-argument-grammar-as-four-harnesses-actually-solved-it)). None of
+the four re-enters its own parser, so (b) has no adopters. All four declare the
+argument shape on the registry entry — Codex a bare
+`supports_inline_args() -> bool` (20 of 59), Claude Code named `arguments` plus
+`argument-hint`, OpenCode a `hints: string[]` **derived by regex from the command
+template**. But the two with a real substitution grammar (`$ARGUMENTS`, `$1`)
+have it only because their commands *are* prompt text, which BitRouter's are not,
+so that half does not transfer. The warning is concrete: OpenCode's shared
+`session.command` port takes `arguments` as a single string, and its CLI
+hand-quotes argv back into that string before sending — [§6.6](#66-the-shell-out-escape-hatch-universal-and-its-failure-modes-are-documented)'s
+quoting failure mode, reappearing *inside* the shared port. **Whatever
+`SessionActions::run` takes, it must not be one string.**
 
 ### D10 — is there a first-party GUI over `acp serve`?
 
@@ -2104,7 +2219,7 @@ Two consequences, and the second matters more than the first:
    future `SessionActions` impl from reading config directly instead of calling
    `actions::*`, which is root cause (a) one layer down. That risk was
    previously priced against B's cost. With B gone, it is unpriced, and the
-   guard in [§12](#12-what-guards-it) is the only thing standing between this
+   guard in [§13](#13-the-guards) is the only thing standing between this
    design and the drift it exists to remove. Treat that guard as load-bearing
    rather than as belt-and-braces — it is now the whole belt.
 
