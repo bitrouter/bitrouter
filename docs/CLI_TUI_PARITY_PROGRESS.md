@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T2
+Task: T3
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -14,7 +14,7 @@ Consecutive non-green iterations on this task: 0
 
 - [x] T0 — preflight and branch
 - [x] T1 — ActionSpec columns, enums, eight rows, G2, G3
-- [ ] T2 — G6, the HTTP profile guard read from the table
+- [x] T2 — G6, the HTTP profile guard read from the table
 - [ ] T3 — the resolver, /commands, /help, /route reset
 - [ ] T4 — SessionPorts, /status, G4, G5, A1
 - [ ] T5 — /models and /preview
@@ -50,6 +50,18 @@ Consecutive non-green iterations on this task: 0
   silently no-ops is indistinguishable from a guard that works. The harness
   now asserts the file changed before running the test; do the same for G1,
   G4, G5 and G6.
+
+- **T2** — G6 added inside `http_profile_never_carries_host_bound_tools`;
+  both existing literal assertions kept, so the change is strictly additive.
+  Confined to `server.rs`. Provoked by re-marking `list_models` as
+  `HostBound`: fails naming the row and both `Reach` values. 3033 tests pass
+  (count unchanged — G6 is an assertion inside an existing test, not a new
+  one). `multitenant_http.rs` byte-identical to base (invariant 3).
+
+  Note for T3: it is the largest task in the plan and crosses the
+  `bitrouter-tui` -> `apps/bitrouter` boundary. `State::new`'s signature change
+  leaves the workspace red between sub-steps 2 and 7 — that is expected, and
+  nothing may be committed until sub-step 10 is green. Expect 2-4 iterations.
 
 ## Blocked
 
