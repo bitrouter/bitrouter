@@ -2241,6 +2241,27 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
     }
 }
 
+/// The two skills ports, over the shared root resolution.
+///
+/// `SkillsRoot::mcp_scope` is what makes an MCP client see the user-global
+/// skills the CLI reaches with `-g`; both surfaces used to be built over
+/// `current_dir()` alone. Building them together is deliberate — they read the
+/// same roots, and a caller that wired one and not the other is how the two
+/// skills surfaces would disagree again.
+fn skills_ports() -> Result<(
+    std::sync::Arc<dyn bitrouter_mcp::actions::skills::SkillsQuery>,
+    std::sync::Arc<dyn bitrouter_mcp::capabilities::skill_catalog::SkillCatalog>,
+)> {
+    let base_repo = std::env::current_dir().context("resolving current directory")?;
+    let roots = bitrouter::skills::root::SkillsRoot::mcp_scope(base_repo);
+    Ok((
+        std::sync::Arc::new(bitrouter::actions::skills::InstalledSkills::new(
+            roots.clone(),
+        )),
+        std::sync::Arc::new(bitrouter::skills_catalog::InstalledSkillCatalog::new(roots)),
+    ))
+}
+
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -2269,16 +2290,13 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                         "the skills backend is stdio-only (harnesses launch it as a subprocess)"
                     );
                 }
-                let base_repo = std::env::current_dir().context("resolving current directory")?;
-                let server = bitrouter_mcp::server::BitrouterMcp::builder()
-                    .skills(std::sync::Arc::new(
-                        bitrouter::skills_query::InstalledSkills::new(base_repo.clone()),
-                    ))
-                    .skill_catalog(std::sync::Arc::new(
-                        bitrouter::skills_catalog::InstalledSkillCatalog::new(base_repo),
-                    ))
-                    .build();
-                return bitrouter_mcp::server::serve_stdio(server, None).await;
+                let server = bitrouter_mcp::server::BitrouterMcp::builder();
+                let (skills, catalog) = skills_ports()?;
+                return bitrouter_mcp::server::serve_stdio(
+                    server.skills(skills).skill_catalog(catalog).build(),
+                    None,
+                )
+                .await;
             }
             let transport = bitrouter_mcp::Transport::from(transport);
             // Skills was handled and returned above. Local/Cloud map straight
@@ -2315,7 +2333,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                     std::sync::Arc::new(LocalCostFooter { source })
                         as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
                 });
-            // The three app-injected action ports below all ride the same
+            // The three socket-backed action ports below all ride the same
             // pairing as the spend footer — stdio → local daemon — and all
             // read the same control socket, resolved once here. Lenient on
             // purpose (`resolve_client_socket`, not `_from`): a config file
@@ -2367,6 +2385,29 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 ))
                     as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
             });
+            // Skills on **stdio**, whichever completion backend is in use.
+            //
+            // The two `mcp serve` profiles used to be disjoint: only
+            // `--backend skills` wired them, and `mcp install` writes
+            // `["mcp", "serve"]`, so an installed client never saw a skill. The
+            // identity argument that makes `--backend skills` stdio-only holds
+            // here identically — a stdio server is a subprocess of its caller,
+            // so its installed-skills tree *is* that caller's — and it is what
+            // keeps this off the HTTP profile, which is multi-tenant and whose
+            // callers have no claim on this machine's skills. `--backend skills`
+            // survives as the narrow gateway-subprocess profile.
+            //
+            // The transport, not the backend, is the gate: skills have nothing
+            // to do with the daemon, so `local_stdio` (which is about the
+            // control socket) is the wrong condition for them.
+            let stdio = matches!(transport, bitrouter_mcp::Transport::Stdio);
+            let (skills, skill_catalog) = match stdio {
+                true => {
+                    let (skills, catalog) = skills_ports()?;
+                    (Some(skills), Some(catalog))
+                }
+                false => (None, None),
+            };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -2378,6 +2419,8 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 routing,
                 status,
                 models,
+                skills,
+                skill_catalog,
             })
             .await
         }
@@ -5815,11 +5858,11 @@ mod tests {
     fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
         use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
         use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
+        use bitrouter_mcp::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
         use bitrouter_mcp::backend::{
             Backend, BackendError, CallerAuth, CompleteRequest, CompleteResponse,
         };
-        use bitrouter_mcp::capabilities::skills::SkillsQuery;
         use bitrouter_mcp::error::ToolError;
 
         struct Stub;
@@ -5878,11 +5921,11 @@ mod tests {
 
         #[async_trait::async_trait]
         impl SkillsQuery for Stub {
-            async fn search(&self, _: &str) -> std::result::Result<serde_json::Value, ToolError> {
-                Ok(serde_json::json!({}))
+            async fn list(&self) -> std::result::Result<SkillsReport, ToolError> {
+                Ok(SkillsReport { skills: Vec::new() })
             }
-            async fn get(&self, _: &str) -> std::result::Result<serde_json::Value, ToolError> {
-                Ok(serde_json::json!({}))
+            async fn get(&self, name: &str) -> std::result::Result<SkillDetail, ToolError> {
+                Err(ToolError::new(format!("no installed skill named '{name}'")))
             }
         }
 

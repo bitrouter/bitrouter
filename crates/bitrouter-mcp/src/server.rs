@@ -21,10 +21,12 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler,
 
 use crate::actions::models::{ListModelsArgs, ModelsQuery, ModelsReport};
 use crate::actions::route::{RouteInput, RouteQuery, RouteReport};
+use crate::actions::skills::{
+    SkillDetail, SkillsGetArgs, SkillsQuery, SkillsReport, SkillsSearchArgs,
+};
 use crate::actions::status::{StatusQuery, StatusReport};
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
 use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
-use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
 use crate::error::ToolError;
 use bitrouter_sdk::mcp::skills::{
     GetSkillParams, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
@@ -63,15 +65,6 @@ fn parse_bearer(value: &str) -> Option<&str> {
 pub trait CostFooter: Send + Sync {
     /// The line to append to a successful tool result, or `None`.
     async fn line(&self) -> Option<String>;
-}
-
-/// Wrap a capability's JSON result into a tool result: `Ok`→success text,
-/// `Err`→error text (the orchestrator reads the message and can adjust).
-fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolResult {
-    match result {
-        Ok(v) => CallToolResult::success(vec![ContentBlock::text(v.to_string())]),
-        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
-    }
 }
 
 /// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
@@ -187,8 +180,9 @@ const CAPABILITIES: &[CapSpec] = &[
         wired: |caps| caps.skills.is_some(),
         router: BitrouterMcp::skills_router,
         instructions: |_| {
-            "`skills_search` / `skills_get` browse installed skills and fetch one's \
-             full body."
+            "`skills_search` / `skills_get` browse the skills installed on this machine \
+             and fetch one's full body. A skill listed with `valid: false` carries a \
+             `problem` explaining why it cannot be loaded."
                 .to_string()
         },
     },
@@ -366,7 +360,14 @@ impl BitrouterMcp {
 #[tool_router(router = skills_router)]
 impl BitrouterMcp {
     #[tool(
-        description = "Search installed BitRouter skills by name/description.",
+        description = "List the skills installed on this machine, optionally narrowed by a \
+                       `query` matched against name and description. Every skill found on disk \
+                       is returned, including ones that cannot be used: those carry \
+                       `valid: false` and a `problem` saying why (bad frontmatter, a directory \
+                       name that does not match `name`, an out-of-bounds name or description). \
+                       Only `valid` skills are servable — `skills/list` publishes those alone — \
+                       so a skill you can see here but not load is a bug in the skill, not a \
+                       missing one. `dir` is the skill's directory; `skill_md` is its SKILL.md.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -377,12 +378,22 @@ impl BitrouterMcp {
     async fn skills_search(
         &self,
         Parameters(args): Parameters<SkillsSearchArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.skills()?.search(&args.query).await))
+    ) -> Result<rmcp::handler::server::wrapper::Json<SkillsReport>, McpError> {
+        // `Json<SkillsReport>` rather than a hand-built `CallToolResult`: that
+        // is what makes rmcp derive the tool's `output_schema` from the shared
+        // report type, which is the agreement `actions::ACTIONS` asserts
+        // against `bitrouter skills list --json`.
+        self.skills()?
+            .list()
+            .await
+            .map(|report| report.matching(args.query.as_deref()))
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
     #[tool(
-        description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.",
+        description = "Fetch one skill's frontmatter metadata and SKILL.md body so you can hand \
+                       it to a subagent.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -393,8 +404,12 @@ impl BitrouterMcp {
     async fn skills_get(
         &self,
         Parameters(args): Parameters<SkillsGetArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.skills()?.get(&args.name).await))
+    ) -> Result<rmcp::handler::server::wrapper::Json<SkillDetail>, McpError> {
+        self.skills()?
+            .get(&args.name)
+            .await
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -702,7 +717,9 @@ impl ServerHandler for BitrouterMcp {
         let resources = listed
             .skills
             .iter()
-            .filter_map(|skill| skill.resources.as_ref())
+            // A dynamic skill enumerates nothing, so it contributes no
+            // resources here; its files are reachable only by direct read.
+            .filter_map(|skill| skill.resources.entries())
             .flatten()
             .map(|resource| {
                 let name = resource
@@ -852,6 +869,14 @@ fn build_http_router(
 /// answer them (its own `GET /v1/models`; the cloud account's remaining credit,
 /// read with the caller's own bearer). Nothing else: the host-bound tools stay
 /// off this transport, per the invariant above.
+/// [`http_profile`] for the crate's own profile tests, which live in `lib.rs`
+/// (they compare it against [`crate::stdio_profile`], and only one of the two
+/// can be module-private).
+#[cfg(test)]
+pub(crate) fn http_profile_for_test(backend: Arc<dyn Backend>) -> BitrouterMcp {
+    http_profile(backend)
+}
+
 fn http_profile(backend: Arc<dyn Backend>) -> BitrouterMcp {
     let mut builder = BitrouterMcp::builder().completion(backend.clone());
     if let Some(models) = backend.clone().models_port() {
@@ -1190,11 +1215,11 @@ mod tests {
     struct StubSkills;
     #[async_trait::async_trait]
     impl SkillsQuery for StubSkills {
-        async fn search(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"skills": []}))
+        async fn list(&self) -> Result<SkillsReport, ToolError> {
+            Ok(SkillsReport { skills: vec![] })
         }
-        async fn get(&self, _: &str) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"name": "stub"}))
+        async fn get(&self, name: &str) -> Result<SkillDetail, ToolError> {
+            Err(ToolError::new(format!("no installed skill named '{name}'")))
         }
     }
 
@@ -1213,14 +1238,16 @@ mod tests {
             bitrouter_sdk::mcp::skills::SkillEntry {
                 uri: "skill://demo/SKILL.md".into(),
                 frontmatter,
-                resources: Some(vec![
+                resources: bitrouter_sdk::mcp::skills::SkillResources::Enumerated(vec![
                     bitrouter_sdk::mcp::skills::SkillResource {
                         uri: "skill://demo/SKILL.md".into(),
                         digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                        size: 22,
                     },
                     bitrouter_sdk::mcp::skills::SkillResource {
                         uri: "skill://demo/refs/GUIDE.md".into(),
                         digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                        size: 7,
                     },
                 ]),
                 extra: serde_json::Map::new(),

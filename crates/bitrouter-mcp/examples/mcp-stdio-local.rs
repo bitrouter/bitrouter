@@ -11,7 +11,9 @@ use bitrouter_mcp::backend::local::LocalBackend;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
-use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult, SkillEntry, SkillResource};
+use bitrouter_sdk::mcp::skills::{
+    GetSkillResult, ListSkillsResult, SkillEntry, SkillResource, SkillResources,
+};
 use rmcp::model::{
     CacheScope, CustomRequest, CustomResult, ListToolsResult, PaginatedRequestParams, ResultType,
     ServerCapabilities, ServerInfo, Tool,
@@ -51,18 +53,20 @@ impl FixtureCatalog {
         SkillEntry {
             uri: Self::SKILL_MD.into(),
             frontmatter,
-            resources: Some(vec![
+            resources: SkillResources::Enumerated(vec![
                 SkillResource {
                     uri: Self::SKILL_MD.into(),
                     digest:
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .into(),
+                    size: 14,
                 },
                 SkillResource {
                     uri: Self::GUIDE.into(),
                     digest:
                         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                             .into(),
+                    size: 7,
                 },
             ]),
             extra: serde_json::Map::new(),
