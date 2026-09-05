@@ -1171,8 +1171,8 @@ merged or moved, [§2.3](#23-31s-two-tracks-replaced-24s-46-target) says why.
 
 **Start-ability today.** Phases 0–3 can start as soon as the #869/#870/#875
 stack merges; none waits on an open decision, each taking the default named in
-the open-decisions section. Phase 4 can start after phase 0. Nothing in this
-spec waits on D7's leaf.
+[§8](#8-open-decisions--what-each-blocks). Phase 4 can start after phase 0.
+Nothing in this spec waits on D7's leaf.
 
 ### Phase 0 — the table's new columns, the resolver, `/commands` grouped, `/help`, `/route reset`
 
@@ -1259,8 +1259,8 @@ not wait on it.
 ### Phase 3 — `bitrouter acp commands`, and the shared commands report
 
 Ships: the headless twin of `/commands` — a set-C verb acquiring a CLI leaf —
-and `/commands` rendering through the shared report. Research phase 0.5, with
-D14 and D15 as decided.
+and `/commands` rendering through the shared report. Research phase 0.5, taking
+D14's and D15's recommendations as the default ([§8](#8-open-decisions--what-each-blocks)).
 
 | File | Change |
 |---|---|
@@ -1326,8 +1326,9 @@ the diff"` both send `Review: the diff` (assert the expanded text in the
 ## 8. Open decisions — what each blocks
 
 The research spec's [§16](CLI_TUI_PARITY_SPEC.md#16-open-decisions) carries
-fifteen decisions. Five are decided (D2, D10, D12, D13, D14, D15 — six, counting
-D7's intent). For every one still open, the table says which phase stalls
+fifteen decisions. Four carry a maintainer's decision (D2, D7 as an intent, D10,
+D12); D13, D14 and D15 carry the research spec's own verdict or recommendation
+and are **not** decided. For every one still open, the table says which phase stalls
 without it and the default this spec builds with, so an implementer can start
 without waiting on all of them. **No phase in [§7](#7-phases) is blocked today.**
 (Blocked in the other direction — phase 0 waits on the #869/#870/#875 stack
@@ -1347,13 +1348,15 @@ merging, per [§1.1](#11-which-tree-this-is-written-against).)
 | **D10** — first-party GUI | **decided: none; C** | — | — | — |
 | **D11** — `route/set` as an ACP config option | open | nothing | (a) keep `_bitrouter/route/*` | If (b): `route_set`'s *implementation* moves to `session/set_config_option`; the row, its `tui_command`, the picker and G1–G3 are unchanged; `Requires::Binding` comes to mean "the agent advertised the option" |
 | **D12** — take the inversion | **decided: yes** | — | `SessionPorts` and `resolve` are it | — |
-| **D13** — remote over HTTP | **decided: `Reach` column; build nothing until a caller** | — | `Reach` with G6 as its reader; no widening | The seam is `server.rs:714`'s function when a remote caller for `HostBound` reads appears |
-| **D14** — distinguishing sources | **decided: `source` field, grouped, never a sigil** | — | `CommandSource { Bitrouter, Config, Agent }`; shadowed rows listed | — |
-| **D15** — `/list` vs `/commands` | **decided: `/commands`, leaf `acp commands`** | — | as written | — |
+| **D13** — remote over HTTP | open — the research spec's verdict is "C stands; a `Reach` column; build nothing until a caller" | nothing | `Reach` with G6 as its reader; no widening | If the column is refused: G2's set-C clause needs another marker (a `session_bound: bool`), and G6 is dropped. The seam for remote `HostBound` reads is `server.rs:714`'s function either way |
+| **D14** — distinguishing sources | open — recommended: a `source` field, rendered as a group, never a sigil | **Phase 3's report shape** | `CommandSource { Bitrouter, Config, Agent }`; shadowed rows listed | A sigil would rewrite agent names in `CommandRow.name` and in the TUI list — one field fewer (`shadowed`), one mangling more, and the ACP v2 proxy clause against it |
+| **D15** — `/list` vs `/commands` | open — recommended: keep `/commands`, leaf `acp commands` | **Phase 3's leaf name** | as written | A rename touches the `commands` row's `tui_command`, `cli_leaf`, `ALIASES`, both docs, and users' fingers; an alias adds an `ALIASES` entry and nothing else |
 
-**Read per phase:** phase 0 needs nothing decided. Phase 1 takes D1's default.
-Phase 2 takes D8's default. Phases 3 and 4 need nothing. An implementer who
-disagrees with a default should stop at the phase the table names, not before.
+**Read per phase:** phase 0 needs nothing decided (D13's `Reach` is taken as
+the research spec's verdict; refusing it is a small edit, above). Phase 1 takes
+D1's default. Phase 2 takes D8's default. Phase 3 takes D14's and D15's
+recommendations. Phase 4 needs nothing. An implementer who disagrees with a
+default should stop at the phase the table names, not before.
 
 ---
 
