@@ -6,14 +6,14 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T1
+Task: T2
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
 ## Ledger
 
 - [x] T0 — preflight and branch
-- [ ] T1 — ActionSpec columns, enums, eight rows, G2, G3
+- [x] T1 — ActionSpec columns, enums, eight rows, G2, G3
 - [ ] T2 — G6, the HTTP profile guard read from the table
 - [ ] T3 — the resolver, /commands, /help, /route reset
 - [ ] T4 — SessionPorts, /status, G4, G5, A1
@@ -36,6 +36,20 @@ Consecutive non-green iterations on this task: 0
   indexed in `docs/README.md` — inserted rather than overwritten, because the
   stack tip's README carries an `ACTIONS_SPEC.md` entry (from #869) that the
   docs branch, cut from `main`, does not have.
+
+- **T1** — eight rows, `Effect`/`Requires`/`Reach`, G2 and G3. Confined to
+  `crates/bitrouter-mcp/src/actions/mod.rs`; `main.rs` untouched, so the three
+  pre-existing guards pass unchanged in text. 3033 tests pass (baseline 3031,
+  +2 for the new guards). All five guard clauses provoked and confirmed to
+  name the offending row.
+
+  Worth carrying forward: two provocations first reported PASS because the
+  mutation never applied — `cargo fmt` had reflowed
+  `Effect::Write { inverse: .. }` onto three lines after the row was written,
+  so patterns matching the pre-format text hit nothing. A provocation that
+  silently no-ops is indistinguishable from a guard that works. The harness
+  now asserts the file changed before running the test; do the same for G1,
+  G4, G5 and G6.
 
 ## Blocked
 
