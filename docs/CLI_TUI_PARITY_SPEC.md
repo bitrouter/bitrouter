@@ -1145,7 +1145,13 @@ has no headless twin in that harness.
 
 Four categories recur in **all four** harnesses: renderer verbs, conversation-
 buffer verbs, session/model switching, and lifecycle-in-place. Permission and
-config editing recur in three of four.
+config editing recur in three of four. `aider` is absent from the table because
+its set C is empty
+([§6.9.7](#697-aider--set-c-is-empty-and-the-cli-is-a-client-of-the-command-language))
+— but note that it has the same *verbs* (`/editor`, `/voice`, `/multiline-mode`,
+`/copy`, `/paste`, `/clear`, `/undo`, `/exit`); they are dispatchable headlessly
+and simply have nothing to act on there. Emptiness of set C is a property of the
+dispatcher, not of the vocabulary.
 
 ⇒ **Finding 13. Set C's membership is not arbitrary and it is not per-project.
 Every recurring category is a verb whose *subject is the session's own
@@ -1286,6 +1292,34 @@ for one verb in #866 ([§6.10](#610-the-in-repo-precedent-866)) by the same mean
   contract beyond an optional `completions_raw_<cmd>` method. This is
   [D9](#d9--argument-grammar) option (a) at full scale and it is the one part of
   aider's design not to copy.
+
+#### 6.9.8 What this survey could not establish
+
+Recorded so that a later reader does not mistake absence for a finding.
+
+- **Any command count for Claude Code**, on either surface, and therefore any
+  overlap ratio. The registry is closed and the documentation publishes no
+  complete built-in command list. The previously circulated figure of "roughly 7
+  shared names out of ~130" could not be reproduced and is not repeated.
+- **Whether `/config` has a headless twin.** The published CLI reference has no
+  `claude config` entry, which is consistent with the maintainer's claim, but
+  no statement of intent was found either way.
+- **Any parity post-mortem in this field.** [§6.3](#63-hub-the-only-rigorous-post-mortem-of-a-parity-layer)'s
+  `hub` retrospective has no agent-harness equivalent — no harness was found
+  that built a parity layer and repudiated it, in a maintainer's own words. The
+  field is young enough that the obituaries have not been written. This was the
+  single most valuable thing sought and it was not found; the closest substitute
+  is `codex-acp`'s archival, which is a *handover* rather than a repudiation
+  ([§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero)).
+- **Any maintainer statement in an agent harness that a command was
+  *deliberately* withheld from one surface.** The nearest are Claude Code's
+  documentation naming a "terminal-only built-in" class
+  ([§6.9.1](#691-claude-code--a-documented-terminal-only-class-and-a-shared-class-that-is-not-commands))
+  and ACP's `ConradIrwin` declining the slash-command form of model selection in
+  favour of typed config options
+  ([§6.9.4](#694-acps-own-position-on-command-ownership)). Both are statements
+  about *shape*, not about a specific withheld command.
+- **`pi`.** Not reached.
 
 ### 6.10 The in-repo precedent (#866)
 
