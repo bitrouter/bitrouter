@@ -5,6 +5,10 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
 · Measured at `43ae57d8` (`claude/actions-table-phase04`)
 · Peer-group research and the #866 amendment added 2026-09-05
 ([§6.9](#69-the-agent-harness-peer-group), [§6.10](#610-the-in-repo-precedent-866))
+· `acpx`, the transport survey, and the remote-HTTP requirement added 2026-09-05
+([§6.11](#611-acpx-and-what-remote-over-http-can-actually-mean),
+[D13](#d13--the-remote-transport-requirement)); D10's reasoning superseded, its
+conclusion held
 · Refs: [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) (phases 0–4 implemented),
 [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §2/§8.3/§9,
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) §14,
@@ -61,6 +65,16 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
    BitRouter is a middlebox), and not new extension methods (a JSON round trip
    to talk to yourself, for a consumer that does not exist)
    ([§9](#9-the-mechanism)).
+   **[Amended 2026-09-05.]** The registry goes *underneath* both surfaces and the
+   headless CLI becomes a client of the same dispatch — OpenCode's inversion,
+   taken for the dispatch and not for its openness
+   ([D12](#d12--take-693s-inversion)). And the new requirement that both surfaces
+   also work **remotely over HTTP** does not reverse this: ACP defines no network
+   transport, while `mcp serve --transport http` already carries the same
+   `ACTIONS` rows remotely, so the answer is a `Reach` column rather than a new
+   protocol ([§6.11](#611-acpx-and-what-remote-over-http-can-actually-mean),
+   [D13](#d13--the-remote-transport-requirement)). Four of the six commands do not
+   travel at all, and that is a fact about the goal rather than the mechanism.
 7. **Source of truth: `ACTIONS` extends** with `tui_command`, `effect`, and a
    tmux-shaped `requires` ([§10](#10-source-of-truth)), guarded by five tests
    ([§13](#13-the-guards)).
@@ -1387,6 +1401,174 @@ thing that caught it was a person noticing, not a test. That is an argument for
 treating guard **A1** as load-bearing exactly as D10 says, and a small argument
 for building it before the fourth surface rather than after.
 
+### 6.11 `acpx`, and what "remote over HTTP" can actually mean
+
+Written for [D13](#d13--the-remote-transport-requirement), which is the decision
+it exists to serve, and for the `acpx` reference in
+[§6.10](#610-the-in-repo-precedent-866)'s commit-body quotation, which was
+previously unexplained in this document.
+
+#### 6.11.1 `acpx` is a real project, and it is BitRouter's nearest neighbour
+
+#866's commit body says the headless permission work was *"modelled on **acpx**'s
+surface."* The name appears exactly once in this repository — in that commit
+message — and nowhere in the source, so it is worth writing down what it is.
+
+**[openclaw/acpx](https://github.com/openclaw/acpx)** ([acpx.sh](https://acpx.sh/)),
+MIT-licensed, describes itself as a *"headless CLI client for stateful Agent
+Client Protocol (ACP) sessions"* — *"talk to coding agents from the command line,
+not the PTY."* Read on 2026-09-05 from its published
+[`docs/CLI.md`](https://github.com/openclaw/acpx/blob/main/docs/CLI.md):
+
+| Measure | Value |
+|---|---|
+| Top-level commands | `prompt`, `exec`, `compare`, `flow run`, `cancel`, `set-mode`, `set`, `status`, `sessions`, `config` |
+| `sessions` leaves | `list`, `new`, `ensure`, `close`, `show`, `history`, `export`, `import`, `prune` |
+| Permission flags | `--approve-all`, `--approve-reads`, `--deny-all`, `--policy` |
+| Output formats | text (default), `--format json` (NDJSON ACP events), `--format quiet` (final assistant text only) |
+| Transport | **stdio only.** No HTTP, no network mode, no daemon; sessions are files under `~/.acpx/sessions/` with a per-session queue-owner process |
+| A command that lists the *agent's* commands | **none** |
+
+Two things follow, and both are load-bearing later.
+
+⇒ **Finding 16. The surface #866 copied is not a coincidence of naming — it is
+the same four permission flags and the same three output formats.**
+`--approve-all` / `--approve-reads` / `--deny-all` / `--policy` against #866's
+`--approve-all` / `--approve-reads` / `--deny-all` / `--permission-policy`, and
+`text` / `json` / `quiet` against #866's `text` / `json` / `quiet`. That makes
+`acpx` the closest thing this survey found to a control group: an independently
+built headless ACP client, converging on the same answers, with **no** router, no
+middlebox position, and no interactive TUI to be at parity with.
+
+⇒ **Finding 17. The nearest neighbour has no command-listing command either, and
+it is stdio-only.** `acpx` is a pure ACP client — it receives
+`available_commands_update` like any client — and still exposes no way to ask
+"what can this agent do?". That is a gap in the field rather than a BitRouter
+oversight: any headless command-listing surface BitRouter builds has no adopter
+to copy. Its being stdio-only is the second half of §6.11.2's point: the
+reference headless ACP client has no remote transport because ACP has none to
+offer.
+
+#### 6.11.2 ACP has no network transport, and that is the fact that decides D13
+
+Sourced from the protocol repository, read on 2026-09-05.
+[`docs/protocol/v1/transports.mdx`](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/transports.mdx)
+and its `v2` sibling are **identical on this point**:
+
+> *"The protocol currently defines the following transport mechanisms for
+> agent-client communication: 1. stdio … 2. \_Streamable HTTP (draft proposal in
+> progress)\_. Agents and clients **SHOULD** support stdio whenever possible."*
+
+and, under the Streamable HTTP heading itself, the entire section body is:
+
+> *"In discussion, draft proposal in progress."*
+
+So: **stdio is the only transport ACP defines.** The escape clause is
+`## Custom Transports`, which grants permission rather than specifying anything —
+*"the protocol is transport-agnostic and can be implemented over any
+communication channel that supports bidirectional message exchange… Implementers
+who choose to support custom transports **MUST** ensure they preserve the
+JSON-RPC message format and lifecycle requirements."*
+
+**Work is under way and its status is precisely knowable.** A **Transports
+Working Group** was announced 2026-04-22 by Ben Brandt (Zed Industries, ACP lead
+maintainer): *"Remote Agent support is a key focus of ACP, and in order to make
+this more of a reality, we need to standardize all of the approaches to
+transports people have been trying."* The RFD is
+[`docs/rfds/streamable-http-websocket-transport.mdx`](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/streamable-http-websocket-transport.mdx)
+(authors alexhancock, jh-block; champion anna239). Its shape, and the quotations
+that matter to BitRouter specifically:
+
+- A single `/acp` endpoint; `POST` for client→server, long-lived SSE `GET`
+  streams for server→client (one connection-scoped, one per session),
+  `Upgrade: websocket` as an alternative on the same endpoint, `DELETE` to
+  terminate. **HTTP/2 required.** Clients supporting remote ACP MUST support
+  both profiles.
+- On the status quo it is blunt: *"ACP only has stdio. There is no standard
+  remote transport, which causes fragmentation as implementers invent their own
+  HTTP layers, leading to incompatible SDKs and deployments."*
+- On BitRouter's exact position, in the "shiny future" section: *"**Proxy
+  chains** can route ACP traffic over HTTP for multi-hop agent topologies."*
+- On maturity: *"targeted for inclusion in **v1** as an additive feature, with
+  more robust durability and reliability primitives coming in **v2**,"* and for
+  v1 *"durability and reliability are the implementer's responsibility — the
+  protocol provides the building blocks, not the guarantees,"* including
+  *"**in-flight messages are not replayed**… server→client messages emitted
+  while a client was disconnected are not redelivered on reconnect."*
+
+It is **not landed**: `docs/protocol/v1/draft/transports.mdx` — the draft channel,
+where an accepted-but-unreleased change would appear — still reads *"In
+discussion, draft proposal in progress."* The RFD is in neither version's
+transports page.
+
+⇒ **Finding 18. ACP has no network transport today; an HTTP/WebSocket one is an
+RFD in an active working group targeted at v1; and the RFD's own statement of the
+status quo is that everyone who needs remote ACP right now is inventing an
+incompatible HTTP layer.** BitRouter's `acp serve` is stdio by construction and
+says so in its help text — *"Serve one agent session as a vanilla ACP Agent over
+**stdio** until the manager disconnects"*
+([`main.rs:1271`](../apps/bitrouter/src/main.rs:1271)). Anything BitRouter ships
+before that RFD ratifies is one of the incompatible layers the RFD names.
+
+#### 6.11.3 BitRouter has already answered "the same actions, but remote", once, for `ACTIONS`
+
+This is the in-tree precedent [D13](#d13--the-remote-transport-requirement) turns
+on, and it is stronger than [§6.10](#610-the-in-repo-precedent-866)'s because it
+is about transport rather than about sharing an interpreter. Measured in this
+worktree at `0a9537b5`.
+
+| Claim | Evidence |
+|---|---|
+| `bitrouter mcp serve` already has a **remote transport**, and it is not ACP | [`main.rs:818`](../apps/bitrouter/src/main.rs:818) `enum McpTransport { Stdio, Http }` — *"Streamable HTTP, mounted at `/mcp-control`"*, `--bind` default `127.0.0.1:4357` ([`main.rs:774`](../apps/bitrouter/src/main.rs:774)) |
+| It is genuinely multi-tenant, not loopback-only by accident | [`multitenant_http.rs:58`](../crates/bitrouter-mcp/tests/multitenant_http.rs:58) `two_callers_forward_distinct_bearers` — two clients, two bearers, each forwarded to the upstream separately |
+| An unauthenticated bind is **forced** to loopback | [`lib.rs:142`](../crates/bitrouter-mcp/src/lib.rs:142) → [`server.rs:786`](../crates/bitrouter-mcp/src/server.rs:786) `ensure_loopback_bind` |
+| The two transports serve **two profiles of one table**, not two implementations | [`lib.rs:160`](../crates/bitrouter-mcp/src/lib.rs:160) `stdio_profile` and [`server.rs:880`](../crates/bitrouter-mcp/src/server.rs:880) `http_profile`, both assembling the same `BitrouterMcp::builder()` from the same ports |
+| The remote profile is a **strict subset**, and a guard says exactly which | [`server.rs:1403`](../crates/bitrouter-mcp/src/server.rs:1403) `http_profile_never_carries_host_bound_tools` asserts `["complete", "list_models", "status"]` — and `["complete", "list_models"]` for a backend with no status of its own |
+| …and a second guard stops the stdio side widening it | [`lib.rs:308`](../crates/bitrouter-mcp/src/lib.rs:308) `wiring_skills_into_stdio_does_not_widen_the_http_profile` |
+| The exclusion criterion is **host-boundness**, stated as a crate invariant | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): *"the remaining non-completion tools are semantically bound to one machine (`route_preview` resolves against the serving host's own config and control socket; `skills_search`/`skills_get` read its installed-skills root), so **no multi-tenant HTTP profile may carry them**"* |
+| The guarantee is **structural, not conventional** | [`lib.rs:150`](../crates/bitrouter-mcp/src/lib.rs:150): the HTTP profile *"is built from an `Arc<dyn Backend>` alone and therefore **cannot** reach these ports even by accident"* |
+| Statefulness is separately excluded, by the MCP version negotiation | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): under SEP-2567 a peer negotiating `2026-07-28` is *"**always** served statelessly… each request gets a fresh handler… Adding a stateful tool to this HTTP profile would therefore break under draft-version clients even though it works today against `2025-11-25`"* |
+| A degraded answer is a **result**, not a fabrication | same guard's comment: *"A backend with no status of its own gets no `status` tool rather than a fabricated one: the local daemon's liveness is a control-socket question the HTTP profile cannot answer"* |
+| The named seam, if a remote client ever needs the host-bound reads | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): *"this is the single function to change — take a handler factory, keep the profile strictly loopback and incompatible with the cloud backend, and prefer modeling that read-only data as MCP resources over widening the tool surface"* |
+
+⇒ **Finding 19. BitRouter's answer to "the same table, but remote" already exists,
+and it is neither a new protocol nor two implementations behind a trait. It is one
+table, two *profiles*, with the remote profile constructed from a narrower
+dependency so that it cannot reach what it must not carry, and two guard tests
+naming the difference.** That is the structural guarantee
+[§9](#9-the-mechanism) conceded option C lacked — obtained from a narrower
+constructor rather than from a wire boundary, at a cost of two assertions rather
+than ~200 lines of protocol.
+
+**And a second in-repo precedent, on the tunnelling question specifically.**
+`apps/bitrouter/src/gateways.rs` is *"one spec, two renderers"*: `gateway_servers`
+declares the injected MCP gateways once, `to_acp` renders them as an ACP
+`session/new` `mcpServers` descriptor and `Harness::launch_overlay` renders them
+into a harness's own config surface. The `bitrouter_tools` gateway is *"injected
+as a streamable-HTTP server so the harness's own MCP client dials the daemon
+directly."* That is descriptor-passing HTTP, and it was chosen **over** tunnelling
+MCP through the ACP connection, because the MCP-over-ACP mechanism was behind an
+`unstable_mcp_over_acp` schema feature that no shipping harness advertised. The
+same shape of choice recurs in D13 with the same answer: **do not tunnel over an
+unratified channel; dial the surface that already exists.**
+
+The module also records the one thing the pattern could not do, and it is directly
+on point:
+
+> *"there is **no HTTP path to the daemon's own installed skills**. The aggregate
+> `/mcp` proxies configured `mcp_servers` upstreams; it does not serve origin
+> content… The precondition for retiring it is 'the daemon serves its own skills
+> over HTTP', which needs an in-process executor seam (`McpTarget::Direct` assumes
+> a dialable transport, and a daemon serving itself has none)."*
+
+⇒ **Finding 20. "Remote" is not a uniform property of a surface; it is a property
+of each answer.** The same binary already carries actions that travel (a model
+catalog), actions that travel *degraded* (`status`, which reports what the serving
+deployment can see), actions that cannot travel because they resolve against one
+machine (`route_preview`, the skills roots), and actions that cannot travel
+because they are stateful under a stateless negotiation. Choosing a transport
+changes none of that.
+
 ---
 
 ## 7. The membership rule
@@ -1679,6 +1861,7 @@ lines, as it does for every other notice.
 | Reaches an `acp serve` GUI | ✓ (wrongly) | ✓ | ✗ — but the GUI has the CLI and MCP |
 | New surface to version | the agent's own field | a capability block + N methods | none |
 | Lines of new protocol | 0 | ~200 + tests | 0 |
+| Reaches a **remote** caller over HTTP | ✗ | ✗ — ACP defines no network transport | ✓ — via the existing `/mcp-control` profile |
 
 **The rule that keeps C from becoming two mechanisms:** *the answer travels over
 ACP only when the ACP peer is the authority.* `route/set` stays on the wire
@@ -1712,6 +1895,36 @@ narrow and worth asking directly: *does a first-party GUI over `acp serve` exist
 in the plan?* If yes, B's cost is not ceremony — it is the price of the surface
 that GUI needs, and C would have to be redone. If no, B is ~200 lines of protocol
 for a consumer that never arrives.
+
+**[Corrected, 2026-09-05 — the paragraph above states the deciding question
+wrongly, and the recommendation it guards is nevertheless unchanged.]** Two things
+happened after it was written. First, [D10](#d10--is-there-a-first-party-gui-over-acp-serve)
+answered the question — no first-party GUI — and settled §9 on C. Then the
+maintainer added a requirement that **falsifies D10's premise**: the CLI and the
+TUI must both work remotely, over HTTP, against a proxy server, which *is* a
+remote consumer. So "does a remote consumer exist?" is no longer the deciding
+question, because the answer is now yes and the recommendation does not change.
+
+**The deciding question was always the wrong one, and the right one is: is there a
+standard remote transport for B to travel on?** There is not.
+[§6.11.2](#6112-acp-has-no-network-transport-and-that-is-the-fact-that-decides-d13)
+establishes it from the protocol repository: ACP defines **stdio and nothing
+else**; Streamable HTTP is *"in discussion, draft proposal in progress"* in v1 and
+v2 alike; the HTTP/WebSocket RFD is targeted at v1 and has not landed even in the
+draft channel. B over HTTP would therefore mean implementing an unratified RFD or
+inventing a private framing — *"a wire protocol you now own and version anyway"*,
+which is the cost B existed to avoid paying.
+
+**And C's conceded weakness is now answered rather than merely tolerated.** §9
+above concedes that C's guarantee is *conventional* where B's is *structural*.
+[§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions)
+shows the repository already obtaining a structural guarantee on this exact table
+without a wire boundary: `mcp serve --transport http` serves `ACTIONS` rows
+remotely, and its profile *"is built from an `Arc<dyn Backend>` alone and therefore
+**cannot** reach these ports even by accident"*, with two guard tests naming the
+row-set difference. **A narrower constructor is a structural guarantee.** Full
+reasoning, the `Reach` column it implies, and the trigger that reopens B are in
+[D13](#d13--the-remote-transport-requirement).
 
 ### D. The escape hatch: `/bitrouter <leaf> [args]`
 
@@ -2392,6 +2605,31 @@ This also removes the last reason to keep the door open on B "in case a GUI
 appears": if one ever does, it consumes the same ACP surface `chat` does, and
 the question reopens then with a real consumer to design against.
 
+**[Superseded in its reasoning, 2026-09-05 — the conclusion survives, the
+argument does not. Read [D13](#d13--the-remote-transport-requirement) with this.]**
+The maintainer has since required that the CLI and the TUI both work remotely over
+HTTP against a proxy server. **That is a remote consumer, so the premise this
+decision rests on — "there is no consumer for B to serve" — is false as of the
+requirement.** Stating it plainly rather than absorbing it: D10's argument for C
+is dead.
+
+The conclusion is unchanged, on a different and stronger ground. B is extension
+methods on ACP, and **ACP has no network transport to carry them**: stdio is the
+only transport it defines, and Streamable HTTP is an unratified RFD
+([§6.11.2](#6112-acp-has-no-network-transport-and-that-is-the-fact-that-decides-d13)).
+Meanwhile the remote consumer is already served by a surface that exists, is
+externally versioned, and carries the same `ACTIONS` rows — `mcp serve --transport
+http` ([§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions)).
+So B is now rejected for having *no transport*, where D10 rejected it for having
+*no consumer*; that reason does not evaporate the next time a consumer appears,
+which is the defect D10's reasoning had.
+
+Consequence 2 above — "the risk is unpriced, treat the guard as the whole belt" —
+is also superseded, favourably. The risk **is** priced now: §6.11.3 shows the
+repository buying a structural guarantee for this table from a narrower
+constructor rather than a wire boundary, at a cost of two guard assertions. The
+guard remains load-bearing; it is no longer the only thing available.
+
 ### D11 — should `route/set` become an ACP config option?
 
 Raised by [§6.9.4](#694-acps-own-position-on-command-ownership), and not
@@ -2509,6 +2747,208 @@ commands, all renderer and buffer verbs
 about *where the registry lives*, not a claim that the two surfaces end up with
 the same rows — which is [§3](#3-the-goal-restated)'s P1/P2 split restated, and
 the reason P2 exists separately from P1.
+
+### D13 — the remote transport requirement
+
+**New requirement, 2026-09-05, from the maintainer: the CLI and the TUI must both
+work (a) locally over stdio and (b) remotely over HTTP, against a proxy server.**
+
+This is the requirement that could have reversed [§9](#9-the-mechanism), and it
+has to be answered in the open rather than designed around, because
+[D10](#d10--is-there-a-first-party-gui-over-acp-serve) chose option C over option
+B on a premise this requirement attacks directly. **A CLI or TUI talking to a
+proxy over HTTP is a remote consumer, and D10's stated ground for C was that no
+remote consumer exists.** That ground is gone.
+
+**Verdict: §9's recommendation stands — C, not B — but D10's *argument* for it
+is dead and is replaced below. The requirement does not reverse the mechanism; it
+shrinks set A whenever the transport is remote, which is a new fact about the
+*goal*, not about the mechanism.** Four questions, answered in order.
+
+#### (1) Does the requirement reintroduce B?
+
+No — it argues *against* B, harder than D10 ever did, for a reason D10 did not
+know.
+
+Option B was *new `_bitrouter/*` ACP extension methods*. Its entire claimed
+advantage over C was a **structural** guarantee: the report crosses a declared
+JSON-RPC boundary with a negotiated capability, so a second implementation has to
+announce itself. That advantage is only real if the boundary is one somebody else
+maintains. **ACP has no network transport**
+([§6.11.2](#6112-acp-has-no-network-transport-and-that-is-the-fact-that-decides-d13),
+finding 18): stdio is the only transport it defines; Streamable HTTP is *"in
+discussion, draft proposal in progress"* in both v1 and v2; the HTTP/WebSocket RFD
+is targeted at v1 but has not landed even in the draft channel. `bitrouter acp
+serve` is stdio in its help text.
+
+So B-over-HTTP does not exist to be chosen. Choosing it would mean either
+implementing an unratified RFD ahead of the working group, or inventing a private
+HTTP framing for ACP — which is precisely what that RFD names as the problem it
+was written to stop: *"ACP only has stdio. There is no standard remote transport,
+which causes fragmentation as implementers invent their own HTTP layers, leading
+to incompatible SDKs and deployments."* **A private wire you own and version
+yourself is exactly the cost C was rejected for imposing, with none of B's
+compensating standardness.** The requirement makes B worse, not better.
+
+#### (2) Can C's injected port be satisfied by one trait with a local and a remote impl?
+
+Yes, and BitRouter has already done it once for the same table — but the answer
+is better than "a trait with two impls", and the difference matters.
+
+`bitrouter mcp serve --transport http` already serves `ACTIONS` rows over
+streamable HTTP at `POST /mcp-control`, multi-tenant, with per-caller bearer
+forwarding proved by an integration test
+([§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions),
+finding 19). It is **not** two implementations. It is one builder and two
+**profiles** — `stdio_profile` and `http_profile` — assembling the same ports, and
+the remote profile is a strict subset asserted by a guard
+(`http_profile_never_carries_host_bound_tools`).
+
+**"Two impls behind a trait" is the wrong shape and would reintroduce the exact
+defect this line of work exists to remove.** Two impls is
+[`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
+with a `#[cfg]`-free blessing. A profile is not an implementation: it is a
+**declaration of which rows this transport may carry**, over one implementation.
+The correct extension of [§10](#10-source-of-truth) is therefore a column, not a
+trait:
+
+```rust
+pub enum Reach {
+    /// Answerable for any caller from any host. Travels.
+    Portable,
+    /// Answerable remotely, but only about the serving deployment; it must
+    /// report which deployment answered (`resolved_via`), never fabricate.
+    Degraded,
+    /// Resolves against the serving machine's own config, control socket, or
+    /// installed-skills root. Local transports only.
+    HostBound,
+    /// Its subject is a live session on the serving process. Local only, and
+    /// separately excluded by any stateless negotiation.
+    SessionBound,
+}
+```
+
+This is the same move `Requires` makes for the daemon dependency, one axis over,
+and it has the same property: **checkable from the table rather than re-argued per
+command.** It is also how the existing HTTP profile already behaves — `Reach`
+merely writes down the criterion `server.rs:825` states in prose.
+
+#### (3) What stops the remote impl from being "B with extra steps"?
+
+Three things. Only the third is new, and it is the one that answers §9's strongest
+concession.
+
+1. **The wire is not BitRouter's.** MCP's streamable HTTP is versioned by
+   somebody else (`2025-11-25`, SEP-2567's `2026-07-28`), implemented by `rmcp`,
+   and already spoken by every harness's MCP client. B would have been a private
+   `_bitrouter/*` capability block that BitRouter versions alone, forever. "A wire
+   protocol you now own and version anyway, but undocumented" is a fair
+   description of B; it is not a description of dialing an existing MCP endpoint.
+2. **The port's signature is the report type, not an envelope.** Both profiles
+   return `StatusReport` / `ModelsReport`; the transport serializes. The seam that
+   could drift is the same single seam C already has, not a second one.
+3. **The structural guarantee is available without a wire boundary, and is
+   already in the tree.** §9 conceded that *"C's guarantee is conventional where
+   B's is structural"* and D10 left that risk unpriced. It is now priced, and the
+   price is two assertions: the HTTP profile *"is built from an `Arc<dyn Backend>`
+   alone and therefore **cannot** reach these ports even by accident"*
+   ([`lib.rs:150`](../crates/bitrouter-mcp/src/lib.rs:150)). **A narrower
+   constructor is a structural guarantee.** It is enforced by the type system in
+   the same way a JSON-RPC boundary would be, and it costs no protocol. This is
+   the single most useful thing the transport requirement surfaced, and it
+   improves C rather than damaging it.
+
+#### (4) Versioning and capability negotiation, which the local case never needed
+
+Three layers. BitRouter owns exactly one of them, and that is the point.
+
+| Layer | Who versions it | BitRouter's obligation |
+|---|---|---|
+| Transport and protocol version | MCP (`protocolVersion` handshake), or ACP once the RFD lands | None. Negotiate, do not invent |
+| **Which rows this transport carries** | **BitRouter** | The `Reach` column above, plus a guard per transport asserting the exact row set — the shape `http_profile_never_carries_host_bound_tools` already has |
+| Report shapes | `ACTIONS`' `output_schema` | Already declared; guard A1 already compares shapes |
+
+**The middle row is the whole capability-negotiation story, and it must be a
+column rather than a function**, for the reason [§10](#10-source-of-truth) gives
+for `tui_command`: two hand-maintained profile functions are two places to forget.
+Today there are two profiles and two guards, which is tractable; a third transport
+makes it a table.
+
+A fourth concern the local case never had, recorded so it is not discovered later:
+**a remote surface has a threat model.** The existing code already reflects this —
+an unauthenticated bind is forced to loopback
+([`ensure_loopback_bind`](../crates/bitrouter-mcp/src/server.rs:786)), and the
+comment says why: it *"would expose the BYOK daemon's provider keys to the
+network."* Anything reachable remotely inherits that constraint, and
+[§7](#7-the-membership-rule)'s R3 ("never handles a secret") stops being a
+guideline about keystrokes and becomes a network-exposure rule.
+
+#### (5) The consequence that actually matters, and it is not about B
+
+Apply `Reach` to this spec's own inventory
+([§8](#8-the-inventory)) and the requirement's real bite appears:
+
+| Command | `Reach` | Why |
+|---|---|---|
+| `models` | **Portable** | A catalog. Already on the HTTP profile |
+| `status` | **Degraded** | On the HTTP profile only where the backend can answer for its own deployment; a backend with no status of its own *"gets no `status` tool rather than a fabricated one"* |
+| `route` (preview) | **HostBound** | *"resolves against the serving host's own config and control socket"* — named by the crate invariant as what must never reach a multi-tenant profile |
+| `route/set`, `route/reset` | **SessionBound** | A lease over a live ACP session on the serving process. Excluded twice: host-bound, and stateful under a negotiation that serves *"always statelessly"* |
+| `/commands` (the agent's list) | **SessionBound** | An artefact of one live ACP connection |
+
+⇒ **Of the six commands [§2.4](#24-the-count-is-not-the-complaint) identified,
+one travels, one travels degraded, and four do not travel at all.** Not because
+of transport difficulty — because the answers are bound to one machine and one
+live session ([§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions),
+finding 20). **"The CLI and the TUI must both work remotely" is therefore
+satisfiable in full only for the portable subset, and the honest form of the
+requirement is: both surfaces work over both transports, and each transport
+carries the rows its `Reach` admits, with the excluded ones absent rather than
+dead** ([invariant 3](#15-invariants)).
+
+That is not a workaround. The tree already behaves this way: a session started
+with an explicit `--base-url` gets **no controller binding**, so `/route` is
+absent rather than broken ([`acp_cli.rs:1025`](../apps/bitrouter/src/acp_cli.rs:1025),
+[§1](#1-verified-starting-state)). **"Remote means fewer session verbs" is
+already encoded in this codebase, deliberately, and predates the requirement.**
+
+#### (6) What "remote via HTTP" means here, concretely
+
+Four readings. Only one is available today.
+
+- **(a) Tunnel ACP over HTTP.** Needs the unratified RFD, or a private framing.
+  Not available. This repository has already made this call once in the
+  neighbouring case: `gateways.rs` chose descriptor-passing HTTP over
+  MCP-over-ACP tunnelling because tunnelling sat behind `unstable_mcp_over_acp`
+  and no shipping harness advertised it
+  ([§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions)).
+  Same reasoning, same answer.
+- **(b) A separate BitRouter control protocol over HTTP.** Already exists, twice:
+  the OpenAI/Anthropic-compatible routing surface at `127.0.0.1:4356`, and the MCP
+  control surface at `/mcp-control` (default `127.0.0.1:4357`). The second is the
+  one shaped like *"the same actions, remotely"*, and it is the answer.
+- **(c) A new BitRouter-owned wire.** This is B in different clothes and is
+  rejected for B's reasons plus (1)'s.
+- **(d) The CLI/TUI as a client pointed at a remote base URL.** This is what
+  `--base-url` already is. It is the reading the tree supports, and its existing
+  behaviour — fewer session verbs, stated rather than hidden — is the behaviour
+  (5) prescribes.
+
+**Recommendation: (b) for the portable rows, over the MCP surface that already
+exists, extended per the named seam at [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825)
+if the host-bound reads are ever wanted remotely — and (d) for the session verbs,
+which do not travel and should say so.** Build nothing until a remote caller
+actually asks: the requirement names a shape, not yet a consumer, and CLAUDE.md
+rule 4 applies to shapes too.
+
+#### (7) The trigger that reopens B
+
+Stated explicitly, because D10's version of this promise is what the requirement
+just tested. **B reopens when both of these are true**: the ACP Streamable
+HTTP/WebSocket RFD ratifies into v1 (so there is a standard remote transport to
+carry extension methods over), *and* a real remote consumer of BitRouter-as-ACP-agent
+exists. Either alone is insufficient — a transport with no consumer is D10's
+mistake, and a consumer with no transport is (1)'s. Until then, C.
 
 ---
 
