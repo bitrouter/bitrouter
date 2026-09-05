@@ -1452,6 +1452,30 @@ at the cost of ~200 lines of protocol and a capability block to version.
 CLI's `--json` and the MCP tools. But the recommendation is only as good as that
 fact, and the maintainer knows it better than the tree does.
 
+**[Decided by the maintainer, 2026-09-05 — C.]** There is no first-party GUI.
+One was built (a native GPUI renderer in its own repo, consuming ACP through an
+`AcpFeed`) and **abandoned**; the direction adopted in its place is exactly the
+pair this spec is about — an ACP-compatible headless CLI and an interactive TUI.
+
+Two consequences, and the second matters more than the first:
+
+1. **§9 settles on C.** B would be ~200 lines of protocol and a versioned
+   capability block built for a consumer that was tried and dropped — CLAUDE.md
+   rule 4 in its plainest form.
+2. **The C-versus-B trade-off is no longer a trade-off, so the argument
+   against C has to be answered on its own.** §9 conceded that C's guarantee is
+   *conventional* where B's is *structural*: nothing in the type system stops a
+   future `SessionActions` impl from reading config directly instead of calling
+   `actions::*`, which is root cause (a) one layer down. That risk was
+   previously priced against B's cost. With B gone, it is unpriced, and the
+   guard in [§12](#12-what-guards-it) is the only thing standing between this
+   design and the drift it exists to remove. Treat that guard as load-bearing
+   rather than as belt-and-braces — it is now the whole belt.
+
+This also removes the last reason to keep the door open on B "in case a GUI
+appears": if one ever does, it consumes the same ACP surface `chat` does, and
+the question reopens then with a real consumer to design against.
+
 ---
 
 ## 17. Explicitly out of scope
