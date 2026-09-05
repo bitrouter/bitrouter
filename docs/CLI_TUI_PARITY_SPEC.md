@@ -581,6 +581,136 @@ Two more transferable primitives, noted without a recommendation:
   field's missing primitive: *"it would be awesome to have the equivalent of the
   pipe (`|`) for TUIs."* Out of scope here; worth remembering.
 
+### 6.9 The agent-harness peer group
+
+§6.1–§6.8 surveyed general-purpose developer tools. The obvious objection is
+that none of them is a coding-agent harness, which is the peer group BitRouter
+actually competes in, and that the newer field might have solved what the older
+one gave up on. It has not. This subsection is the check, done against primary
+sources — vendor documentation, the harnesses' own source, and the protocol
+repository — with counts derived here rather than quoted.
+
+**Method and its limits, stated first.** Where a harness is open source
+(Codex CLI, OpenCode) the numbers below are **counted** from the registry in the
+tree, at the commit reachable on the default branch on 2026-09-05, and the file
+is named so the count can be re-run. Where it is not (Claude Code) nothing is
+counted: the findings are qualitative and taken from published documentation and
+one maintainer reply on a public issue. Anywhere a number is an estimate it says
+so. Four harnesses were in scope; `pi` and `aider` were not reached.
+
+**The direct answer: no coding-agent harness in the survey has CLI/TUI command
+parity, and one of the four has no overlap at all by construction.** But the
+result is more interesting than "everyone gave up", because OpenCode got
+substantially closer than the §6.1 cohort ever did, and it got there by the same
+inversion that makes tmux work ([§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)).
+That is the finding worth carrying.
+
+#### 6.9.1 Claude Code — a documented terminal-only class, and a shared class that is not commands
+
+Claude Code is closed-source, so its command registry cannot be walked. What
+*can* be established is stronger than a count anyway, because the vendor
+documents the split in its own words.
+
+**The vendor names an interactive-only class.** The skills documentation
+describes `/help` and `/feedback` as *"terminal-only built-in commands"*, and
+records what happens to their names headlessly — they are *"not reserved in
+non-interactive sessions, so plugin skills with these names keep their bare
+commands in headless mode"* — while *"other terminal-only built-ins like
+`/login`"* keep their names *"reserved even in non-interactive sessions **where
+commands can't run**"*
+([code.claude.com/docs/en/slash-commands](https://code.claude.com/docs/en/slash-commands)).
+That is set C, named as a class, by the maintainer, with a documented consequence
+for name resolution. `/skill-doctor` is documented the same way and more
+bluntly: *"not available in non-interactive mode with the `-p` flag"*.
+
+**But the split is not interactive-versus-headless. It is built-in versus
+prompt-expansion.** The clearest statement is a maintainer reply on
+[anthropics/claude-code#837](https://github.com/anthropics/claude-code/issues/837)
+(*"use slash commands in print/headless/non-interactive mode"*, opened
+2025-04-21, closed). The request was for `claude -p "/cost"`. A user reported
+that `claude -p /project:my-custom-command` works, and `bcherny` — a repository
+collaborator — replied in full:
+
+> *"yep, this is supported"*
+
+So user-defined and skill-backed commands **are** shared across both surfaces,
+because they are prompt text and the headless mode takes a prompt. The built-in
+commands are not, because they are not prompt text. **The line is drawn by
+implementation kind, not by mode**, and it lands where §2.4 predicted: the
+commands that need the process's own state — permissions, config, panels — are
+the ones that do not cross.
+
+⇒ **Finding 7. The nearest peer's interactive-only set is real, documented, and
+named as such — and the boundary it is drawn on is "does this expand to a
+prompt", not "is a human watching".** For BitRouter this is the reassuring
+result and also the limiting one: BitRouter has no prompt-expansion class of its
+own (the harness owns that), so it has no cheap path to a shared set and every
+member of set A has to be built like [§9 option C](#c-local-dispatch-through-the-same-action-ports--recommended)
+builds it.
+
+**Two documented pairs are worth more than the class boundary, because they show
+what happens to names that exist on both sides.**
+
+| Pair | What the documentation says |
+|---|---|
+| `claude doctor` / `/doctor` | *"Print **read-only** installation and settings diagnostics from the terminal without starting a session… For the in-session setup checkup **that can also apply fixes**, run `/doctor`"* ([CLI reference](https://code.claude.com/docs/en/cli-reference)) |
+| `claude mcp login <name>` / `/mcp` | *"Run a configured MCP server's OAuth flow **without opening the interactive `/mcp` panel`**"* (same page) |
+
+The first is a shared **name** whose two members are deliberately *different
+actions* — the headless one is read-only, the interactive one can write. Under
+this spec's P1 that pair is a violation, not a success, and command-count parity
+would have scored it as a win. It is the cleanest external illustration of why
+P1 is phrased as *"the two answer with the same typed report"* rather than
+*"both surfaces have the command"* ([§3](#3-the-goal-restated)).
+
+The second is a set-C member migrating to set A **because the interactive
+affordance was in the way of automation** — the leaf exists precisely to escape
+a panel. That is [§6.8](#68-the-inverse-principle-and-whether-it-is-symmetric)'s
+"automation dead end" being remediated in public, and it is the shape BitRouter
+should expect if `/route`'s picker ever needs a headless twin ([D7](#d7--does-the-route-picker-need-a-cli-leaf)):
+the trigger will be a script that cannot get past the modal, not a desire for
+symmetry.
+
+**The headless-only side is mostly flags, not commands.** The CLI reference marks
+`--init`, `--json-schema`, `--max-budget-usd`, `--max-turns`,
+`--no-session-persistence` and `--permission-prompts` as *"print mode only"*.
+None of these is a command; each is a flag with no interactive expression at all.
+That is [§2.1](#21-command-is-ambiguous-and-both-readings-fail)'s objection
+appearing in the nearest peer: the unit "command" does not partition the surface,
+and a parity rule stated over commands would score a harness as complete while
+six behaviours remain reachable from exactly one side.
+
+**On the maintainer's own first-hand claim** — that `/permissions`, `/config`,
+`/doctor` and `/hooks` are interactive-only, and `--print` and `claude mcp add`
+headless-only — the published documentation **partly refutes it**:
+
+- **`/doctor` is wrong.** `claude doctor` is a documented CLI command. The pair
+  exists; it is the *semantics* that differ, as above.
+- **`/permissions` and `/hooks` hold as stated for commands**, with a caveat
+  that matters: their headless equivalents exist as *flags and settings files*
+  (`--permission-mode`, `--allowedTools`, `--disallowedTools`, `--settings`,
+  and `settings.json` hooks), not as commands. "Interactive-only" is true of the
+  command and false of the capability.
+- **`/config` could not be verified either way.** The published CLI reference
+  contains no `claude config` entry, which is consistent with the claim, but
+  absence from a reference is not a statement of intent and no maintainer source
+  was found. Recorded as unverified.
+- **`--print` holds** — *"Print response without interactive mode"*.
+- **`claude mcp add` holds as a command**, though `/mcp` covers part of the same
+  ground interactively, so this is a partial overlap rather than a clean
+  headless-only.
+
+The claim's *shape* survives — all three sets are non-empty in Claude Code — but
+two of its five examples were imprecise, and the correction is the useful part:
+**the interesting boundary is not the mode, it is whether the command's answer
+comes from the process's own state.**
+
+**Not established for Claude Code:** any command count on either side, and
+therefore any overlap ratio. The prior figure of "roughly 7 shared names out of
+~130" was carried into this work unsourced; **no attempt to reproduce it
+succeeded**, the documentation publishes no complete built-in command list, and
+the source is closed. It is not repeated here and should not be cited.
+
 ---
 
 ## 7. The membership rule
