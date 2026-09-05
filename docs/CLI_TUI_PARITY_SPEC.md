@@ -9,6 +9,9 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
 ([§6.11](#611-acpx-and-what-remote-over-http-can-actually-mean),
 [D13](#d13--the-remote-transport-requirement)); D10's reasoning superseded, its
 conclusion held
+· Implementation: [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md)
+— the buildable form of §9–§14, measured later against the actions-table stack
+tip; where the two disagree on a `file:line`, that document is current
 · Refs: [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) (phases 0–4 implemented),
 [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §2/§8.3/§9,
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) §14,

@@ -25,6 +25,13 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
   Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
   form; read its §5 and §16 D1 before agreeing to anything.
+- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **proposed,
+  nothing built.** The buildable form of the above: the Rust for the `ACTIONS`
+  extension, the resolver that replaces the TUI's string compares, five phases
+  with the files each touches, the guards as tests, and what each open decision
+  blocks. Written against the actions-table stack tip (#869 → #870 → #875),
+  not `main`; its Appendix A lists the research spec's `file:line` references
+  that have since moved.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.
