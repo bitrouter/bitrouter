@@ -81,6 +81,13 @@ conclusion held
 8. This **knowingly reverses `ACP_TUI_SPEC.md` §8.3** in a narrowed form, and
    nothing else ([§5](#5-the-prior-record-and-what-parity-would-reverse),
    [D1](#d1--amend-83-or-hold-it)).
+9. **[Added 2026-09-05.]** The agent's own commands already cross the proxy and
+   are already rendered by the TUI; the gap is headless, and it is a *discovery*
+   gap rather than a dispatch one. The design is
+   [phase 0.5](#phase-05--the-agents-commands-headlessly), the provenance rule for
+   two command sources is [D14](#d14--how-the-two-command-sources-are-distinguished)
+   (a `source` field, rendered as a group; never a sigil), and the name stays
+   `/commands` ([D15](#d15--list-versus-commands)).
 
 ## Contents
 
@@ -147,6 +154,38 @@ headless CLI is **no longer true**. `apps/bitrouter/src/chat/effects.rs` is
 shipped for one verb — permission answering — and the interactive TUI, the piped
 `chat`, and `acp prompt` all run it. See [§6.10](#610-the-in-repo-precedent-866)
 for the verification and for what it settles.
+
+**[Measured 2026-09-05, for [D14](#d14--how-the-two-command-sources-are-distinguished)
+and [D15](#d15--list-versus-commands).]** The agent's own command list, end to
+end. Every row was checked in this worktree at `0a9537b5`; two of them correct
+the brief that commissioned this addition, and those are marked **[correction]**.
+
+| Claim | Evidence |
+|---|---|
+| ACP's `AvailableCommandsUpdate` survives the proxy and is translated into BitRouter's own type | [`translate.rs:223`](../crates/bitrouter-sdk/src/acp/translate.rs:223) → `SessionUpdateKind::AvailableCommands` |
+| The journal stores it, replacing the previous set wholesale | [`journal.rs:178`](../crates/bitrouter-tui/src/journal.rs:178) `self.commands = update.available_commands` |
+| The TUI renders it under `/commands`, and the doc comment says whose it is | [`render/session.rs:64`](../crates/bitrouter-tui/src/render/session.rs:64) — *"The agent's own slash commands."* |
+| It is rendered **on request only**, never kept on screen | same file, `:10` — *"listed on request, because a list of commands is not a thing to keep on screen"* |
+| BitRouter's own `/route` does **not** appear in that list | [§1](#1-verified-starting-state); `commands()` takes `&[AvailableCommand]` from the journal and nothing else |
+| **[correction]** The data **does** reach a headless caller — as an unsolicited NDJSON event, not as an answer to a question | `acp prompt --format json` emits every `SessionUpdateKind` verbatim ([`acp_cli.rs:2137`](../apps/bitrouter/src/acp_cli.rs:2137) `emit_update`), so an `{"type":"available_commands",…}` line is already on stdout. What is missing is a **command**, not the data |
+| …and it is dropped by the other two formats | `--format text` renders the journal *document*, which deliberately excludes the command list (`render/session.rs:10`); `--format quiet` prints assistant text only |
+| The piped `chat` loop consumes no slash command at all except a refusal | [`chat/session.rs:538`](../apps/bitrouter/src/chat/session.rs:538) — `/route` prints *"needs a terminal"*; there is no `/commands` branch |
+| **[correction]** BitRouter's own type **drops `input`** | [`translate.rs:59`](../crates/bitrouter-sdk/src/acp/translate.rs:59) `AgentCommand { name, description }` — ACP's `input: Option<AvailableCommandInput>` is not carried, so no surface can render a command's `hint` |
+| ACP has **no method to ask** for the list | [§1](#1-verified-starting-state)'s enumerated v1 method set; `available_commands_update` is a notification |
+| …and the agent is not obliged to send one | [`slash-commands.mdx`](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/slash-commands.mdx): *"After creating a session, the Agent **MAY** send a list of available commands"* |
+| …nor to send it once | same file: *"The Agent can update the list of available commands **at any time** during a session"* |
+
+⇒ **The consequence that shapes the design, and it is easy to miss.** There is
+nothing to query. The list is a **stream with no request side and no completion
+condition**: it MAY never arrive, it MAY arrive late, and it MAY be replaced
+mid-session. So a headless "list the agent's commands" command cannot be a query;
+it can only be *"print the set in force as of now"*, which needs an explicit
+deadline and must distinguish **"the agent advertised an empty set"** from **"the
+agent has advertised nothing yet"**. The TUI has exactly the same property and
+hides it, because a human types `/commands` after the session has visibly settled;
+its current empty-case string — *"this agent advertises no commands"* — conflates
+the two. A headless caller has no such luck, and a script cannot tell a silent
+agent from a command-less one.
 
 ---
 
@@ -1444,8 +1483,7 @@ middlebox position, and no interactive TUI to be at parity with.
 it is stdio-only.** `acpx` is a pure ACP client — it receives
 `available_commands_update` like any client — and still exposes no way to ask
 "what can this agent do?". That is a gap in the field rather than a BitRouter
-oversight: any headless command-listing surface BitRouter builds has no adopter
-to copy. Its being stdio-only is the second half of §6.11.2's point: the
+oversight: it is why [D15](#d15--list-versus-commands) has no adopter to copy. Its being stdio-only is the second half of §6.11.2's point: the
 reference headless ACP client has no remote transport because ACP has none to
 offer.
 
@@ -2236,6 +2274,11 @@ Today `/route` exists and is invisible. `/commands` lists only the agent's.
   (enterprise > personal > project > bundled, plugin skills namespaced, synced
   skills yield); irssi, which has no rule, lets a script replace a builtin with
   no trace. Silent shadowing is the failure to avoid.
+  **[Generalised 2026-09-05.]** The grouping is a *rendering* of a `source` field
+  carried on every row, so that the headless surface added in
+  [phase 0.5](#phase-05--the-agents-commands-headlessly) can obey the same rule in
+  its own idiom. Names are never rewritten — no sigil, no prefix. Full statement
+  and costs: [D14](#d14--how-the-two-command-sources-are-distinguished).
 - Add `/help` as an alias, because it is what people type.
 - The list comes from one place that `submit()` also dispatches from — the
   `const COMMANDS` G1 needs. Two commands do not justify a table; **the guard
@@ -2247,6 +2290,58 @@ Ships the discoverability fix — the field's answer to the one legitimate
 argument for the stated goal
 ([§6.8](#68-the-inverse-principle-and-whether-it-is-symmetric)) — plus the
 mechanism every later phase needs.
+
+### Phase 0.5 — the agent's commands, headlessly
+
+The one place where the data already crosses the proxy and only one surface reads
+it. Sequenced here because it needs phase 0's `const COMMANDS` (to have a
+BitRouter group to tag) and nothing else, and because it is the direction
+[§6.10](#610-the-in-repo-precedent-866) finding 15 says has the asymmetric payoff:
+**a set-C verb acquiring a headless twin**, not a CLI leaf acquiring a keystroke.
+
+Verified starting state and the protocol constraints are in
+[§1](#1-verified-starting-state)'s post-research measurement. In short: the list
+survives translation, the journal stores it, the TUI renders it, the NDJSON stream
+already forwards it verbatim — and there is no way to *ask* for it, no obligation
+on the agent to send it, and no completion condition.
+
+- **`bitrouter acp commands --agent <id>`.** Spawn, `initialize`, `session/new`,
+  collect `available_commands_update` until quiescent or `--wait` elapses
+  (default short — this is a settle, not a poll), print a `CommandsReport`, tear
+  the session down. No prompt is sent, so nothing is billed and no turn runs.
+- **The report distinguishes three outcomes, because the protocol has three.**
+  `advertised: [...]` (the agent sent a list), `advertised: []` with
+  `received: true` (the agent sent an explicitly empty list), and
+  `received: false` (the deadline elapsed with no notification — *"the Agent
+  **MAY** send"*). The TUI's current single empty-case string conflates the last
+  two and should be corrected to match, which is P1's *"the same typed report"*
+  applied to the case that actually differs.
+- **Rows carry `source`, and both groups are present**, per
+  [D14](#d14--how-the-two-command-sources-are-distinguished). `--source agent`
+  filters to the agent's own — the maintainer's stated request, as a filter rather
+  than as the schema.
+- **`translate.rs` carries ACP's `input` through** so a `hint` can be rendered.
+  Two lines, and without it neither surface can say what a command expects
+  ([§1](#1-verified-starting-state)).
+- **`ACTIONS` gains the row**: `cli_leaf: Some("acp commands")`,
+  `tui_command: Some("commands")`, `Effect::Read`, and — once
+  [D13](#d13--the-remote-transport-requirement)'s column exists —
+  `Reach::SessionBound`, because the list is an artefact of one live ACP
+  connection and does not travel. This is the first row in the table with **both**
+  surfaces *and* a session subject, which is the case P1 was written for.
+- Lockstep: `docs/CLI.md` and `skills/bitrouter/references/` in the same change
+  ([invariant 9](#15-invariants)).
+
+**Explicitly not built here.** No `--watch`, no re-render on a later
+`available_commands_update`. The list is a stream and a headless caller gets a
+snapshot with a stated as-of; following the stream is what `--format json` already
+does, for free, and a second follower would be two implementations of one thing.
+
+**What this does not do, and it is worth saying because the framing invites the
+opposite reading.** It does not let a headless caller *invoke* an agent command.
+Invocation needs no new surface at all — ACP's only channel is `session/prompt`,
+so `bitrouter acp prompt --agent x "/plan ship it"` already works and always did.
+The gap being closed is discovery, not dispatch.
 
 ### Phase 1 — `/route reset`, and the write model
 
@@ -2949,6 +3044,141 @@ HTTP/WebSocket RFD ratifies into v1 (so there is a standard remote transport to
 carry extension methods over), *and* a real remote consumer of BitRouter-as-ACP-agent
 exists. Either alone is insufficient — a transport with no consumer is D10's
 mistake, and a consumer with no transport is (1)'s. Until then, C.
+
+### D14 — how the two command sources are distinguished
+
+Two origins reach one prompt line: the agent's commands, forwarded from
+`available_commands_update`, and BitRouter's own, matched in `submit()` before the
+line becomes a prompt. [§6.9.4](#694-acps-own-position-on-command-ownership)
+established that **ACP supplies nothing to reconcile them with** — no origin,
+owner or provenance field on `AvailableCommand`; no namespace; no collision rule;
+in either protocol version. The field has three incompatible answers and no
+protocol support for any of them:
+
+| Harness | Answer | Shape |
+|---|---|---|
+| `codex-acp` | A **sigil**. Skills advertised under `$`, with `if (commandName.startsWith("$")) return {handled:false}` as the forwarding rule | Names are rewritten. First-writer-wins: built-ins seeded first, colliding skills skipped |
+| OpenCode | **Documented last-writer-wins.** *"Custom commands can override built-in commands"* — user beats built-in | Names are not rewritten; the loser disappears |
+| Claude Code | A **published four-level precedence table** (enterprise > personal > project > bundled; plugin skills namespaced; synced skills yield) | Names are not rewritten; precedence is documentation |
+
+**Recommendation: a `source` field, rendered as a group — not a sigil, and not
+silent precedence.** Concretely:
+
+- Every command row carries `source: "bitrouter" | "agent"`. On structured
+  surfaces (`--json`, NDJSON, the MCP tool) it is a field. On human surfaces it is
+  a **group heading** — which is what [phase 0](#phase-0--the-discoverability-defect-no-design-required)
+  already specifies for the TUI, generalised so the headless surface can obey the
+  same rule in its own idiom.
+- **Names are never rewritten.** No `$`, no `bitrouter:` prefix, no mangling of a
+  name the agent published.
+- The precedence rule stays phase 0's — **local wins, and the shadowed entry is
+  listed as shadowed** rather than dropped. That is Claude Code's answer (publish
+  the table) plus the one thing Claude Code does not do: show the loser.
+
+**Why a field and not a sigil.** Three reasons, in descending force.
+
+1. **The two surfaces need different renderings of the same fact, and only a
+   field survives both.** A sigil is a name mangling, so it is identical on every
+   surface — which sounds like a virtue until the TUI, which has layout and can
+   group for free, is forced to carry `$` in a list it could simply have
+   headed. A field renders as a heading in the TUI, a section in CLI text, and a
+   key in JSON. This is P1's *"the same typed report"* doing its job: one report,
+   three renderings.
+2. **`source` is the one piece of OpenCode's model that survives
+   [D12](#d12--take-693s-inversion)'s refusal of the rest.** D12 declines
+   OpenCode's *open* registry; it does not decline its `source` tag. Provenance is
+   needed whenever two origins merge into one namespace, and that is true here
+   even though BitRouter's second origin is the agent rather than a user. Worth
+   naming, because "we did not take OpenCode's openness" could otherwise be read
+   as "we took none of its data model".
+3. **Rewriting an agent's command name sits badly with ACP v2's proxy clause.**
+   v2 tells a middlebox to *"preserve it when storing, replaying, **proxying, or
+   forwarding** command metadata"*
+   ([§6.9.4](#694-acps-own-position-on-command-ownership)). The clause is written
+   about *input specifications* and does not literally govern names, so this is an
+   argument rather than a prohibition — but a proxy that publishes `/plan` as
+   `$plan` is not obviously preserving what it forwarded, and BitRouter is
+   precisely the position the clause was written for. A sigil would put the
+   project on the wrong side of the only sentence in the protocol addressed to it.
+
+**What it costs, stated plainly.** Four things, and the third is the one that
+would change the answer.
+
+1. **It attributes; it does not deconflict.** A harness advertising its own
+   `/status` is still eaten by `submit()`'s local match. `source` makes the
+   shadowing *visible*; only a sigil or a prefix makes it *avoidable*, and both
+   are refused above. The residual defect is real and should be written into the
+   help text, not hidden: **a shadowed agent command has no way to be invoked at
+   all.** If that ever bites, the escape is a general prefix escape (`//status`
+   forwards verbatim), which is one character of grammar rather than a rewrite of
+   every name — and it is the cheapest thing to add later, so nothing here
+   forecloses it.
+2. **It is a field on a frozen contract.** [Invariant 8](#15-invariants) keeps
+   stdout to one JSON value per leaf; adding `source` after the report ships is a
+   consumer-visible change. It costs nothing now and something later, so it is
+   decided now.
+3. **A grouped list is a list of *both* sources, which is not what was asked
+   for.** The request was for a command reporting *the agent's own* commands, not
+   BitRouter's. A list that omits BitRouter's cannot show shadowing, and
+   "shadowing is visible" is the whole value of this recommendation. **The
+   resolution: the report carries both, tagged; `--source agent` filters to the
+   requested view; the default is both.** If the maintainer wants agent-only as
+   the default, the shadow-visibility argument goes with it and D14 collapses to
+   "no rule at all", which is irssi's position and
+   [§9 objection 3](#a-ride-availablecommandsupdate) already rejects it.
+4. **It does not fix the missing `hint`.** BitRouter's `AgentCommand` drops ACP's
+   `input`, so no surface can show what a command expects — measured in
+   [§1](#1-verified-starting-state). Carrying `source` and not carrying `input` is
+   an odd pair of choices, and adding the field is a two-line change in
+   `translate.rs`. Do it in the same PR or explain why not.
+
+---
+
+### D15 — `/list` versus `/commands`
+
+The maintainer asked for a `/list`-style command on both surfaces. The TUI already
+ships `/commands`. Three readings — an alias, a rename, or two different things —
+and one of them has to be chosen before phase 0 writes the `const COMMANDS` table.
+
+**Recommendation: keep `/commands` on the TUI, name the headless leaf `bitrouter
+acp commands`, and add neither a `/list` alias nor a `/list` command.** One name,
+one meaning, on both surfaces. Reasons:
+
+- **`/list` is ambiguous in a surface with several listable things.** Models,
+  routes, skills, sessions and commands are all listable, and three of them are
+  already in this spec's inventory. Every harness in
+  [§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses) that has a listing verb
+  qualifies it — `/sessions`, `/models`, `/themes`, `/agents` — and none ships a
+  bare `/list`. That is not a coincidence; it is what happens once a second thing
+  becomes listable.
+- **This document already decided the rule, in [D8](#d8--route-overloading):**
+  *"keeps every name meaning one thing."* D8 spent a command name to avoid
+  overloading `/route`. Spending `/commands` on an unambiguous name and declining
+  an ambiguous alias is the same decision, applied consistently.
+- **An alias does not help.** The problem with `/list` is ambiguity, and adding an
+  ambiguous alias for an unambiguous name adds ambiguity for zero discoverability
+  — unlike phase 0's `/help` alias, which is unambiguous and is *"what people
+  type."*
+- **A rename costs the lockstep and buys nothing.** `/commands` is in
+  `docs/CLI.md`, `skills/bitrouter/references/`, and users' fingers.
+  [Invariant 9](#15-invariants) makes the rename a three-file change for a name
+  that is worse.
+- **They are not two different things.** Phase 0 already merges BitRouter's group
+  into `/commands`, so there is no second list left for `/list` to be. Shipping
+  both would be two commands over one report, which P1 forbids.
+
+**Where `list` is the right word: as a leaf under a namespace.** `bitrouter acp
+commands` reads as a noun and matches the TUI's `/commands`; `bitrouter acp
+list-commands` would be the same thing with a redundant verb, and `bitrouter acp
+list` reintroduces the ambiguity one level down. Same noun on both surfaces is
+what P1 asks for.
+
+**What would change this.** If a future `/commands` grows into a general
+"what can I do here" panel spanning commands, skills and config options, `/list`
+becomes the honest name for the panel and `/commands` becomes one section of it.
+That is a real possibility — it is roughly what Claude Code's `/help` is — but it
+is a different feature, and naming for it now would be naming for something that
+does not exist (CLAUDE.md rule 4).
 
 ---
 
