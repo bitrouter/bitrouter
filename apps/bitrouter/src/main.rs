@@ -476,6 +476,10 @@ enum Command {
             conflicts_with = "no_wait"
         )]
         result_schema: Option<String>,
+        /// (with `-p`) How permission requests are answered, and what is
+        /// printed.
+        #[command(flatten)]
+        headless: bitrouter::acp_cli::HeadlessOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted.
         #[arg(short, long)]
@@ -623,6 +627,19 @@ fn parse_unit_interval_ppm(value: &str) -> std::result::Result<u32, String> {
 
 #[derive(Subcommand)]
 enum WorkflowStateAction {
+    /// Evaluate a shadow task/role/progress/risk classifier without routing.
+    ClassifierBakeoff {
+        /// Directory tree containing frozen workflow-state fixture JSON files.
+        #[arg(long)]
+        fixtures: PathBuf,
+        /// Optional candidate submission JSON. Omit to evaluate the compiled
+        /// deterministic scorecard as an uncalibrated baseline.
+        #[arg(long)]
+        submission: Option<PathBuf>,
+        /// Output path for the deterministic manifest and evaluation report.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Build a deterministic benchmark trace bundle.
     Bundle {
         /// Run label stored in `run-artifact.json`.
@@ -1315,6 +1332,8 @@ enum AcpCmd {
         no_wait: bool,
         #[command(flatten)]
         routing: bitrouter::acp_cli::RoutingOptions,
+        #[command(flatten)]
+        headless: bitrouter::acp_cli::HeadlessOptions,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -1594,6 +1613,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             turn_timeout,
             no_wait,
             result_schema,
+            headless,
             config,
             legacy_agent,
             no_install,
@@ -1646,6 +1666,16 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 model,
                 no_start,
             };
+            // A flattened struct cannot say `requires = "prompt"` for itself,
+            // so the modes that hand permissions to someone else refuse the
+            // flags that would answer them here.
+            if prompt.is_none() && headless != bitrouter::acp_cli::HeadlessOptions::default() {
+                anyhow::bail!(
+                    "spawn: `--approve-all`, `--approve-reads`, `--deny-all`, \
+                     `--permission-policy`, and `--format` apply to `-p` only; \
+                     `--serve` hands permissions to the manager and `--check` asks nothing."
+                );
+            }
 
             if check {
                 let report = bitrouter::acp_cli::spawn_check(cfg, &agent, &routing).await?;
@@ -1667,11 +1697,18 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
                 let options = bitrouter::acp_cli::launch_options(turn_timeout);
-                // A malformed schema fails fast, before any session side effect.
+                // A malformed schema or policy fails fast, before any session
+                // side effect.
                 let contract = result_schema
                     .as_deref()
                     .map(bitrouter::result_contract::ResultContract::from_flag)
                     .transpose()?;
+                let prompt_options = bitrouter::acp_cli::PromptOptions {
+                    no_wait,
+                    contract,
+                    policy: headless.policy()?,
+                    format: headless.format,
+                };
                 let mut stdout = tokio::io::stdout();
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
@@ -1680,7 +1717,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     options,
                     routing,
                 };
-                bitrouter::acp_cli::prompt(ctx, &text, no_wait, contract, &mut stdout).await
+                let tally =
+                    bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
+                exit_with(tally.exit_code())
             } else {
                 anyhow::bail!(
                     "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
@@ -1776,6 +1815,31 @@ async fn settlement_api_key(
 
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
+        WorkflowStateAction::ClassifierBakeoff {
+            fixtures,
+            submission,
+            output,
+        } => {
+            use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
+            use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
+            use bitrouter::workflow_state::shadow_classifier::ShadowClassifierSubmission;
+
+            let fixtures = WorkflowTraceFixture::load_tree(&fixtures)
+                .with_context(|| format!("read classifier fixtures {}", fixtures.display()))?;
+            let submission = submission
+                .as_ref()
+                .map(ShadowClassifierSubmission::load_json)
+                .transpose()?;
+            let artifact = ClassifierBakeoffArtifact::build(&fixtures, submission)?;
+            artifact.write_json(&output)?;
+            println!(
+                "✓ wrote shadow classifier bake-off to {} (accepted: {}/{})",
+                output.display(),
+                artifact.report.accepted_count,
+                artifact.report.total_count
+            );
+            Ok(())
+        }
         WorkflowStateAction::Bundle {
             run_label,
             traces,
@@ -4919,12 +4983,19 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             turn_timeout,
             no_wait,
             routing,
+            headless,
             config,
             text,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
+            let prompt_options = bitrouter::acp_cli::PromptOptions {
+                no_wait,
+                contract: None,
+                policy: headless.policy()?,
+                format: headless.format,
+            };
             let mut stdout = tokio::io::stdout();
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,
@@ -4933,8 +5004,20 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 options,
                 routing,
             };
-            bitrouter::acp_cli::prompt(ctx, &text, no_wait, None, &mut stdout).await
+            let tally = bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
+            exit_with(tally.exit_code())
         }
+    }
+}
+
+/// Leave with a status a successful command chose for itself — `spawn
+/// --check`'s report and a headless prompt's permission tally both do — or
+/// return normally for zero.
+fn exit_with(code: i32) -> Result<()> {
+    if code == 0 {
+        Ok(())
+    } else {
+        std::process::exit(code);
     }
 }
 
@@ -6002,6 +6085,32 @@ mod tests {
     }
 
     #[test]
+    fn shadow_classifier_bakeoff_flags_parse_without_a_submission() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "classifier-bakeoff",
+            "--fixtures",
+            "fixtures",
+            "--output",
+            "bakeoff.json",
+        ])
+        .expect("parse shadow classifier bake-off");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::WorkflowState {
+                action: WorkflowStateAction::ClassifierBakeoff {
+                    submission: None,
+                    ..
+                }
+            })
+        ));
+    }
+
+    #[test]
     fn policy_oracle_accepts_human_readable_cost_assumptions() {
         use clap::Parser;
 
@@ -6179,6 +6288,55 @@ mod tests {
         assert!(
             Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", "fleet"]).is_err(),
             "the fleet backend must no longer be accepted"
+        );
+    }
+
+    /// The headless permission flags are mutually exclusive, parse on both
+    /// front doors, and default to deny-all with NDJSON.
+    #[test]
+    fn headless_permission_flags_parse_on_both_front_doors() {
+        use bitrouter::acp_cli::{HeadlessOptions, PromptFormat};
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "spawn",
+            "claude-acp",
+            "-p",
+            "hi",
+            "--approve-reads",
+            "--format",
+            "quiet",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Spawn { headless, .. }) => {
+                assert!(headless.approve_reads);
+                assert_eq!(headless.format, PromptFormat::Quiet);
+            }
+            _ => panic!("expected `spawn -p`"),
+        }
+        let cli = Cli::try_parse_from(["bitrouter", "acp", "prompt", "--agent", "a", "hi"])
+            .expect("parse");
+        match cli.command {
+            Some(Command::Acp {
+                cmd: AcpCmd::Prompt { headless, .. },
+            }) => assert_eq!(headless, HeadlessOptions::default()),
+            _ => panic!("expected `acp prompt`"),
+        }
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "acp",
+                "prompt",
+                "--agent",
+                "a",
+                "--approve-all",
+                "--deny-all",
+                "hi"
+            ])
+            .is_err(),
+            "one mode at a time"
         );
     }
 

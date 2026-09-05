@@ -65,17 +65,6 @@ models:
     capabilities:
       - reasoning
       - tools
-  - id: z-ai/glm-5
-    provider_model_id: glm-5
-    pricing:
-      input_tokens:
-        no_cache: 1
-        cache_read: 0.2
-      output_tokens:
-        text: 3.2
-    capabilities:
-      - reasoning
-      - tools
   - id: z-ai/glm-4.7
     provider_model_id: glm-4.7
     pricing:

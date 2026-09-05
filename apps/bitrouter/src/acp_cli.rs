@@ -11,11 +11,18 @@
 //!   after the prompt resolves (or immediately after submission when `no_wait`
 //!   is true).
 //!
-//! ## NDJSON format
+//! ## Output formats
 //!
-//! Update lines carry the [`SessionUpdateKind`] directly — the `type` tag
-//! value is the snake_case variant name (`message_chunk`, `thought_chunk`,
-//! `tool_call`, `tool_call_update`). The terminal result line is:
+//! `--format json` (the default) is NDJSON. Update lines carry the
+//! [`SessionUpdateKind`] directly — the `type` tag value is the snake_case
+//! variant name (`message_chunk`, `thought_chunk`, `tool_call`,
+//! `tool_call_update`). A permission the headless policy answered is one line:
+//!
+//! ```json
+//! {"type":"permission","decision":"denied","title":"Write src/main.rs","kind":"edit"}
+//! ```
+//!
+//! The terminal result line is:
 //!
 //! ```json
 //! {"type":"result","stop_reason":"end_turn"}
@@ -29,6 +36,18 @@
 //! ```json
 //! {"type":"submitted"}
 //! ```
+//!
+//! `--format text` prints the transcript exactly as `bitrouter chat` prints
+//! it to a pipe; `--format quiet` prints the assistant's text and nothing else.
+//!
+//! ## Permissions
+//!
+//! Nobody is at a headless terminal to broker a permission, so the caller
+//! states the rule up front: `--deny-all` (the default), `--approve-reads`,
+//! `--approve-all`, and a per-tool `--permission-policy`. The decision is made
+//! by the same [`bitrouter_tui::permission::Policy`] the piped `chat` runs
+//! under and reaches the agent through the same wire as a keystroke would. A
+//! run that denied at least one request and approved none exits 5.
 //!
 //! Both functions load their `Config` via the standard resolution chain (see
 //! `bitrouter::paths`) and launch the agent named under `config.agents`.
@@ -44,14 +63,16 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use agent_client_protocol::schema::v1::{Cost, LlmProtocol};
-use bitrouter_sdk::acp::client::{AcpClient, ClientOptions};
+use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
+use bitrouter_sdk::acp::client::{AcpClient, ClientOptions, PendingPermission};
 use bitrouter_sdk::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
 };
-use bitrouter_sdk::acp::translate::SessionUpdateKind;
+use bitrouter_sdk::acp::translate::{SessionUpdateKind, translate};
+use bitrouter_tui::permission::{Decision, Mode, Policy, Prompt as PermissionPrompt};
 
+use crate::chat::effects::Wire;
 use crate::paths::ConfigSource;
 
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
@@ -74,6 +95,147 @@ pub struct RoutingOptions {
     /// Never auto-start a local daemon when none is running — fail fast.
     #[arg(long)]
     pub no_start: bool,
+}
+
+// ── headless presentation and permissions ────────────────────────────────────
+
+/// What a headless `prompt` prints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum PromptFormat {
+    /// One self-describing JSON object per line.
+    #[default]
+    Json,
+    /// The transcript as `bitrouter chat` prints it to a pipe.
+    Text,
+    /// The assistant's text and nothing else.
+    Quiet,
+}
+
+/// The flags a headless caller states instead of sitting at the terminal:
+/// how permission requests are answered, and what is printed.
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeadlessOptions {
+    /// Approve every permission request the harness makes.
+    #[arg(long, conflicts_with_all = ["approve_reads", "deny_all"])]
+    pub approve_all: bool,
+    /// Approve tool calls the harness labels `read` or `search` (the ACP tool
+    /// kind); deny everything else, including unlabelled calls.
+    #[arg(long, conflicts_with_all = ["approve_all", "deny_all"])]
+    pub approve_reads: bool,
+    /// Deny every permission request. This is the default.
+    #[arg(long, conflicts_with_all = ["approve_all", "approve_reads"])]
+    pub deny_all: bool,
+    /// Per-tool policy, inline JSON or `@path`:
+    /// `{"autoApprove":[…],"autoDeny":[…],"defaultAction":"approve"|"deny"}`.
+    /// Entries match the ACP tool kind (`read`, `edit`, `execute`, …), the
+    /// tool-call title, or its first word. `autoDeny` wins over `autoApprove`;
+    /// an unmatched request uses `defaultAction`, else the mode flag.
+    #[arg(long, value_name = "JSON|@PATH")]
+    pub permission_policy: Option<String>,
+    /// Output: `json` (NDJSON, the default), `text` (the transcript as `chat`
+    /// prints it to a pipe), or `quiet` (assistant text only).
+    #[arg(long, value_enum, default_value_t)]
+    pub format: PromptFormat,
+}
+
+/// The per-tool half of [`HeadlessOptions::permission_policy`], as written.
+///
+/// `escalate` — acpx's fourth action — is deliberately not a field: nobody is
+/// at this terminal to escalate to, and accepting it would silently mean
+/// `deny`. `deny_unknown_fields` is what turns it into a parse error instead.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PolicyFile {
+    #[serde(default)]
+    auto_approve: Vec<String>,
+    #[serde(default)]
+    auto_deny: Vec<String>,
+    default_action: Option<PolicyAction>,
+}
+
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum PolicyAction {
+    Approve,
+    Deny,
+}
+
+impl HeadlessOptions {
+    /// The policy these flags describe. A malformed `--permission-policy`
+    /// fails here, before any session side effect.
+    pub fn policy(&self) -> Result<Policy> {
+        let mode = if self.approve_all {
+            Mode::ApproveAll
+        } else if self.approve_reads {
+            Mode::ApproveReads
+        } else {
+            Mode::DenyAll
+        };
+        let file = match self.permission_policy.as_deref() {
+            None => PolicyFile::default(),
+            Some(flag) => {
+                let text = match flag.strip_prefix('@') {
+                    Some(path) => std::fs::read_to_string(path)
+                        .with_context(|| format!("reading --permission-policy from {path}"))?,
+                    None => flag.to_string(),
+                };
+                serde_json::from_str(&text).context("--permission-policy is not a valid policy")?
+            }
+        };
+        Ok(Policy {
+            mode,
+            auto_approve: file.auto_approve,
+            auto_deny: file.auto_deny,
+            default_action: file.default_action.map(|action| match action {
+                PolicyAction::Approve => Decision::Approve,
+                PolicyAction::Deny => Decision::Deny,
+            }),
+        })
+    }
+}
+
+/// Everything one headless [`prompt`] is told beyond its text.
+#[derive(Default)]
+pub struct PromptOptions {
+    /// Return as soon as the prompt is submitted.
+    pub no_wait: bool,
+    /// The `--result-schema` contract, when there is one.
+    pub contract: Option<crate::result_contract::ResultContract>,
+    /// How permission requests are answered.
+    pub policy: Policy,
+    /// What is printed.
+    pub format: PromptFormat,
+}
+
+/// What the headless policy decided over one run, for the exit status.
+///
+/// Only decisions the policy made are counted. A request still outstanding at
+/// teardown is denied by the client's own ledger (invariant I1) and is not
+/// tallied, because no policy answered it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionTally {
+    approved: usize,
+    denied: usize,
+}
+
+impl PermissionTally {
+    fn record(&mut self, decision: Decision) {
+        match decision {
+            Decision::Approve => self.approved += 1,
+            Decision::Deny => self.denied += 1,
+        }
+    }
+
+    /// The process exit status this tally calls for: 5 when at least one
+    /// request was denied and none approved (acpx's reading of "the agent was
+    /// refused"), else 0.
+    pub fn exit_code(&self) -> i32 {
+        if self.denied > 0 && self.approved == 0 {
+            5
+        } else {
+            0
+        }
+    }
 }
 
 /// The inputs shared by the two sub-agent launch paths ([`serve`] and
@@ -1636,19 +1798,27 @@ async fn chat_piped(
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
 /// persistent session should use `bitrouter acp serve` instead.
 ///
-/// `contract` is the optional `--result-schema` contract: its
+/// `options.contract` is the optional `--result-schema` contract: its
 /// instruction rides the prompt, and the terminal `result` line gains
-/// `result`/`schema_ok` (+ `raw` on failure) fields.
+/// `result`/`schema_ok` (+ `raw` on failure) fields. `options.policy` answers
+/// the harness's permission requests; the tally returned is what the caller
+/// exits with.
 pub async fn prompt<W>(
     ctx: SpawnContext<'_>,
     text: &str,
-    no_wait: bool,
-    contract: Option<crate::result_contract::ResultContract>,
+    options: PromptOptions,
     out: &mut W,
-) -> Result<()>
+) -> Result<PermissionTally>
 where
     W: AsyncWrite + Unpin + Send,
 {
+    let PromptOptions {
+        no_wait,
+        contract,
+        policy,
+        format,
+    } = options;
+    let mut presenter = Presenter::new(format, contract.is_some(), out);
     let SpawnContext {
         source,
         mut config,
@@ -1676,8 +1846,7 @@ where
     {
         Ok(routed) => routed,
         Err(e) => {
-            write_ndjson_line(out, &e.ndjson()).await?;
-            out.flush().await.ok();
+            presenter.routing_error(&e).await?;
             return Err(anyhow::Error::new(e));
         }
     };
@@ -1726,9 +1895,8 @@ where
     // can come back and be true.
     //
     // `via` is null when running direct.
-    write_ndjson_line(
-        out,
-        &serde_json::json!({
+    presenter
+        .session(&serde_json::json!({
             "type": "session",
             "session_id": ids.acp_session_id,
             "agent_session_id": ids.agent_session_id,
@@ -1738,50 +1906,40 @@ where
             // group its spend. Null when the caller supplied their own
             // credential and the traffic is therefore not separable.
             "launch_id": routed.launch_id,
-        }),
-    )
-    .await?;
-
-    // Headless: there is no manager to broker permissions and none will ever
-    // attach, so explicitly DENY each request (the reject option). The client
-    // also denies whatever is still outstanding when a turn is abandoned or
-    // the connection tears down; this loop is the one that answers promptly,
-    // so a turn that only needs consent it will never get ends now.
-    let mut permissions = session.client.subscribe_permissions();
-    tokio::spawn(async move {
-        while let Some(pending) = permissions.next().await {
-            tracing::warn!(
-                tool = pending
-                    .tool_call
-                    .fields
-                    .title
-                    .as_deref()
-                    .unwrap_or("(unnamed)"),
-                "headless prompt: denying permission request (no manager attached)"
-            );
-            pending.deny();
-        }
-    });
+        }))
+        .await?;
 
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
         // killed on shutdown. Callers needing a persistent background session
-        // should use `bitrouter acp serve` instead.
-        write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await?;
+        // should use `bitrouter acp serve` instead. Whatever the harness asks
+        // between ack and teardown is denied by the client's own ledger.
+        presenter.submitted().await?;
         let clean = session.shutdown().await;
         if let Some(exporter) = observability.exporter {
             exporter.shutdown();
         }
-        return teardown_result(clean);
+        return teardown_result(clean).map(|()| PermissionTally::default());
     }
 
-    let turn = Turn {
+    // Headless: there is no manager to broker permissions and none will ever
+    // attach, so the policy answers each request as it arrives, through the
+    // same wire a keystroke would. The client also denies whatever is still
+    // outstanding when a turn is abandoned or the connection tears down; this
+    // loop is the one that answers promptly, so a turn that only needs consent
+    // it will never get ends now.
+    let mut turn = Turn {
         client: &session.client,
         session_id: &ids.acp_session_id,
         agent_id,
         recorder: observability.recorder.clone(),
+        wire: Wire::new(&session.client, &ids.acp_session_id),
+        permissions: session.client.subscribe_permissions(),
+        policy,
+        tally: PermissionTally::default(),
     };
-    let outcome = prompt_wait(&turn, text, contract, out).await;
+    let outcome = prompt_wait(&mut turn, text, contract, &mut presenter).await;
+    let tally = turn.tally;
     let clean = session.shutdown().await;
     if let Some(exporter) = observability.exporter {
         // Flush the span batch before exit; spans are lost otherwise.
@@ -1790,7 +1948,7 @@ where
     // The turn's own failure is the more specific thing that went wrong, so it
     // outranks a teardown that did not confirm.
     outcome?;
-    teardown_result(clean)
+    teardown_result(clean).map(|()| tally)
 }
 
 /// What a `prompt` exits with when the turn itself was fine.
@@ -1967,32 +2125,45 @@ async fn launch_controlled(
 }
 
 /// Everything one prompt turn needs beyond its text: the client to drive, the
-/// harness-native session it belongs to, and where its telemetry goes.
+/// harness-native session it belongs to, where its telemetry goes, and how
+/// its permission requests are answered.
 struct Turn<'a> {
     client: &'a AcpClient,
     session_id: &'a str,
     agent_id: &'a str,
     recorder: Option<Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    /// The wire half of the session's effects — the same interpreter `chat`
+    /// runs, so an answer here reaches the agent as an answer there does.
+    wire: Wire<'a>,
+    /// The harness's permission requests, polled beside the updates.
+    permissions: std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
+    /// The rule that answers them.
+    policy: Policy,
+    /// What it decided, for the exit status.
+    tally: PermissionTally,
 }
 
 /// Inner implementation for the wait (non-`--no-wait`) path.
 async fn prompt_wait<W>(
-    turn: &Turn<'_>,
+    turn: &mut Turn<'_>,
     text: &str,
     contract: Option<crate::result_contract::ResultContract>,
-    out: &mut W,
+    presenter: &mut Presenter<'_, W>,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
-    let mut updates = turn.client.subscribe_updates();
+    // The **raw** stream: the text presentation is a journal, which is a
+    // protocol client, and the NDJSON one translates for itself.
+    let mut updates = turn.client.subscribe_raw_updates();
     let task = match &contract {
         // The contract clause rides the subagent's task prompt.
         Some(c) => format!("{text}{}", c.instruction()),
         None => text.to_string(),
     };
-    let (response, reply) = run_turn(turn, &mut updates, &task, contract.is_some(), out).await?;
+    let (response, reply) =
+        run_turn(turn, &mut updates, &task, contract.is_some(), presenter).await?;
 
     // Extract + validate the machine-consumable result. On failure: ONE
     // repair re-prompt, then `schema_ok:false` + raw text — the orchestrator
@@ -2002,8 +2173,14 @@ where
         Some(c) => match c.check(&reply) {
             Ok(value) => (response, Some(value), Some(true), None),
             Err(problem) => {
-                let (response, reply) =
-                    run_turn(turn, &mut updates, &c.repair_prompt(&problem), true, out).await?;
+                let (response, reply) = run_turn(
+                    turn,
+                    &mut updates,
+                    &c.repair_prompt(&problem),
+                    true,
+                    presenter,
+                )
+                .await?;
                 match c.check(&reply) {
                     Ok(value) => (response, Some(value), Some(true), None),
                     Err(_) => (
@@ -2020,37 +2197,35 @@ where
     // Emit the terminal result line. `response.stop_reason` is an ACP
     // `StopReason` that serializes to its snake_case wire form (e.g.
     // `"end_turn"`).
-    write_ndjson_line(
-        out,
-        &ResultLine {
+    presenter
+        .result(&ResultLine {
             kind: "result",
             stop_reason: response.stop_reason,
             result,
             schema_ok,
             raw,
-        },
-    )
-    .await?;
-    Ok(())
+        })
+        .await
 }
 
-/// Drive one prompt turn: stream its updates to `out` (accumulating message
-/// text when `capture`), report the turn's telemetry, and return the typed
-/// response plus the reply text.
+/// Drive one prompt turn: present its updates (accumulating message text when
+/// `capture`), answer its permission requests under the turn's policy, report
+/// the turn's telemetry, and return the typed response plus the reply text.
 async fn run_turn<W>(
-    turn: &Turn<'_>,
-    updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
+    turn: &mut Turn<'_>,
+    updates: &mut (impl futures::Stream<Item = SessionUpdate> + Unpin),
     text: &str,
     capture: bool,
-    out: &mut W,
+    presenter: &mut Presenter<'_, W>,
 ) -> Result<(agent_client_protocol::schema::v1::PromptResponse, String)>
 where
     W: AsyncWrite + Unpin,
 {
     let mut reply = String::new();
     let started = std::time::Instant::now();
-    // Drive updates and the prompt concurrently. The loop returns the resolved
-    // `PromptResponse` directly, so there is no `Option` to unwrap afterward.
+    // Drive updates, permissions, and the prompt concurrently. The loop
+    // returns the resolved `PromptResponse` directly, so there is no `Option`
+    // to unwrap afterward.
     let response = {
         let prompt_future = turn.client.prompt(turn.session_id, text);
         tokio::pin!(prompt_future);
@@ -2069,7 +2244,7 @@ where
                             _ = std::future::ready(()) => None,
                         };
                         match maybe {
-                            Some(update) => emit_update(&update, capture, &mut reply, out).await?,
+                            Some(update) => presenter.update(update, capture, &mut reply).await?,
                             None => break,
                         }
                     }
@@ -2078,12 +2253,23 @@ where
 
                 maybe_update = updates.next() => {
                     if let Some(update) = maybe_update {
-                        emit_update(&update, capture, &mut reply, out).await?;
+                        presenter.update(update, capture, &mut reply).await?;
+                    }
+                }
+
+                // `if let`, not a `Some(..) =` pattern: a stream that ended
+                // must not spin the select.
+                request = turn.permissions.next() => {
+                    if let Some(request) = request {
+                        let (decision, prompt) = turn.wire.answer(request, &turn.policy).await;
+                        turn.tally.record(decision);
+                        presenter.permission(&prompt, decision).await?;
                     }
                 }
             }
         }
     };
+    presenter.turn_settled().await?;
     report_turn(
         turn.client,
         turn.agent_id,
@@ -2129,22 +2315,229 @@ pub(crate) fn report_turn(
     drain_telemetry_record(record);
 }
 
-/// Emit one update as NDJSON, accumulating message text into `reply` when the
-/// result contract needs it. The `SessionUpdateKind`'s own `type` tag (e.g.
-/// `message_chunk`) makes the line self-describing.
-async fn emit_update<W>(
-    update: &SessionUpdateKind,
-    capture: bool,
-    reply: &mut String,
-    out: &mut W,
-) -> Result<()>
+/// How one headless run is printed.
+///
+/// One sink, three presentations, chosen once by `--format`. Everything the
+/// turn has to say goes through here, so the three cannot drift in *what* is
+/// said — only in how.
+enum Presenter<'a, W> {
+    /// NDJSON: every update as the [`SessionUpdateKind`] it translates to,
+    /// plus `session`, `permission`, `result`, `submitted`, and `error` lines.
+    Json(&'a mut W),
+    /// The assistant's text as it streams, and a trailing newline. Under a
+    /// result contract, only the extracted result instead — the text was the
+    /// working, not the answer.
+    Quiet { out: &'a mut W, contracted: bool },
+    /// The transcript as `chat` prints it to a pipe, written once per turn.
+    /// Boxed: a journal and a render cache are a lot larger than a writer.
+    Text {
+        out: &'a mut W,
+        transcript: Box<bitrouter_tui::plain::Transcript>,
+    },
+}
+
+impl<'a, W> Presenter<'a, W>
 where
     W: AsyncWrite + Unpin,
 {
-    if capture && let SessionUpdateKind::MessageChunk { text, .. } = update {
-        reply.push_str(text);
+    fn new(format: PromptFormat, contracted: bool, out: &'a mut W) -> Self {
+        match format {
+            PromptFormat::Json => Presenter::Json(out),
+            PromptFormat::Quiet => Presenter::Quiet { out, contracted },
+            PromptFormat::Text => Presenter::Text {
+                out,
+                transcript: Box::default(),
+            },
+        }
     }
-    write_ndjson_line(out, update).await
+
+    /// The fail-fast routing failure, before any session exists. NDJSON only:
+    /// `main` already prints the reason on stderr, and the other two formats
+    /// promise stdout carries the session and nothing else.
+    async fn routing_error(&mut self, error: &RoutingError) -> Result<()> {
+        if let Presenter::Json(out) = self {
+            write_ndjson_line(out, &error.ndjson()).await?;
+            out.flush().await.ok();
+        }
+        Ok(())
+    }
+
+    /// The `session` correlation line.
+    async fn session(&mut self, line: &serde_json::Value) -> Result<()> {
+        match self {
+            Presenter::Json(out) => write_ndjson_line(out, line).await,
+            Presenter::Quiet { .. } => Ok(()),
+            Presenter::Text { out, .. } => {
+                let field = |name: &str| {
+                    line.get(name)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-")
+                        .to_string()
+                };
+                let via = line
+                    .get("via")
+                    .and_then(|v| v.as_str())
+                    .map_or_else(|| "direct".to_string(), |via| format!("via {via}"));
+                write_line(
+                    out,
+                    &format!(
+                        "session {} · agent {} · {via}",
+                        field("session_id"),
+                        field("agent")
+                    ),
+                )
+                .await
+            }
+        }
+    }
+
+    /// One update, accumulating message text into `reply` when the result
+    /// contract needs it.
+    async fn update(
+        &mut self,
+        update: SessionUpdate,
+        capture: bool,
+        reply: &mut String,
+    ) -> Result<()> {
+        match self {
+            Presenter::Text { transcript, .. } => {
+                if capture {
+                    // The journal keeps the raw update; the reply text is what
+                    // the contract reads, and only the translation names it.
+                    if let Some(SessionUpdateKind::MessageChunk { text, .. }) =
+                        translate(update.clone())
+                    {
+                        reply.push_str(&text);
+                    }
+                }
+                transcript.apply(update);
+                Ok(())
+            }
+            Presenter::Json(out) => {
+                let Some(kind) = translate(update) else {
+                    return Ok(());
+                };
+                if capture && let SessionUpdateKind::MessageChunk { text, .. } = &kind {
+                    reply.push_str(text);
+                }
+                // The `SessionUpdateKind`'s own `type` tag (e.g.
+                // `message_chunk`) makes the line self-describing.
+                write_ndjson_line(out, &kind).await
+            }
+            Presenter::Quiet { out, contracted } => {
+                let Some(SessionUpdateKind::MessageChunk { text, .. }) = translate(update) else {
+                    return Ok(());
+                };
+                if capture {
+                    reply.push_str(&text);
+                }
+                if *contracted {
+                    return Ok(());
+                }
+                out.write_all(text.as_bytes())
+                    .await
+                    .context("writing assistant text")
+            }
+        }
+    }
+
+    /// A permission request the policy answered.
+    async fn permission(&mut self, prompt: &PermissionPrompt, decision: Decision) -> Result<()> {
+        match self {
+            Presenter::Json(out) => {
+                write_ndjson_line(
+                    out,
+                    &serde_json::json!({
+                        "type": "permission",
+                        "decision": decision.to_string(),
+                        "title": prompt.title(),
+                        "kind": prompt.kind(),
+                    }),
+                )
+                .await
+            }
+            Presenter::Quiet { .. } => Ok(()),
+            Presenter::Text { out, .. } => {
+                write_line(out, &format!("  permission {decision}: {}", prompt.title())).await
+            }
+        }
+    }
+
+    /// The turn's updates have all arrived. The text transcript is written
+    /// here, once, because a pipe cannot take a row back.
+    async fn turn_settled(&mut self) -> Result<()> {
+        if let Presenter::Text { out, transcript } = self {
+            let mut rendered = Vec::new();
+            bitrouter_tui::plain::write(&mut rendered, &transcript.unwritten())
+                .context("rendering the transcript")?;
+            out.write_all(&rendered)
+                .await
+                .context("writing the transcript")?;
+        }
+        Ok(())
+    }
+
+    /// The terminal result.
+    async fn result<S: Serialize>(&mut self, line: &ResultLine<S>) -> Result<()> {
+        match self {
+            Presenter::Json(out) => write_ndjson_line(out, line).await,
+            Presenter::Quiet { out, contracted } => {
+                let text = match (&line.result, &line.raw) {
+                    (Some(result), None) => {
+                        serde_json::to_string(result).context("serialising the result")?
+                    }
+                    // A failed contract: the raw reply is the only answer there
+                    // is, and quiet promised to print the answer.
+                    (_, Some(raw)) => raw.clone(),
+                    // No contract: the text already streamed; end the line.
+                    (None, None) => String::new(),
+                };
+                if *contracted || text.is_empty() {
+                    write_line(out, &text).await
+                } else {
+                    Ok(())
+                }
+            }
+            Presenter::Text { out, .. } => {
+                let stop = serde_json::to_value(&line.stop_reason)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                write_line(out, &format!("[{stop}]")).await?;
+                if let Some(result) = &line.result {
+                    let pretty =
+                        serde_json::to_string_pretty(result).context("serialising the result")?;
+                    write_line(out, &format!("result: {pretty}")).await?;
+                }
+                if let Some(raw) = &line.raw {
+                    write_line(out, &format!("raw: {raw}")).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The `--no-wait` acknowledgement.
+    async fn submitted(&mut self) -> Result<()> {
+        match self {
+            Presenter::Json(out) => {
+                write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await
+            }
+            Presenter::Quiet { .. } => Ok(()),
+            Presenter::Text { out, .. } => write_line(out, "[submitted]").await,
+        }
+    }
+}
+
+/// Write one line of text to `out`.
+async fn write_line<W>(out: &mut W, line: &str) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    out.write_all(line.as_bytes())
+        .await
+        .context("writing to stdout")?;
+    out.write_all(b"\n").await.context("writing to stdout")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -16,6 +16,6 @@
     "state_kind": "tool_followup",
     "baseline_fingerprint": "after_Read",
     "confidence_min": 0.7,
-    "prediction": {"next_step_role": "implement", "next_action_class": "mutate", "route_risk": "normal"}
+    "prediction": {"next_step_role": "implement", "next_action_class": "mutate", "route_risk": "normal", "task_family": "code_generation", "progress_state": "progressing"}
   }
 }

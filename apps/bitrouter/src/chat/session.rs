@@ -20,8 +20,9 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 
 use agent_client_protocol::schema::v1::SessionUpdate;
-use bitrouter_sdk::acp::client::{AcpClient, RouteError, RouteMethod};
-use bitrouter_tui::permission::Prompt as PermissionPrompt;
+use bitrouter_sdk::acp::client::{AcpClient, RouteMethod};
+
+use crate::chat::effects::Wire;
 
 /// This process's session log, once the subscriber has opened one.
 ///
@@ -226,7 +227,7 @@ async fn drive(
     use agent_client_protocol::schema::v1::{
         ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
     };
-    use bitrouter_tui::machine::{Action, Effect, Notice, Routes, State, step};
+    use bitrouter_tui::machine::{Action, Effect, Notice, State, step};
     use bitrouter_tui::writer::{Schedule, Trigger};
 
     // The three exits, all landing at `lifecycle::restore()`: `Stdin`'s drop
@@ -271,14 +272,11 @@ async fn drive(
     // of a new turn immediate, which is what is wanted.
     let mut ticker = tokio::time::interval(Schedule::INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // Requests shown and not yet answered, keyed the way the machine routes
-    // answers. Entries are **removed** when answered: a retained entry holds a
-    // strong handle on the resolver, and the client's ledger holds a weak one
-    // on purpose so that a dropped request still denies itself.
-    let mut outstanding: std::collections::HashMap<
-        String,
-        bitrouter_sdk::acp::client::PendingPermission,
-    > = std::collections::HashMap::new();
+    // The wire half of every effect, and the requests it is holding open. The
+    // same interpreter the piped and headless loops run, so a permission
+    // answered here by a keystroke reaches the agent as one answered there by
+    // a policy does.
+    let mut wire = Wire::new(client, session_id);
     // The turn in flight, if any. It cannot live in `State`: that is plain
     // data the machine mutates through `&mut`, and a future polled across
     // iterations cannot go there.
@@ -286,9 +284,6 @@ async fn drive(
         std::pin::Pin<Box<dyn std::future::Future<Output = Result<PromptResponse>> + '_>>,
     > = None;
     let mut started = std::time::Instant::now();
-    // Answers produced by an effect that awaited inline, dispatched before the
-    // select is entered again.
-    let mut queued: std::collections::VecDeque<Action> = std::collections::VecDeque::new();
     let mut abnormal = false;
     let mut exit = false;
 
@@ -297,7 +292,9 @@ async fn drive(
     view.paint(&shared).context("painting a frame")?;
 
     while !exit {
-        let action = match queued.pop_front() {
+        // An answer an inline effect produced is dispatched before the select
+        // is entered again.
+        let action = match wire.reply() {
             Some(action) => action,
             None => tokio::select! {
                 // A signal leaves by the front door from every phase: the
@@ -310,11 +307,7 @@ async fn drive(
                 // Already in the journal; the machine and the schedule decide
                 // when it is seen.
                 Some(()) = dirty_rx.recv() => Action::Dirty,
-                Some(request) = permissions.next() => {
-                    let prompt = prompt_of(&request);
-                    outstanding.insert(request.request_id.clone(), request);
-                    Action::Permission(prompt)
-                }
+                Some(request) = permissions.next() => Action::Permission(wire.admit(request)),
                 result = in_flight(&mut turn) => match result {
                     Ok(response) => {
                         // The same record `prompt` and the piped path report,
@@ -347,6 +340,15 @@ async fn drive(
         }
 
         for effect in step(&mut state, action) {
+            // The invariant "there is a future exactly when the phase is
+            // `Turn` or `Answering`" is the driver's to keep, so a cancel
+            // drops the future here before the wire tells the agent.
+            if matches!(effect, Effect::Cancel) {
+                turn = None;
+            }
+            let Some(effect) = wire.apply(effect).await else {
+                continue;
+            };
             match effect {
                 Effect::Paint(trigger) => {
                     if schedule.wake(trigger, std::time::Instant::now()) {
@@ -372,11 +374,6 @@ async fn drive(
                 Effect::Modal(Some(row)) => view.open_modal(row),
                 Effect::Modal(None) => view.close_modal(),
                 Effect::ShowPermission(prompt) => view.set_permission(prompt),
-                Effect::Resolve { id, outcome } => {
-                    if let Some(request) = outstanding.remove(&id) {
-                        request.resolve(outcome);
-                    }
-                }
                 Effect::Prompt { line, nth } => {
                     // The prompt joins the document in the user's own voice, so
                     // it scrolls with the answer it asked for.
@@ -392,77 +389,20 @@ async fn drive(
                         vec![ContentBlock::Text(TextContent::new(line))],
                     ))));
                 }
-                Effect::Cancel => {
-                    // Tell the agent, not merely ourselves: dropping the turn
-                    // future stops this side waiting and leaves the agent
-                    // working.
-                    turn = None;
-                    let told = client.cancel(session_id).await;
-                    // And leave no question hanging. The machine has already
-                    // answered whatever it was holding; this answers anything
-                    // the client emitted that never reached it — while the
-                    // connection is still live, rather than at teardown.
-                    outstanding.clear();
-                    client.deny_session_permissions(session_id);
-                    if let Err(error) = told {
-                        tracing::warn!(%error, "cancelling the turn");
-                    }
-                }
-                // Awaited inline, exactly as the picker's own loop awaited it:
-                // both are reachable only from an idle prompt, where no turn
-                // is streaming and nothing else needs the loop.
-                Effect::ListRoutes => {
-                    queued.push_back(Action::Routes(match client.route_list(session_id).await {
-                        Ok(listed) => Ok(Routes {
-                            available: listed.available,
-                            current: listed.current,
-                        }),
-                        Err(error) => Err(format!("{error}")),
-                    }))
-                }
-                // Typed by the client, so a refused route and a vanished
-                // binding read differently without parsing text.
-                Effect::SetRoute(route) => queued.push_back(Action::Routed(
-                    match client.route_set(session_id, &route).await {
-                        Ok(in_force) => Ok(in_force),
-                        Err(RouteError::InvalidRoute(message)) => {
-                            Err(format!("route unchanged: {message}"))
-                        }
-                        Err(RouteError::Unavailable(message)) => Err(format!(
-                            "route unchanged: route control is unavailable ({message})"
-                        )),
-                        Err(RouteError::Other(error)) => Err(format!("route unchanged: {error:#}")),
-                    },
-                )),
                 Effect::RouteInForce(route) => view.set_route(route),
                 Effect::Exit => exit = true,
+                // The wire's, and already run by it; listed so this match
+                // stays total without asserting what `apply` returns.
+                Effect::Resolve { .. }
+                | Effect::Cancel
+                | Effect::ListRoutes
+                | Effect::SetRoute(_) => {}
             }
         }
     }
 
     pump.abort();
     Ok(abnormal)
-}
-
-/// The prompt a pending request is drawn and answered as.
-fn prompt_of(request: &bitrouter_sdk::acp::client::PendingPermission) -> PermissionPrompt {
-    PermissionPrompt::new(
-        request.request_id.clone(),
-        request.tool_call.fields.title.clone(),
-        request.tool_call.tool_call_id.0.to_string(),
-        request.options.clone(),
-    )
-}
-
-/// Answer a permission nobody is going to answer.
-///
-/// A turn can be cancelled with a question outstanding, and a cancelled turn
-/// must never resolve to consent. This is the same `Prompt::unanswered()` path
-/// an `Esc` at the prompt takes, so there is exactly one rule for "no answer"
-/// and it is the safe one.
-fn deny(request: bitrouter_sdk::acp::client::PendingPermission) {
-    let outcome = prompt_of(&request).unanswered();
-    request.resolve(outcome);
 }
 
 /// The user's own prompt, as the update the agent would have sent for it.
@@ -490,10 +430,10 @@ fn prompt_chunk(line: &str, nth: usize) -> agent_client_protocol::schema::v1::Co
 /// turn that produces it has settled — which is also what makes in-place
 /// patching arrive as one finished tool call rather than three.
 ///
-/// A permission request is denied rather than asked, because there is nobody
-/// to ask: the terminal that would carry the question is the one that isn't
-/// there. Denying is the same answer this path gives an unanswerable prompt
-/// anywhere else, and it is never mistaken for consent.
+/// A permission request is answered by the default headless policy — deny —
+/// because there is nobody to ask: the terminal that would carry the question
+/// is the one that isn't there. It is the same rule `acp prompt` runs under
+/// with no flag, through the same wire, and it is never mistaken for consent.
 ///
 /// # Teardown belongs to the caller
 ///
@@ -513,11 +453,9 @@ pub(crate) async fn chat_plain(
     use tokio::io::AsyncBufReadExt as _;
 
     let mut out = std::io::stdout();
-    let mut journal = bitrouter_tui::journal::Journal::default();
-    let mut cache = bitrouter_tui::writer::Cache::default();
-    let registry = bitrouter_tui::render::Registry::default();
-    // How many rows of the document have already been written.
-    let mut written = 0_usize;
+    let mut transcript = bitrouter_tui::plain::Transcript::default();
+    let policy = bitrouter_tui::permission::Policy::default();
+    let mut wire = Wire::new(client, session_id);
     let mut prompts = 0_usize;
     let mut updates = client.subscribe_raw_updates();
     let mut permissions = client.subscribe_permissions();
@@ -540,7 +478,7 @@ pub(crate) async fn chat_plain(
             continue;
         }
         prompts = prompts.saturating_add(1);
-        journal.apply(SessionUpdate::UserMessageChunk(prompt_chunk(
+        transcript.apply(SessionUpdate::UserMessageChunk(prompt_chunk(
             &line, prompts,
         )));
 
@@ -550,11 +488,11 @@ pub(crate) async fn chat_plain(
         let outcome = loop {
             tokio::select! {
                 update = updates.next() => if let Some(update) = update {
-                    journal.apply(update);
+                    transcript.apply(update);
                 },
                 request = permissions.next() => if let Some(request) = request {
-                    deny(request);
-                    writeln!(out, "  permission denied: no terminal to ask on")
+                    let (decision, prompt) = wire.answer(request, &policy).await;
+                    writeln!(out, "  permission {decision}: {}", prompt.title())
                         .context("writing the permission decision")?;
                 },
                 result = &mut turn => break result,
@@ -564,12 +502,10 @@ pub(crate) async fn chat_plain(
         // resolving. There is nothing to flush: the journal has no buffered
         // state, which is the whole reason it replaced `Transcript`.
         while let Some(Some(update)) = updates.next().now_or_never() {
-            journal.apply(update);
+            transcript.apply(update);
         }
-        let document = cache.document(&journal, &registry, bitrouter_tui::plain::PIPED, &[]);
-        bitrouter_tui::plain::write(&mut out, document.get(written..).unwrap_or_default())
+        bitrouter_tui::plain::write(&mut out, &transcript.unwritten())
             .context("writing the session to stdout")?;
-        written = document.len();
         match outcome {
             Ok(response) => {
                 // The same record `prompt` reports, from the same round-trip:

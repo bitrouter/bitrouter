@@ -188,7 +188,11 @@ So the payload splits, exactly as originally drawn:
   `(id, title, tool_call_id, options)` and freely constructible in a test.
 - **The driver** holds `HashMap<String, PendingPermission>` keyed by
   `PendingPermission::request_id`, and `Effect::Resolve { id, outcome }` is a
-  map lookup plus `request.resolve(outcome)`.
+  map lookup plus `request.resolve(outcome)`. Since 2026-09-04 that map and
+  the wire arms of the effect match live in `apps/bitrouter/src/chat/effects.rs`
+  as `Wire`, shared by the interactive loop, the piped loop, and `acp prompt`;
+  a headless policy's answer is `machine::decide`, the same `Effect::Resolve`
+  a keystroke produces.
 
 `permission::Prompt` gains an `id` field and an `id()` accessor for this, fed
 from `PendingPermission::request_id` — which is the one piece of the new shape
