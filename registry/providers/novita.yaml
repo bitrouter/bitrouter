@@ -132,28 +132,6 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
-  - id: deepseek/deepseek-v3.1-terminus
-    provider_model_id: deepseek/deepseek-v3.1-terminus
-    pricing:
-      input_tokens:
-        no_cache: 0.27
-        cache_read: 0.135
-      output_tokens:
-        text: 1
-  - id: qwen/qwen3.5-35b-a3b
-    provider_model_id: qwen/qwen3.5-35b-a3b
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-      output_tokens:
-        text: 2
-  - id: qwen/qwen3.5-397b-a17b
-    provider_model_id: qwen/qwen3.5-397b-a17b
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-      output_tokens:
-        text: 3.6
 status: active
 weight: 1
 submitted_at: 2026-07-07

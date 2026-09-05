@@ -487,14 +487,6 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
-  - id: deepseek/deepseek-v3.1-terminus
-    provider_model_id: deepseek/deepseek-v3.1-terminus
-    pricing:
-      input_tokens:
-        no_cache: 0.27
-        cache_read: 0.135
-      output_tokens:
-        text: 1
   - id: google/gemini-3.7-flash
     provider_model_id: google/gemini-3.7-flash
     pricing:
@@ -624,50 +616,6 @@ models:
         cache_write: 0.083333
       output_tokens:
         text: 2.5
-  - id: qwen/qwen3.5-35b-a3b
-    provider_model_id: qwen/qwen3.5-35b-a3b
-    pricing:
-      input_tokens:
-        no_cache: 0.08
-      output_tokens:
-        text: 0.75
-  - id: qwen/qwen3.5-397b-a17b
-    provider_model_id: qwen/qwen3.5-397b-a17b
-    pricing:
-      input_tokens:
-        no_cache: 0.55
-        cache_read: 0.225
-      output_tokens:
-        text: 3.5
-  - id: qwen/qwen3.5-9b
-    provider_model_id: qwen/qwen3.5-9b
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-      output_tokens:
-        text: 0.15
-  - id: qwen/qwen3.5-flash-02-23
-    provider_model_id: qwen/qwen3.5-flash-02-23
-    pricing:
-      input_tokens:
-        no_cache: 0.065
-      output_tokens:
-        text: 0.26
-  - id: qwen/qwen3.5-plus-02-15
-    provider_model_id: qwen/qwen3.5-plus-02-15
-    pricing:
-      input_tokens:
-        no_cache: 0.26
-      output_tokens:
-        text: 1.56
-  - id: qwen/qwen3.5-plus-20260420
-    provider_model_id: qwen/qwen3.5-plus-20260420
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_write: 0.375
-      output_tokens:
-        text: 1.8
 status: active
 weight: 1
 community: false

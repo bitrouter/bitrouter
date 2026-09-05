@@ -378,46 +378,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-35b-a3b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider_model_id": "qwen3.5-35b-a3b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.6
-            },
-            "output_tokens": {
-              "text": 3.6
-            }
-          },
-          "provider_model_id": "qwen3.5-397b-a17b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "name": "alibaba",
@@ -853,26 +813,6 @@
             }
           },
           "provider_model_id": "qwen3.8-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.172
-            },
-            "output_tokens": {
-              "text": 1.032
-            }
-          },
-          "provider_model_id": "qwen3.5-397b-a17b",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5142,46 +5082,6 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "deepseek/deepseek-v3.1-terminus",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.135,
-              "no_cache": 0.27
-            },
-            "output_tokens": {
-              "text": 1.0
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v3.1-terminus"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-35b-a3b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-35b-a3b"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.6
-            },
-            "output_tokens": {
-              "text": 3.6
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-397b-a17b"
         }
       ],
       "name": "novita",
@@ -7526,24 +7426,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "deepseek/deepseek-v3.1-terminus",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.135,
-              "no_cache": 0.27
-            },
-            "output_tokens": {
-              "text": 1.0
-            }
-          },
-          "provider_model_id": "deepseek/deepseek-v3.1-terminus"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "google/gemini-3.7-flash",
           "pricing": {
             "input_tokens": {
@@ -7816,110 +7698,6 @@
             }
           },
           "provider_model_id": "google/gemini-3.5-flash-lite"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-35b-a3b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.08
-            },
-            "output_tokens": {
-              "text": 0.75
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-35b-a3b"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.225,
-              "no_cache": 0.55
-            },
-            "output_tokens": {
-              "text": 3.5
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-397b-a17b"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-9b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.15
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-9b"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-flash-02-23",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.065
-            },
-            "output_tokens": {
-              "text": 0.26
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-flash-02-23"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-plus-02-15",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.26
-            },
-            "output_tokens": {
-              "text": 1.56
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-plus-02-15"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "qwen/qwen3.5-plus-20260420",
-          "pricing": {
-            "input_tokens": {
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.8
-            }
-          },
-          "provider_model_id": "qwen/qwen3.5-plus-20260420"
         }
       ],
       "name": "openrouter",
@@ -8665,45 +8443,6 @@
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-35b-a3b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.24
-            },
-            "output_tokens": {
-              "text": 1.8
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-35B-A3B"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.39
-            },
-            "output_tokens": {
-              "text": 2.34
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-397B-A17B"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-9b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.15
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-9B"
         }
       ],
       "name": "siliconflow",
@@ -8852,45 +8591,6 @@
             }
           },
           "provider_model_id": "zai-org/GLM-5.2"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-35b-a3b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.23
-            },
-            "output_tokens": {
-              "text": 1.86
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-35B-A3B"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-397b-a17b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.29
-            },
-            "output_tokens": {
-              "text": 1.74
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-397B-A17B"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.5-9b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.22
-            },
-            "output_tokens": {
-              "text": 1.74
-            }
-          },
-          "provider_model_id": "Qwen/Qwen3.5-9B"
         }
       ],
       "name": "siliconflow_cn",

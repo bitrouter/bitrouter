@@ -63,14 +63,3 @@
   release_date: 2026-08-13
   open_weights: false
   family: deepseek-thinking
-- id: deepseek/deepseek-v3.1-terminus
-  deprecation_date: 2026-10-05
-  name: 'DeepSeek: DeepSeek V3.1 Terminus'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 163840
-  max_output_tokens: 32768
-  release_date: 2025-09-22
-  knowledge_cutoff: 2025-03-31
