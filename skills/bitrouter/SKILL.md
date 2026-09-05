@@ -38,7 +38,7 @@ before, most of these steps are already done.
 
 ```bash
 bitrouter --version          # not found -> step 2
-bitrouter status             # prints `running: no` when no daemon is reachable
+bitrouter status             # liveness + `spend`; `running: false` when nothing is reachable
 bitrouter providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
@@ -158,8 +158,8 @@ wire contract are there — before reasoning about this surface.
 ### 6. Verify
 
 ```bash
-bitrouter route claude-sonnet-4-6   # resolve a model through the routing table
-bitrouter models                    # everything routable
+bitrouter route claude-sonnet-4-6   # what would actually run: read `effective_model`
+bitrouter models                    # everything routable, with every provider that serves it
 bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
 ```
 

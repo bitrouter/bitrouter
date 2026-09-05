@@ -10,6 +10,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller).
+- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–3 implemented, 4–5
+  proposed.** One actions table so the CLI leaf and the MCP tool that answer
+  the same question share one report type, one implementation, and a guard
+  test. Written for
+  [#868](https://github.com/bitrouter/bitrouter/issues/868); stands alone
+  from #863 and #866.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.

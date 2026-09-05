@@ -1,7 +1,8 @@
 //! `BitrouterMcp` — the rmcp origin server handler. One handler assembles its
 //! profiles from named `#[tool_router]` blocks: a **public** profile
-//! (`complete`/`list_models`/`status`, HTTP-safe), the stdio **router**
-//! profile (that plus `route_preview`), and the **skills** origin profile. The
+//! (`complete`, plus `list_models` and `status` wherever those ports are wired,
+//! all HTTP-safe), the stdio **router** profile (that plus `route_preview`),
+//! and the **skills** origin profile. The
 //! [`Builder`] merges only the routers whose capability is wired, so an
 //! unwired capability's tools are never registered — a public HTTP client
 //! can't so much as see `route_preview`.
@@ -18,8 +19,10 @@ use rmcp::service::RequestContext;
 use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
+use crate::actions::models::{ListModelsArgs, ModelsQuery, ModelsReport};
+use crate::actions::route::{RouteInput, RouteQuery, RouteReport};
+use crate::actions::status::{StatusQuery, StatusReport};
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
-use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
 use crate::capabilities::skill_catalog::{SkillCatalog, SkillFileBody};
 use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
 use crate::error::ToolError;
@@ -73,9 +76,8 @@ fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolRes
 
 /// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
 /// plus `footer` when given, `Err`→error text. The one shaping path for the
-/// three completion tools; the footer choice stays explicit at each call site
-/// (`complete`/`status` are spend-feed events and pass one, `list_models`
-/// passes `None` — intentional asymmetry).
+/// completion tool; the footer choice stays explicit at the call site
+/// (`complete` is a spend-feed event and passes one).
 fn serialize_tool_result<T: serde::Serialize>(
     result: Result<T, BackendError>,
     footer: Option<ContentBlock>,
@@ -103,7 +105,19 @@ fn serialize_tool_result<T: serde::Serialize>(
 #[derive(Clone, Default)]
 struct Caps {
     backend: Option<Arc<dyn Backend>>,
-    routing: Option<Arc<dyn RoutingQuery>>,
+    /// The `status` action's port. Separate from `backend` because the two
+    /// answer different questions from different places: a local daemon's
+    /// liveness comes off the control socket and its spend off the local
+    /// metering database (both injected app-side), a metered account's
+    /// remaining credit off the cloud backend itself.
+    status_query: Option<Arc<dyn StatusQuery>>,
+    /// The `list_models` action's port. Separate from `backend` for the same
+    /// reason as `status_query`: on stdio + local the catalog comes off the
+    /// daemon's control socket (with a static-config fallback that answers
+    /// with no daemon at all), while a `--local-url` or cloud client gets the
+    /// backend's own `GET /v1/models`.
+    models_query: Option<Arc<dyn ModelsQuery>>,
+    routing: Option<Arc<dyn RouteQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
     /// The SEP-2640 skills surface (`skills/list` / `skills/get` plus
     /// `resources/*` over skill files). Contributes no tools — it is served as
@@ -133,8 +147,29 @@ const CAPABILITIES: &[CapSpec] = &[
         wired: |caps| caps.backend.is_some(),
         router: BitrouterMcp::completion_router,
         instructions: |_| {
-            "BitRouter origin MCP server. Use `list_models` to discover routable \
-             models, `complete` to run a completion, `status` for health/credits."
+            "BitRouter origin MCP server. Use `complete` to run a completion \
+             through it."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.models_query.is_some(),
+        router: BitrouterMcp::models_router,
+        instructions: |_| {
+            "`list_models` lists every routable model with **all** the providers \
+             that can serve it, in fallback order — pass `provider` to narrow it. \
+             `resolved_via` says whether a running router answered (`live`) or the \
+             list was projected from static config (`config`)."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.status_query.is_some(),
+        router: BitrouterMcp::status_router,
+        instructions: |_| {
+            "`status` reports whether BitRouter is running (pid, listen address, \
+             routable models, providers, control socket) and the spend position: \
+             what has been spent, and what is left where a cap exists."
                 .to_string()
         },
     },
@@ -142,8 +177,9 @@ const CAPABILITIES: &[CapSpec] = &[
         wired: |caps| caps.routing.is_some(),
         router: BitrouterMcp::routing_router,
         instructions: |_| {
-            "`route_preview` shows how a model/prompt would route (provider chain, \
-             policy decision, cost estimate) without sending anything."
+            "`route_preview` shows how a model/prompt would route — the effective model \
+             the policy table selects, the provider fallback chain, and the first hop's \
+             per-token rates — without sending anything."
                 .to_string()
         },
     },
@@ -214,9 +250,19 @@ impl BitrouterMcp {
         };
         Ok(serialize_tool_result(result, footer))
     }
+}
 
+// ── the `list_models` action (guarded on `self.caps.models_query`) ──
+#[tool_router(router = models_router)]
+impl BitrouterMcp {
     #[tool(
-        description = "List models routable through BitRouter.",
+        description = "List the models BitRouter can route. Each entry carries every provider \
+                       that can serve it, in fallback order — not just the first — so `providers` \
+                       is the chain a request would walk. `resolved_via` is `live` when a running \
+                       router answered and `config` when the list was projected from static \
+                       configuration (what the file says now, resolved the way a daemon would \
+                       at start-up — a running daemon's `reload`s are not reflected). Pass \
+                       `provider` to list only what one provider declares.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -226,20 +272,35 @@ impl BitrouterMcp {
     )]
     async fn list_models(
         &self,
+        Parameters(args): Parameters<ListModelsArgs>,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        let backend = self.backend()?;
+    ) -> Result<rmcp::handler::server::wrapper::Json<ModelsReport>, McpError> {
         let caller = caller_from_extensions(&ctx.extensions);
-        // No footer: listing models is not a spend event, unlike
-        // `complete`/`status` (intentional asymmetry).
-        Ok(serialize_tool_result(
-            backend.list_models(&caller).await,
-            None,
-        ))
+        // `Json<ModelsReport>` rather than a `CallToolResult`: that is what
+        // makes rmcp derive the tool's `output_schema` from the shared report
+        // type, which is the agreement `actions::ACTIONS` asserts. No spend
+        // footer either — listing models is not a spend event, unlike
+        // `complete` (intentional asymmetry; `status` carries spend as typed
+        // data instead).
+        self.models_query()?
+            .list_models(&caller)
+            .await
+            .map(|report| report.filtered(args.provider.as_deref()))
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
+}
 
+// ── the `status` action (guarded on `self.caps.status_query`) ──
+#[tool_router(router = status_router)]
+impl BitrouterMcp {
     #[tool(
-        description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance).",
+        description = "Report BitRouter status: whether it is running (pid, listen address, \
+                       routable models, providers, control socket) and the spend position \
+                       — `spend.spent` is what has already gone (a locally metered estimate; \
+                       read `spend.spent.unpriced` for the requests it could not price), and \
+                       `spend.limit` is what is left where a cap exists. A stopped daemon is \
+                       `running: false`, not an error.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -247,17 +308,25 @@ impl BitrouterMcp {
             open_world_hint = false
         )
     )]
-    async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
-        let backend = self.backend()?;
+    async fn status(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<StatusReport>, McpError> {
         let caller = caller_from_extensions(&ctx.extensions);
-        let result = backend.status(&caller).await;
-        // Status is the health check agents poll → keep spend visible on it.
-        let footer = if result.is_ok() {
-            self.footer_content().await
-        } else {
-            None
-        };
-        Ok(serialize_tool_result(result, footer))
+        // Deliberately *not* a `CallToolResult`: returning `Json<StatusReport>`
+        // is what makes rmcp derive the tool's `output_schema` from the shared
+        // report type, which is the agreement `actions::ACTIONS` asserts.
+        //
+        // Structured content leaves no room beside it for the free-text spend
+        // footer `complete` carries, and it does not need one: the footer's
+        // content is `StatusReport::spend`, typed rather than prose, and it is
+        // richer there — `unpriced` and the remaining cap have no line in a
+        // one-sentence footer.
+        self.status_query()?
+            .status(&caller)
+            .await
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -265,8 +334,11 @@ impl BitrouterMcp {
 #[tool_router(router = routing_router)]
 impl BitrouterMcp {
     #[tool(
-        description = "Preview how BitRouter would route a model/prompt: resolved provider(s), \
-                       policy decision, and estimated cost. Read-only — nothing is sent upstream.",
+        description = "Preview how BitRouter would route a model/prompt: the effective model the \
+                       policy table selects (which can differ from the one requested), the \
+                       resolved provider fallback chain, the policy decision behind it, and the \
+                       first hop's per-token rates. Read-only — nothing is sent upstream, and \
+                       no credential is surfaced.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -276,9 +348,17 @@ impl BitrouterMcp {
     )]
     async fn route_preview(
         &self,
-        Parameters(args): Parameters<RoutePreviewArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(json_tool_result(self.routing()?.preview(args).await))
+        Parameters(input): Parameters<RouteInput>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<RouteReport>, McpError> {
+        // `Json<RouteReport>` rather than a hand-built `CallToolResult`: that
+        // is what makes rmcp derive the tool's `output_schema` from the shared
+        // report type, which is the agreement `actions::ACTIONS` asserts
+        // against `bitrouter route --json`.
+        self.routing()?
+            .route(input)
+            .await
+            .map(rmcp::handler::server::wrapper::Json)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -339,15 +419,27 @@ impl BitrouterMcp {
         Builder::default()
     }
 
+    /// Every tool this handler registers, with its schemas and annotations.
+    ///
+    /// The same list `tools/list` answers with. Public so the embedding binary
+    /// can assert the actions table against the real tool surface — that guard
+    /// has to name both `ACTIONS` and the CLI's clap definition, so it can only
+    /// live app-side.
+    pub fn tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
+
     /// Attach a cost annotator; its line is appended to successful
-    /// `complete` / `status` results as a second content item.
+    /// `complete` results as a second content item.
     pub fn with_cost_footer(mut self, footer: Arc<dyn CostFooter>) -> Self {
         self.cost_footer = Some(footer);
         self
     }
 
     port_accessor!(backend, dyn Backend, "completion backend");
-    port_accessor!(routing, dyn RoutingQuery, "routing capability");
+    port_accessor!(status_query, dyn StatusQuery, "status capability");
+    port_accessor!(models_query, dyn ModelsQuery, "list_models capability");
+    port_accessor!(routing, dyn RouteQuery, "routing capability");
     port_accessor!(skills, dyn SkillsQuery, "skills capability");
     port_accessor!(skill_catalog, dyn SkillCatalog, "skills catalog");
 
@@ -392,14 +484,20 @@ impl Builder {
         self
     }
 
-    /// Wire completion against the local BYOK daemon at `url`.
-    pub fn completion_local(mut self, url: &str) -> Self {
-        self.caps.backend = Some(Arc::new(LocalBackend::new(url)));
+    /// Wire the `status` action's port (the `status` tool).
+    pub fn status(mut self, status: Arc<dyn StatusQuery>) -> Self {
+        self.caps.status_query = Some(status);
+        self
+    }
+
+    /// Wire the `list_models` action's port (the `list_models` tool).
+    pub fn models(mut self, models: Arc<dyn ModelsQuery>) -> Self {
+        self.caps.models_query = Some(models);
         self
     }
 
     /// Wire the routing-introspection capability (the `route_preview` tool).
-    pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
+    pub fn routing(mut self, routing: Arc<dyn RouteQuery>) -> Self {
         self.caps.routing = Some(routing);
         self
     }
@@ -737,7 +835,7 @@ fn build_http_router(
         StreamableHttpService, session::local::LocalSessionManager,
     };
     let service = StreamableHttpService::new(
-        move || Ok(BitrouterMcp::builder().completion(backend.clone()).build()),
+        move || Ok(http_profile(backend.clone())),
         LocalSessionManager::default().into(),
         config,
     );
@@ -746,6 +844,23 @@ fn build_http_router(
         router = router.layer(axum::middleware::from_fn(require_bearer));
     }
     router
+}
+
+/// The whole HTTP tool surface, in one function so a test can assert it.
+///
+/// Completion, plus `list_models` and `status` where the backend itself can
+/// answer them (its own `GET /v1/models`; the cloud account's remaining credit,
+/// read with the caller's own bearer). Nothing else: the host-bound tools stay
+/// off this transport, per the invariant above.
+fn http_profile(backend: Arc<dyn Backend>) -> BitrouterMcp {
+    let mut builder = BitrouterMcp::builder().completion(backend.clone());
+    if let Some(models) = backend.clone().models_port() {
+        builder = builder.models(models);
+    }
+    if let Some(status) = backend.status_port() {
+        builder = builder.status(status);
+    }
+    builder.build()
 }
 
 /// Serve streamable HTTP on an already-bound listener until the task is dropped.
@@ -827,8 +942,9 @@ fn malformed_inline_opener(
 }
 
 /// Serve `server` over stdio until the client disconnects. `cost_footer`, when
-/// given, annotates successful `complete` / `status` results with one spend
-/// line (the HTTP transport is multi-tenant and gets no footer).
+/// given, annotates successful `complete` results with one spend line (the
+/// HTTP transport is multi-tenant and gets no footer). `status` needs no
+/// footer: it reports the same spend as typed structured content.
 pub async fn serve_stdio(
     server: BitrouterMcp,
     cost_footer: Option<Arc<dyn CostFooter>>,
@@ -937,9 +1053,10 @@ pub fn build_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{
-        BackendError, CallerAuth, CompleteResponse, ModelInfo, StatusInfo, Usage,
-    };
+    use crate::actions::models::ModelsSource;
+    use crate::actions::status::{Spend, SpendLimit};
+    use crate::backend::{BackendError, CallerAuth, CompleteResponse, Usage};
+    use bitrouter_sdk::language_model::routing::ModelInfo;
 
     #[test]
     fn require_bearer_predicate() {
@@ -992,23 +1109,81 @@ mod tests {
                 finish_reason: "stop".into(),
             })
         }
-        async fn list_models(&self, _: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError> {
-            Ok(vec![])
+        /// Answers `status` itself, standing in for the cloud backend — which
+        /// is the only shape in which the HTTP profile carries the tool.
+        fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+            Some(self)
         }
-        async fn status(&self, _: &CallerAuth) -> Result<StatusInfo, BackendError> {
-            Ok(StatusInfo::Cloud {
-                available_micro_usd: 1,
-                balance_micro_usd: 1,
-                pending_micro_usd: 0,
-            })
+        /// …and its own catalog, as both real backends do.
+        fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>> {
+            Some(self)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelsQuery for StubBackend {
+        async fn list_models(&self, _: &CallerAuth) -> Result<ModelsReport, ToolError> {
+            Ok(ModelsReport::live(vec![ModelInfo {
+                id: "openai/gpt-4o".into(),
+                providers: vec!["openai".into(), "azure".into()],
+            }]))
+        }
+    }
+
+    /// A backend that cannot answer `status`, like `LocalBackend`.
+    struct StatuslessBackend;
+    #[async_trait::async_trait]
+    impl Backend for StatuslessBackend {
+        async fn complete(
+            &self,
+            _: &CallerAuth,
+            _: CompleteRequest,
+        ) -> Result<CompleteResponse, BackendError> {
+            Err(BackendError::Transport("stub".into()))
+        }
+        fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>> {
+            None
+        }
+        fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>> {
+            Some(self)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelsQuery for StatuslessBackend {
+        async fn list_models(&self, _: &CallerAuth) -> Result<ModelsReport, ToolError> {
+            Ok(ModelsReport::live(Vec::new()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl StatusQuery for StubBackend {
+        async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
+            Ok(StatusReport::metered(Spend {
+                currency: "USD".into(),
+                spent: None,
+                limit: Some(SpendLimit {
+                    balance_micro_usd: 1,
+                    pending_micro_usd: 0,
+                    remaining_micro_usd: 1,
+                }),
+            }))
         }
     }
 
     struct StubRouting;
     #[async_trait::async_trait]
-    impl RoutingQuery for StubRouting {
-        async fn preview(&self, _: RoutePreviewArgs) -> Result<serde_json::Value, ToolError> {
-            Ok(serde_json::json!({"provider_chain": []}))
+    impl RouteQuery for StubRouting {
+        async fn route(&self, input: RouteInput) -> Result<RouteReport, ToolError> {
+            Ok(RouteReport {
+                requested_model: input.model.clone(),
+                effective_model: input.model,
+                effective_effort: None,
+                resolved_via: crate::actions::route::ResolvedVia::Config,
+                policy_decision: None,
+                provider_chain: Vec::new(),
+                estimated_cost: None,
+            })
         }
     }
 
@@ -1150,11 +1325,115 @@ mod tests {
     }
 
     #[test]
-    fn public_profile_advertises_exactly_the_three_completion_tools() {
+    fn public_profile_advertises_exactly_the_wired_tools() {
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .build();
-        assert_eq!(tool_names(&server), ["complete", "list_models", "status"]);
+        // `list_models` and `status` are each their own capability now: a wired
+        // completion backend does not imply either port.
+        assert_eq!(tool_names(&server), ["complete"]);
+        let with_models = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
+            .build();
+        assert_eq!(tool_names(&with_models), ["complete", "list_models"]);
+    }
+
+    /// The drift phase 2 removes, asserted at the tool boundary: a model served
+    /// by two providers must reach the client with both. The tool returns the
+    /// shared `ModelsReport`, so this is the same value `bitrouter models`
+    /// emits.
+    #[tokio::test]
+    async fn list_models_carries_the_whole_fallback_chain() {
+        let report = ModelsQuery::list_models(&StubBackend, &CallerAuth::default())
+            .await
+            .expect("list_models");
+        assert_eq!(
+            report.models.first().map(|m| m.providers.as_slice()),
+            Some(["openai".to_string(), "azure".to_string()].as_slice())
+        );
+        assert_eq!(report.resolved_via, ModelsSource::Live);
+        // …and the filter both surfaces share narrows the same list.
+        assert!(
+            report
+                .clone()
+                .filtered(Some("azure"))
+                .models
+                .iter()
+                .any(|m| m.id == "openai/gpt-4o")
+        );
+        assert!(report.filtered(Some("nobody")).models.is_empty());
+    }
+
+    /// Invariant: the HTTP profile is completion plus, at most, `list_models`
+    /// and `status` — only what the backend itself can answer for its own
+    /// deployment. It
+    /// must never carry the host-bound tools — `route_preview` resolves against
+    /// the serving machine's own config and control socket, and the skills
+    /// tools read its installed-skills root, so neither means anything to a
+    /// multi-tenant caller.
+    #[test]
+    fn http_profile_never_carries_host_bound_tools() {
+        assert_eq!(
+            tool_names(&http_profile(Arc::new(StubBackend))),
+            ["complete", "list_models", "status"]
+        );
+        // A backend with no status of its own gets no `status` tool rather than
+        // a fabricated one: the local daemon's liveness is a control-socket
+        // question the HTTP profile cannot answer. Its catalog it *can* answer,
+        // so `list_models` stays.
+        assert_eq!(
+            tool_names(&http_profile(Arc::new(StatuslessBackend))),
+            ["complete", "list_models"]
+        );
+    }
+
+    /// A stopped daemon is a *result*, not a tool error: an agent polling for
+    /// health has to be able to tell "down" from "broken".
+    #[tokio::test]
+    async fn stopped_daemon_is_a_result_not_a_tool_error() {
+        struct StoppedStatus;
+        #[async_trait::async_trait]
+        impl StatusQuery for StoppedStatus {
+            async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
+                Ok(StatusReport::stopped("/x.sock".into(), None))
+            }
+        }
+        let report = StoppedStatus.status(&CallerAuth::default()).await;
+        let report = report.expect("a stopped daemon must not be an error");
+        assert!(!report.running);
+        assert_eq!(
+            serde_json::to_value(&report).expect("serialize"),
+            serde_json::json!({
+                "running": false, "providers": [], "socket": "/x.sock"
+            })
+        );
+    }
+
+    /// The `status` tool advertises the shared report's schema — the whole
+    /// point of returning `Json<StatusReport>` rather than a `CallToolResult`.
+    #[test]
+    fn status_tool_advertises_the_shared_report_schema() {
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .status(Arc::new(StubBackend))
+            .build();
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "status")
+            .expect("status tool registered");
+        let schema = crate::actions::ACTIONS
+            .iter()
+            .find(|a| a.id == "status")
+            .and_then(|row| row.output_schema)
+            .expect("the status row carries a shared schema");
+        assert_eq!(
+            tool.output_schema.as_deref(),
+            Some(&schema()),
+            "the `status` tool must advertise its row's schema"
+        );
     }
 
     #[test]
@@ -1194,6 +1473,8 @@ mod tests {
         // What `bitrouter mcp serve --transport stdio --backend local` wires.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
+            .status(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .build();
         assert_eq!(
@@ -1210,6 +1491,8 @@ mod tests {
         // one. Nothing left on this surface is destructive.
         let server = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
+            .status(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))
             .build();
@@ -1259,6 +1542,7 @@ mod tests {
         // for tools a completion-only client couldn't call.
         let public = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .build()
             .instructions();
         assert!(public.contains("list_models"));
@@ -1271,6 +1555,7 @@ mod tests {
 
         let wired = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
+            .models(Arc::new(StubBackend))
             .routing(Arc::new(StubRouting))
             .skills(Arc::new(StubSkills))
             .build()

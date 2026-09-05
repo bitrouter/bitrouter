@@ -12,6 +12,7 @@
 
 pub mod acp_cli;
 pub mod acp_runtime;
+pub mod actions;
 pub mod adequacy;
 pub mod agent_registry;
 pub mod agents;
@@ -40,7 +41,6 @@ pub mod policy_lock;
 pub mod policy_table_router;
 pub mod reload;
 pub mod result_contract;
-pub mod routing_preview;
 pub mod session_identity;
 pub mod skills;
 pub mod skills_catalog;

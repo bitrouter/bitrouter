@@ -204,7 +204,7 @@ siblings; filesystem parsing and catalog implementation stay in the app.
 | Tier | Concern | Home | Rationale |
 |---|---|---|---|
 | **1 — protocol** | `SKILL_SCHEME`, the `skills/*` method names, `SkillEntry`, `SkillResource`, `ListSkillsResult`, `GetSkillParams/Result`, URI namespacing | `bitrouter-sdk::mcp::skills` | Both halves of the gateway speak these, and so must anything that reasons about skills in flight. Pure `serde_json` — ungated, pulls no rmcp, so a consumer gets it at `default-features = false`. |
-| **2 — port** | `SkillCatalog`, `SkillFile`, `SkillFileBody` | `bitrouter-mcp::capabilities::skill_catalog` | A port is "what the app implements for the origin server", not protocol. Its five siblings — `Fleet`, `CostQuery`, `HumanBridge`, `SkillsQuery`, `RoutingQuery` — all live here; moving one to the SDK would be the inconsistency. |
+| **2 — port** | `SkillCatalog`, `SkillFile`, `SkillFileBody` | `bitrouter-mcp::capabilities::skill_catalog` | A port is "what the app implements for the origin server", not protocol. Its sibling `SkillsQuery` lives here too; moving one to the SDK would be the inconsistency. (The routing port, `RoutingQuery` when this was written, has since become `actions::route::RouteQuery` — ports whose action is unified onto a shared report move next to that report; see `ACTIONS_SPEC.md`.) |
 | **3 — filesystem** | frontmatter parsing, discovery, filesystem `SkillCatalog` impl | `apps/bitrouter/src/skills/` and `skills_catalog.rs` | These are binary-local read concerns shared by the SEP catalog, compatibility tools, and surviving `skills list` / `skills init` commands. |
 
 **Why tier 1 belongs in the SDK, stated once so it is not re-litigated.** The

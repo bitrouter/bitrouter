@@ -1,8 +1,20 @@
-//! The `Backend` abstraction over *where* tool calls route, plus the wire
+//! The `Backend` abstraction over *where* completions route, plus the wire
 //! types the tools and both backends share. Implementations are thin reqwest
 //! clients — no routing logic lives here.
+//!
+//! `status` and `list_models` are **not** here: they are
+//! [actions](crate::actions), answered through
+//! [`crate::actions::status::StatusQuery`] and
+//! [`crate::actions::models::ModelsQuery`] by whichever side
+//! actually knows. A backend that can answer one hands its port over via
+//! [`Backend::status_port`] / [`Backend::models_port`].
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
+
+use crate::actions::models::ModelsQuery;
+use crate::actions::status::StatusQuery;
 
 pub mod cloud;
 pub mod local;
@@ -38,38 +50,25 @@ pub struct CompleteResponse {
     pub finish_reason: String,
 }
 
-/// One routable model.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub struct ModelInfo {
-    pub id: String,
-    pub provider: String,
-}
-
-/// Backend-specific status payload.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(untagged)]
-pub enum StatusInfo {
-    Local {
-        listen: String,
-        models: usize,
-        providers: Vec<ProviderStatus>,
-    },
-    Cloud {
-        available_micro_usd: i64,
-        balance_micro_usd: i64,
-        pending_micro_usd: i64,
-    },
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub struct ProviderStatus {
-    pub id: String,
-}
-
 /// Envelope returned by `/v1/models` on both backends.
 #[derive(serde::Deserialize)]
 pub(super) struct ModelsEnvelope {
     pub(super) data: Vec<ModelEntry>,
+}
+
+impl ModelsEnvelope {
+    /// The envelope as the shared action's element type, keeping **every**
+    /// provider per model — the fallback chain the wire has always carried and
+    /// this crate used to throw away.
+    pub(super) fn into_models(self) -> Vec<bitrouter_sdk::language_model::routing::ModelInfo> {
+        self.data
+            .into_iter()
+            .map(|m| bitrouter_sdk::language_model::routing::ModelInfo {
+                id: m.id,
+                providers: m.providers,
+            })
+            .collect()
+    }
 }
 
 /// One entry in the models list envelope.
@@ -102,7 +101,7 @@ pub enum BackendError {
     MissingCredential,
 }
 
-/// Where tool calls route. Object-safe so tools hold `Arc<dyn Backend>`.
+/// Where completions route. Object-safe so tools hold `Arc<dyn Backend>`.
 #[async_trait]
 pub trait Backend: Send + Sync {
     async fn complete(
@@ -110,6 +109,30 @@ pub trait Backend: Send + Sync {
         caller: &CallerAuth,
         req: CompleteRequest,
     ) -> Result<CompleteResponse, BackendError>;
-    async fn list_models(&self, caller: &CallerAuth) -> Result<Vec<ModelInfo>, BackendError>;
-    async fn status(&self, caller: &CallerAuth) -> Result<StatusInfo, BackendError>;
+
+    /// The `status` port this backend can answer with, or `None`.
+    ///
+    /// This is wiring, not logic: it exists so the HTTP profile — which is
+    /// assembled from an `Arc<dyn Backend>` and nothing else — can still serve
+    /// `status` for the deployment whose status the backend genuinely knows
+    /// (the cloud account's remaining credit). A local daemon's liveness is a
+    /// control-socket question and its spend a metering-database one, so
+    /// `LocalBackend` returns `None` and the embedding binary injects the real
+    /// port instead.
+    fn status_port(self: Arc<Self>) -> Option<Arc<dyn StatusQuery>>;
+
+    /// The `list_models` port this backend can answer with, or `None`.
+    ///
+    /// Wiring on the same terms as [`Self::status_port`], and for the same
+    /// reason: the HTTP profile is assembled from an `Arc<dyn Backend>` and
+    /// nothing else, so a backend that can list a catalog has to hand its port
+    /// over rather than have one injected. Both backends can: `GET /v1/models`
+    /// is exactly this question, and the response has always carried every
+    /// provider per model.
+    ///
+    /// The embedding binary injects a better port where it has one — on
+    /// stdio + local it reads the daemon's live routing table over the control
+    /// socket and falls back to static config, so `list_models` answers with no
+    /// daemon running at all.
+    fn models_port(self: Arc<Self>) -> Option<Arc<dyn ModelsQuery>>;
 }
