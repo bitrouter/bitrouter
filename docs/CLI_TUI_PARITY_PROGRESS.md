@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T9
+Task: complete
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -21,7 +21,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T6 — CommandsReport and its builder
 - [x] T7 — bitrouter acp commands, /commands through the shared report
 - [x] T8 — the prompt-expansion registry
-- [ ] T9 — acceptance sweep
+- [x] T9 — acceptance sweep
 
 ## Notes
 
@@ -203,6 +203,28 @@ Consecutive non-green iterations on this task: 0
   crate's own `parse()`). Together with T1's no-op provocation and T7's
   `rc=0` through a pipe: assert on a positive signal, never on the absence of
   a negative one.
+
+- **T9 — acceptance sweep.** §7 run in full.
+
+  | Line | Result |
+  |---|---|
+  | fmt / clippy / nextest clean at **every** commit in the range | pass — all 9 commits, fmt ok, 0 clippy errors, 0 test failures (3031 → 3050) |
+  | G1, G2, G3, G6 from T3's commit; G4, G5, A1 from T4's | pass — 10 guards run green; each provoked once when written |
+  | the three pre-existing guards unchanged **in text** | pass — byte-identical to base (15 / 24 / 26 lines) |
+  | `multitenant_http.rs` unchanged | pass — 0 diff lines vs base |
+  | `bitrouter-tui` gained no `bitrouter-*` dependency | pass — 0 added |
+  | session notice bytes == `render_to_vec` of the same report | pass — **live**: piped `/status` against `claude-acp` is byte-identical to `bitrouter status --human` (7 lines) |
+  | `acp commands` against a real harness | pass — 6 bitrouter rows + 70 agent rows, hints rendered, `received: true` |
+  | `acp commands` against an empty-list and a silent harness | **not run live** — no stub harness available. Covered by unit tests (`silence_and_an_empty_list_are_different_answers`) |
+  | by-hand: routed chat, `--direct`, piped, at 60 columns; `stty` restored | **partially run** — the piped path was exercised live and exits 0. The two interactive paths need a TTY, which this session does not have. Not verified |
+
+  **Finding, not fixed (§7 says record and stop).** 4 of 76 agent command
+  descriptions from `claude-acp` contain embedded newlines, so
+  `impl CliReport for CommandsReport` spills past the `  /name  description`
+  indent onto unindented continuation lines. Not corruption — `plain_lines`
+  splits on newlines, so the differential writer's arithmetic stays correct —
+  but the rendering assumes single-line descriptions and ACP does not promise
+  that. Fix is one line (take the first line, or indent continuations).
 
 ## Blocked
 
