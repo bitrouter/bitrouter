@@ -270,7 +270,13 @@ That is four questions. The commands that answer them are `route`, `models`,
 the list of 103 is answered *outside* the session by construction: it is about
 the daemon, the account, the config on disk, or another session entirely.
 
-**So the honest target is roughly 4–6 commands, not 29 or 103.** If that ratio is
+**So the honest target is roughly 4–6 commands, not 29 or 103.**
+
+**[Superseded 2026-09-05 — the reasoning holds, the target does not.]** The
+maintainer's goal is one terminal for BitRouter's full features, which is a
+product goal that observed friction cannot bound. 4–6 remains the right
+*first* track; see [§3.1](#31-the-goal-the-maintainer-actually-stated) for the
+two-track scope that replaces it. If that ratio is
 unacceptable, the disagreement is not about the rule — it is about whether the
 goal was formed by counting commands or by counting the times someone had to
 leave the session. A cheap way to settle it before building anything is in
@@ -343,6 +349,57 @@ ids the daemon's `route_chain` will refuse
 ([`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §1, phase 5). Under P1 that is a violated
 invariant with a failing test. Command-count parity would have scored today's
 `/route` as a success.
+
+---
+
+### 3.1 The goal the maintainer actually stated
+
+**[Added 2026-09-05, and it supersedes §2.4's target.]** §2.4 argued the honest
+target is 4–6 commands. That number answered *"what makes you leave the session
+today"*. The maintainer's goal is stronger:
+
+> A user should need only one terminal to use BitRouter's full features, from
+> either the interactive TUI or the headless CLI.
+
+This does not overturn [§3](#3-the-goal-restated)'s topology — set C still cannot
+travel, and [D7](#d7--does-the-route-picker-need-a-cli-leaf) has now emptied it
+of everything except renderer verbs. What it overturns is the *scope*: 4–6 was
+derived from observed friction, not from what is reachable, and "never leave the
+session" is a product goal that observed friction cannot bound.
+
+**The cost is uneven, and that unevenness is the plan.** Two tracks, because two
+kinds of command are in the way:
+
+**Track 1 — reads, nearly free once the inversion lands.** `status`, `models`,
+`route`, `skills list`, and the inspection halves of `policy` and `eval` are one
+shared report rendered twice. The per-command cost after the mechanism exists is
+a row, a renderer call, and a guard line. This is what [§14](#14-phases)'s phases
+already describe.
+
+**Track 2 — the ~25 commands that are hostile in-session.** These are not blocked
+by the mechanism; each needs a bespoke interactive affordance, and that is
+per-command UI work with no shared report to amortise it. Four distinct
+hostilities, from [§2.2](#22-roughly-a-quarter-of-the-cli-is-actively-hostile-in-a-session):
+
+| Hostility | Members | What a session-safe form needs |
+|---|---|---|
+| Recursion | `chat`, `launch`, `acp serve` | A session cannot nest itself — needs a detach-and-hand-off, or exclusion |
+| Blocking | `serve`, `mcp serve` | Launch detached, report the handle, never hold the loop |
+| Substrate destruction | `stop`, `restart`, `update` | Confirm, then detach *before* acting — you are killing what you are talking to |
+| TTY contention | `init`, `providers login`, `cloud billing checkout` | An in-TUI modal, because a raw prompt fights the renderer for the terminal |
+
+**The recommendation is to phase by track, not by command.** Track 1 first,
+because it is where the inversion pays and where the four questions of §2.4
+actually live. Then triage track 2 by how often a command is genuinely needed
+*mid-session* — `stop` and `login` plausibly are; `cloud billing checkout` is
+plausibly never. [D5](#d5--settle-the-scope-empirically-before-phase-2) remains
+the cheap way to order that triage, and is now more useful than before: it tells
+you which track-2 members earn their affordance.
+
+**One asymmetry worth keeping in view.** The goal names both surfaces, but the
+CLI is already complete for everything except session-scoped verbs — and D7 has
+just committed to closing that. Practically, "one terminal" is a statement about
+the **TUI's** reach, and track 2 is entirely TUI work.
 
 ---
 
@@ -2257,6 +2314,15 @@ Each ends green, is independently shippable, and fixes something a user can see.
 Phases 0 and 1 are worth doing **even if the maintainer rejects everything
 else in this spec**, because they are defect fixes rather than design.
 
+**[Amended 2026-09-05.]** Every phase below is
+[§3.1](#31-the-goal-the-maintainer-actually-stated)'s **track 1** — the reads the
+inversion makes nearly free. Track 2, the ~25 commands that are hostile
+in-session, is deliberately unphased here: each needs a bespoke affordance rather
+than a shared report, so phasing it before
+[D5](#d5--settle-the-scope-empirically-before-phase-2) orders the triage would be
+guessing at which members earn one. Phase 1 additionally grows a headless route
+setter, per [D7](#d7--does-the-route-picker-need-a-cli-leaf).
+
 ### Phase 0 — the discoverability defect (no design required)
 
 Today `/route` exists and is invisible. `/commands` lists only the agent's.
@@ -2503,6 +2569,51 @@ That, rather than the subprocess plumbing, is now the leading argument against
 D2. The recommendation is unchanged; the reason is stronger. Full statement in
 D12.
 
+**[Decided by the maintainer, 2026-09-05 — yes, scoped to prompt expansion.]**
+The recommendation above, and [D12](#d12--take-693s-inversion)'s "the openness is
+explicitly not taken", both rested on a false dichotomy: that an open registry
+and a guarded table are two designs for one thing, so taking one means refusing
+the other. They are two designs for **two different kinds of thing**, and the
+distinction is what the command *is*.
+
+- **Prompt expansion is data.** OpenCode's user commands, its MCP prompts and its
+  skills are a stored prompt template plus arguments, expanded and sent to the
+  model. There is nothing to type-check because the output is text. A user
+  writing YAML is writing a prompt.
+- **A router action is code.** `status` reads the metering database, `models`
+  reads the routing table, `route` resolves a chain. Each returns a typed report
+  from a shared implementation. A user cannot write one of these in YAML,
+  because it is not a prompt.
+
+| | Prompt expansion | Router action |
+|---|---|---|
+| Authored by | the user, in config | the project, in a release |
+| Produces | text for the model | a typed report |
+| Guardable by a test | no — the set is not known at compile time | yes, and that is the point |
+| Arguments | untyped | typed |
+| Needs a collision rule | yes | no |
+
+**The two cannot collide in any way that matters**, which is what makes having
+both safe: a YAML-authored command cannot read a metering database, and
+`status` cannot be shadowed into meaning something else without
+[D14](#d14--how-the-two-command-sources-are-distinguished)'s precedence rule
+noticing. Claude Code runs both classes today — built-in commands alongside
+prompt-expansion ones, with `claude -p /project:my-custom-command` confirmed
+working by a collaborator
+([§6.9.1](#691-claude-code--a-documented-terminal-only-class-and-a-shared-class-that-is-not-commands)).
+
+**So OpenCode's real mistake was one registry for both**, which is precisely why
+it needed a documented last-writer-wins rule and why `session.command`'s
+`arguments` is a single string its own CLI has to re-quote by hand
+([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)).
+Two registries, two contracts, one dispatcher.
+
+What survives from the objections above: R2/R3 still forbid a user binding
+`stop`, so the prompt-expansion registry gets **no `run:` key** — it expands to a
+prompt, it does not shell out. That removes the subprocess plumbing `chat/` lacks
+and is the reason this is now affordable. Scheduling stays open; nothing here
+says it is built before the router actions are.
+
 ### D3 — `reload`
 
 `bitrouter reload` fails R1 (daemon-wide) and R5 (no inverse), but it is the one
@@ -2594,6 +2705,42 @@ normal review**. This is the gate the old TUI lacked: its verbs existed nowhere
 else."* The gate was review; the CLI leaf was the only available forcing
 function. A row plus a guard test is a stronger one, and unlike the CLI leaf it
 cannot be satisfied by adding a command nobody runs.
+
+**[Decided by the maintainer, 2026-09-05 — (b), add the leaves.]** Against the
+recommendation above. The maintainer's requirement is that a user *or an agent*
+can pick a model and its provider from the headless CLI, which makes route
+selection a set-A action rather than a set-C verb, and the argument above — that
+the CLI has no live session to name — becomes a problem to solve rather than a
+reason not to.
+
+**Much of it already exists.** `RoutingOptions` (`acp_cli.rs:62`, shared by
+`acp serve` and `acp prompt`) already carries `--model`, documented as pinning
+the harness's model, and it accepts the provider-qualified `provider:model` form
+that Strategy 1 of `resolve_clean_route_chain` routes directly. With
+`bitrouter models` to list and `bitrouter route <model>` to preview, **launch-time
+selection by model and provider is shipped today.** What (b) adds is *mid-session*
+change — the headless twin of `/route`.
+
+**A prerequisite this document missed.** `bitrouter acp route set --session <id>`
+needs session ids to be discoverable, and `AcpCmd` has exactly two variants,
+`Serve` and `Prompt`. There is no `bitrouter acp sessions`. So (b) is really two
+pieces, and the order matters:
+
+1. **Session discovery** — either a `bitrouter acp sessions` leaf, or scoping the
+   setter to the session the invoking process owns, which needs no listing and no
+   new surface. The second is smaller and covers the agent case; the first is
+   what a human at a second terminal needs.
+2. **The setter itself**, over the same port `/route` uses — not a second path to
+   the same mutation, which is the drift this document exists to prevent.
+
+**What this costs, stated plainly.** P2 no longer needs weakening, because
+`route/set` acquires a `cli_leaf` and stops being the rule's counterexample —
+`OBSERVABILITY_TUI_SPEC.md` §14 is satisfied literally rather than reinterpreted.
+The price is that set C loses its only non-renderer member, so the three-set
+argument in [§3](#3-the-goal-restated) now rests entirely on renderer verbs. That
+is still true — `/commands`, and whatever §14's guardrails admit later, address a
+renderer that does not exist headless — but it is a narrower base than the one
+[§6.9.5](#695-what-recurs-in-set-c-across-four-harnesses) surveyed.
 
 ### D8 — `/route` overloading
 
@@ -2842,6 +2989,17 @@ commands, all renderer and buffer verbs
 about *where the registry lives*, not a claim that the two surfaces end up with
 the same rows — which is [§3](#3-the-goal-restated)'s P1/P2 split restated, and
 the reason P2 exists separately from P1.
+
+**[Corrected, 2026-09-05 — the openness *is* taken, for one of the two classes.]**
+The paragraph above refuses OpenCode's open registry wholesale. That was the
+false dichotomy [D2](#d2--the-user-configured-escape-hatch) now corrects: the
+openness is right for **prompt expansion** and wrong for **router actions**, and
+those are disjoint sets that cannot collide. The inversion is still taken exactly
+as decided — one dispatcher, `ACTIONS` as the table a name resolves against —
+but that dispatcher now resolves against **two registries**: the closed guarded
+one, and an open prompt-expansion one with no `run:` key. Read this decision as
+"take the inversion, and take the openness only where the thing being registered
+is a prompt."
 
 ### D13 — the remote transport requirement
 
