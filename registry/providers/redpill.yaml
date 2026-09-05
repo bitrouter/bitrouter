@@ -12,10 +12,9 @@ api_protocol:
 auth_scheme: bearer
 kind: gateway
 doc_url: https://docs.redpill.ai/get-started/introduction
-# RedPill is Phala Network's confidential AI gateway. Verified 2026-08-01
-# against public `GET https://api.redpill.ai/v1/models`; the response currently
-# matches Phala's inference catalog for these models. Prices below are converted
-# from per-token catalog values to USD per 1M tokens.
+# RedPill is Phala Network's confidential AI gateway. Verified 2026-09-05
+# against public `GET https://api.redpill.ai/v1/models`. Prices below are
+# converted from per-token catalog values to USD per 1M tokens.
 models:
   - id: deepseek/deepseek-v4-pro
     provider_model_id: deepseek/deepseek-v4-pro
@@ -27,6 +26,15 @@ models:
     capabilities:
       - reasoning
       - tools
+  # Catalog and model page: https://redpill.ai/models/deepseek/deepseek-v4-pro-0813
+  - id: deepseek/deepseek-v4-pro-0813
+    provider_model_id: deepseek/deepseek-v4-pro-0813
+    pricing:
+      input_tokens:
+        no_cache: 1.45
+        cache_read: 0.15
+      output_tokens:
+        text: 4.36
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek/deepseek-v4-flash
     pricing:
@@ -37,6 +45,14 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek/deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.44
+        cache_read: 0.028
+      output_tokens:
+        text: 1.32
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/kimi-k2.6
     pricing:
