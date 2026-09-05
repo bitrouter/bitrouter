@@ -29,6 +29,8 @@ for why not `main`.
 - [3. Type changes](#3-type-changes)
 - [4. The dispatcher](#4-the-dispatcher)
 - [5. Rendering](#5-rendering)
+- [6. The guards](#6-the-guards)
+- [7. Phases](#7-phases)
 
 ---
 
@@ -1010,3 +1012,304 @@ Rules the code above must keep, each with its enforcement:
 extended `render::session::commands(bitrouter: &[Command], agent: &[AvailableCommand])`,
 which adds the "BitRouter" group above the agent's and marks shadowed agent
 rows. Phase 3 deletes that renderer.
+
+---
+
+## 6. The guards
+
+The research spec names G1–G5 and A1. Here each is a test: where it lives, what
+it asserts, and what breaking it looks like. One is added (G6) because `Reach`
+needs a reader; two (G4, G5) are lines added to an existing test rather than
+tests of their own. Where a guard needs only the table it lives in the crate;
+where it needs `Cli` or `bitrouter-tui` it lives in `main.rs`'s test module,
+for the reason `ACTIONS_SPEC.md` §5 records (an integration test cannot see
+`Cli`).
+
+### G1 — every TUI command has a row
+
+- **Where:** `apps/bitrouter/src/main.rs`, beside `every_mcp_tool_has_an_actions_row`
+  (`:5893`). Needs both `bitrouter_tui::machine::{REDUCER_OWNED, ALIASES}` and
+  `bitrouter_mcp::actions::ACTIONS`, which only the app can name together.
+- **Asserts:**
+  1. every id in `REDUCER_OWNED` is an `ACTIONS` row with `tui_command: Some(_)`;
+  2. the `tui_command`s of all rows are pairwise distinct;
+  3. every `ALIASES` target equals some row's `tui_command`, and no alias equals
+     any row's `tui_command`;
+  4. `crate::actions::session::summary_for(row.id)` returns a non-empty string
+     for every row with a `tui_command`.
+- **Breaking it:** push `"foo"` onto `REDUCER_OWNED` → (1) fails naming `foo`.
+  Give `route_set` and `route` the same `tui_command` → (2). Add
+  `("status", "commands")` to `ALIASES` once `status` has a `tui_command` → (3).
+  Add a row with `tui_command: Some("skills")` and no `summary_for` arm → (4).
+- **Phase:** 0.
+
+### G2 — every row with a `tui_command` is fully inventoried (P2)
+
+- **Where:** `crates/bitrouter-mcp/src/actions/mod.rs`, `#[cfg(test)]` — needs
+  only the table.
+- **Asserts, for every row with `tui_command: Some(_)`:**
+  1. `cli_leaf.is_some() || reach == Reach::SessionBound` — a TUI command with
+     no CLI leaf is legal only when its subject is a live session;
+  2. `cli_leaf.is_some() && mcp_tool.is_some() ⇒ output_schema.is_some()` — a
+     row on two machine surfaces has a shape to hold them to.
+- **Breaking it:** give `skills_get` (no leaf, `HostBound`) a `tui_command` →
+  (1) fails: *"`skills_get` is offered in a session with no CLI leaf, but its
+  subject is not a live session; add the leaf or mark it `SessionBound`"*.
+  Set `status`'s `output_schema` to `None` while it has a `tui_command` → (2).
+- **Phase:** 0. This is the research spec's *"single highest-value
+  assertion"* — `OBSERVABILITY_TUI_SPEC.md` §14's review gate as a test.
+
+### G3 — every write names an inverse row that names it back (R5)
+
+- **Where:** `crates/bitrouter-mcp/src/actions/mod.rs`, `#[cfg(test)]`.
+- **Asserts, for every row with `effect: Effect::Write { inverse }`:**
+  1. a row with `id == inverse` exists;
+  2. that row is `Effect::Write { inverse: back }` with `back == this.id`;
+  3. if this row has a `tui_command`, so does the inverse — an undo the user
+     cannot type is not an undo.
+- **Breaking it:** delete the `route_reset` row → (1). Make `route_reset` a
+  `Read` → (2). Set `route_reset.tui_command = None` → (3).
+- **Phase:** 0.
+
+### G4 — the driver names no report type (the §8.3 amendment holds)
+
+- **Where:** `apps/bitrouter/src/chat/mod.rs`,
+  `the_chat_module_reaches_nothing_daemon_wide` — five strings appended to
+  `forbidden`: `"StatusReport"`, `"ModelsReport"`, `"RouteReport"`,
+  `"SkillsReport"`, `"CommandsReport"`.
+- **Asserts:** none of `effects.rs`, `input.rs`, `session.rs` contains those
+  identifiers. The driver deals in `Box<dyn CliReport>`; a type it cannot name
+  it cannot store, poll, or put in the footer. `bitrouter-tui` cannot name them
+  by construction (no dependency), so the scan only has to cover `chat/`.
+- **Breaking it:** `let last_status: Option<StatusReport> = None;` anywhere in
+  `session.rs` → fails naming the file and the identifier. So does a doc
+  comment mentioning `StatusReport` — the existing test already warns that
+  `session.rs` states in prose what it does not reach, for exactly this reason.
+- **Phase:** 1 (the first phase that hands a report to the driver).
+
+### G5 — action rendering is palette-free
+
+- **Where:** same test; one string appended: `"for_stdout"`.
+- **Asserts:** `Theme::for_stdout` (and `Palette::for_stdout`) are unreachable
+  from `chat/`. The only renderer the driver may call is `render_to_vec`, which
+  hard-codes `Theme::none()`.
+- **Breaking it:** `Output::new(Format::Human).write(.., Theme::for_stdout(), ..)`
+  → fails. (`write` is private today, so this also needs it made `pub`; the
+  string scan fails first.)
+- **Phase:** 1.
+
+### G6 — the HTTP profile carries only `Portable` rows
+
+- **Where:** `crates/bitrouter-mcp/src/server.rs`, inside
+  `http_profile_never_carries_host_bound_tools` (`:1258`) as an added
+  assertion; the two literal assertions it has today stay.
+- **Asserts:** every name in `tool_names(&http_profile(Arc::new(StubBackend)))`
+  is the `mcp_tool` of a row whose `reach` is `Reach::Portable`.
+- **Breaking it:** change `list_models`'s `reach` to `HostBound` → fails (the
+  table now disagrees with the profile). Wire `routing` into `http_profile` →
+  fails (the profile now carries a `HostBound` tool), which is the same failure
+  the literal assertion already produces, now with the row named.
+- **Phase:** 0. This is what makes `Reach` a column with a reader rather than a
+  comment, and it is D13's *"a guard per transport asserting the exact row
+  set"* derived from the table instead of hand-written.
+
+### A1 — three surfaces, one report
+
+- **Where:** `apps/bitrouter/src/actions/session.rs`, `#[cfg(test)]`, using
+  the same temp-dir `bitrouter.yaml` fixture `actions/route.rs`'s tests use and
+  a socket path nothing listens on.
+- **Asserts:** for each of the three read actions, the JSON of
+  `SessionPorts::open(source.clone(), socket.clone()).run(id, args)` equals the
+  JSON of what the CLI leaf constructs:
+  - `"status", []` vs `DaemonStatus::new(socket, Some(source)).report()`;
+  - `"list_models", ["demo"]` vs `RoutableModels::new(source, Some(socket)).report().filtered(Some("demo"))`;
+  - `"route", ["demo-model"]` vs `RouteAction::new(source, Some(socket)).report(RouteInput { model: "demo-model", prompt: None })`.
+- **What it catches, stated honestly:** `open` passing a different source or
+  socket than the leaves do (the `socket` field of `StatusReport` shows a wrong
+  path), and `run` mapping arguments differently than the leaf does (`filtered`,
+  `RouteInput`). It does **not** catch a live-daemon divergence — no daemon runs
+  under test — which is the same limit `both_surfaces_produce_the_same_report`
+  has today and `ACTIONS_SPEC.md` D2 records (*"a shared type stops the shapes
+  diverging, not the contents"*).
+- **Phase:** 1 for `status`; extended in phase 2 for the other two.
+
+### Reducer tests — `crates/bitrouter-tui/src/machine.rs`
+
+Not guards — unit tests of `resolve`, listed because each pins a rule stated
+above:
+
+| Input | Expect | Rule |
+|---|---|---|
+| `/route reset` | `Owned { action: "route_reset", args: [] }` | longest name first |
+| `/route` | `Owned { action: "route_set", .. }` | one-word fallback |
+| `/help` | `Owned { action: "commands", .. }` | alias |
+| `/status extra words` (phase 1) | `Action { action: "status", args: ["extra", "words"] }` | args are a `Vec`, never one string |
+| `/route` with `unavailable: Some(..)` | `Unavailable(reason)` | listed, not run |
+| `/plan ship it` | `Prompt("/plan ship it")` | the agent's, untouched |
+| `/review foo bar` with a `review` prompt command (phase 4) | `Expand("<template with foo bar>")` | substitution |
+| `/status` with a `status` prompt command (phase 4) | `Action`/`Owned`, never `Expand` | local wins — and the load-time check should have refused the config anyway |
+
+---
+
+## 7. Phases
+
+Every phase is **track 1** ([research §3.1](CLI_TUI_PARITY_SPEC.md#31-the-goal-the-maintainer-actually-stated)),
+except phase 4, which is the prompt-expansion class D2 decided — a class of
+its own, neither track. Each phase is independently shippable, ends green
+(`cargo nextest run --all-features`, `cargo clippy --all-features`,
+`cargo fmt -- --check`, every guard named for it, and
+`crates/bitrouter-mcp/tests/multitenant_http.rs` byte-identical to the
+base), and changes something a user can see. Where a research-spec phase was
+merged or moved, [§2.3](#23-31s-two-tracks-replaced-24s-46-target) says why.
+
+**Start-ability today.** Phases 0–3 can start as soon as the #869/#870/#875
+stack merges; none waits on an open decision, each taking the default named in
+the open-decisions section. Phase 4 can start after phase 0. Nothing in this
+spec waits on D7's leaf.
+
+### Phase 0 — the table's new columns, the resolver, `/commands` grouped, `/help`, `/route reset`
+
+Merges research phases 0 and 1 ([§2.3](#23-31s-two-tracks-replaced-24s-46-target)).
+Ships: BitRouter's own commands listed in `/commands` above the agent's; `/help`;
+`/route reset`; `/route` under `--direct` listed with its reason instead of
+answering a bare refusal.
+
+| File | Change |
+|---|---|
+| `crates/bitrouter-mcp/src/actions/mod.rs` | `tui_command`, `effect`, `requires`, `reach` on `ActionSpec`; `Effect`, `Requires`, `Reach`; the five rows filled per [§3.1](#31-actionspec--cratesbitrouter-mcpsrcactionsmodrs); new rows `commands`, `route_set`, `route_reset`; module doc's "every row carries a schema" sentence rewritten; **G2, G3** |
+| `crates/bitrouter-mcp/src/server.rs` | **G6** added to `http_profile_never_carries_host_bound_tools` |
+| `crates/bitrouter-tui/src/machine.rs` | `Command`, `REDUCER_OWNED`, `ALIASES`, `Resolution` (without `Action`/`Expand` — those arrive with their first producer), `resolve(commands, line)`, `submit` rewritten; `State { commands }`, `State::new(Vec<Command>)`, `State::available`; `routable` and `NOT_ROUTABLE` deleted (`:72`, `:102`, `:115`, `:120`, `:395`, `:582`); `Effect::ResetRoute`; `Action::Routed(Result<Option<String>, String>)`; `routed()` reports `Ok(None)`; existing tests' `State::new(bool)` calls updated; resolver tests |
+| `crates/bitrouter-tui/src/render/session.rs` | `commands(bitrouter: &[Command], agent: &[AvailableCommand])` — "BitRouter" group first, each row's `summary` and any `unavailable` reason, then the agent's group with rows whose name matches a BitRouter name marked shadowed |
+| `crates/bitrouter-tui/src/picker.rs` | `Picker::open(routable, ..)`'s first parameter comes from `state.available("route_set")` |
+| `apps/bitrouter/src/actions/session.rs` (new) | `offered_commands`, `summary_for`, `NOT_ROUTABLE`, `NOT_RESETTABLE` |
+| `apps/bitrouter/src/actions/mod.rs` | `pub mod session;` |
+| `apps/bitrouter/src/chat/session.rs` | `run`/`chat_plain` take `commands: Vec<Command>`; `State::new(commands)`; the `Notice::Commands` arm passes `&state.commands`; `chat_plain` runs `resolve` (`Owned` → `"/<name> needs a terminal"`, `Unavailable` → the reason, `Prompt` → the turn); `can_reroute` deleted |
+| `apps/bitrouter/src/chat/effects.rs` | `Effect::ResetRoute` arm; `SetRoute` arm returns `Ok(Some(in_force))` |
+| `apps/bitrouter/src/acp_cli.rs` | at `:1497` build `offered_commands(&session.client)`; keep the *"type /route to change the route"* hint, printed when the `route_set` command is available; pass the list to `run` (`:1501`) and `chat_plain` (`:1771`) |
+| `apps/bitrouter/src/main.rs` | **G1** beside `every_mcp_tool_has_an_actions_row` |
+| `docs/CLI.md:535`–`:537` | the in-session table gains `/help` and `/route reset`; says BitRouter's commands are listed above the agent's and that a same-named agent command is shown as shadowed |
+| `skills/bitrouter/references/cli.md:207` | same |
+
+**Done when:** `/commands` in a routed `chat` shows `route`, `route reset`,
+`commands` under a "BitRouter" heading and the agent's list beneath; `/help`
+does the same; `/route reset` after `/route` clears the footer's route and says
+so; under `--direct`, `/commands` lists `route` with the not-routable reason and
+`/route` answers with it; G1, G2, G3, G6 pass; the picker's existing tests pass
+unchanged in meaning.
+
+**Not in this phase:** `Effect::Action` and `Resolution::Action` — no row
+produces them yet, and a variant with no producer is dead.
+
+### Phase 1 — `SessionPorts`, proved on `/status`
+
+Ships: `/status` in the interactive and piped `chat`, rendering the same lines
+`bitrouter status --human` renders with the palette off.
+
+| File | Change |
+|---|---|
+| `crates/bitrouter-mcp/src/actions/mod.rs` | `status` row: `tui_command: Some("status")` |
+| `crates/bitrouter-tui/src/machine.rs` | `Resolution::Action`, `Effect::Action { action, args }`; `submit`'s `Action` arm; resolver test for args |
+| `apps/bitrouter/src/actions/session.rs` | `SessionPorts { status, models, route }`, `open`, `run` with the `"status"` arm only (the other two arms arrive in phase 2 with their rows); `summary_for("status")`; **A1** for `status` |
+| `apps/bitrouter/src/acp_cli.rs` | `SessionPorts::open(source.clone(), crate::daemon::socket_path_for(source, &config))` beside `:1295`; passed to `run` and `chat_plain` |
+| `apps/bitrouter/src/chat/session.rs` | `ports: &SessionPorts` parameter on both loops; the `Effect::Action` arm and `plain_lines` ([§5](#5-rendering)); `chat_plain`'s `Action` arm writes `render_to_vec` bytes to stdout |
+| `apps/bitrouter/src/chat/mod.rs` | **G4, G5** — six strings appended to `forbidden` |
+| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | `/status` row; a sentence that its output is `bitrouter status --human`'s |
+
+**Done when:** `/status` with the daemon up shows the running block; with the
+daemon down shows `running: false` as a notice, not an error; `echo /status |
+bitrouter chat <agent>` prints the same block to stdout; the bytes of the
+notice equal `Output::new(Format::Human).render_to_vec(&report)` for the same
+report (assert in a driver test with a stub `SessionPorts`—the stub is the one
+place a second `impl StatusQuery` is legitimate); A1, G4, G5 pass; the chat
+guard's existing nine strings are still present (extended, never weakened).
+
+**This phase forces D1** (amend `ACP_TUI_SPEC.md` §8.3, or hold it). The
+default is (a), and G4 is the enforcement. See the open-decisions section.
+
+### Phase 2 — `/models [provider]` and `/preview <model>`
+
+Ships: the two remaining reads. `preview` is D8's option (b) as the default —
+`/route` keeps meaning the picker, `/preview` means `bitrouter route`'s
+read — so every name means one thing on both surfaces.
+
+| File | Change |
+|---|---|
+| `crates/bitrouter-mcp/src/actions/mod.rs` | `list_models` → `tui_command: Some("models")`; `route` → `tui_command: Some("preview")` |
+| `apps/bitrouter/src/actions/session.rs` | `run`'s `"list_models"` and `"route"` arms ([§3.3](#33-sessionports--appsbitroutersrcactionssessionrs-new-phase-1)); `summary_for` arms; **A1** extended to both |
+| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | two rows; the `/route`-versus-`/preview` sentence |
+
+**Done when:** `/models anthropic` renders what `bitrouter models --provider
+anthropic --human` renders; `/preview gpt-5` renders what `bitrouter route gpt-5
+--human` renders (palette off); `/preview` with no argument answers with the
+usage line, not a panic; checked by hand at 60 columns that `models` on the
+default catalog wraps acceptably — if it does not, `list_models` loses its
+`tui_command` and the reason is recorded here, per [§5](#5-rendering).
+
+The picker and `/models` disagreeing about what is routable is
+`ACTIONS_SPEC.md` phase 5's daemon-side fix, not this phase's; this phase does
+not wait on it.
+
+### Phase 3 — `bitrouter acp commands`, and the shared commands report
+
+Ships: the headless twin of `/commands` — a set-C verb acquiring a CLI leaf —
+and `/commands` rendering through the shared report. Research phase 0.5, with
+D14 and D15 as decided.
+
+| File | Change |
+|---|---|
+| `crates/bitrouter-mcp/src/actions/commands.rs` (new) | `CommandSource`, `CommandRow`, `CommandsReport` ([§3.4](#34-the-commands-report--cratesbitrouter-mcpsrcactionscommandsrs-new-phase-3)) |
+| `crates/bitrouter-mcp/src/actions/mod.rs` | `pub mod commands;`; `commands` row → `cli_leaf: Some("acp commands")`, `output_schema: Some(..)` |
+| `apps/bitrouter/src/actions/commands.rs` (new) | `commands_report(bitrouter, config, agent, received)`; unit tests for shadowing, source order, and the `received` flag |
+| `apps/bitrouter/src/output/reports/commands.rs` (new) | `impl CliReport for CommandsReport` — three headed groups, shadowed rows marked, `received: false` rendered distinctly from an empty agent list |
+| `apps/bitrouter/src/main.rs` | `AcpCmd::Commands { agent, routing: RoutingOptions, wait_ms: u64 /* default 2000 */, source: Option<CommandSource> }`; `every_actions_row_resolves_to_a_cli_leaf` walks `acp commands` with no change |
+| `apps/bitrouter/src/acp_cli.rs` | the runner: `acp prompt`'s launch preamble, `initialize`, `session/new`, then collect `AvailableCommandsUpdate` from `client.subscribe_raw_updates()` for `wait_ms` (the last update wins; `received = any arrived`), build `commands_report(offered_commands(&client), prompt_commands, &agent_list, received)`, emit, tear down. No prompt is sent |
+| `crates/bitrouter-sdk/src/acp/translate.rs:59` | `AgentCommand` gains `hint: Option<String>` from `input`, so `--format json` consumers see it |
+| `crates/bitrouter-tui/src/journal.rs:179` | `commands_received: bool`, set on the first `AvailableCommandsUpdate`, exposed beside `commands()` |
+| `apps/bitrouter/src/chat/session.rs` | the `Notice::Commands` arm builds `commands_report(&state.commands, &[], journal.commands(), journal.commands_received())` and renders it through `render_to_vec` |
+| `crates/bitrouter-tui/src/render/session.rs` | `commands(..)` deleted |
+| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | the `acp commands` leaf; `/commands` now documents three outcomes |
+
+**Done when:** `bitrouter acp commands --agent <id> --json` prints a
+`CommandsReport`; against a harness that never sends the update it prints
+`received: false` and an empty agent group after `wait_ms`; `--source agent`
+filters; `--human` output and the TUI's `/commands` notice are the same bytes
+for the same inputs (by construction — one function, one renderer; the unit
+tests cover `commands_report`); `every_actions_row_matches_its_tools_output_schema`
+still passes (the row has no tool, so it is skipped, and the test still reports
+a non-empty checked set).
+
+### Phase 4 — the prompt-expansion registry (D2)
+
+Ships: `chat.commands` in `bitrouter.yaml`; `/name args` expands identically in
+the TUI, the piped loop, and `acp prompt`; a name that collides with a
+BitRouter command is refused at launch.
+
+| File | Change |
+|---|---|
+| `crates/bitrouter-sdk/src/config/mod.rs:46` | `pub chat: ChatConfig`; `ChatConfig`, `PromptCommandConfig` ([§3.5](#35-prompt-expansion-config--cratesbitrouter-sdksrcconfigmodrs-phase-4)); a deserialization test in `config/tests.rs` |
+| `apps/bitrouter/src/actions/session.rs` | `prompt_commands(&ChatConfig) -> Result<Vec<PromptCommand>>` — unique names, and none equal to a `tui_command` or an alias; the error names the offender and the BitRouter command it collides with |
+| `crates/bitrouter-tui/src/machine.rs` | `PromptCommand`; `State { prompt_commands }`; `resolve` gains its `prompt_commands` parameter and the `Expand` arm; `submit` treats `Expand` as a prompt; resolver tests for substitution and precedence |
+| `apps/bitrouter/src/acp_cli.rs` | `chat` launch: `prompt_commands(&config.chat)?` passed to `State`; `acp prompt`: the prompt text goes through `resolve(&[], &prompt_commands, text)` and an `Expand` replaces it before `session/prompt`; `acp commands` passes the list as the `config` group |
+| `apps/bitrouter/src/main.rs` | `config validate` also runs `prompt_commands` so a collision is reported without launching a session |
+| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | the `chat.commands` block, `$ARGUMENTS`, the no-`run:` statement, the collision rule |
+
+**Done when:** with `chat.commands: [{name: review, prompt: "Review: $ARGUMENTS"}]`,
+typing `/review the diff` in `chat` and running `acp prompt --agent x "/review
+the diff"` both send `Review: the diff` (assert the expanded text in the
+`session/prompt` request — the `acp prompt` path has NDJSON tests to extend);
+`/commands` shows a "config" group; a config naming `status` fails
+`bitrouter chat` and `bitrouter config validate` with a message naming both.
+
+### Not phased
+
+- **`bitrouter chat --command <name>` / `acp prompt "/status"` reaching the
+  action ports headlessly.** The resolver makes it a one-line change; nothing
+  asks for it (research D12). Add when something does.
+- **Widening the HTTP profile from `Reach`.** G6 makes the guard table-driven;
+  the seam for carrying `HostBound` reads remotely is `server.rs:714`'s named
+  function, and D13 says wait for a caller.
+- **`//` prefix escape** for a shadowed agent command (D14, cost 1). One line in
+  `resolve` when someone hits it.
+- **Argument grammar beyond whitespace splitting.** Every command here takes
+  zero or one positional; D9 decides when one needs more.
+- **Track 2**, in full.
