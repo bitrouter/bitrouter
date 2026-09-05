@@ -8,7 +8,7 @@ row is out of scope here.
 > **Historical note (2026-08-16):** this plan predates the removal of
 > `status --watch`. Steps that say to leave it untouched describe the state of
 > the implementation when the plan was executed; the current status surface is
-> `bitrouter status --requests`.
+> `bro status --requests`.
 
 Designed to be driven by `/goal`. See §A for the loop protocol and §B for the
 goal conditions to paste.
@@ -376,11 +376,11 @@ depends on the TUI existing.
   - Depends on: 2.3, 4.3
   - Files: `apps/bitrouter/src/main.rs`, `apps/bitrouter/src/acp_cli.rs`,
     `apps/bitrouter/Cargo.toml`
-  - Do: add `bitrouter chat <agent>`, reusing `RoutingOptions` via clap
+  - Do: add `bro chat <agent>`, reusing `RoutingOptions` via clap
     `#[command(flatten)]` (§8.1). The verb owns argument parsing and session
     launch; it hands the running ACP session to `bitrouter_tui`. Do not add an
     interactive mode to `spawn`.
-  - Done when: `bitrouter chat --help` lists the shared routing flags and the
+  - Done when: `bro chat --help` lists the shared routing flags and the
     flags have exactly one definition in source.
   - Verify: `cargo run -p bitrouter -- chat --help 2>&1 | head -25`
   - Commit: `feat(cli): add the chat verb for ACP sessions`

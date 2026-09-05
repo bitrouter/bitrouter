@@ -19,7 +19,7 @@ pub struct McpRegistryRow {
     pub description: String,
 }
 
-/// Result of `bitrouter mcp list` / `bitrouter mcp search <query>`.
+/// Result of `bro mcp list` / `bro mcp search <query>`.
 #[derive(Serialize)]
 pub struct McpRegistryReport {
     pub servers: Vec<McpRegistryRow>,
@@ -41,12 +41,15 @@ impl CliReport for McpRegistryReport {
         }
         h.table(&t)?;
         h.line("")?;
-        h.line("  add a server with: bitrouter mcp add <name>")?;
+        h.line(&format!(
+            "  add a server with: {} mcp add <name>",
+            bitrouter_sdk::invocation::name()
+        ))?;
         Ok(())
     }
 }
 
-/// Result of `bitrouter mcp add <name>` — the paste-able YAML stub plus the
+/// Result of `bro mcp add <name>` — the paste-able YAML stub plus the
 /// derived `mcp_servers:` key.
 #[derive(Serialize)]
 pub struct McpAddReport {

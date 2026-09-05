@@ -1,4 +1,4 @@
-//! `bitrouter update` — in-place self-updater built on cargo-dist's
+//! `bro update` — in-place self-updater built on cargo-dist's
 //! `axoupdater`. Decision logic (install-method detection, release channel,
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
@@ -7,6 +7,7 @@ use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
 use axoupdater::{AxoUpdater, UpdateRequest};
+use bitrouter_sdk::invocation;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -109,7 +110,7 @@ fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
-/// Options parsed from the `bitrouter update` flags.
+/// Options parsed from the `bro update` flags.
 #[derive(Debug)]
 pub struct UpdateOptions {
     pub check: bool,
@@ -126,7 +127,7 @@ pub struct UpdateOptions {
 /// [`Output`]: crate::output::Output
 #[derive(Debug)]
 pub struct RunOutcome {
-    /// The single result value for `bitrouter update`, rendered to stdout.
+    /// The single result value for `bro update`, rendered to stdout.
     pub report: UpdateReport,
     /// A running daemon needs restarting to pick up the new binary. When true,
     /// `report.daemon` is already set to `restarted` on the optimistic
@@ -302,7 +303,7 @@ const NUDGE_DISABLE_ENV: &str = "BITROUTER_NO_UPDATE_CHECK";
 /// Nudge network check cadence: once per day.
 const NUDGE_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// Best-effort "update available" line for `bitrouter status`. Never returns an
+/// Best-effort "update available" line for `bro status`. Never returns an
 /// error and never blocks meaningfully: it respects the opt-out env var, checks
 /// the network at most once per `NUDGE_TTL_SECS` (cached under `home`), and
 /// swallows every failure.
@@ -344,12 +345,13 @@ pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
 
     if let Some(latest) = latest.filter(|l| is_newer(l, current_version())) {
         // Diagnostic, not the command result — goes to stderr so it never
-        // pollutes a command's JSON stdout (e.g. `bitrouter status`).
+        // pollutes a command's JSON stdout (e.g. `bro status`).
         eprintln!();
         eprintln!(
-            "  {dim}↑ {latest} available — run `bitrouter update`{reset}",
+            "  {dim}↑ {latest} available — run `{cli} update`{reset}",
             dim = p.dim,
             reset = p.reset,
+            cli = invocation::name(),
         );
     }
 }

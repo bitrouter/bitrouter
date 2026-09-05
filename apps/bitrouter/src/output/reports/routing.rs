@@ -12,7 +12,7 @@ pub struct ModelRow {
     pub providers: Vec<String>,
 }
 
-/// Result of `bitrouter models`.
+/// Result of `bro models`.
 #[derive(Serialize)]
 pub struct ModelsReport {
     pub models: Vec<ModelRow>,
@@ -39,7 +39,7 @@ pub struct ProviderRow {
     pub api_base: String,
 }
 
-/// Result of `bitrouter providers list`.
+/// Result of `bro providers list`.
 #[derive(Serialize)]
 pub struct ProvidersReport {
     pub providers: Vec<ProviderRow>,

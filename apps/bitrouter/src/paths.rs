@@ -14,7 +14,7 @@
 //! 5. **Zero-config in-memory defaults** — used when nothing on steps
 //!    2-4 exists, with `~/.bitrouter` as the implicit home for the
 //!    daemon's runtime artefacts (socket, pid, log, db). No file is
-//!    written; `bitrouter init` is the explicit way to scaffold a YAML.
+//!    written; `bro init` is the explicit way to scaffold a YAML.
 //!
 //! The two outcomes are surfaced as [`ConfigSource`] variants
 //! ([`ConfigSource::File`] / [`ConfigSource::Default`]) so each
@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use base64::Engine;
+use bitrouter_sdk::invocation;
 use rand::Rng;
 
 use crate::trajectory::canonical::CorrelationKey;
@@ -173,9 +174,10 @@ pub fn resolve_config_with(
         anyhow::bail!(
             "BITROUTER_HOME is set to '{}' but '{}' is missing there. \
              Either drop the env var or create the file (e.g. \
-             `bitrouter init -c $BITROUTER_HOME/{}`).",
+             `{} init -c $BITROUTER_HOME/{}`).",
             env_home.display(),
             CONFIG_FILENAME,
+            invocation::name(),
             CONFIG_FILENAME,
         );
     }
@@ -222,7 +224,7 @@ pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config:
 /// permissions on Unix (the operator may drop secrets like `<home>/.env`
 /// inside later). Idempotent. Called by the daemon on entry when
 /// running zero-config so the runtime artefacts have a stable place to
-/// live, and by `bitrouter init` before writing the starter file.
+/// live, and by `bro init` before writing the starter file.
 pub fn ensure_home_directory(home: &Path) -> Result<()> {
     std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
     #[cfg(unix)]

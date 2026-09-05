@@ -14,6 +14,7 @@ use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
     PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
 };
+use bitrouter_sdk::invocation;
 #[cfg(test)]
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
@@ -988,7 +989,9 @@ pub fn verify_legacy_migration(
         .map(|migration| migration.legacy_adequacy_digest.as_str());
     if migrated != Some(actual.as_str()) {
         anyhow::bail!(
-            "adaptive policy startup found unsealed legacy learned state; run `bitrouter policy compile --output policy-candidate.yaml` and publish the candidate"
+            "adaptive policy startup found unsealed legacy learned state; run `{} policy \
+             compile --output policy-candidate.yaml` and publish the candidate",
+            invocation::name()
         );
     }
     Ok(())
@@ -2315,7 +2318,9 @@ pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileU
     if apply {
         if !update.conflicts.is_empty() {
             anyhow::bail!(
-                "compiled policy has unresolved conflicts; inspect `bitrouter policy compile` before applying"
+                "compiled policy has unresolved conflicts; inspect `{} policy compile` before \
+                 applying",
+                invocation::name()
             );
         }
         let loaded = load_for_config(&config, Some(config_path))
@@ -3753,7 +3758,7 @@ certificates:
         assert!(
             result
                 .err()
-                .is_some_and(|error| { error.to_string().contains("bitrouter policy compile") })
+                .is_some_and(|error| { error.to_string().contains("bro policy compile") })
         );
     }
 

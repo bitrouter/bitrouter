@@ -51,7 +51,7 @@
 //! **Session-scoped only.** There is no metering store here, no daemon control
 //! socket, no request history — nothing daemon-wide is reachable, so nothing
 //! daemon-wide can be drawn. What one session did is the whole subject, and
-//! `bitrouter status --requests` is where the other question is answered.
+//! `bro status --requests` is where the other question is answered.
 
 pub mod cost;
 pub mod editor;

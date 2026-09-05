@@ -7,7 +7,7 @@
 //! provider metadata, while this built-in keeps the zero-config auth/transport
 //! defaults and the local cloud OAuth/API-key auth applier. [`entry_from_registry`]
 //! reuses the same mapper for a fetched registry provider when a consumer (e.g.
-//! `bitrouter providers login`) needs the auth/transport shape of one of those
+//! `bro providers login`) needs the auth/transport shape of one of those
 //! providers.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use crate::registry::types::{
     Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
 };
 
-/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Public
+/// The hosted bro cloud gateway — the sole compiled-in built-in. Public
 /// provider metadata comes from the registry; this hand-authored entry carries
 /// auth defaults and local OAuth/API-key integration.
 const BITROUTER_TOML: &str = include_str!("../providers/bitrouter.toml");
@@ -87,7 +87,7 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
 /// `oauth::registry` holds their client config), but device-code providers
 /// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
 /// `token_endpoint` / `scope` ONLY here, so dropping them breaks
-/// `bitrouter providers login github-copilot`. JSON values that TOML cannot represent
+/// `bro providers login github-copilot`. JSON values that TOML cannot represent
 /// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
 fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
     let missing = |field: &str| LoadError::Snapshot {

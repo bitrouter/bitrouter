@@ -314,11 +314,11 @@ fn spawn_child_reaper(
 
 /// How long `health_check` waits for `initialize` before declaring the agent
 /// unhealthy. Generous enough for a cold npm start; tight enough to keep
-/// `bitrouter agents check` snappy when an agent hangs.
+/// `bro agents check` snappy when an agent hangs.
 const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Spawn the agent, run ACP `initialize` only (no session), return elapsed on
-/// success or an error string. Used by `bitrouter agents check`.
+/// success or an error string. Used by `bro agents check`.
 ///
 /// `env` is applied to the spawned child process (the same plumbing every
 /// other caller of [`AgentProcess`] gets) so an agent that needs API-key vars

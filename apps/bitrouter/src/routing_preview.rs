@@ -1,5 +1,5 @@
 //! The routing-preview adapter — the app side of the `route_preview` tool the
-//! stdio/local `bitrouter mcp serve` profile wires.
+//! stdio/local `bro mcp serve` profile wires.
 //!
 //! Implements `bitrouter-mcp`'s
 //! [`RoutingQuery`] port by
@@ -32,7 +32,7 @@ pub struct RoutingPreview {
     policy: Option<PolicyTableRouter>,
     pricing: PricingTable,
     /// The daemon control socket, when known. `route_preview` resolves through
-    /// the live daemon first (like `bitrouter route`), so it reflects `reload`s
+    /// the live daemon first (like `bro route`), so it reflects `reload`s
     /// and subscription-backed providers the static config alone can't resolve;
     /// it falls back to config resolution when the daemon is unreachable.
     socket: Option<PathBuf>,
@@ -80,7 +80,7 @@ impl RoutingPreview {
     }
 
     async fn do_preview(&self, args: RoutePreviewArgs) -> Result<serde_json::Value> {
-        // Daemon-first, mirroring `bitrouter route`: the live routing table
+        // Daemon-first, mirroring `bro route`: the live routing table
         // reflects `reload`s and subscription-backed providers (claude-code,
         // google-ai, …) that the static config alone can't resolve. Only when
         // the daemon isn't reachable do we fall back to config resolution.

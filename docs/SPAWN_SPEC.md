@@ -1,4 +1,4 @@
-# Spec: `bitrouter spawn` — ACP sub-agents, routed through BitRouter by default
+# Spec: `bro spawn` — ACP sub-agents, routed through BitRouter by default
 
 Status: **implemented (v1) — all open questions resolved (§14)** · Author:
 Claude (with Spikel) · Date: 2026-07-13
@@ -35,12 +35,12 @@ gateway MCP servers.
 
 BitRouter has two agent-launching surfaces that grew independently:
 
-- `bitrouter spawn` — launches an **interactive native-TUI harness** (Claude
+- `bro spawn` — launches an **interactive native-TUI harness** (Claude
   Code, Codex) env-wrapped so its LLM traffic routes through the daemon.
   Encodes per-harness routing knowledge (`ANTHROPIC_BASE_URL` /
   `ANTHROPIC_AUTH_TOKEN`, Codex `-c` provider overrides), daemon auto-start,
   install-on-missing, auth precedence, exit cost summary.
-- `bitrouter acp serve|prompt` — launches a **headless ACP session** via the
+- `bro acp serve|prompt` — launches a **headless ACP session** via the
   substrate (records, OTel spans), but
   its LLM traffic goes wherever the harness's own config points — **not**
   through the daemon (#672).
@@ -54,8 +54,8 @@ resident ACP broker are different process topologies.
 
 | Role | Verb | Protocol | UI | Routed via daemon |
 |---|---|---|---|---|
-| Main orchestrator agent | `bitrouter launch` | none (native) | harness's own TUI | yes (already default) |
-| Sub-agent | `bitrouter spawn` | ACP | none (managed by caller) | **yes (new default)** |
+| Main orchestrator agent | `bro launch` | none (native) | harness's own TUI | yes (already default) |
+| Sub-agent | `bro spawn` | ACP | none (managed by caller) | **yes (new default)** |
 
 An orchestrator has no manager — the human drives it through its own TUI, so
 it doesn't need ACP. Sub-agents are driven by a program (the orchestrator via
@@ -65,9 +65,9 @@ daemon:
 
 ```
 human
- └─ bitrouter launch claude            # native TUI, env-wrapped
-     └─ (agent runs) bitrouter spawn codex -p "…"   # ACP session, NDJSON
-         └─ bitrouter spawn gemini -p "…"           # ACP all the way down
+ └─ bro launch claude            # native TUI, env-wrapped
+     └─ (agent runs) bro spawn codex -p "…"   # ACP session, NDJSON
+         └─ bro spawn gemini -p "…"           # ACP all the way down
 ```
 
 Because BitRouter owns the sub-agent's entire lifecycle, routing-by-default
@@ -79,7 +79,7 @@ already-configured workflow) — the opt-out remains for the exceptions.
 
 Goals (v1):
 
-1. `bitrouter spawn <agent>` spawns any catalog-known or config-declared ACP
+1. `bro spawn <agent>` spawns any catalog-known or config-declared ACP
    harness as a substrate session.
 2. Spawned sub-agents' LLM traffic routes through the local daemon **by
    default**, with a per-invocation and per-agent opt-out.
@@ -100,25 +100,25 @@ Non-goals (v1, tracked as follow-ups):
 
 ## 3. CLI surface
 
-### 3.1 `bitrouter launch` (rename of today's `spawn`)
+### 3.1 `bro launch` (rename of today's `spawn`)
 
 ```
-bitrouter launch --agent claude [--base-url URL] [--no-install] [--no-start] [--check] [-- <args>]
+bro launch --agent claude [--base-url URL] [--no-install] [--no-start] [--check] [-- <args>]
 ```
 
-Behavior is exactly today's `bitrouter spawn` (env-wrap, daemon ensure,
+Behavior is exactly today's `bro spawn` (env-wrap, daemon ensure,
 install offer, exit cost summary, exit-code propagation). Only the name
-changes. `bitrouter spawn --agent <claude|codex>` remains as a **deprecated
+changes. `bro spawn --agent <claude|codex>` remains as a **deprecated
 alias for two alpha releases** (it is unambiguous: the old form requires
 `--agent` with the closed enum; the new form takes a positional id), emitting
 a one-line deprecation notice on stderr pointing at `launch`.
 
-### 3.2 `bitrouter spawn` (new: sub-agent creation, subsumes `acp serve|prompt`)
+### 3.2 `bro spawn` (new: sub-agent creation, subsumes `acp serve|prompt`)
 
 ```
-bitrouter spawn <agent> -p "<text>" [--no-wait]        # one-shot prompt → NDJSON on stdout
-bitrouter spawn <agent> --serve                        # ACP over stdio (GUI / manager)
-bitrouter spawn <agent> --check                        # preflight only, no launch
+bro spawn <agent> -p "<text>" [--no-wait]        # one-shot prompt → NDJSON on stdout
+bro spawn <agent> --serve                        # ACP over stdio (GUI / manager)
+bro spawn <agent> --check                        # preflight only, no launch
 
 # shared session flags (carried over from `acp serve|prompt` unchanged):
   [--turn-timeout SECS] [-c CONFIG]
@@ -133,9 +133,9 @@ bitrouter spawn <agent> --check                        # preflight only, no laun
   A catalog-known id that has no config entry is launched from its catalog
   invocation directly — no YAML edit required to spawn a blessed harness.
 - Exactly one of `-p` / `--serve` / `--check` is required. A bare
-  `bitrouter spawn <agent>` at a TTY errors with a hint; we do not TTY-sniff
+  `bro spawn <agent>` at a TTY errors with a hint; we do not TTY-sniff
   a mode.
-- `bitrouter acp serve|prompt` remain as **hidden aliases** delegating to the
+- `bro acp serve|prompt` remain as **hidden aliases** delegating to the
   new code path (the GUI's AcpFeed and existing docs keep working); `acp
   sessions` is unchanged and stays under `acp` (it operates
   on records, not launches).
@@ -267,7 +267,7 @@ When `spawn` launches a session and routing is not disabled:
    injected into the harness's auth var (one place to change when v1.5
    minting lands, §10):
    - `BITROUTER_API_KEY` (`brk_…`) when exported → use it.
-   - Else, local daemon with `skip_auth: true` (the `bitrouter init`
+   - Else, local daemon with `skip_auth: true` (the `bro init`
      default) → `"bitrouter-local"` placeholder.
    - Else — local daemon with `skip_auth: false`, or a remote `--base-url`
      whose config spawn cannot read — **hard error** before launch:
@@ -420,7 +420,7 @@ Exit non-zero on any fail, same reporting shape as `SpawnCheckReport`.
   nobody can start — spawn **fails fast, before any side effect** (no
   record, no npx fetch):
   - `-p` mode: the only stdout line is
-    `{"type":"error","code":"daemon_unreachable","via":"http://127.0.0.1:4356","hint":"bitrouter start, or pass --direct"}`,
+    `{"type":"error","code":"daemon_unreachable","via":"http://127.0.0.1:4356","hint":"bro start, or pass --direct"}`,
     exit non-zero.
   - `--serve` mode: exit non-zero with the message on stderr **before
     speaking any ACP** — a manager handles "child failed to start" far more
@@ -501,7 +501,7 @@ A fleet MCP backend shipped on top of this launch path, exposing subagent
 spawn/manage tools plus a human-escalation bridge to the control tower's
 decision queue. #749 removed all of it along with the control tower: BitRouter
 routes calls, it does not orchestrate agents. No subagent tool surface remains
-in `bitrouter mcp serve`.
+in `bro mcp serve`.
 
 What survives from this section's reasoning is the contract it forced: nothing
 in `spawn` may assume the caller is a shell (hence the structured `session`

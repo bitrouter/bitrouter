@@ -1,11 +1,11 @@
-//! Cloud authentication glue and the `bitrouter cloud …` CLI entry points.
+//! Cloud authentication glue and the `bro cloud …` CLI entry points.
 //!
 //! Two daemon-side responsibilities, both keyed on the `"bitrouter"`
 //! provider id:
 //!
 //! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
-//!   `bitrouter cloud login` (an `account-credentials.json` file is present
+//!   `bro cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
 //!   already covered by [`bitrouter_providers::zero_config`].
 //! - [`register_if_configured`] — register the hosted provider applier.
@@ -13,7 +13,7 @@
 //! These are kept here rather than inside `bitrouter-providers` so that
 //! the providers crate stays focused on reusable hosted authentication.
 //!
-//! The [`cli`] sub-module owns the `bitrouter cloud` subcommand surface
+//! The [`cli`] sub-module owns the `bro cloud` subcommand surface
 //! — typed wrappers around the application-owned management client.
 
 pub mod api;
@@ -37,13 +37,13 @@ const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
-/// has run `bitrouter cloud login` (i.e. the credentials file exists at the
+/// has run `bro cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
 ///
 /// No-op when the credentials file is absent — `bitrouter_providers::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
 /// paths give a signed-in user the cloud provider on every fresh
-/// `bitrouter serve` regardless of which credential source they chose.
+/// `bro serve` regardless of which credential source they chose.
 pub fn enable_in_zero_config(config: &mut Config) {
     let Ok(path) = default_credentials_path() else {
         return;
@@ -204,7 +204,7 @@ fn credential_origin_for_exporter(exporter: &str) -> String {
 
 /// Resolve the signed-in Cloud bearer only when `target_base_url` has the
 /// exact origin recorded at login. This permits headless gateway clients to
-/// reuse `bitrouter cloud login` without ever forwarding that credential to
+/// reuse `bro cloud login` without ever forwarding that credential to
 /// an arbitrary remote host.
 pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
     let manager = default_manager().ok()?;

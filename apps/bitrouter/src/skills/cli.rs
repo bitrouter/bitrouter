@@ -1,4 +1,4 @@
-//! The `bitrouter skills` subcommand tree and its dispatcher.
+//! The `bro skills` subcommand tree and its dispatcher.
 //!
 //! Two verbs, both local and read-mostly: [`SkillsAction::List`] reads the
 //! installed-skills directory, [`SkillsAction::Init`] scaffolds a `SKILL.md`.
@@ -14,7 +14,7 @@ use clap::Subcommand;
 
 use crate::commands;
 
-/// `bitrouter skills …`. All variants land in [`run`].
+/// `bro skills …`. All variants land in [`run`].
 #[derive(Debug, Subcommand)]
 pub enum SkillsAction {
     /// List installed skills.

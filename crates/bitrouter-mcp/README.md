@@ -10,7 +10,7 @@ An **origin** Model Context Protocol (MCP) server for BitRouter: it exposes
 BitRouter's *own* capabilities as MCP tools to any MCP-capable client (Claude
 Code, Claude Desktop, Cursor, …).
 
-This is **not** the same as BitRouter's MCP *gateway* (the `bitrouter tools`
+This is **not** the same as BitRouter's MCP *gateway* (the `bro tools`
 subcommand and the `mcp_servers` config), which *proxies* upstream MCP servers.
 This crate makes BitRouter itself the server.
 
@@ -52,17 +52,17 @@ http→cloud). The host-bound tools in the table above ride stdio only.
 
 ```bash
 # stdio (local daemon backend) — what an MCP client launches
-bitrouter mcp serve
+bro mcp serve
 
 # streamable HTTP (cloud backend)
-bitrouter mcp serve --transport http --bind 127.0.0.1:4357
+bro mcp serve --transport http --bind 127.0.0.1:4357
 
 # write the client config block (or omit --config to print it)
-bitrouter mcp install --client claude
-bitrouter mcp install --client cursor
+bro mcp install --client claude
+bro mcp install --client cursor
 ```
 
-`bitrouter mcp serve --help` lists every flag (`--transport`, `--backend`,
+`bro mcp serve --help` lists every flag (`--transport`, `--backend`,
 `--local-url`, `--cloud-url`, `--token`, `--bind`).
 
 A typical MCP client config entry (stdio):
@@ -70,7 +70,7 @@ A typical MCP client config entry (stdio):
 ```json
 {
   "mcpServers": {
-    "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
+    "bitrouter": { "command": "bro", "args": ["mcp", "serve"] }
   }
 }
 ```

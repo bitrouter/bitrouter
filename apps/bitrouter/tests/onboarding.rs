@@ -24,7 +24,7 @@ const PROBE_VARS: &[&str] = &[
 /// Run the compiled binary with an isolated home/data dir and a null (non-TTY)
 /// stdin. `extra_env` layers provider-key or `BITROUTER_HOME` overrides on top.
 fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
     command
         .args(args)
         .env("HOME", home)

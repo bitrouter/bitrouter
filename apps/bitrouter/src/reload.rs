@@ -200,7 +200,7 @@ impl DaemonReloader for AppReloader {
                     // fills its fields — so a sign-in survives a hot-reload.
                     crate::claude_code::enable_if_logged_in(&mut fresh);
                     // Re-merge the registry too, so a reload picks up newly-set
-                    // credentials (a `bitrouter reload` run after exporting a
+                    // credentials (a `bro reload` run after exporting a
                     // provider key activates that provider's canonical models).
                     crate::assemble::merge_registry_into(&mut fresh).await;
                     // Then re-activate any provider that has an OAuth /
@@ -393,7 +393,7 @@ providers:
         }
     }
 
-    /// `bitrouter reload` used to return `{"status":"reloaded"}` while the
+    /// `bro reload` used to return `{"status":"reloaded"}` while the
     /// daemon kept serving the tiers it started with — only `restart` applied
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.

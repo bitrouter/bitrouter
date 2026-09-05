@@ -17,7 +17,7 @@ pub struct SkillEntry {
     pub path: String,
 }
 
-/// Result of `bitrouter skills list`.
+/// Result of `bro skills list`.
 #[derive(Serialize)]
 pub struct SkillsListReport {
     pub skills: Vec<SkillEntry>,
@@ -35,7 +35,7 @@ impl CliReport for SkillsListReport {
     }
 }
 
-/// Result of `bitrouter skills init <name>`.
+/// Result of `bro skills init <name>`.
 #[derive(Serialize)]
 pub struct SkillInitReport {
     pub path: String,

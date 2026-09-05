@@ -6,17 +6,17 @@ Wire OpenAI's Codex CLI to route its model calls through BitRouter.
 
 ## Prerequisites
 
-- BitRouter installed and running (`bitrouter status` shows green), unless using Cloud.
+- BitRouter installed and running (`bro status` shows green), unless using Cloud.
 - Codex CLI installed (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`).
 - A BitRouter model id to use, such as `openai/gpt-5-codex`, `openai/gpt-5.1`, or any configured alias.
 
 ## Preferred launch path
 
-Use `bitrouter launch` when you want a reversible, per-process setup:
+Use `bro launch` when you want a reversible, per-process setup:
 
 ```bash
-bitrouter launch --agent codex
-bitrouter launch --agent codex -- --model openai/gpt-5-codex
+bro launch --agent codex
+bro launch --agent codex -- --model openai/gpt-5-codex
 ```
 
 The wrapper does not edit `~/.codex/config.toml`. It injects one-shot Codex `-c` overrides:
@@ -28,7 +28,7 @@ model_providers.bitrouter.base_url="http://localhost:4356/v1"
 model_providers.bitrouter.wire_api="responses"
 ```
 
-If `BITROUTER_API_KEY` is set, `spawn` forwards it with `env_key="BITROUTER_API_KEY"`. Otherwise it injects a local placeholder bearer token, which works with the `skip_auth: true` default from `bitrouter init`.
+If `BITROUTER_API_KEY` is set, `spawn` forwards it with `env_key="BITROUTER_API_KEY"`. Otherwise it injects a local placeholder bearer token, which works with the `skip_auth: true` default from `bro init`.
 
 ## Permanent Codex config
 
@@ -48,18 +48,18 @@ Codex appends `/responses` to the provider base URL. Do not use `wire_api = "cha
 
 ## Model selection
 
-Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter launch --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
+Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bro launch --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
 
 ```bash
 codex --model openai/gpt-5-codex
-bitrouter launch --agent codex -- --model anthropic/claude-sonnet-4-6
+bro launch --agent codex -- --model anthropic/claude-sonnet-4-6
 ```
 
 ## Verify
 
 ```bash
 codex --version
-bitrouter launch --agent codex -- --version
+bro launch --agent codex -- --version
 tail -n 20 ~/.bitrouter/bitrouter.log
 ```
 

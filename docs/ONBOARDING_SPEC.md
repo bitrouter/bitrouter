@@ -41,21 +41,21 @@ Why not agent-led onboarding (an LLM agent driving setup in the TUI): it hits a
 BitRouter, but acquiring a credential is precisely what onboarding is *for*, so
 it cannot emit its first token before the thing it sets up exists. It also puts
 npm/Node on the critical path of a self-contained Rust binary. Deferred to a
-later track; v1's payoff is the existing `bitrouter launch` (which wraps the
+later track; v1's payoff is the existing `bro launch` (which wraps the
 harness's own native TUI).
 
 ## 2. Goals / non-goals
 
 Goals (v1):
 
-1. One guided entry: bare `bitrouter` when unconfigured, and `bitrouter init`
+1. One guided entry: bare `bitrouter` when unconfigured, and `bro init`
    to (re)run it; the wizard ends in first value.
 2. Sequence existing verbs only — the sole new durable state is credentials in
    the credential store.
 3. Agent-native preserved: every prompt has a flag equivalent; `--yes` runs
    headless and emits the JSON result envelope; `--yes` never blocks on a human.
 4. Orchestrator choice restricted to `claude | codex` — the harnesses
-   `bitrouter launch` can actually run.
+   `bro launch` can actually run.
 5. First-run detection is **network-free** — deciding whether to onboard must
    not fetch the registry or hit the network.
 
@@ -75,10 +75,10 @@ Non-goals (deferred, tracked):
 
 ```
 bitrouter                      # no subcommand: run wizard IFF unconfigured; else status + hint
-bitrouter init                 # interactive wizard (first run or re-run / reconfigure)
-bitrouter init --yes [flags]   # non-interactive: today's behavior — scaffold starter bitrouter.yaml
-bitrouter init --force         # allow overwriting an existing bitrouter.yaml when scaffolding
-bitrouter init --reset         # clear stored onboarding credentials, then run the wizard
+bro init                 # interactive wizard (first run or re-run / reconfigure)
+bro init --yes [flags]   # non-interactive: today's behavior — scaffold starter bitrouter.yaml
+bro init --force         # allow overwriting an existing bitrouter.yaml when scaffolding
+bro init --reset         # clear stored onboarding credentials, then run the wizard
 ```
 
 - clap change: `Cli.command` becomes `Option<Command>` (`main.rs:58-59`). `None`
@@ -87,10 +87,10 @@ bitrouter init --reset         # clear stored onboarding credentials, then run t
   (configured). Bare `bitrouter` never re-onboards a configured user and never
   silently spawns a harness or daemon.
 - `init` keeps `-c/--config <path>` and its default write path, and gains
-  `--yes`, `--force`, `--reset`. **`bitrouter init --yes` reproduces today's
+  `--yes`, `--force`, `--reset`. **`bro init --yes` reproduces today's
   `commands::init`** (write `STARTER_CONFIG`; refuse to overwrite unless
   `--force`) — the sensible headless default when there is nothing to ask.
-  Interactive `bitrouter init` runs the wizard.
+  Interactive `bro init` runs the wizard.
 - `announce_zero_config` / `print_onboarding_hint` are superseded for the
   interactive case; the single-line hint is retained for non-TTY / when a user
   runs a specific command without onboarding.
@@ -103,8 +103,8 @@ Each prompt maps to a flag (used by `--yes` and scriptable directly).
 active cloud session, and a claude-code session before asking anything.
 
 ```
-default → bitrouter cloud login          # device-flow OAuth, one account = every model
-  or   → bitrouter providers login <id>   # claude-code / openai-codex / github-copilot / supergrok
+default → bro cloud login          # device-flow OAuth, one account = every model
+  or   → bro providers login <id>   # claude-code / openai-codex / github-copilot / supergrok
   or   → paste a BYOK key                 # openai / anthropic / google / openrouter / opencode-*
   or   → use detected key(s)
 loop   → "add another provider? [y/N]"
@@ -125,8 +125,8 @@ the PATH-after-install caveat. Flags: `--harness claude|codex` (repeatable),
 **Step 3 — Finish (three-way exit).**
 
 ```
-(a) launch now      → bitrouter launch -a <harness> [--model <id>]   # native TUI, this-session model
-(b) start + snippet → bitrouter start; print paste-in base_url/env for your existing tool
+(a) launch now      → bro launch -a <harness> [--model <id>]   # native TUI, this-session model
+(b) start + snippet → bro start; print paste-in base_url/env for your existing tool
 (c) exit            → nothing launched  (+ optional "write a starter bitrouter.yaml? [y/N]")
 ```
 
@@ -208,7 +208,7 @@ erroring.
 
 ## 7. What onboarding does NOT change
 
-- `bitrouter launch` semantics (env-wrap, daemon auto-start, exit summary) —
+- `bro launch` semantics (env-wrap, daemon auto-start, exit summary) —
   reused as-is for exit (a). No new `launch` flags.
 - The credential store format and the zero-config auto-detect path — the wizard
   writes credentials the exact way `cloud login` / `providers login` already do.
@@ -254,7 +254,7 @@ Per CLAUDE.md rules, in the same change:
   wizard offered, not a hard error; `init --yes` with no creds and no key flags
   → envelope reports zero providers + skipped-interactive and exits non-blocking;
   install → launch path re-resolve.
-- **E2E** (bitrouter-e2e-test skill) — fresh `HOME`: `bitrouter init --yes
+- **E2E** (bitrouter-e2e-test skill) — fresh `HOME`: `bro init --yes
   --api-key brk_… --harness claude --after exit` → credential stored, claude
   present-or-reported, JSON envelope emitted; then bare `bitrouter` → status,
   not the wizard.
@@ -263,7 +263,7 @@ Per CLAUDE.md rules, in the same change:
 
 - [ ] Bare `bitrouter` launches the wizard when and only when the probe reports
       unconfigured; otherwise prints status + hint. Exit code 0 either way.
-- [ ] `bitrouter init` runs the wizard; `bitrouter init --yes` reproduces the
+- [ ] `bro init` runs the wizard; `bro init --yes` reproduces the
       current starter-file write (with `--force` overwrite, `--reset` clear).
 - [ ] Every wizard prompt has a working flag equivalent; `--yes` completes
       without blocking and emits the JSON envelope.
@@ -289,7 +289,7 @@ Resolved with Spikel, 2026-07-15:
    runs; ACP agents stay `spawn`-only.
 4. **Six steps compress to three** — a "default" you don't remember is just an
    in-session pick for the launch you're about to do.
-5. **Entry: bare `bitrouter` (unconfigured) + `bitrouter init` (re-run)**;
+5. **Entry: bare `bitrouter` (unconfigured) + `bro init` (re-run)**;
    `init --yes` = today's scaffold-the-file; `--force`/`--reset` added.
 6. **`--yes` reports-and-skips interactive OAuth** rather than attempting or
    hanging; `providers login` gains `--api-key`.
@@ -297,7 +297,7 @@ Resolved with Spikel, 2026-07-15:
 ## 13. Open questions
 
 1. Bare-configured `bitrouter` output — a compact `status` view, or clap's help?
-   (Leaning: one-line status + "run `bitrouter launch`" hint.)
+   (Leaning: one-line status + "run `bro launch`" hint.)
 2. Snippet client detection for exit (b) — ask "which client?", or emit all
    three shapes (Anthropic / OpenAI / Codex) and let the user pick? (Leaning:
    emit all three, labeled.)

@@ -1,4 +1,4 @@
-//! Integration tests for `bitrouter acp serve|prompt`.
+//! Integration tests for `bro acp serve|prompt`.
 //!
 //! Test 1 (`prompt_ndjson`) — in-process: build a `Config` with a bash ACP
 //! stub agent, call [`bitrouter::acp_cli::prompt`] with a `Vec<u8>` sink,
@@ -7,7 +7,7 @@
 //!   - the final line is `{"type":"result","stop_reason":"EndTurn"}`.
 //!
 //! Test 2 (`serve_subprocess_e2e`) — subprocess: write a temp config YAML,
-//! spawn `bitrouter acp serve --agent stub --config <path>` as a child
+//! spawn `bro acp serve --agent stub --config <path>` as a child
 //! process, drive its stdio with raw JSON-RPC NDJSON (the ACP wire format),
 //! and assert the full `initialize` → `session/new` → `session/prompt` round-
 //! trip succeeds, including the forwarded `session/update` carrying "hi".
@@ -575,7 +575,7 @@ agents:
             done
 "#;
 
-/// Spawn `bitrouter acp serve --agent stub --config <path>` as a child process
+/// Spawn `bro acp serve --agent stub --config <path>` as a child process
 /// and drive it with raw JSON-RPC NDJSON — the actual ACP wire format over
 /// stdio. This exercises the path that the in-process `down.rs` duplex tests
 /// cannot: real OS-level stdio pipes and the CLI entry point.
@@ -614,10 +614,7 @@ async fn serve_subprocess_e2e() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
 
     if !binary.exists() {
         eprintln!(
@@ -627,7 +624,7 @@ async fn serve_subprocess_e2e() {
         return;
     }
 
-    // Spawn `bitrouter acp serve --agent stub --config <path>`.
+    // Spawn `bro acp serve --agent stub --config <path>`.
     // Redirect stderr to a temp file so we can inspect it on failure.
     let stderr_path = dir.path().join("serve.stderr");
     let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
@@ -650,7 +647,7 @@ async fn serve_subprocess_e2e() {
         // a stalled server is reaped rather than leaked.
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter acp serve");
+        .expect("spawn bro acp serve");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     let child_stdout = child.stdout.take().expect("child stdout");
@@ -774,7 +771,7 @@ async fn serve_subprocess_e2e() {
 
     // ── Disconnect: serve must exit on its OWN when the manager closes stdin ─
     // This is the regression guard for the process-leak bug: dropping the
-    // child's stdin handle delivers EOF to `bitrouter acp serve` (the manager
+    // child's stdin handle delivers EOF to `bro acp serve` (the manager
     // disconnecting). The server must detect EOF, tear down, drop its
     // `Arc<Session>` (which kills the upstream agent child), and exit — WITHOUT
     // us having to `kill()` it. We assert it exits on its own within a few
@@ -795,7 +792,7 @@ async fn serve_subprocess_e2e() {
             // then fail loudly — this is the bug we are guarding against.
             let _ = child.kill().await;
             panic!(
-                "bitrouter acp serve did NOT exit within 5s after the manager \
+                "bro acp serve did NOT exit within 5s after the manager \
                  closed stdin — it hung (process/agent-child leak regression)"
             );
         }
@@ -1167,7 +1164,7 @@ agents:
             done
 "#;
 
-/// A live `bitrouter acp serve` subprocess, initialized and with a session
+/// A live `bro acp serve` subprocess, initialized and with a session
 /// open — the fixture the four conformance assertions below each drive.
 struct ServeFixture {
     child: tokio::process::Child,
@@ -1202,10 +1199,7 @@ impl ServeFixture {
         } else {
             "release"
         };
-        let binary = workspace_root
-            .join("target")
-            .join(profile)
-            .join("bitrouter");
+        let binary = workspace_root.join("target").join(profile).join("bro");
         if !binary.exists() {
             eprintln!(
                 "conformance: binary not found at {}; skipping",
@@ -1232,7 +1226,7 @@ impl ServeFixture {
             .stderr(stderr_file)
             .kill_on_drop(true)
             .spawn()
-            .expect("spawn bitrouter acp serve");
+            .expect("spawn bro acp serve");
 
         let mut stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -1335,7 +1329,7 @@ impl ServeFixture {
                 // than a leak that outlives the run.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                panic!("bitrouter acp serve did not exit within 5s of stdin close");
+                panic!("bro acp serve did not exit within 5s of stdin close");
             }
         }
     }
@@ -1367,7 +1361,7 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
 
 // ── Test 5: `chat` on a pipe ─────────────────────────────────────────────────
 
-/// `bitrouter chat` renders for a person; a redirect has none. Spawn it with
+/// `bro chat` renders for a person; a redirect has none. Spawn it with
 /// stdout on a pipe, feed it one prompt, and assert the transcript arrives as
 /// plain text — **no ESC byte anywhere**.
 ///
@@ -1395,10 +1389,7 @@ async fn chat_on_a_pipe_is_plain_text() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
     if !binary.exists() {
         eprintln!(
             "chat_on_a_pipe_is_plain_text: binary not found at {}; skipping",
@@ -1423,7 +1414,7 @@ async fn chat_on_a_pipe_is_plain_text() {
         .stderr(stderr_file)
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter chat");
+        .expect("spawn bro chat");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     child_stdin
@@ -1454,7 +1445,7 @@ async fn chat_on_a_pipe_is_plain_text() {
 
 // ── `acp serve` emits the ignored-config warnings ─────────────────────────────
 
-/// `bitrouter acp serve` never builds an `App` and never reaches
+/// `bro acp serve` never builds an `App` and never reaches
 /// `build_observability`, so for the whole of PR #851 it was the one telemetry
 /// surface that read `plugins.*` and said nothing about the blocks it ignores.
 /// The guard is emitted first thing in `acp_cli::serve`, which is why this test
@@ -1480,10 +1471,7 @@ async fn serve_warns_about_ignored_plugin_blocks() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
     if !binary.exists() {
         eprintln!(
             "serve_warns_about_ignored_plugin_blocks: binary not found at {}; skipping",

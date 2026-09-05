@@ -133,13 +133,13 @@ impl ManagementClient {
     }
 
     /// The base URL this client targets. Exposed primarily for
-    /// diagnostics — `bitrouter cloud whoami` prints it.
+    /// diagnostics — `bro cloud whoami` prints it.
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
     /// The namespace this client's credential is baked into, or `None`
-    /// for a namespace-null / pre-namespace credential. `bitrouter cloud
+    /// for a namespace-null / pre-namespace credential. `bro cloud
     /// whoami` prints it; `namespace list` marks the active one.
     pub fn namespace_id(&self) -> Option<&str> {
         self.namespace_id.as_deref()

@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
-/// Result of `bitrouter key sign`. The plaintext `secret` is shown once — only
+/// Result of `bro key sign`. The plaintext `secret` is shown once — only
 /// its SHA-256 hash is stored.
 #[derive(Serialize)]
 pub struct KeySignReport {
@@ -31,7 +31,7 @@ impl CliReport for KeySignReport {
     }
 }
 
-/// Result of `bitrouter policy create <id>`.
+/// Result of `bro policy create <id>`.
 #[derive(Serialize)]
 pub struct PolicyCreateReport {
     pub id: String,
@@ -44,13 +44,14 @@ impl CliReport for PolicyCreateReport {
         h.line(&format!("wrote starter policy to {}", self.path))?;
         h.line("  edit, then bind to a key with:")?;
         h.line(&format!(
-            "    bitrouter key sign --user <id> --policy {}",
+            "    {} key sign --user <id> --policy {}",
+            bitrouter_sdk::invocation::name(),
             self.id
         ))
     }
 }
 
-/// Result of `bitrouter providers login <provider>`.
+/// Result of `bro providers login <provider>`.
 #[derive(Serialize)]
 pub struct ProviderLoginReport {
     pub provider: String,
@@ -69,7 +70,7 @@ impl CliReport for ProviderLoginReport {
     }
 }
 
-/// Result of `bitrouter providers logout <provider>`.
+/// Result of `bro providers logout <provider>`.
 #[derive(Serialize)]
 pub struct ProviderLogoutReport {
     pub provider: String,

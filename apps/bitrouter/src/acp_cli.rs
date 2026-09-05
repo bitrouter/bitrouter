@@ -1,4 +1,4 @@
-//! `bitrouter acp` subcommands — headless ACP session surface.
+//! `bro acp` subcommands — headless ACP session surface.
 //!
 //! Two entry points:
 //!
@@ -37,7 +37,7 @@
 //! {"type":"submitted"}
 //! ```
 //!
-//! `--format text` prints the transcript exactly as `bitrouter chat` prints
+//! `--format text` prints the transcript exactly as `bro chat` prints
 //! it to a pipe; `--format quiet` prints the assistant's text and nothing else.
 //!
 //! ## Permissions
@@ -59,6 +59,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
+use bitrouter_sdk::invocation;
 use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -105,7 +106,7 @@ pub enum PromptFormat {
     /// One self-describing JSON object per line.
     #[default]
     Json,
-    /// The transcript as `bitrouter chat` prints it to a pipe.
+    /// The transcript as `bro chat` prints it to a pipe.
     Text,
     /// The assistant's text and nothing else.
     Quiet,
@@ -311,14 +312,16 @@ impl RoutingError {
     }
 
     /// One-line remediation hint.
-    fn hint(&self) -> &'static str {
+    fn hint(&self) -> String {
         match self {
-            RoutingError::DaemonUnreachable { .. } => "run `bitrouter start`, or pass --direct",
+            RoutingError::DaemonUnreachable { .. } => {
+                format!("run `{} start`, or pass --direct", invocation::name())
+            }
             RoutingError::AuthRequired { .. } => {
-                "export BITROUTER_API_KEY (or create a key), or pass --direct"
+                "export BITROUTER_API_KEY (or create a key), or pass --direct".to_string()
             }
             RoutingError::EndpointConfiguration { .. } => {
-                "check the pinned ACP adapter configuration, or pass --direct"
+                "check the pinned ACP adapter configuration, or pass --direct".to_string()
             }
         }
     }
@@ -376,7 +379,7 @@ pub struct Routed {
 
 /// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
 /// inserting the bundled-catalog invocation when the id is catalog-known but
-/// unconfigured (so `bitrouter spawn claude-acp` works with no YAML edit).
+/// unconfigured (so `bro spawn claude-acp` works with no YAML edit).
 ///
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
@@ -454,8 +457,9 @@ async fn apply_routing_with_cloud_credentials(
     if !harness.env_args_routable() {
         eprintln!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
-             (`bitrouter launch` does); launching direct",
-            harness.id
+             (`{cli} launch` does); launching direct",
+            harness.id,
+            cli = invocation::name()
         );
         warn_model_dropped("the harness routes only in the interactive facet");
         return Ok(Routed::default());
@@ -630,7 +634,7 @@ where
         .context("writing NDJSON line")
 }
 
-/// `bitrouter spawn <agent> --check` — preflight the harness resolution, the
+/// `bro spawn <agent> --check` — preflight the harness resolution, the
 /// routing decision, and (when routing) daemon reachability, without launching
 /// anything or auto-starting a daemon. Read-only.
 pub async fn spawn_check(
@@ -677,8 +681,10 @@ pub async fn spawn_check(
                     "agent",
                     SpawnCheckStatus::Fail,
                     format!(
-                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter launch --agent {}`",
-                        h.interactive_binary.unwrap_or(agent_id)
+                        "'{agent_id}' is interactive-only (no ACP adapter) — use \
+                         `{cli} launch --agent {}`",
+                        h.interactive_binary.unwrap_or(agent_id),
+                        cli = invocation::name()
                     ),
                 ));
                 (String::new(), Vec::new())
@@ -793,7 +799,10 @@ pub async fn spawn_check(
             row(
                 "daemon",
                 SpawnCheckStatus::Fail,
-                format!("{base_url} is unreachable — run `bitrouter start` (or pass --direct)"),
+                format!(
+                    "{base_url} is unreachable — run `{cli} start` (or pass --direct)",
+                    cli = invocation::name()
+                ),
             )
         });
     }
@@ -1025,7 +1034,7 @@ impl AcpSessionCost for DaemonSessionCost {
 /// the attributed requests carries charge evidence: a session BitRouter routed
 /// but could not price is not a free one, so it is never `$0.00`. When some
 /// rows are priced the figure is their sum — the same floor
-/// `bitrouter status --requests` reports alongside its unpriced count.
+/// `bro status --requests` reports alongside its unpriced count.
 fn attributed_cost(spend_micro_usd: u64, requests: u64, unpriced: u64) -> Option<Cost> {
     (requests > 0 && unpriced < requests)
         .then(|| Cost::new(spend_micro_usd as f64 / 1_000_000.0, "USD"))
@@ -1259,8 +1268,8 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     // the config as read — before `apply_routing_with_cloud_credentials`
     // rewrites it — and safe to emit at once because `main` installs this
     // path's subscriber before dispatching (`init_session_log_tracing_
-    // subscriber` for `bitrouter acp serve`, `init_basic_tracing_subscriber`
-    // for `bitrouter spawn --serve`). Both write to stderr, so the JSON-RPC
+    // subscriber` for `bro acp serve`, `init_basic_tracing_subscriber`
+    // for `bro spawn --serve`). Both write to stderr, so the JSON-RPC
     // stream on stdout stays pristine.
     for message in crate::assemble::ignored_config_warnings(&config) {
         tracing::warn!("{message}");
@@ -1717,8 +1726,9 @@ fn unauthenticated_message(
     } else {
         format!(
             "'{agent_id}' is not authenticated. It offers: {offered}. \
-             Run `bitrouter chat {agent_id}` in a terminal to sign in, or use the \
-             harness's own tooling"
+             Run `{cli} chat {agent_id}` in a terminal to sign in, or use the \
+             harness's own tooling",
+            cli = invocation::name()
         )
     }
 }
@@ -1796,7 +1806,7 @@ async fn chat_piped(
 ///
 /// When `no_wait` is true: shut down the session immediately after emitting
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
-/// persistent session should use `bitrouter acp serve` instead.
+/// persistent session should use `bro acp serve` instead.
 ///
 /// `options.contract` is the optional `--result-schema` contract: its
 /// instruction rides the prompt, and the terminal `result` line gains
@@ -1912,7 +1922,7 @@ where
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
         // killed on shutdown. Callers needing a persistent background session
-        // should use `bitrouter acp serve` instead. Whatever the harness asks
+        // should use `bro acp serve` instead. Whatever the harness asks
         // between ack and teardown is denied by the client's own ledger.
         presenter.submitted().await?;
         let clean = session.shutdown().await;
@@ -1956,7 +1966,7 @@ where
 /// A teardown that did not confirm **fails the command**. Before `prompt`
 /// moved onto the shared client it did this by `?`-ing on `shutdown()`; the
 /// controlled session logs and returns a flag instead, and the flag went
-/// unread — so an orchestrator scripting `bitrouter acp prompt` saw exit 0
+/// unread — so an orchestrator scripting `bro acp prompt` saw exit 0
 /// for a run whose harness child may still be alive. That was an undeclared
 /// change, and this is it declared: the NDJSON on stdout is already complete
 /// and correct, and the status code is what says the process did not end
@@ -2562,7 +2572,7 @@ async fn build_observability(
     // ignored-config warnings for free — and they read the same telemetry
     // config, which is exactly what the skill documents. Without this, a stale
     // `plugins.bitrouter-observe` block is silent on `chat` and `acp prompt`
-    // while being loud on `bitrouter serve`. `acp_cli::serve` emits the same
+    // while being loud on `bro serve`. `acp_cli::serve` emits the same
     // set itself, since it never reaches this function. The subscriber is
     // already installed on all of these paths, so unlike the daemon these can
     // be emitted in place.

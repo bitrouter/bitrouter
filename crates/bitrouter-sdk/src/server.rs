@@ -386,7 +386,7 @@ async fn mcp_invoke_inner(
     // rejects everything else as "method not found"). Without this, every
     // spec-compliant client (Claude clients, opencode, the MCP SDK) fails its
     // opening `initialize` over Streamable HTTP and never reaches a tool call;
-    // only handshake-skipping callers (curl, `bitrouter tools`) worked before.
+    // only handshake-skipping callers (curl, `bro tools`) worked before.
     // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
     match method.as_str() {
         "initialize" => {
@@ -791,7 +791,7 @@ async fn handle(
     // on, else a pre-auth anonymous placeholder for `AuthHook` to upgrade or
     // reject.
     //
-    // On the `skip_auth` path only, a credential `bitrouter launch` minted
+    // On the `skip_auth` path only, a credential `bro launch` minted
     // tags the caller with its session, so per-launch spend is answerable on
     // the zero-config install that cannot answer it any other way. This never
     // grants anything — see `caller::launch_tag` — and a real key falls

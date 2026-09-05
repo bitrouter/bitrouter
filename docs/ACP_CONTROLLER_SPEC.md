@@ -1209,12 +1209,12 @@ until the single-user-session TUI migration replaces that path.
 
 ### 16.3 Existing commands
 
-- `bitrouter acp serve --agent <harness>` is the headless stdio entry point for
+- `bro acp serve --agent <harness>` is the headless stdio entry point for
   one fixed-harness controller connection; its explicit harness selection
   remains.
-- `bitrouter chat <harness>` remains on the existing single-session engine in
+- `bro chat <harness>` remains on the existing single-session engine in
   Phase 2; TUI/controller convergence is separate product work.
-- Direct `bitrouter launch` remains the harness-owned native UX and is
+- Direct `bro launch` remains the harness-owned native UX and is
   unaffected.
 - No TUI command is required to prove controller correctness.
 

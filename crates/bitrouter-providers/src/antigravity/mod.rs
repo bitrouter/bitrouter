@@ -139,7 +139,8 @@ impl AntigravityAuthApplier {
                 status: 401,
                 message: format!(
                     "no google-ai credential for label '{label}' — \
-                     run `bitrouter providers login google-ai` (imports your `agy` session)"
+                     run `{cli} providers login google-ai` (imports your `agy` session)",
+                    cli = bitrouter_sdk::invocation::name()
                 ),
             })?;
         if needs_refresh(&stored) {
@@ -275,8 +276,9 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
             status: 401,
             message: format!(
                 "google-ai OAuth refresh failed ({error}{}). Re-run `agy` to re-authenticate, \
-                 then `bitrouter providers login google-ai`.",
-                description.map(|d| format!(": {d}")).unwrap_or_default()
+                 then `{cli} providers login google-ai`.",
+                description.map(|d| format!(": {d}")).unwrap_or_default(),
+                cli = bitrouter_sdk::invocation::name()
             ),
         },
         other => BitrouterError::Upstream {
@@ -429,8 +431,7 @@ mod tests {
             .unwrap();
         let err = applier.apply(req, &target()).await.unwrap_err();
         assert!(
-            err.to_string()
-                .contains("bitrouter providers login google-ai"),
+            err.to_string().contains("bro providers login google-ai"),
             "expected login hint, got: {err}"
         );
     }

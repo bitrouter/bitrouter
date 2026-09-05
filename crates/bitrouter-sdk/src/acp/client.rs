@@ -196,7 +196,7 @@ impl PendingPermission {
     }
 
     /// Answer this request with the reject option — the safe default when no
-    /// manager will ever broker it (the headless `bitrouter acp prompt` path).
+    /// manager will ever broker it (the headless `bro acp prompt` path).
     /// Convenience over [`resolve`](Self::resolve); idempotent.
     pub fn deny(&self) {
         self.resolve(select_option(PermissionOutcome::Deny, &self.options));

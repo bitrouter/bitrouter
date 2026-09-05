@@ -5,9 +5,9 @@
 //! Two entry points, both landing here:
 //! - bare `bitrouter` ([`entry`]) runs the credential [`probe`] and either
 //!   launches the wizard (unconfigured) or prints a one-line status + a
-//!   `bitrouter launch` hint (configured). It never re-onboards a configured
+//!   `bro launch` hint (configured). It never re-onboards a configured
 //!   user and never silently spawns a harness or daemon.
-//! - `bitrouter init` ([`run`]) runs the wizard interactively, or — with
+//! - `bro init` ([`run`]) runs the wizard interactively, or — with
 //!   `--yes` (or no TTY) — headlessly, emitting the JSON result envelope and
 //!   never blocking on a human.
 //!
@@ -29,6 +29,7 @@ use bitrouter_providers::hosted::account::credentials::default_credentials_path;
 use bitrouter_providers::hosted::account::manager::CredentialManager;
 use bitrouter_providers::hosted::applier::PROVIDER_ID;
 use bitrouter_providers::oauth::credential_store::CredentialStore;
+use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -143,7 +144,7 @@ fn detected_env_keys(lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
 /// The three-way finish exit (§3.2 step 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AfterAction {
-    /// Launch the harness's native TUI now (`bitrouter launch`).
+    /// Launch the harness's native TUI now (`bro launch`).
     Launch,
     /// Start the daemon and print a paste-in snippet for an existing tool.
     Serve,
@@ -297,7 +298,7 @@ impl CliReport for OnboardingReport {
 }
 
 /// The configured-user status view for bare `bitrouter` (§13 Q1): a compact
-/// status plus a `bitrouter launch` hint — never clap help, never the wizard.
+/// status plus a `bro launch` hint — never clap help, never the wizard.
 #[derive(Debug, Clone, Serialize)]
 pub struct OnboardingStatusReport {
     /// Always `"status"`.
@@ -329,7 +330,10 @@ impl OnboardingStatusReport {
             action: "status",
             configured: true,
             signals: parts,
-            hint: "run `bitrouter launch` to start a coding session".to_string(),
+            hint: format!(
+                "run `{} launch` to start a coding session",
+                invocation::name()
+            ),
         }
     }
 }
@@ -372,7 +376,7 @@ pub async fn entry(output: &Output) -> Result<()> {
     }
 }
 
-/// `bitrouter init [flags]`. Runs the wizard interactively, or headlessly when
+/// `bro init [flags]`. Runs the wizard interactively, or headlessly when
 /// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
     let manager = crate::cloud::default_manager()?;
@@ -387,7 +391,7 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
         run_interactive(flags, &signals, output, manager).await
     } else {
         // No TTY and no `--yes`: fall back to the headless runner. Preserve the
-        // historical `bitrouter init` behavior (scaffold the starter file) by
+        // historical `bro init` behavior (scaffold the starter file) by
         // forcing the config write, and still emit the envelope.
         run_headless(
             OnboardingFlags {
@@ -440,9 +444,10 @@ async fn run_headless(
             Ok(_) => installed.push(agent.spec().id.to_string()),
             Err(_) => note(&format!(
                 "harness '{}' is not installed — skipped (install it, or run \
-                 `bitrouter launch -a {}` interactively)",
+                 `{cli} launch -a {}` interactively)",
                 agent.spec().id,
-                agent.spec().id
+                agent.spec().id,
+                cli = invocation::name()
             )),
         }
     }
@@ -618,7 +623,7 @@ async fn run_interactive(
     // --- Step 1: credentials ---
     let mut configured = signals.already_configured();
     let mut skipped: Vec<String> = Vec::new();
-    // Apply any flag-supplied credentials first (so `bitrouter init --api-key …`
+    // Apply any flag-supplied credentials first (so `bro init --api-key …`
     // / `--provider …` seed before we prompt), then either accept the detected
     // set (`--use-detected`) or open the interactive credential menu.
     apply_flag_credentials(
@@ -886,7 +891,7 @@ async fn finish_serve(mut report: OnboardingReport, output: &Output) -> Result<(
 /// Build the three labeled paste-in shapes (§13 Q2). Templates the bearer by
 /// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
 /// the local `skip_auth` placeholder. The Codex form is taken from the shared
-/// harness catalog so it stays in lockstep with `bitrouter launch`.
+/// harness catalog so it stays in lockstep with `bro launch`.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::spawn::derive_base_url(listen);
     let token = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV)
@@ -1076,9 +1081,10 @@ fn print_hint() {
         reset = p.reset,
     );
     eprintln!();
-    eprintln!("  bitrouter init                 # guided setup wizard (interactive)");
-    eprintln!("  bitrouter cloud login          # one BitRouter Cloud account, every model");
-    eprintln!("  bitrouter providers login claude-code   # a subscription you already pay for");
+    let cli = invocation::name();
+    eprintln!("  {cli} init                 # guided setup wizard (interactive)");
+    eprintln!("  {cli} cloud login          # one BitRouter Cloud account, every model");
+    eprintln!("  {cli} providers login claude-code   # a subscription you already pay for");
     eprintln!("  export OPENAI_API_KEY=…        # or any BYOK provider key, then re-run");
     eprintln!();
 }
@@ -1339,7 +1345,7 @@ mod tests {
         };
         let report = OnboardingStatusReport::from_signals(&signals);
         assert!(report.configured);
-        assert!(report.hint.contains("bitrouter launch"));
+        assert!(report.hint.contains("bro launch"));
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "status");
         assert_eq!(v["configured"], true);
