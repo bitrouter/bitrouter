@@ -56,13 +56,6 @@ models:
         no_cache: 0.27
       output_tokens:
         text: 0.42
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: moonshotai/Kimi-K2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.45
-      output_tokens:
-        text: 2.25
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/Kimi-K2.6
     pricing:
@@ -99,20 +92,6 @@ models:
         no_cache: 0.2
       output_tokens:
         text: 1.6
-  - id: minimax/minimax-m2.5
-    provider_model_id: MiniMaxAI/MiniMax-M2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 1.2
-  - id: z-ai/glm-5
-    provider_model_id: zai-org/GLM-5
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-      output_tokens:
-        text: 2.55
   - id: z-ai/glm-5.1
     provider_model_id: zai-org/GLM-5.1
     pricing:

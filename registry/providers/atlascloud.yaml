@@ -83,14 +83,6 @@ models:
         cache_read: 0.13
       output_tokens:
         text: 0.38
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: moonshotai/kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.49
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/kimi-k2.6
     pricing:
@@ -107,14 +99,6 @@ models:
         cache_read: 0.16
       output_tokens:
         text: 4
-  - id: minimax/minimax-m2.5
-    provider_model_id: minimaxai/minimax-m2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.295
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
   - id: minimax/minimax-m3
     provider_model_id: minimaxai/minimax-m3
     pricing:

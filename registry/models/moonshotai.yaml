@@ -1,15 +1,3 @@
-- id: moonshotai/kimi-k2.5
-  name: 'Kimi: K2.5'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 262144
-  max_output_tokens: 65535
-  knowledge_cutoff: 2025-01
-  open_weights: true
-  family: kimi-k2
 - id: moonshotai/kimi-k2.6
   name: 'Kimi: K2.6'
   input_modalities:

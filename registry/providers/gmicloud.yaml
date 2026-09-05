@@ -72,14 +72,6 @@ models:
         cache_read: 0.38
       output_tokens:
         text: 8
-  - id: z-ai/glm-5
-    provider_model_id: zai-org/GLM-5-FP8
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-        cache_read: 0.12
-      output_tokens:
-        text: 1.92
   - id: z-ai/glm-5.1
     provider_model_id: zai-org/GLM-5.1-FP8
     pricing:
