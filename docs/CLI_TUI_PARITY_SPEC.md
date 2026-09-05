@@ -36,12 +36,18 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
    `aws-shell` — are the only obituaries in the set
    ([§6.1](#61-nobody-achieved-parity-and-the-two-who-tried-are-dead),
    [§6.3](#63-hub-the-only-rigorous-post-mortem-of-a-parity-layer)).
-   **[Amended post-research.]** The coding-agent peer group agrees — none of the
-   four surveyed has parity, and Codex has *no* shared dispatch at all — but
-   **OpenCode got substantially closer than any tool in §6.1**, by putting the
-   command registry on the server and making `opencode run --command` a client
-   of it. Parity is reachable in this field; it is reachable only by inversion
-   ([§6.9](#69-the-agent-harness-peer-group), findings 8 and 10).
+   **[Amended post-research.]** The coding-agent peer group agrees in the
+   direction the goal is stated — none of the five surveyed has it, every one
+   has CLI surface with no interactive expression, and Codex has *no* shared
+   dispatch at all. But two of them **do** share a dispatcher across the
+   terminal and the headless CLI: OpenCode through a server-side
+   `session.command` port, and aider by making its whole 43-command table
+   headlessly invocable. Both got there by **inversion** — the registry
+   underneath both surfaces, the headless caller a client of it — which is
+   [§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)'s
+   result, and the shape of the achievable goal in
+   [§3](#3-the-goal-restated) ([§6.9](#69-the-agent-harness-peer-group),
+   findings 8, 10 and 16).
 4. The topology is **three disjoint sets**, not a subset with a gap. BitRouter
    already has a set-C member — `route/set`, a session-scoped write with no
    headless subject — and the current rules call it a violation
@@ -619,20 +625,37 @@ one gave up on. It has not. This subsection is the check, done against primary
 sources — vendor documentation, the harnesses' own source, and the protocol
 repository — with counts derived here rather than quoted.
 
-**Method and its limits, stated first.** Where a harness is open source
-(Codex CLI, OpenCode) the numbers below are **counted** from the registry in the
+**Method and its limits, stated first.** Where a harness is open source (Codex
+CLI, OpenCode, aider) the numbers below are **counted** from the registry in the
 tree, at the commit reachable on the default branch on 2026-09-05, and the file
 is named so the count can be re-run. Where it is not (Claude Code) nothing is
 counted: the findings are qualitative and taken from published documentation and
 one maintainer reply on a public issue. Anywhere a number is an estimate it says
-so. Four harnesses were in scope; `pi` and `aider` were not reached.
+so. Five harnesses are covered — the four in scope plus `aider`, reached with
+time remaining. `pi` was not reached.
 
 **The direct answer: no coding-agent harness in the survey has CLI/TUI command
-parity, and one of the four has no overlap at all by construction.** But the
-result is more interesting than "everyone gave up", because OpenCode got
-substantially closer than the §6.1 cohort ever did, and it got there by the same
-inversion that makes tmux work ([§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)).
-That is the finding worth carrying.
+parity in the direction the brief asked about** — every one of them has CLI
+surface with no interactive expression, and in three of five that surface is
+large. But the survey found both degenerate cases of the three-set topology, and
+they are more instructive than the negative result:
+
+- **Codex's set A is empty.** 59 interactive commands, 29 CLI subcommands, nine
+  shared names, zero shared dispatch
+  ([§6.9.2](#692-codex-cli--the-registry-lives-in-the-tui-crate-so-the-overlap-is-zero)).
+- **aider's set C is empty.** All 43 chat commands are dispatchable headlessly,
+  through one dispatcher with three callers
+  ([§6.9.7](#697-aider--set-c-is-empty-and-the-cli-is-a-client-of-the-command-language)).
+- **OpenCode is in between and shows the mechanism**: a shared `session.command`
+  port under both surfaces, with the registry in the server package
+  ([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it)).
+
+**The two harnesses with real cross-surface sharing both got there by the same
+inversion that makes tmux work** ([§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)):
+the command registry is underneath both surfaces, and the headless caller is a
+*client* of the interactive vocabulary rather than its parent. That is the
+finding worth carrying, and BitRouter reached it independently for one verb in
+#866 ([§6.10](#610-the-in-repo-precedent-866)).
 
 #### 6.9.1 Claude Code — a documented terminal-only class, and a shared class that is not commands
 
@@ -1187,6 +1210,82 @@ that string ([§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion
 **Whatever `SessionActions::run` takes, it must not be one string.** A `Vec<String>`
 or a typed per-action request costs nothing today and forecloses the one bug the
 only shared-port implementation in the field actually has.
+
+#### 6.9.7 aider — set C is empty, and the CLI is a client of the command language
+
+`aider` was outside the original scope and was reached with time remaining. It is
+the most important thing in this subsection, because it is the **counter-example
+the brief asked for**: a coding-agent harness where the entire interactive
+command vocabulary is reachable headlessly.
+
+Counted from [`Aider-AI/aider`](https://github.com/Aider-AI/aider) on 2026-09-05:
+
+| Measure | Value | Source |
+|---|---|---|
+| Chat commands | **43** | `def cmd_*` methods in [`aider/commands.py`](https://github.com/Aider-AI/aider/blob/main/aider/commands.py) — counted |
+| Of those, reachable headlessly | **43** | one dispatcher, three callers |
+| Dispatcher | `Commands.run(inp)` → `matching_commands()` → `do_run(command, rest)` | same file, `:312` |
+
+**Three callers, one dispatcher.** The interactive prompt loop is one.
+`aider --message "/add src/foo.py"` is the second: `main.py` does
+`coder.run(with_message=args.message)`, and the coder's run path routes anything
+starting with `/` or `!` through `Commands.run`. `aider --load <file>` is the
+third, and it is a **command script**: `cmd_load` reads the file, skips blanks
+and `#` comments, and calls `self.run(cmd)` per line
+([`commands.py:1465`](https://github.com/Aider-AI/aider/blob/main/aider/commands.py)).
+
+The tell that this is deliberate rather than incidental is one line in `main.py`:
+
+```python
+if args.apply_clipboard_edits:
+    args.edit_format = main_model.editor_edit_format
+    args.message = "/paste"
+```
+
+**A CLI flag implemented by injecting a slash command into the headless message
+channel.** The command language is the primary surface and the flag is sugar over
+it — [§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)'s
+inversion, stated in three lines, in a coding agent.
+
+⇒ **Finding 16. Set C can be empty too, and the harness where it is empty is the
+one whose CLI is a client of its interactive command table rather than its
+parent.** Codex and aider are the two extremes of the same axis:
+
+| Harness | Set A | Set B | Set C | What decides it |
+|---|---|---|---|---|
+| Codex | **empty** | 20 subcommands | 59 commands | registry lives in the TUI crate |
+| Claude Code | prompt-expansion commands | flags + `claude <verb>` | terminal-only built-ins | registry is split by implementation kind |
+| OpenCode | `init`, `review`, user/MCP/skill | ~22 subcommands | ~15 renderer verbs | registry lives in the server; TUI keeps its own |
+| aider | all 43 | CLI flags with no command | **empty** | registry is the primary surface; the CLI calls it |
+
+**What this does and does not do to the spec's argument.** It does *not* rescue
+the stated goal: aider's set B is large — most of its ~100 CLI flags have no
+command — so even the harness with an empty set C is not at parity in the
+"every CLI command has a TUI command" direction, which is the direction the brief
+asked about. Nobody is. What it does is confirm, for the second time, that the
+**achievable** parity is the one this spec's P1 states: a shared *interpreter*
+under both surfaces, with each surface feeding it in the idiom it can express.
+Two of the four harnesses got there, both by inversion, and BitRouter got there
+for one verb in #866 ([§6.10](#610-the-in-repo-precedent-866)) by the same means.
+
+**Two mechanics worth stealing, and one worth avoiding.**
+
+- **`--load` is `/commands` for scripts.** A file of commands, `#` comments
+  skipped, executed in order, is a cheap and honest headless surface for an
+  interactive vocabulary, and it costs nothing once a dispatcher exists. Not
+  proposed here — BitRouter's admitted set is six commands, four of them reads —
+  but it is the natural shape if the set ever grows.
+- **Prefix disambiguation.** `matching_commands()` accepts any unambiguous
+  prefix and errors with *"Ambiguous command: …"* otherwise. That is a recall
+  aid the `/commands` registry in [phase 0](#phase-0--the-discoverability-defect-no-design-required)
+  could offer for free, and it is only safe *because* there is a registry to
+  enumerate — which is the argument for building the registry first.
+- **The argument grammar is the same hand-parse everyone else does.**
+  `do_run(command, rest_inp)` hands each `cmd_*` the raw remainder of the line.
+  Forty-three independent parsers, no declaration on the entry, no completion
+  contract beyond an optional `completions_raw_<cmd>` method. This is
+  [D9](#d9--argument-grammar) option (a) at full scale and it is the one part of
+  aider's design not to copy.
 
 ### 6.10 The in-repo precedent (#866)
 
