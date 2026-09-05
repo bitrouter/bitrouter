@@ -12,7 +12,7 @@ use crate::eval::types::{
 
 use super::decision::{PolicyDecisionRecord, ingress_request_id_sha256};
 
-pub const ROUTING_BASELINE_SCHEMA_VERSION: u32 = 1;
+pub const ROUTING_BASELINE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutingBaselineReport {
@@ -97,14 +97,26 @@ impl RoutingBaselineReport {
                 increment(&mut excluded_by_reason, "missing_selected_tier");
                 continue;
             };
+            // Controls may only assign a declared compound target. Continuation
+            // can pin an effort that a scalar tier did not declare for this input;
+            // exclude that record without rewriting its pre-guard measurement.
             let targets_by_tier = measurement
                 .candidates
                 .iter()
-                .map(|candidate| (candidate.tier.as_str(), candidate.model.as_str()))
+                .map(|candidate| {
+                    (
+                        candidate.tier.as_str(),
+                        (candidate.model.as_str(), candidate.effort),
+                    )
+                })
                 .collect::<BTreeMap<_, _>>();
             if targets_by_tier.len() != measurement.candidates.len()
-                || targets_by_tier.get(selected_tier.as_str()).copied()
-                    != record.selected_model.as_deref()
+                || !targets_by_tier
+                    .get(selected_tier.as_str())
+                    .is_some_and(|(model, effort)| {
+                        Some(*model) == record.selected_model.as_deref()
+                            && *effort == record.selected_effort
+                    })
             {
                 increment(&mut excluded_by_reason, "selected_target_mismatch");
                 continue;
@@ -117,7 +129,7 @@ impl RoutingBaselineReport {
         }
         eligible.sort_by(|left, right| left.decision_id_digest.cmp(&right.decision_id_digest));
         let dataset_digest =
-            canonical_digest(&("bitrouter.routing-baseline-dataset.v1", &eligible))?;
+            canonical_digest(&("bitrouter.routing-baseline-dataset.v2", &eligible))?;
         let mut grouped = BTreeMap::<String, Vec<EligibleDecision>>::new();
         for decision in eligible {
             grouped
@@ -177,7 +189,7 @@ fn build_group(
             .collect();
         always_tier.push(RoutingBaseline {
             baseline_id: canonical_digest(&(
-                "bitrouter.routing-baseline.v1",
+                "bitrouter.routing-baseline.v2",
                 RoutingBaselineKind::AlwaysTier,
                 dataset_digest,
                 candidate_set_digest.as_str(),
@@ -221,7 +233,7 @@ fn build_group(
     assignments.sort_by(|left, right| left.decision_id_digest.cmp(&right.decision_id_digest));
     let share_matched = RoutingBaseline {
         baseline_id: canonical_digest(&(
-            "bitrouter.routing-baseline.v1",
+            "bitrouter.routing-baseline.v2",
             RoutingBaselineKind::ShareMatched,
             dataset_digest,
             candidate_set_digest.as_str(),
@@ -471,5 +483,99 @@ mod tests {
             original_report.groups[0].share_matched.assignments,
             permuted_report.groups[0].share_matched.assignments
         );
+    }
+
+    #[test]
+    fn baseline_excludes_effective_effort_outside_declared_targets() -> anyhow::Result<()> {
+        let mut decision = record(Some("request-a"), "economy", "");
+        decision.input_effort = Some(ReasoningEffort::Low);
+        decision.selected_effort = Some(ReasoningEffort::Low);
+        decision.route_measurement = Some(RouteDecisionMeasurement::new(
+            "economy",
+            "vendor/economy",
+            Some(ReasoningEffort::Low),
+            vec![RouteActionCandidate {
+                tier: "economy".into(),
+                model: "vendor/economy".into(),
+                effort: Some(ReasoningEffort::Low),
+                logging_probability_ppm: 1_000_000,
+            }],
+        )?);
+        let accepted = RoutingBaselineReport::from_records(&[decision.clone()])?;
+        assert_eq!(accepted.eligible_decision_count, 1);
+        assert_eq!(
+            accepted.groups[0].share_matched.assignments[0].effort,
+            Some(ReasoningEffort::Low)
+        );
+
+        let measurement = decision.route_measurement.clone();
+        decision.continuation_adjustment = Some("pin".into());
+        decision.selected_effort = Some(ReasoningEffort::High);
+        let pinned = RoutingBaselineReport::from_records(&[decision.clone()])?;
+        assert_eq!(pinned.eligible_decision_count, 0);
+        assert_eq!(
+            pinned.excluded_by_reason.get("selected_target_mismatch"),
+            Some(&1)
+        );
+        assert_ne!(accepted.dataset_digest, pinned.dataset_digest);
+        assert_eq!(decision.route_measurement, measurement);
+
+        // An unknown effective effort is not evidence for an explicit low effort.
+        decision.selected_effort = None;
+        assert_eq!(
+            RoutingBaselineReport::from_records(&[decision])?.eligible_decision_count,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn baseline_preserves_declared_post_guard_compound_target() -> anyhow::Result<()> {
+        let mut decision = record(Some("request-a"), "economy", "");
+        decision.route_measurement = Some(RouteDecisionMeasurement::new(
+            "economy",
+            "vendor/same",
+            Some(ReasoningEffort::Low),
+            vec![
+                RouteActionCandidate {
+                    tier: "economy".into(),
+                    model: "vendor/same".into(),
+                    effort: Some(ReasoningEffort::Low),
+                    logging_probability_ppm: 1_000_000,
+                },
+                RouteActionCandidate {
+                    tier: "strong".into(),
+                    model: "vendor/same".into(),
+                    effort: Some(ReasoningEffort::High),
+                    logging_probability_ppm: 0,
+                },
+            ],
+        )?);
+        decision.selected_tier = Some("strong".into());
+        decision.selected_model = Some("vendor/same".into());
+        decision.selected_effort = Some(ReasoningEffort::High);
+        let report = RoutingBaselineReport::from_records(&[decision])?;
+        assert_eq!(report.eligible_decision_count, 1);
+        let target = &report.groups[0].share_matched.assignments[0];
+        assert_eq!(target.tier, "strong");
+        assert_eq!(target.effort, Some(ReasoningEffort::High));
+        Ok(())
+    }
+
+    #[test]
+    fn baseline_rejects_absent_effective_model_even_for_an_undeclared_tier() -> anyhow::Result<()> {
+        for tier in ["economy", "undeclared"] {
+            let mut decision = record(Some("request-a"), "economy", "");
+            decision.selected_tier = Some(tier.into());
+            decision.selected_model = None;
+            let report = RoutingBaselineReport::from_records(&[decision])?;
+            assert_eq!(report.eligible_decision_count, 0);
+            assert_eq!(
+                report.excluded_by_reason.get("selected_target_mismatch"),
+                Some(&1)
+            );
+            assert!(report.groups.is_empty());
+        }
+        Ok(())
     }
 }

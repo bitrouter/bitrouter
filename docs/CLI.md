@@ -795,7 +795,15 @@ signed policy remain authoritative.
 The report contains per-head exact counts and macro-F1, per-slice coverage and
 accepted error risk, fixed-point Brier/ECE for calibrated candidates, OOD
 confusion counts, resource measurements when supplied, and a versioned
-decision-weighted loss. The checked-in fixtures are an evaluation contract and
+`classification_surrogate_loss`. This is a fixed label-error penalty, not
+policy replay or measured routing cost/quality loss. Report and artifact schema
+v2 replace the former `decision_weighted_loss` field, correct ECE to the
+`0..1_000_000` ppm range, and emit `accepted_error_risk_ppm: null` when a slice
+has no accepted predictions. Regenerate v1 reports from the original fixtures
+and submissions; their ECE values cannot be repaired from the reported scalar.
+Submission and manifest versions are unchanged.
+
+The checked-in fixtures are an evaluation contract and
 must not be used as both training and evaluation data; the command rejects
 matching split commitments. Synthetic unit-test predictions are test vectors,
 not classifier research results or production promotion evidence.
@@ -834,8 +842,14 @@ Bundles also write `routing-baselines.json` and embed the same report in
 `run-artifact.json`. For each compatible candidate-set digest, the report
 contains an always-tier control for every declared target and a deterministic,
 content-blind control with exactly the observed selected-tier counts. Only
-hashed decision identities are emitted. Legacy decisions without measurement
-are counted as exclusions. These controls measure routing allocation; they do
+hashed decision identities are emitted. Baseline report schema v2 requires the
+effective `(tier, model, effort)` to match a declared candidate. Continuation
+pins to an undeclared effort are counted as `selected_target_mismatch`, as are
+missing efforts when the candidate declares one; the pre-guard measurement is
+not rewritten. Declared post-guard targets remain eligible, even when their
+logging probability was zero. Dataset and baseline ID domains are versioned
+to v2; regenerate controls from the original decisions. Legacy decisions
+without measurement are counted as exclusions. These controls measure routing allocation; they do
 not estimate the unexecuted models' quality or authorize a policy change.
 
 ---

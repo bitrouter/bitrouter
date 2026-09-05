@@ -20,14 +20,16 @@ use super::shadow_classifier::{
 use crate::eval::types::canonical_digest;
 use crate::workflow_state::predictive::TaskFamily;
 
-pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 1;
-const DECISION_WEIGHT_TASK: u32 = 4;
-const DECISION_WEIGHT_ROLE: u32 = 3;
-const DECISION_WEIGHT_PROGRESS: u32 = 2;
-const DECISION_WEIGHT_RISK: u32 = 8;
-const DECISION_WEIGHT_MAX: u32 =
-    DECISION_WEIGHT_TASK + DECISION_WEIGHT_ROLE + DECISION_WEIGHT_PROGRESS + DECISION_WEIGHT_RISK;
-const DECISION_WEIGHT_ABSTENTION: u32 = DECISION_WEIGHT_MAX;
+pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 2;
+const CLASSIFICATION_WEIGHT_TASK: u32 = 4;
+const CLASSIFICATION_WEIGHT_ROLE: u32 = 3;
+const CLASSIFICATION_WEIGHT_PROGRESS: u32 = 2;
+const CLASSIFICATION_WEIGHT_RISK: u32 = 8;
+const CLASSIFICATION_WEIGHT_MAX: u32 = CLASSIFICATION_WEIGHT_TASK
+    + CLASSIFICATION_WEIGHT_ROLE
+    + CLASSIFICATION_WEIGHT_PROGRESS
+    + CLASSIFICATION_WEIGHT_RISK;
+const CLASSIFICATION_WEIGHT_ABSTENTION: u32 = CLASSIFICATION_WEIGHT_MAX;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,7 +58,8 @@ pub struct ClassifierSliceReport {
     pub accepted_count: usize,
     pub accepted_error_count: usize,
     pub coverage_ppm: u32,
-    pub accepted_error_risk_ppm: u32,
+    /// No accepted predictions means the conditional error rate is unobserved.
+    pub accepted_error_risk_ppm: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,7 +92,8 @@ pub struct OodDetectionReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DecisionWeightedLossReport {
+/// Fixed label-error penalties, not policy replay or measured cost/quality loss.
+pub struct ClassificationSurrogateLossReport {
     pub task_error_weight: u32,
     pub role_error_weight: u32,
     pub progress_error_weight: u32,
@@ -121,7 +125,7 @@ pub struct ClassifierBakeoffReport {
     pub calibration: Option<CalibrationReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ood_detection: Option<OodDetectionReport>,
-    pub decision_weighted_loss: DecisionWeightedLossReport,
+    pub classification_surrogate_loss: ClassificationSurrogateLossReport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<super::shadow_classifier::ResourceMeasurements>,
 }
@@ -220,9 +224,9 @@ fn evaluate_submission(
         progress_state,
         route_risk,
         slices: slice_reports(&manifest.evaluation_cases, &submission.predictions),
-        calibration: calibration_report(manifest, submission),
+        calibration: calibration_report(manifest, submission)?,
         ood_detection: ood_detection_report(manifest, submission),
-        decision_weighted_loss: decision_weighted_loss(manifest, submission),
+        classification_surrogate_loss: classification_surrogate_loss(manifest, submission),
         resources: submission.predictor.resources.clone(),
     })
 }
@@ -463,7 +467,8 @@ fn slice_reports(
                 accepted_count: accepted,
                 accepted_error_count: accepted_errors,
                 coverage_ppm: ratio_ppm(accepted as u128, indexes.len() as u128),
-                accepted_error_risk_ppm: ratio_ppm(accepted_errors as u128, accepted as u128),
+                accepted_error_risk_ppm: (accepted > 0)
+                    .then(|| ratio_ppm(accepted_errors as u128, accepted as u128)),
             };
             (slice, report)
         })
@@ -480,36 +485,36 @@ fn all_heads_correct(case: &ClassifierEvaluationCase, context: &RouteContextV3) 
 fn calibration_report(
     manifest: &ClassifierBaselineManifest,
     submission: &ShadowClassifierSubmission,
-) -> Option<CalibrationReport> {
+) -> Result<Option<CalibrationReport>> {
     if submission.predictor.confidence_kind != ShadowConfidenceKind::CalibratedProbability {
-        return None;
+        return Ok(None);
     }
-    Some(CalibrationReport {
+    Ok(Some(CalibrationReport {
         task_family: head_calibration_report(
             &manifest.evaluation_cases,
             &submission.predictions,
             |case| case.task_family.as_str(),
             |context| &context.task_family,
-        ),
+        )?,
         next_step_role: head_calibration_report(
             &manifest.evaluation_cases,
             &submission.predictions,
             |case| case.next_step_role.as_str(),
             |context| &context.next_step_role,
-        ),
+        )?,
         progress_state: head_calibration_report(
             &manifest.evaluation_cases,
             &submission.predictions,
             |case| case.progress_state.as_str(),
             |context| &context.progress_state,
-        ),
+        )?,
         route_risk: head_calibration_report(
             &manifest.evaluation_cases,
             &submission.predictions,
             |case| case.route_risk.as_str(),
             |context| &context.route_risk,
-        ),
-    })
+        )?,
+    }))
 }
 
 fn head_calibration_report<Expected, Head>(
@@ -517,7 +522,7 @@ fn head_calibration_report<Expected, Head>(
     predictions: &[ShadowClassifierPrediction],
     expected: Expected,
     head: Head,
-) -> HeadCalibrationReport
+) -> Result<HeadCalibrationReport>
 where
     Expected: Fn(&ClassifierEvaluationCase) -> &str,
     Head: Fn(&RouteContextV3) -> &CategoricalHead,
@@ -538,11 +543,9 @@ where
         bins[bin].2 += u128::from(head.predicted_label == expected);
     }
     let observations = cases.len();
-    let brier = if observations == 0 {
-        0
-    } else {
-        squared_error / (observations as u128 * 1_000_000)
-    };
+    let brier = squared_error
+        .checked_div(observations as u128 * 1_000_000)
+        .context("calibration requires at least one observation")?;
     let ece_numerator = bins
         .iter()
         .map(|(count, confidence_sum, correct)| {
@@ -553,12 +556,17 @@ where
             }
         })
         .sum::<u128>();
-    HeadCalibrationReport {
+    // Bin confidence sums are already in ppm. Scaling again would overflow
+    // ordinary nonzero ECE values and could turn them into apparent zero error.
+    let ece = ece_numerator
+        .checked_div(observations as u128)
+        .context("calibration requires at least one observation")?;
+    Ok(HeadCalibrationReport {
         observation_count: observations,
-        multiclass_brier_ppm: u32::try_from(brier).unwrap_or(u32::MAX),
-        top_label_ece_ppm: ratio_ppm(ece_numerator, observations as u128),
+        multiclass_brier_ppm: u32::try_from(brier).context("Brier score exceeds wire range")?,
+        top_label_ece_ppm: u32::try_from(ece).context("ECE exceeds wire range")?,
         bin_count: 10,
-    }
+    })
 }
 
 fn ood_detection_report(
@@ -604,10 +612,10 @@ fn ood_detection_report(
     Some(report)
 }
 
-fn decision_weighted_loss(
+fn classification_surrogate_loss(
     manifest: &ClassifierBaselineManifest,
     submission: &ShadowClassifierSubmission,
-) -> DecisionWeightedLossReport {
+) -> ClassificationSurrogateLossReport {
     let incurred = manifest
         .evaluation_cases
         .iter()
@@ -615,25 +623,25 @@ fn decision_weighted_loss(
         .map(|(case, prediction)| {
             let context = &prediction.context;
             if context.abstained {
-                return u64::from(DECISION_WEIGHT_ABSTENTION);
+                return u64::from(CLASSIFICATION_WEIGHT_ABSTENTION);
             }
             u64::from(context.task_family.predicted_label != case.task_family)
-                * u64::from(DECISION_WEIGHT_TASK)
+                * u64::from(CLASSIFICATION_WEIGHT_TASK)
                 + u64::from(context.next_step_role.predicted_label != case.next_step_role)
-                    * u64::from(DECISION_WEIGHT_ROLE)
+                    * u64::from(CLASSIFICATION_WEIGHT_ROLE)
                 + u64::from(context.progress_state.predicted_label != case.progress_state)
-                    * u64::from(DECISION_WEIGHT_PROGRESS)
+                    * u64::from(CLASSIFICATION_WEIGHT_PROGRESS)
                 + u64::from(context.route_risk.predicted_label != case.route_risk)
-                    * u64::from(DECISION_WEIGHT_RISK)
+                    * u64::from(CLASSIFICATION_WEIGHT_RISK)
         })
         .sum::<u64>();
-    let maximum = manifest.evaluation_cases.len() as u64 * u64::from(DECISION_WEIGHT_MAX);
-    DecisionWeightedLossReport {
-        task_error_weight: DECISION_WEIGHT_TASK,
-        role_error_weight: DECISION_WEIGHT_ROLE,
-        progress_error_weight: DECISION_WEIGHT_PROGRESS,
-        risk_error_weight: DECISION_WEIGHT_RISK,
-        abstention_weight: DECISION_WEIGHT_ABSTENTION,
+    let maximum = manifest.evaluation_cases.len() as u64 * u64::from(CLASSIFICATION_WEIGHT_MAX);
+    ClassificationSurrogateLossReport {
+        task_error_weight: CLASSIFICATION_WEIGHT_TASK,
+        role_error_weight: CLASSIFICATION_WEIGHT_ROLE,
+        progress_error_weight: CLASSIFICATION_WEIGHT_PROGRESS,
+        risk_error_weight: CLASSIFICATION_WEIGHT_RISK,
+        abstention_weight: CLASSIFICATION_WEIGHT_ABSTENTION,
         incurred_weight_units: incurred,
         maximum_weight_units: maximum,
         normalized_loss_ppm: ratio_ppm(incurred as u128, maximum as u128),
@@ -775,7 +783,37 @@ mod tests {
         assert_eq!(calibration.progress_state.multiclass_brier_ppm, 0);
         assert_eq!(calibration.route_risk.multiclass_brier_ppm, 0);
         assert_eq!(report.ood_detection.unwrap().accuracy_ppm, 1_000_000);
-        assert_eq!(report.decision_weighted_loss.normalized_loss_ppm, 0);
+        assert_eq!(report.classification_surrogate_loss.normalized_loss_ppm, 0);
+    }
+
+    #[test]
+    fn report_versions_the_classification_surrogate_without_claiming_route_loss() -> Result<()> {
+        let manifest = manifest();
+        let report = evaluate_submission(&manifest, &submission(&manifest), false)?;
+        let wire = serde_json::to_value(&report)?;
+        assert_eq!(wire["schema_version"], 2);
+        assert!(wire.get("decision_weighted_loss").is_none());
+        assert_eq!(
+            wire["classification_surrogate_loss"]["task_error_weight"],
+            4
+        );
+        assert_eq!(
+            wire["classification_surrogate_loss"]["role_error_weight"],
+            3
+        );
+        assert_eq!(
+            wire["classification_surrogate_loss"]["progress_error_weight"],
+            2
+        );
+        assert_eq!(
+            wire["classification_surrogate_loss"]["risk_error_weight"],
+            8
+        );
+        assert_eq!(
+            wire["classification_surrogate_loss"]["abstention_weight"],
+            17
+        );
+        Ok(())
     }
 
     #[test]
@@ -820,6 +858,125 @@ mod tests {
         assert_eq!(report.accepted_count, 1);
         assert_eq!(report.coverage_ppm, 500_000);
         assert_eq!(report.task_family.exact_count, 2);
-        assert_eq!(report.decision_weighted_loss.incurred_weight_units, 17);
+        assert_eq!(
+            report.classification_surrogate_loss.incurred_weight_units,
+            17
+        );
+    }
+
+    fn set_prediction_confidence(
+        context: &mut RouteContextV3,
+        case: &ClassifierEvaluationCase,
+        confidence: u32,
+        correct: bool,
+    ) {
+        for (head, expected) in [
+            (&mut context.task_family, case.task_family.as_str()),
+            (&mut context.next_step_role, case.next_step_role.as_str()),
+            (&mut context.progress_state, case.progress_state.as_str()),
+            (&mut context.route_risk, case.route_risk.as_str()),
+        ] {
+            let alternative = head
+                .probabilities
+                .iter()
+                .find(|class| class.label != expected)
+                .map(|class| class.label.clone())
+                .unwrap_or_default();
+            head.predicted_label = if correct {
+                expected.to_owned()
+            } else {
+                alternative.clone()
+            };
+            for class in &mut head.probabilities {
+                class.probability_ppm = if class.label == head.predicted_label {
+                    confidence
+                } else if class.label == expected || class.label == alternative {
+                    1_000_000 - confidence
+                } else {
+                    0
+                };
+            }
+        }
+    }
+
+    #[test]
+    fn calibration_matches_hand_computed_nonzero_and_boundary_vectors() -> Result<()> {
+        // (confidence, correct) per case; expected ECE and multiclass Brier.
+        // Same-bin errors cancel before the absolute value; different bins do not.
+        for (cases, expected_ece, expected_brier) in [
+            ([(800_000, true), (800_000, true)], 200_000, 80_000),
+            ([(999_000, true), (999_000, true)], 1_000, 2),
+            ([(600_000, true), (600_000, false)], 100_000, 520_000),
+            ([(800_000, true), (600_000, false)], 400_000, 400_000),
+            (
+                [(1_000_000, false), (1_000_000, false)],
+                1_000_000,
+                2_000_000,
+            ),
+            ([(1_000_000, true), (1_000_000, true)], 0, 0),
+        ] {
+            let manifest = manifest();
+            let mut submission = submission(&manifest);
+            for ((prediction, case), (confidence, correct)) in submission
+                .predictions
+                .iter_mut()
+                .zip(&manifest.evaluation_cases)
+                .zip(cases)
+            {
+                set_prediction_confidence(&mut prediction.context, case, confidence, correct);
+            }
+            let report = evaluate_submission(&manifest, &submission, false)?;
+            let calibration = report.calibration.context("missing calibration")?;
+            for head in [
+                calibration.task_family,
+                calibration.next_step_role,
+                calibration.progress_state,
+                calibration.route_risk,
+            ] {
+                assert_eq!(head.top_label_ece_ppm, expected_ece);
+                assert_eq!(head.multiclass_brier_ppm, expected_brier);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn selective_risk_distinguishes_unobserved_from_zero_and_nonzero_error() -> Result<()> {
+        let manifest = manifest();
+        let mut submission = submission(&manifest);
+        submission.predictions[1].context.abstained = true;
+        submission.predictions[1].context.abstention_reason = Some("low_confidence".into());
+        let report = evaluate_submission(&manifest, &submission, false)?;
+        let wire = serde_json::to_value(&report)?;
+        assert_eq!(wire["slices"]["english"]["accepted_error_risk_ppm"], 0);
+        assert!(wire["slices"]["ood"]["accepted_error_risk_ppm"].is_null());
+        assert_eq!(wire["slices"]["ood"]["accepted_count"], 0);
+
+        submission.predictions[1].context.abstained = false;
+        submission.predictions[1].context.abstention_reason = None;
+        set_prediction_confidence(
+            &mut submission.predictions[1].context,
+            &manifest.evaluation_cases[1],
+            800_000,
+            false,
+        );
+        let report = evaluate_submission(&manifest, &submission, false)?;
+        let wire = serde_json::to_value(&report)?;
+        assert_eq!(
+            wire["slices"]["english"]["accepted_error_risk_ppm"],
+            500_000
+        );
+        assert_eq!(wire["slices"]["ood"]["accepted_error_risk_ppm"], 1_000_000);
+
+        for prediction in &mut submission.predictions {
+            prediction.context.abstained = true;
+            prediction.context.abstention_reason = Some("low_confidence".into());
+        }
+        let report = evaluate_submission(&manifest, &submission, false)?;
+        assert_eq!(report.accepted_count, 0);
+        for slice in report.slices.values() {
+            assert!(serde_json::to_value(slice)?["accepted_error_risk_ppm"].is_null());
+        }
+        Ok(())
     }
 }
