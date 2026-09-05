@@ -55,42 +55,6 @@
   max_input_tokens: 1048576
   max_output_tokens: 65536
   release_date: 2026-09-02
-- id: google/gemini-3.1-flash-image
-  name: 'Google: Nano Banana 2 (Gemini 3.1 Flash Image)'
-  input_modalities:
-  - image
-  - text
-  output_modalities:
-  - image
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 32768
-  release_date: 2026-06-18
-- id: google/gemini-3.1-flash-lite
-  name: 'Google: Gemini 3.1 Flash Lite'
-  input_modalities:
-  - audio
-  - file
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 65536
-  release_date: 2026-05-07
-- id: google/gemini-3.1-flash-lite-image
-  name: 'Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)'
-  input_modalities:
-  - image
-  - text
-  output_modalities:
-  - image
-  - text
-  max_input_tokens: 65536
-  max_output_tokens: 58982
-  release_date: 2026-06-30
-  knowledge_cutoff: 2025-01-01
 - id: google/gemini-3.5-flash-lite
   name: 'Google: Gemini 3.5 Flash Lite'
   input_modalities:

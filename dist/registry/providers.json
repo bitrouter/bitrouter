@@ -4414,64 +4414,6 @@
             "google",
             "openai"
           ],
-          "id": "google/gemini-3.1-flash-image",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 60.0
-            }
-          },
-          "provider_model_id": "gemini-3.1-flash-image",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "id": "google/gemini-3.1-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.025,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider_model_id": "gemini-3.1-flash-lite",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "id": "google/gemini-3.1-flash-lite-image",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 30.0
-            }
-          },
-          "provider_model_id": "gemini-3.1-flash-lite-image",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
           "id": "google/gemini-3.5-flash-lite",
           "pricing": {
             "input_tokens": {
@@ -7633,59 +7575,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "google/gemini-3.1-flash-image",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider_model_id": "google/gemini-3.1-flash-image"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "google/gemini-3.1-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.025,
-              "cache_write": 0.083333,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider_model_id": "google/gemini-3.1-flash-lite"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "google/gemini-3.1-flash-lite-image",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider_model_id": "google/gemini-3.1-flash-lite-image"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "google/gemini-3.5-flash-lite",
           "pricing": {
             "input_tokens": {
@@ -9519,40 +9408,6 @@
             }
           },
           "provider_model_id": "gemini-3.8-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "google",
-          "id": "google/gemini-3.1-flash-image",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 60.0
-            }
-          },
-          "provider_model_id": "gemini-3.1-flash-image",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "google",
-          "id": "google/gemini-3.1-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.025,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider_model_id": "gemini-3.1-flash-lite",
           "rate_limits": {
             "requests_per_minute": 60
           }

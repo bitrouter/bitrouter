@@ -4326,7 +4326,7 @@ api_base: https://api.acme.test/v1
         for (id, expected) in [
             ("anthropic/claude-opus-4.6", 4),
             ("deepseek/deepseek-v4-pro", 2),
-            ("google/gemini-3.1-pro-preview", 5),
+            ("google/gemini-3.1-pro-preview", 4),
             ("qwen/qwen3.5-27b", 3),
             ("x-ai/grok-4.20", 4),
             ("openai/gpt-5.6-sol", 3),
