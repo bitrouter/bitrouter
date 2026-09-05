@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T5
+Task: T6
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -17,7 +17,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T2 — G6, the HTTP profile guard read from the table
 - [x] T3 — the resolver, /commands, /help, /route reset
 - [x] T4 — SessionPorts, /status, G4, G5, A1
-- [ ] T5 — /models and /preview
+- [x] T5 — /models and /preview
 - [ ] T6 — CommandsReport and its builder
 - [ ] T7 — bitrouter acp commands, /commands through the shared report
 - [ ] T8 — the prompt-expansion registry
@@ -116,6 +116,30 @@ Consecutive non-green iterations on this task: 0
      dead-code warning and a CLAUDE.md rule 4 breach. Same for the unused
      `from_parts`. T5 adds the two fields *with* their `run` arms. `args` got
      a reader by having `/status` refuse arguments rather than swallow them.
+
+- **T5** — `/models [provider]` and `/preview <model>`, D8(b) as decided.
+  `SessionPorts` gains its other two ports *with* their `run` arms (T4's
+  deferral discharged). A1 now covers all three reads. 3046 tests pass (+4).
+
+  **The 60-column check found a defect, not a fit problem.**
+  `ModelsReport::render` emits a literal tab between its columns — deliberate,
+  so `bitrouter models --human | cut -f1` works. On a ratatui screen that is
+  unsafe: the differential writer measures rows with `unicode-width`, where a
+  tab is one column, while the terminal advances to the next tab stop, so every
+  row after the tab is misplaced. It appears in the *narrow* common case
+  (`demo-model<TAB>demo`); in wide output the tab happens to land on a wrap
+  boundary and hides.
+
+  Fixed at the seam rather than by taking the spec's "drop the `tui_command`"
+  fallback: `plain_lines` expands tabs to the next eight-column stop, which is
+  what the terminal would have done. This is the seam's job, not the extra
+  renderer §5 warns against, and it protects any future report that uses tabs.
+  On width proper both commands wrap readably at 60 columns even on a hostile
+  catalog (6 providers, 48-char model ids), so `list_models` keeps its
+  `tui_command`.
+
+  For T6/T7: any report rendered into a notice must be checked for tabs the
+  same way. `CommandsReport` should avoid them entirely.
 
 ## Blocked
 

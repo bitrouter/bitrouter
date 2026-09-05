@@ -536,6 +536,8 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 | `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
 | `/route reset` | Drop this session's route lease, so the daemon's own choice applies again. The footer stops naming a route. |
 | `/status` | Whether the daemon is up, what it is serving, and what it has spent. The same report `bitrouter status --human` prints, rendered with the palette off. |
+| `/models [provider]` | The models this config can route to, optionally only those a provider declares. What `bitrouter models --human` prints. |
+| `/preview <model>` | Where that model would be routed, and through which provider chain — without sending anything. What `bitrouter route <model> --human` prints. |
 | `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
 | `/help` | The same list. An alias for `/commands`. |
 

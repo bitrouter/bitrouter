@@ -156,8 +156,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         id: "list_models",
         cli_leaf: Some("models"),
         mcp_tool: Some("list_models"),
-        // `tui_command` lands with `/models`.
-        tui_command: None,
+        tui_command: Some("models"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::Portable,
@@ -173,8 +172,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         id: "route",
         cli_leaf: Some("route"),
         mcp_tool: Some("route_preview"),
-        // `tui_command` lands as `/preview` — `/route` means the picker.
-        tui_command: None,
+        // `/preview`, not `/route`: `/route` already means the picker, and one
+        // name meaning two things on one surface is what the second name buys
+        // its way out of.
+        tui_command: Some("preview"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::HostBound,

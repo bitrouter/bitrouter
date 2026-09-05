@@ -9,6 +9,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bitrouter_mcp::actions::models::ModelsQuery;
+use bitrouter_mcp::actions::route::{RouteInput, RouteQuery};
 use bitrouter_mcp::actions::status::StatusQuery;
 use bitrouter_mcp::actions::{ACTIONS, Requires};
 use bitrouter_mcp::backend::CallerAuth;
@@ -37,6 +39,8 @@ const NOT_RESETTABLE: &str = "this session has no route lease to drop (the contr
 pub fn summary_for(action: &str) -> &'static str {
     match action {
         "status" => "whether the daemon is up, and what it has spent",
+        "list_models" => "the models this config can route to, optionally by provider",
+        "route" => "show where a model would be routed, without sending anything",
         "commands" => "list the commands this session offers",
         "route_set" => "choose the route for the rest of the session",
         "route_reset" => "drop the route lease, so the daemon's default applies",
@@ -90,19 +94,26 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
 /// because there is only one thing for them to ask.
 pub struct SessionPorts {
     status: Arc<dyn StatusQuery>,
+    models: Arc<dyn ModelsQuery>,
+    route: Arc<dyn RouteQuery>,
 }
 
 impl SessionPorts {
-    /// The same constructor `bitrouter status` calls, with the same arguments.
-    ///
-    /// One port today. The models and route ports join it in the phase that
-    /// adds their `run` arms — a field nothing reads is dead weight, and the
-    /// two would be exactly that until then.
+    /// The same three constructors `bitrouter status`, `bitrouter models` and
+    /// `bitrouter route` call, with the same arguments.
     pub fn open(source: ConfigSource, socket: PathBuf) -> Self {
         Self {
             status: Arc::new(crate::actions::status::DaemonStatus::new(
-                socket,
-                Some(source),
+                socket.clone(),
+                Some(source.clone()),
+            )),
+            models: Arc::new(crate::actions::models::RoutableModels::new(
+                source.clone(),
+                Some(socket.clone()),
+            )),
+            route: Arc::new(crate::actions::route::RouteAction::new(
+                source,
+                Some(socket),
             )),
         }
     }
@@ -129,6 +140,28 @@ impl SessionPorts {
                     return Err(ToolError::new("usage: /status"));
                 }
                 Ok(Box::new(self.status.status(&caller).await?))
+            }
+            // The filter is applied to the report, not asked of the port —
+            // the same `filtered` the CLI leaf calls, so both surfaces mean
+            // the same thing by "declared by this provider".
+            "list_models" => Ok(Box::new(
+                self.models
+                    .list_models(&caller)
+                    .await?
+                    .filtered(args.first().map(String::as_str)),
+            )),
+            "route" => {
+                let Some(model) = args.first() else {
+                    return Err(ToolError::new("usage: /preview <model>"));
+                };
+                Ok(Box::new(
+                    self.route
+                        .route(RouteInput {
+                            model: model.clone(),
+                            prompt: None,
+                        })
+                        .await?,
+                ))
             }
             other => Err(ToolError::new(format!("no session action `{other}`"))),
         }
@@ -218,6 +251,75 @@ providers:
             !expected.is_empty(),
             "a report that renders to nothing would make this test vacuous"
         );
+    }
+
+    /// `/models` answers with what `bitrouter models --provider` answers,
+    /// filter included — the filter is the report's, so both surfaces read
+    /// "declared by this provider" the same way.
+    #[tokio::test]
+    async fn the_models_surface_answers_with_the_cli_leafs_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = config_source(dir.path(), ONE_MODEL);
+        let socket = dir.path().join("bitrouter.sock");
+
+        let leaf =
+            crate::actions::models::RoutableModels::new(source.clone(), Some(socket.clone()))
+                .report()
+                .await
+                .expect("cli surface")
+                .filtered(Some("demo"));
+        let ports = SessionPorts::open(source, socket);
+        let session = ports
+            .run("list_models", &["demo".to_string()])
+            .await
+            .expect("session surface");
+
+        assert_eq!(
+            serde_json::to_value(&leaf).expect("leaf json"),
+            serde_json::to_value(session.as_ref()).expect("session json"),
+        );
+        assert!(!leaf.models.is_empty(), "the fixture declares one model");
+    }
+
+    /// `/preview <model>` answers with what `bitrouter route <model>` answers.
+    #[tokio::test]
+    async fn the_preview_surface_answers_with_the_cli_leafs_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = config_source(dir.path(), ONE_MODEL);
+        let socket = dir.path().join("bitrouter.sock");
+
+        let leaf = crate::actions::route::RouteAction::new(source.clone(), Some(socket.clone()))
+            .report(RouteInput {
+                model: "demo-model".to_string(),
+                prompt: None,
+            })
+            .await
+            .expect("cli surface");
+        let ports = SessionPorts::open(source, socket);
+        let session = ports
+            .run("route", &["demo-model".to_string()])
+            .await
+            .expect("session surface");
+
+        assert_eq!(
+            serde_json::to_value(&leaf).expect("leaf json"),
+            serde_json::to_value(session.as_ref()).expect("session json"),
+        );
+    }
+
+    /// `/preview` with nothing to preview says how to use it. A missing
+    /// argument is a typo, not a crash.
+    #[tokio::test]
+    async fn preview_without_a_model_answers_with_its_usage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ports = SessionPorts::open(
+            config_source(dir.path(), ONE_MODEL),
+            dir.path().join("bitrouter.sock"),
+        );
+        match ports.run("route", &[]).await {
+            Ok(_) => panic!("a model is required"),
+            Err(error) => assert!(format!("{error}").contains("usage: /preview"), "{error}"),
+        }
     }
 
     /// An id the table does not carry is an error, not a panic: a mistyped
