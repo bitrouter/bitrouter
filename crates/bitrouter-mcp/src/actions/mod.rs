@@ -30,6 +30,7 @@
 //! `None` only until its CLI leaf lands, at which point it has two surfaces and
 //! owes them an agreement. Every other row has a real schema.
 
+pub mod commands;
 pub mod models;
 pub mod route;
 pub mod skills;

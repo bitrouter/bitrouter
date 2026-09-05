@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T6
+Task: T7
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -18,7 +18,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T3 — the resolver, /commands, /help, /route reset
 - [x] T4 — SessionPorts, /status, G4, G5, A1
 - [x] T5 — /models and /preview
-- [ ] T6 — CommandsReport and its builder
+- [x] T6 — CommandsReport and its builder
 - [ ] T7 — bitrouter acp commands, /commands through the shared report
 - [ ] T8 — the prompt-expansion registry
 - [ ] T9 — acceptance sweep
@@ -140,6 +140,20 @@ Consecutive non-green iterations on this task: 0
 
   For T6/T7: any report rendered into a notice must be checked for tabs the
   same way. `CommandsReport` should avoid them entirely.
+
+- **T6** — `CommandsReport`, `commands_report`, and the `CliReport` impl.
+  Types and builder only; the `commands` row still carries `cli_leaf: None`
+  and `output_schema: None` — T7 sets both. 3051 tests pass (+5).
+
+  Two deviations, both CLAUDE.md rule 4: `commands_report` takes three
+  arguments, not the spec's four — the `config` slice needs `PromptCommand`,
+  which does not exist until T8, so it arrives there with its producer (T7
+  therefore calls it with three). And `CommandRow` gained an `unavailable`
+  field the spec did not list, so a listed-but-unrunnable command keeps its
+  reason through the report rather than losing it at the boundary.
+
+  The rendering is deliberately tab-free, with a test pinning it — the direct
+  consequence of what T5 found.
 
 ## Blocked
 

@@ -6,6 +6,7 @@
 
 pub mod admin;
 pub mod agents;
+pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod eval;
