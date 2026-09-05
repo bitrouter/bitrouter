@@ -711,6 +711,130 @@ therefore any overlap ratio. The prior figure of "roughly 7 shared names out of
 succeeded**, the documentation publishes no complete built-in command list, and
 the source is closed. It is not repeated here and should not be cited.
 
+#### 6.9.2 Codex CLI — the registry lives in the TUI crate, so the overlap is zero
+
+Codex is open source, so this one is counted. All figures below are from
+[`openai/codex`](https://github.com/openai/codex) at the default branch on
+2026-09-05 and can be re-derived from two files.
+
+| Measure | Value | Source |
+|---|---|---|
+| Built-in slash commands | **59** | `enum SlashCommand`, [`codex-rs/tui/src/slash_command.rs`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/slash_command.rs) — counted variants |
+| Top-level CLI subcommands | **29** | `enum Subcommand`, [`codex-rs/cli/src/main.rs`](https://github.com/openai/codex/blob/main/codex-rs/cli/src/main.rs) — counted variants, including three `hide = true` internal ones |
+| Names present on both sides | **9** | `agents`, `app`, `archive`, `delete`, `fork`, `logout`, `mcp`, `resume`, `review` |
+| Union of names | **79** | 50 TUI-only, 20 CLI-only |
+
+Those are counted, not estimated. The one caveat is that "leaves" are not
+counted on the CLI side — nine of the 29 are namespaces (`mcp`, `plugin`,
+`debug`, `app-server`, `execpolicy`, `cloud`, `features`, `login`, `exec`), so
+the true leaf count is higher and the *ratio* would be worse, not better.
+
+**The nine shared names are shared in name only, and the reason is structural:
+every file in the repository that mentions `slash_command` is under
+`codex-rs/tui/`.** A search of the repository for that symbol returns 30 paths;
+all 30 are in the TUI crate, and none is in `codex-rs/exec/`. `codex exec` — the
+documented non-interactive mode — has no slash-command dispatch at all. So for
+Codex the three sets are:
+
+```
+A. both surfaces        B. CLI-only              C. interactive-only
+────────────────        ───────────              ───────────────────
+(empty — 9 names,       20 subcommands           59 slash commands
+ 0 shared dispatch)     (exec, serve, doctor,    (model, permissions,
+                        update, apply, …)         status, usage, …)
+```
+
+⇒ **Finding 8. Set A can be empty.** Codex is the counter-example to any
+assumption that a mature harness necessarily has a shared middle. Its
+interactive vocabulary is twice the size of its CLI's and structurally
+unreachable from it, and nine names collide across the divide without sharing a
+line of code. The topology in [§3](#3-the-goal-restated) survives this — three
+sets, one of which happens to be empty — but the *stated goal* does not: a
+project can ship 59 interactive commands and 29 headless ones with zero
+intersection and be, by every other measure, the most successful harness in the
+field.
+
+**What Codex declares on each registry entry is the finding that transfers.**
+`SlashCommand` carries four per-entry predicates, and they are exactly the shape
+[§6.5](#65-every-registry-declares-which-callers-may-reach-an-entry) found
+everywhere else and [§6.4](#64-tmux-is-the-one-real-full-parity-system-and-it-works-by-inversion)
+found in tmux's `cmd_entry` flags word:
+
+| Predicate | What it declares | Entries |
+|---|---|---|
+| `supports_inline_args()` | the command takes text after its name | 20 of 59 |
+| `available_during_task()` | it may run while a turn is in flight | a hand-written match over **every** variant, no `_` arm |
+| `available_in_side_conversation()` | it survives in an ephemeral fork | 10 of 59 |
+| `is_visible()` | platform and build gating (`cfg!(target_os = …)`, `cfg!(debug_assertions)`) | 5 special cases |
+
+`available_during_task` is the one to look at closely: it is written as an
+exhaustive match with no catch-all, so **adding a variant does not compile until
+the author decides whether it is safe mid-turn.** That is a compiler-enforced
+version of the `requires` column [§10](#10-source-of-truth) proposes, obtained
+without a test, and it is a better mechanism than the one this spec sketched. It
+is also direct empirical support for R2 and R4: the harness with the largest
+interactive vocabulary in the survey found it necessary to declare, per command,
+*when* it may run — and 21 of its 59 commands are marked unavailable while the
+agent is working.
+
+**The `codex-acp` counter-precedent, checked and updated.**
+[§6.7](#67-acp-specifically) and [§9 option A](#a-ride-availablecommandsupdate)
+rest on `codex-acp` advertising host commands over
+`available_commands_update`. That is still true, but two facts have changed and
+one of them matters:
+
+1. **The repository the spec cited is archived.** `zed-industries/codex-acp` is
+   archived as of 2026-07-22 with a README pointing at
+   `agentclientprotocol/codex-acp`: *"Development has moved… The new adapter is
+   built on the new Codex App Server, and we are pooling implementation and
+   maintenance work across teams there."* The pattern was not abandoned; it was
+   handed to the protocol organisation, which if anything strengthens it as a
+   precedent.
+2. **The advertised set is now nine, not five.** The current adapter advertises
+   `/status`, `/mcp`, `/skills`, `/goal`, `/review`, `/review-branch`,
+   `/review-commit`, `/compact` and `/logout`, *"as well as configured skills"*.
+   Every one of the nine is a Codex **TUI** command with no `codex` subcommand —
+   so the adapter is re-exposing set C over ACP, which is exactly the move
+   [§9 option A](#a-ride-availablecommandsupdate) contemplates for BitRouter.
+
+**And the adapter's implementation is the strongest available evidence for
+§9's rejection of option A**, because it had to build, by hand, all three of the
+things the option-A objections said ACP does not supply
+([`src/CodexCommands.ts`](https://github.com/agentclientprotocol/codex-acp/blob/main/src/CodexCommands.ts)):
+
+- **A prompt-stream string matcher.** `parseCommand()` takes the first content
+  block, requires `type == "text"`, trims, checks `startsWith("/")`, splits on
+  `/\s+/`, lowercases the name, and hands the remainder on as `rest`. This is
+  the `if line == "/route"` compare, relocated into the hot path of every turn —
+  precisely what §9 objection 1 predicted a middlebox would have to write.
+- **A namespace, invented at the adapter layer.** Skills are advertised under a
+  `$` sigil (`name = "$" + skill.name`) and the dispatcher's first act is
+  `if (commandName.startsWith("$")) return { handled: false }` — sigil means
+  "not mine, forward it". ACP supplies no such rule; the adapter had to mint one.
+- **A collision rule, also invented.** `buildAvailableCommands()` seeds a `Map`
+  with built-ins and then skips any skill whose name is already present —
+  first-writer-wins, built-ins beat skills. Compare
+  [§6.9.3](#693-opencode--the-one-that-got-closest-and-the-inversion-that-did-it):
+  OpenCode's documented rule is the **opposite** (*"Custom commands can override
+  built-in commands"*). Two implementations of the same protocol, two
+  incompatible precedence rules, neither wrong, because the protocol has no
+  opinion.
+- **An out-of-band argument channel.** Two entries carry
+  `_meta.commandAction` — `{kind: "setConfigOption", configId, value, resetValue,
+  presentation}` for `/plan`, `{kind: "prefixPrompt", presentation: "state"}` for
+  `/goal` — because `AvailableCommand` has nowhere else to put a typed action.
+  §9 objection 2 said the field cannot carry arguments; the field's most
+  invested consumer agrees and routes around it through `_meta`.
+
+⇒ **Finding 9. Option A is not hypothetically awkward — the reference
+implementation of it has already had to hand-write a prompt-stream parser, a
+namespace sigil, a precedence rule and an `_meta` side-channel, and its
+precedence rule disagrees with the other major harness's.** This is
+corroboration of §9's rejection rather than a reason to revisit it, and it makes
+[§9 objection 3](#a-ride-availablecommandsupdate) concrete: the missing
+collision rule is not a theoretical gap, it has already been filled twice,
+differently.
+
 ---
 
 ## 7. The membership rule
