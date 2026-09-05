@@ -4403,26 +4403,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "id": "google/gemini-3.5-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "gemini-3.5-flash-lite",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
         }
       ],
       "name": "google",
@@ -6230,20 +6210,6 @@
             }
           },
           "provider_model_id": "gpt-6-astra"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "google/gemini-3.5-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "gemini-3.5-flash-lite"
         }
       ],
       "name": "opencode-zen",
@@ -7508,25 +7474,6 @@
             }
           },
           "provider_model_id": "qwen/qwen3.8-max-0902"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "google/gemini-3.5-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "cache_write": 0.083333,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "google/gemini-3.5-flash-lite"
         }
       ],
       "name": "openrouter",
@@ -9348,23 +9295,6 @@
             }
           },
           "provider_model_id": "gemini-3.8-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "google",
-          "id": "google/gemini-3.5-flash-lite",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "gemini-3.5-flash-lite",
           "rate_limits": {
             "requests_per_minute": 60
           }

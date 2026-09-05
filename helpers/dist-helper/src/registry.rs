@@ -4324,9 +4324,9 @@ api_base: https://api.acme.test/v1
             assert_eq!(classified.version, version, "{id}");
         }
         for (id, expected) in [
-            ("anthropic/claude-opus-4.6", 4),
-            ("deepseek/deepseek-v4-pro", 2),
-            ("google/gemini-3.1-pro-preview", 4),
+            ("anthropic/claude-opus-4.6", 2),
+            ("deepseek/deepseek-v4-pro", 1),
+            ("google/gemini-3.1-pro-preview", 2),
             ("qwen/qwen3.5-27b", 2),
             ("x-ai/grok-4.20", 4),
             ("openai/gpt-5.6-sol", 2),

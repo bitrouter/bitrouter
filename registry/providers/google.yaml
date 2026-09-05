@@ -70,14 +70,6 @@ models:
         cache_read: 0.075
       output_tokens:
         text: 3.75
-  - id: google/gemini-3.5-flash-lite
-    provider_model_id: gemini-3.5-flash-lite
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.03
-      output_tokens:
-        text: 2.5
 status: active
 weight: 1
 submitted_at: 2026-05-25

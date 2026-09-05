@@ -1,4 +1,5 @@
 - id: google/gemini-3.5-flash
+  deprecation_date: 2026-10-05
   name: 'Google: Gemini 3.5 Flash'
   input_modalities:
   - text
@@ -14,6 +15,7 @@
   family: gemini-flash
 # Official model: https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
 - id: google/gemini-3.6-flash
+  deprecation_date: 2026-10-05
   name: 'Google: Gemini 3.6 Flash'
   description: Efficient multimodal Gemini model for coding, agentic planning, and high-throughput workloads.
   input_modalities:
@@ -55,16 +57,3 @@
   max_input_tokens: 1048576
   max_output_tokens: 65536
   release_date: 2026-09-02
-- id: google/gemini-3.5-flash-lite
-  name: 'Google: Gemini 3.5 Flash Lite'
-  input_modalities:
-  - audio
-  - file
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 65536
-  release_date: 2026-07-21
