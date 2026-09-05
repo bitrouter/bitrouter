@@ -107,12 +107,15 @@ struct ModelDiscoveryRule {
     pattern: String,
     #[serde(default)]
     retain_versions: Option<usize>,
+    #[serde(default)]
+    exclude_variants: Vec<String>,
 }
 
 struct CompiledDiscoveryRule {
     key: String,
     regex: Regex,
     retain_versions: usize,
+    exclude_variants: Vec<Regex>,
 }
 
 struct CompiledModelDiscovery {
@@ -127,6 +130,7 @@ struct ClassifiedModel {
     family: String,
     version: String,
     retain_versions: usize,
+    excluded: bool,
 }
 
 #[derive(Default)]
@@ -231,10 +235,32 @@ fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
                 family.key
             );
         }
+        let has_variant = regex.capture_names().any(|name| name == Some("variant"));
+        if !family.exclude_variants.is_empty() && !has_variant {
+            bail!(
+                "{}: family {} must capture 'variant' when exclude_variants is configured",
+                path.display(),
+                family.key
+            );
+        }
+        let exclude_variants = family
+            .exclude_variants
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern).with_context(|| {
+                    format!(
+                        "{}: invalid exclude_variants pattern for {}",
+                        path.display(),
+                        family.key
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         families.push(CompiledDiscoveryRule {
             key: family.key,
             regex,
             retain_versions,
+            exclude_variants,
         });
     }
 
@@ -284,10 +310,15 @@ impl CompiledModelDiscovery {
                 Some(series) => rule.key.replace("{series}", series.as_str()),
                 None => rule.key.clone(),
             };
+            let variant = captures.name("variant").map_or("", |value| value.as_str());
             found = Some(ClassifiedModel {
                 family,
                 version,
                 retain_versions: rule.retain_versions,
+                excluded: rule
+                    .exclude_variants
+                    .iter()
+                    .any(|pattern| pattern.is_match(variant)),
             });
         }
         Ok(found)
@@ -356,6 +387,7 @@ fn plan_openrouter_models(
     let mut seen_ids = HashSet::new();
     let mut version_dates: BTreeMap<(String, String), i64> = BTreeMap::new();
     let mut retention_by_family = BTreeMap::new();
+    let mut matched_family = false;
     for model in catalog.data {
         if model.id.contains(':') {
             continue;
@@ -364,6 +396,7 @@ fn plan_openrouter_models(
         let Some(classified) = discovery.classify(&model.id)? else {
             continue;
         };
+        matched_family = true;
         record_family_retention(&mut retention_by_family, &classified)?;
         if !valid_canonical_id(&model.id) {
             bail!(
@@ -385,11 +418,11 @@ fn plan_openrouter_models(
             .entry(key)
             .and_modify(|created| *created = (*created).min(model.created))
             .or_insert(model.created);
-        if !retired {
+        if !retired && !classified.excluded {
             candidates.push((model, classified));
         }
     }
-    if version_dates.is_empty() {
+    if !matched_family {
         bail!("OpenRouter model discovery catalog matched no configured family");
     }
 
@@ -410,7 +443,6 @@ fn plan_openrouter_models(
             .unwrap_or(i64::MIN);
         version_dates
             .entry((classified.family, classified.version))
-            .and_modify(|created| *created = (*created).min(introduced))
             .or_insert(introduced);
     }
 
@@ -450,6 +482,13 @@ fn plan_openrouter_models(
             continue;
         }
         let classified = discovery.classify(&model.id)?;
+        if classified
+            .as_ref()
+            .is_some_and(|classified| classified.excluded)
+        {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
         let is_retained = classified.as_ref().is_some_and(|classified| {
             retained.contains(&(classified.family.clone(), classified.version.clone()))
         });
@@ -4286,8 +4325,9 @@ api_base: https://api.acme.test/v1
         }
         for (id, expected) in [
             ("anthropic/claude-opus-4.6", 4),
+            ("deepseek/deepseek-v4-pro", 2),
             ("google/gemini-3.1-pro-preview", 5),
-            ("qwen/qwen3.5-27b", 4),
+            ("qwen/qwen3.5-27b", 3),
             ("x-ai/grok-4.20", 4),
             ("openai/gpt-5.6-sol", 3),
         ] {
@@ -4296,6 +4336,28 @@ api_base: https://api.acme.test/v1
                 .with_context(|| format!("expected {id} to match"))?;
             assert_eq!(classified.retain_versions, expected, "{id}");
         }
+        for id in [
+            "deepseek/deepseek-v3.2-exp",
+            "deepseek/deepseek-v4-flash-vision-exp",
+            "google/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview-customtools",
+            "qwen/qwen3.6-max-preview",
+        ] {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert!(classified.excluded, "{id}");
+        }
+        for id in [
+            "deepseek/deepseek-v4-pro",
+            "google/gemini-3.1-flash-lite",
+            "qwen/qwen3.6-plus",
+        ] {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert!(!classified.excluded, "{id}");
+        }
         for alias in [
             "openai/gpt-5.6-sol:batch",
             "~anthropic/claude-opus-latest",
@@ -4303,6 +4365,110 @@ api_base: https://api.acme.test/v1
         ] {
             assert!(discovery.classify(alias)?.is_none(), "{alias}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn excluded_variants_are_removed_without_being_added() -> Result<()> {
+        let root = test_root("model-discovery-variant-exclusion");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/model-1
+- id: acme/model-2-exp
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "acme/model".to_string(),
+                regex: Regex::new(r"^acme/model-(?P<version>[0-9]+)(?P<variant>(?:-[a-z0-9]+)*)$")?,
+                retain_versions: 2,
+                exclude_variants: vec![Regex::new(r"-exp$")?],
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "acme/model-1", "name": "Stable", "created": 100},
+                {"id": "acme/model-2-exp", "name": "Experimental", "created": 200}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert_eq!(
+            plan.removals,
+            HashSet::from(["acme/model-2-exp".to_string()])
+        );
+        assert!(plan.schedules.is_empty());
+        assert!(plan.additions.is_empty());
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+        let updated = load_registry(&root)?;
+        assert_eq!(
+            updated
+                .models()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/model-1"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn openrouter_dates_take_precedence_over_canonical_fallbacks() -> Result<()> {
+        let root = test_root("model-discovery-source-date");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/model-1
+  release_date: 1970-01-01
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "acme/model".to_string(),
+                regex: Regex::new(r"^acme/model-(?P<version>[0-9]+)$")?,
+                retain_versions: 2,
+                exclude_variants: Vec::new(),
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "acme/model-1", "name": "Newest", "created": 400},
+                {"id": "acme/model-2", "name": "Middle", "created": 300},
+                {"id": "acme/model-3", "name": "Oldest", "created": 200}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert!(plan.schedules.is_empty());
+        assert_eq!(
+            plan.additions
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/model-2"]
+        );
         Ok(())
     }
 
@@ -4330,6 +4496,7 @@ api_base: https://api.acme.test/v1
                     r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
                 )?,
                 retain_versions: 3,
+                exclude_variants: Vec::new(),
             }],
         };
         let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
@@ -4391,6 +4558,7 @@ api_base: https://api.acme.test/v1
                     r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
                 )?,
                 retain_versions: 4,
+                exclude_variants: Vec::new(),
             }],
         };
         let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
@@ -4453,6 +4621,7 @@ api_base: https://api.acme.test/v1
                     r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
                 )?,
                 retain_versions: 3,
+                exclude_variants: Vec::new(),
             }],
         };
         let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
