@@ -206,7 +206,10 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 
 Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
 
-**In-session commands**: `/route` opens the route picker; `/route reset` drops
+**In-session commands**: `/status` prints what `bitrouter status --human`
+prints, through the same action port the CLI leaf and the MCP tool use — it is
+rendered once, on request, and never held or polled; `/route` opens the route
+picker; `/route reset` drops
 the session's route lease so the daemon's default applies again; `/commands`
 (alias `/help`) lists everything the session offers — BitRouter's own commands
 first, then the agent's. A local name wins over an agent command of the same

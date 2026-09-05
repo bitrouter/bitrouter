@@ -104,6 +104,7 @@ pub(crate) async fn run(
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     via: Option<String>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     let (mut view, mut stdin) = match open_terminal(via) {
         Ok(terminal) => terminal,
@@ -123,6 +124,7 @@ pub(crate) async fn run(
         agent_id,
         recorder,
         commands,
+        ports,
     )
     .await;
 
@@ -214,6 +216,7 @@ async fn drive(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    ports: &crate::actions::session::SessionPorts,
 ) -> Result<bool> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
@@ -362,6 +365,18 @@ async fn drive(
                         bitrouter_tui::view::lock(&shared).commands(),
                     ));
                 }
+                // One renderer for all three surfaces. `render_to_vec` hard-codes
+                // `Theme::none()`, so no escape sequence can reach the
+                // differential writer's screen, and the driver never names the
+                // report type it is rendering.
+                Effect::Action { action, args } => {
+                    let rendered = match ports.run(action, &args).await {
+                        Ok(report) => crate::output::Output::new(crate::output::Format::Human)
+                            .render_to_vec(report.as_ref()),
+                        Err(error) => format!("{error}").into_bytes(),
+                    };
+                    view.notice_lines(bitrouter_tui::render::session::plain_lines(&rendered));
+                }
                 Effect::ClearNotice => view.clear_notice(),
                 Effect::Modal(Some(row)) => view.open_modal(row),
                 Effect::Modal(None) => view.close_modal(),
@@ -440,6 +455,7 @@ pub(crate) async fn chat_plain(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     use std::io::Write as _;
 
@@ -477,6 +493,20 @@ pub(crate) async fn chat_plain(
                     .find(|command| command.action == action)
                     .map_or(action, |command| command.name);
                 writeln!(out, "/{name} needs a terminal").context("writing to stdout")?;
+                continue;
+            }
+            // The same ports, rendered the same way; a pipe gets the bytes
+            // where a terminal gets a notice.
+            bitrouter_tui::machine::Resolution::Action { action, args } => {
+                match ports.run(action, &args).await {
+                    Ok(report) => out
+                        .write_all(
+                            &crate::output::Output::new(crate::output::Format::Human)
+                                .render_to_vec(report.as_ref()),
+                        )
+                        .context("writing to stdout")?,
+                    Err(error) => writeln!(out, "{error}").context("writing to stdout")?,
+                }
                 continue;
             }
             bitrouter_tui::machine::Resolution::Unavailable(reason) => {

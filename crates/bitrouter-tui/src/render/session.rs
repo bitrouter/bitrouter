@@ -61,6 +61,20 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
     ])
 }
 
+/// Plain bytes as lines, one `Line` per line of text.
+///
+/// The seam between a report the CLI rendered and the screen. It lives here
+/// rather than app-side because `apps/bitrouter` deliberately has no `ratatui`
+/// dependency — the app forwards `Vec<Line>` it never names. Taking bytes
+/// rather than a report is also what lets the chat guard assert the driver
+/// cannot name, and therefore cannot retain, a report type.
+pub fn plain_lines(bytes: &[u8]) -> Vec<Line<'static>> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| Line::from(line.to_string()))
+        .collect()
+}
+
 /// What this session offers: BitRouter's own commands, then the agent's.
 ///
 /// Listed when asked for rather than kept on screen: the list is static for

@@ -114,6 +114,13 @@ pub enum Resolution {
         /// The rest of the line, whitespace-split — never one string.
         args: Vec<String>,
     },
+    /// A BitRouter command the app answers through its action ports.
+    Action {
+        /// The `ACTIONS` row id, handed back to the app unchanged.
+        action: &'static str,
+        /// The rest of the line, whitespace-split — never one string.
+        args: Vec<String>,
+    },
     /// A listed BitRouter command this session cannot run, and why.
     Unavailable(&'static str),
     /// Not ours — a prompt, including any command the agent advertises.
@@ -149,9 +156,19 @@ pub fn resolve(commands: &[Command], line: &str) -> Resolution {
             if let Some(reason) = command.unavailable {
                 return Resolution::Unavailable(reason);
             }
-            return Resolution::Owned {
-                action: command.action,
-                args: words[take..].iter().map(|word| word.to_string()).collect(),
+            let args = words[take..].iter().map(|word| word.to_string()).collect();
+            // The reducer knows three verbs by name; everything else is an
+            // opaque id the app resolves against the same ports the CLI uses.
+            return if REDUCER_OWNED.contains(&command.action) {
+                Resolution::Owned {
+                    action: command.action,
+                    args,
+                }
+            } else {
+                Resolution::Action {
+                    action: command.action,
+                    args,
+                }
             };
         }
     }
@@ -305,6 +322,15 @@ pub enum Effect {
     SetRoute(String),
     /// Drop this session's route lease, so the daemon's default applies again.
     ResetRoute,
+    /// Run this `ACTIONS` row through the app's ports and show what it reports
+    /// as a notice. Emitted for every BitRouter command the reducer does not
+    /// own itself.
+    Action {
+        /// The row id.
+        action: &'static str,
+        /// The rest of the line, already split.
+        args: Vec<String>,
+    },
     /// The route the footer names for the rest of the session — the one the
     /// daemon confirmed.
     RouteInForce(Option<String>),
@@ -510,6 +536,10 @@ fn submit(state: &mut State) -> Vec<Effect> {
             effects.push(Effect::Notice(Notice::Say(format!(
                 "`{action}` is marked reducer-owned but has no reducer arm"
             ))));
+        }
+        Resolution::Action { action, args } => {
+            effects.push(Effect::Action { action, args });
+            return effects;
         }
         Resolution::Unavailable(reason) => {
             effects.push(Effect::Notice(Notice::Say(reason.to_string())));
@@ -855,6 +885,7 @@ mod tests {
                 Effect::ListRoutes => "list-routes",
                 Effect::SetRoute(_) => "set-route",
                 Effect::ResetRoute => "reset-route",
+                Effect::Action { .. } => "action",
                 Effect::RouteInForce(_) => "route-in-force",
                 Effect::Exit => "exit",
             })

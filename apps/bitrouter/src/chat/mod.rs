@@ -85,6 +85,20 @@ mod tests {
             "DaemonRouteControl",
             "DaemonSessionCost",
             "LocalControllerBinding",
+            // The driver renders reports it may not name. A type it cannot
+            // name it cannot store, poll, or put in the footer — which is how
+            // "rendered once, on request, never retained" is enforced rather
+            // than merely intended. It deals in `Box<dyn CliReport>`.
+            "StatusReport",
+            "ModelsReport",
+            "RouteReport",
+            "SkillsReport",
+            "CommandsReport",
+            // Action rendering is palette-free. The only renderer the driver
+            // may call is `render_to_vec`, which hard-codes `Theme::none()`;
+            // a themed render would write raw ANSI into the differential
+            // writer's screen.
+            "for_stdout",
         ];
         for (name, source) in sources {
             for reach in forbidden {

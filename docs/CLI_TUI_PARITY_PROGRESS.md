@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T4
+Task: T5
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -16,7 +16,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T1 — ActionSpec columns, enums, eight rows, G2, G3
 - [x] T2 — G6, the HTTP profile guard read from the table
 - [x] T3 — the resolver, /commands, /help, /route reset
-- [ ] T4 — SessionPorts, /status, G4, G5, A1
+- [x] T4 — SessionPorts, /status, G4, G5, A1
 - [ ] T5 — /models and /preview
 - [ ] T6 — CommandsReport and its builder
 - [ ] T7 — bitrouter acp commands, /commands through the shared report
@@ -92,6 +92,30 @@ Consecutive non-green iterations on this task: 0
      library as `bitrouter::actions::session`, not `crate::actions::session`.
   4. `State::new` is called in `drive`, not `run`, so the command list is
      threaded through both.
+
+- **T4** — `/status` answers in a session through the same `StatusQuery` port
+  the CLI leaf and the MCP tool use. G4/G5 appended to the chat guard (nine
+  original strings intact); A1 asserts the session surface produces the leaf's
+  bytes, as JSON and as rendered output. 3042 tests pass (+3). D1 enacted as
+  (a), narrowly: rendered once on request, never retained — G4 is the
+  enforcement.
+
+  Three deviations, each in the direction of the spec's own invariants:
+
+  1. **The spec's "driver test with a stub `SessionPorts`" cannot exist.** G4
+     forbids `session.rs` naming any report type, and a stub must name one.
+     The assertion lives in `actions/session.rs` instead, testing the same
+     property without the driver naming what it renders. T7 should not try to
+     add a stub-based driver test either.
+  2. **`plain_lines` belongs in `bitrouter-tui`, not app-side.** Written
+     app-side it needs `ratatui::text::Line`, and `apps/bitrouter` has no
+     `ratatui` dependency by design — the app forwards `Vec<Line>` it never
+     names. It is `render::session::plain_lines`.
+  3. **`SessionPorts` carries only the ports it reads.** The spec lists
+     `{status, models, route}` in T4, but two have no reader until T5: a
+     dead-code warning and a CLAUDE.md rule 4 breach. Same for the unused
+     `from_parts`. T5 adds the two fields *with* their `run` arms. `args` got
+     a reader by having `/status` refuse arguments rather than swallow them.
 
 ## Blocked
 

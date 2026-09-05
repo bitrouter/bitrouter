@@ -1380,6 +1380,13 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     }
     let binding =
         LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
+    // The same three constructors the `status`, `models` and `route` leaves
+    // call. Built here because this is where the config source and the socket
+    // path are both known; `chat/` may not name either.
+    let ports = crate::actions::session::SessionPorts::open(
+        source.clone(),
+        crate::daemon::socket_path_for(source, &config),
+    );
 
     // A pipe cannot be drawn on. Everything the terminal branch does — the
     // live row, the modals, raw mode — assumes a screen with a cursor on it,
@@ -1395,6 +1402,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             options,
             &cloud_credentials,
             binding,
+            &ports,
         )
         .await;
     }
@@ -1509,6 +1517,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         observability.recorder,
         routed.via.clone(),
         commands,
+        &ports,
     )
     .await;
 
@@ -1735,6 +1744,7 @@ async fn chat_piped(
     options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
+    ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
@@ -1779,6 +1789,7 @@ async fn chat_piped(
         agent_id,
         observability.recorder,
         crate::actions::session::offered_commands(&session.client),
+        ports,
     )
     .await;
 

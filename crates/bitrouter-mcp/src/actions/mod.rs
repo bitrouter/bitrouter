@@ -142,8 +142,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         id: "status",
         cli_leaf: Some("status"),
         mcp_tool: Some("status"),
-        // `tui_command` lands with `/status`; the port is shared already.
-        tui_command: None,
+        tui_command: Some("status"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::Portable,
