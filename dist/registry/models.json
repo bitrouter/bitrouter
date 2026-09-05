@@ -430,7 +430,6 @@
       "release_date": "2025-10-15"
     },
     {
-      "deprecation_date": "2026-10-05",
       "family": "claude-opus",
       "id": "anthropic/claude-opus-4.6",
       "input_modalities": [
@@ -3159,7 +3158,258 @@
       "release_date": "2026-08-13"
     },
     {
-      "deprecation_date": "2026-10-05",
+      "id": "google/gemini-3.1-flash-image",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 60.0
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.1-flash-image",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.1-flash-image"
+        },
+        {
+          "api_protocol": "google",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 60.0
+            }
+          },
+          "provider": "vertex",
+          "provider_model_id": "gemini-3.1-flash-image",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-06-18"
+    },
+    {
+      "id": "google/gemini-3.1-flash-image-preview",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 65536,
+      "max_output_tokens": 58982,
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 60.0
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.1-flash-image-preview",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.1-flash-image-preview"
+        }
+      ],
+      "release_date": "2026-02-26"
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite",
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "name": "Google: Gemini 3.1 Flash Lite",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.1-flash-lite",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "cache_write": 0.083333,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.1-flash-lite"
+        },
+        {
+          "api_protocol": "google",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "vertex",
+          "provider_model_id": "gemini-3.1-flash-lite",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-05-07"
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite-image",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "knowledge_cutoff": "2025-01-01",
+      "max_input_tokens": 65536,
+      "max_output_tokens": 58982,
+      "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.1-flash-lite-image",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.1-flash-lite-image"
+        }
+      ],
+      "release_date": "2026-06-30"
+    },
+    {
       "family": "gemini-flash-lite",
       "id": "google/gemini-3.1-flash-lite-preview",
       "input_modalities": [
@@ -3255,7 +3505,6 @@
       "release_date": "2026-03-03"
     },
     {
-      "deprecation_date": "2026-10-05",
       "family": "gemini-pro",
       "id": "google/gemini-3.1-pro-preview",
       "input_modalities": [
@@ -3373,7 +3622,81 @@
       "release_date": "2026-02-19"
     },
     {
-      "deprecation_date": "2026-10-05",
+      "id": "google/gemini-3.1-pro-preview-customtools",
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 12.0
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.1-pro-preview-customtools",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 0.375,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 12.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.1-pro-preview-customtools"
+        },
+        {
+          "api_protocol": "google",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 12.0
+            }
+          },
+          "provider": "vertex",
+          "provider_model_id": "gemini-3.1-pro-preview-customtools",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-02-25"
+    },
+    {
       "family": "gemini-flash",
       "id": "google/gemini-3.5-flash",
       "input_modalities": [
@@ -3506,6 +3829,95 @@
         }
       ],
       "release_date": "2026-05-19"
+    },
+    {
+      "id": "google/gemini-3.5-flash-lite",
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "name": "Google: Gemini 3.5 Flash Lite",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "google",
+          "provider_model_id": "gemini-3.5-flash-lite",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "gemini-3.5-flash-lite"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "cache_write": 0.083333,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.5-flash-lite"
+        },
+        {
+          "api_protocol": "google",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "vertex",
+          "provider_model_id": "gemini-3.5-flash-lite",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-07-21"
     },
     {
       "description": "Efficient multimodal Gemini model for coding, agentic planning, and high-throughput workloads.",
@@ -6407,7 +6819,6 @@
       "release_date": "2026-09-04"
     },
     {
-      "deprecation_date": "2026-10-05",
       "description": "Qwen3.5 open-source native vision-language MoE (122B total, 10B active).",
       "family": "qwen3.5",
       "id": "qwen/qwen3.5-122b-a10b",
@@ -6516,7 +6927,6 @@
       "release_date": "2026-02-23"
     },
     {
-      "deprecation_date": "2026-10-05",
       "description": "Qwen3.5 open-source native vision-language model (27B).",
       "family": "qwen3.5",
       "id": "qwen/qwen3.5-27b",
@@ -6623,6 +7033,376 @@
         }
       ],
       "release_date": "2026-02-23"
+    },
+    {
+      "id": "qwen/qwen3.5-35b-a3b",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 16384,
+      "name": "Qwen: Qwen3.5-35B-A3B",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.5-35b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-35b-a3b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.75
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-35b-a3b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.24
+            },
+            "output_tokens": {
+              "text": 1.8
+            }
+          },
+          "provider": "siliconflow",
+          "provider_model_id": "Qwen/Qwen3.5-35B-A3B"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.23
+            },
+            "output_tokens": {
+              "text": 1.86
+            }
+          },
+          "provider": "siliconflow_cn",
+          "provider_model_id": "Qwen/Qwen3.5-35B-A3B"
+        }
+      ],
+      "release_date": "2026-02-25"
+    },
+    {
+      "id": "qwen/qwen3.5-397b-a17b",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 235929,
+      "name": "Qwen: Qwen3.5 397B A17B",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.5-397b-a17b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.172
+            },
+            "output_tokens": {
+              "text": 1.032
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "qwen3.5-397b-a17b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-397b-a17b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.225,
+              "no_cache": 0.55
+            },
+            "output_tokens": {
+              "text": 3.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-397b-a17b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.39
+            },
+            "output_tokens": {
+              "text": 2.34
+            }
+          },
+          "provider": "siliconflow",
+          "provider_model_id": "Qwen/Qwen3.5-397B-A17B"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.29
+            },
+            "output_tokens": {
+              "text": 1.74
+            }
+          },
+          "provider": "siliconflow_cn",
+          "provider_model_id": "Qwen/Qwen3.5-397B-A17B"
+        }
+      ],
+      "release_date": "2026-02-16"
+    },
+    {
+      "id": "qwen/qwen3.5-9b",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 235929,
+      "name": "Qwen: Qwen3.5-9B",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.15
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-9b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.15
+            }
+          },
+          "provider": "siliconflow",
+          "provider_model_id": "Qwen/Qwen3.5-9B"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.22
+            },
+            "output_tokens": {
+              "text": 1.74
+            }
+          },
+          "provider": "siliconflow_cn",
+          "provider_model_id": "Qwen/Qwen3.5-9B"
+        }
+      ],
+      "release_date": "2026-03-10"
+    },
+    {
+      "id": "qwen/qwen3.5-flash-02-23",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5-Flash",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.065
+            },
+            "output_tokens": {
+              "text": 0.26
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-flash-02-23"
+        }
+      ],
+      "release_date": "2026-02-25"
+    },
+    {
+      "id": "qwen/qwen3.5-plus-02-15",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5 Plus 2026-02-15",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.26
+            },
+            "output_tokens": {
+              "text": 1.56
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-plus-02-15"
+        }
+      ],
+      "release_date": "2026-02-16"
+    },
+    {
+      "id": "qwen/qwen3.5-plus-20260420",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5 Plus 2026-04-20",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.8
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-plus-20260420"
+        }
+      ],
+      "release_date": "2026-04-27"
     },
     {
       "description": "Qwen3.6 open-source native vision-language model (27B).",
@@ -8033,7 +8813,6 @@
       "release_date": "2026-09-03"
     },
     {
-      "deprecation_date": "2026-10-05",
       "family": "grok",
       "id": "x-ai/grok-4.20",
       "input_modalities": [
@@ -8119,7 +8898,6 @@
       "release_date": "2026-03-12"
     },
     {
-      "deprecation_date": "2026-10-05",
       "family": "grok",
       "id": "x-ai/grok-4.20-multi-agent",
       "input_modalities": [

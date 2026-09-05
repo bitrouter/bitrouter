@@ -25,7 +25,6 @@
   open_weights: false
   family: claude-haiku
 - id: anthropic/claude-opus-4.6
-  deprecation_date: 2026-10-05
   name: 'Anthropic: Claude Opus 4.6'
   input_modalities:
   - text

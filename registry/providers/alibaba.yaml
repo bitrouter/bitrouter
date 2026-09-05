@@ -176,6 +176,20 @@ models:
         cache_write: 0.2
       output_tokens:
         text: 0.47
+  - id: qwen/qwen3.5-35b-a3b
+    provider_model_id: qwen3.5-35b-a3b
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 2
+  - id: qwen/qwen3.5-397b-a17b
+    provider_model_id: qwen3.5-397b-a17b
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 3.6
 status: active
 weight: 1
 submitted_at: 2026-05-25
