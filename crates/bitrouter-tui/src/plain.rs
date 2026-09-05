@@ -8,8 +8,13 @@
 
 use std::io::{self, Write};
 
+use agent_client_protocol_schema::v1::SessionUpdate;
 use ratatui::layout::Size;
 use ratatui::text::Line;
+
+use crate::journal::Journal;
+use crate::render::Registry;
+use crate::writer::Cache;
 
 /// The terminal a pipe does not have.
 ///
@@ -29,6 +34,40 @@ pub fn text(line: &Line<'static>) -> String {
         .collect()
 }
 
+/// The session as a pipe receives it: the journal, rendered once per turn,
+/// and written from the row after the last one written.
+///
+/// A pipe cannot take a row back, so nothing is emitted until the turn that
+/// produces it has settled — which is also what makes in-place patching
+/// arrive as one finished tool call rather than three. Shared by every path
+/// that writes a session to something that is not a terminal, so they all
+/// print the same document.
+#[derive(Default)]
+pub struct Transcript {
+    journal: Journal,
+    cache: Cache,
+    registry: Registry,
+    /// How many rows of the document have already been handed out.
+    written: usize,
+}
+
+impl Transcript {
+    /// Record one update. Nothing is rendered until [`Transcript::unwritten`].
+    pub fn apply(&mut self, update: SessionUpdate) {
+        self.journal.apply(update);
+    }
+
+    /// The rows added since the last call, rendered at [`PIPED`] width.
+    pub fn unwritten(&mut self) -> Vec<Line<'static>> {
+        let document = self
+            .cache
+            .document(&self.journal, &self.registry, PIPED, &[]);
+        let fresh = document.get(self.written..).unwrap_or_default().to_vec();
+        self.written = document.len();
+        fresh
+    }
+}
+
 /// Write rendered lines to a non-terminal sink, one per row.
 ///
 /// `writeln!` rather than `println!`: a closed pipe makes `println!` panic,
@@ -43,8 +82,50 @@ pub fn write(out: &mut impl Write, lines: &[Line<'static>]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol_schema::v1::{ContentBlock, ContentChunk, TextContent};
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::Span;
+
+    /// A transcript hands out each row once: what a pipe already has is never
+    /// written again, and what arrived since is everything it gets.
+    ///
+    /// The second message is keyed. An unkeyed chunk continues the open run
+    /// *in place* — the journal's sticky rule — which changes a row the pipe
+    /// already has and adds none; that is the case a pipe cannot show, and
+    /// the reason the transcript is written once per turn rather than per
+    /// chunk.
+    #[test]
+    fn a_transcript_hands_out_each_row_once() {
+        use agent_client_protocol_schema::v1::MessageId;
+
+        let chunk = |text: &str, key: &str| {
+            let mut chunk =
+                ContentChunk::new(ContentBlock::Text(TextContent::new(text.to_string())));
+            chunk.message_id = Some(MessageId::from(key.to_string()));
+            SessionUpdate::AgentMessageChunk(chunk)
+        };
+        let mut transcript = Transcript::default();
+        transcript.apply(chunk("first", "m1"));
+        let rows = transcript.unwritten();
+        assert!(
+            rows.iter().any(|row| text(row).contains("first")),
+            "the first turn's rows are written: {rows:?}"
+        );
+        assert!(
+            transcript.unwritten().is_empty(),
+            "nothing new, nothing written"
+        );
+        transcript.apply(chunk("second", "m2"));
+        let rows = transcript.unwritten();
+        assert!(
+            rows.iter().any(|row| text(row).contains("second")),
+            "the second message's rows are written: {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|row| !text(row).contains("first")),
+            "and the first's are not written again: {rows:?}"
+        );
+    }
 
     /// Styling is dropped, not encoded: a piped transcript that carried escape
     /// sequences would corrupt the file it was redirected into.

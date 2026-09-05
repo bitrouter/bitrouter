@@ -57,14 +57,6 @@ models:
         cache_read: 0.16
       output_tokens:
         text: 4
-  - id: z-ai/glm-5
-    provider_model_id: glm-5
-    pricing:
-      input_tokens:
-        no_cache: 0.7
-        cache_read: 0.14
-      output_tokens:
-        text: 2.24
   - id: z-ai/glm-5.1
     provider_model_id: glm-5.1
     pricing:

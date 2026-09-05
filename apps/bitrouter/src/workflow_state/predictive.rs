@@ -85,7 +85,7 @@ impl TaskFamily {
 }
 
 impl NextStepRole {
-    fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Orchestrate => "orchestrate",
             Self::Implement => "implement",
@@ -105,6 +105,19 @@ impl NextStepRole {
             "finalize" => Some(Self::Finalize),
             "unknown" => Some(Self::Unknown),
             _ => None,
+        }
+    }
+}
+
+impl ProgressState {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Opening => "opening",
+            Self::Progressing => "progressing",
+            Self::Stalled => "stalled",
+            Self::Recovering => "recovering",
+            Self::NearDone => "near_done",
+            Self::Unknown => "unknown",
         }
     }
 }

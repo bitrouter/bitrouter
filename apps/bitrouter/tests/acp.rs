@@ -81,7 +81,7 @@ async fn prompt_ndjson() {
             ..Default::default()
         },
     };
-    let result = bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf).await;
+    let result = bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf).await;
 
     let _ = std::env::set_current_dir(&orig_dir);
 
@@ -263,8 +263,16 @@ async fn result_line_for(script: &str) -> serde_json::Value {
     };
     let contract =
         bitrouter::result_contract::ResultContract::from_flag(OK_SCHEMA).expect("valid schema");
-    let result =
-        bitrouter::acp_cli::prompt(ctx, "do the task", false, Some(contract), &mut buf).await;
+    let result = bitrouter::acp_cli::prompt(
+        ctx,
+        "do the task",
+        bitrouter::acp_cli::PromptOptions {
+            contract: Some(contract),
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .await;
     let _ = std::env::set_current_dir(&orig_dir);
     result.expect("prompt should succeed");
 
@@ -848,14 +856,14 @@ async fn prompt_headless_denies_permission_and_completes() {
     // Bound the whole run: before the fix this hung forever.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        bitrouter::acp_cli::prompt(ctx, "write it", false, None, &mut buf),
+        bitrouter::acp_cli::prompt(ctx, "write it", Default::default(), &mut buf),
     )
     .await;
 
     let _ = std::env::set_current_dir(&orig_dir);
 
     let result = result.expect("headless prompt must not hang on a permission request");
-    result.expect("prompt should complete");
+    let tally = result.expect("prompt should complete");
 
     let output = String::from_utf8(buf).expect("utf8");
     assert!(
@@ -865,6 +873,170 @@ async fn prompt_headless_denies_permission_and_completes() {
     assert!(
         output.contains("\"result\""),
         "turn must complete:\n{output}"
+    );
+    // The stream says what was decided, and the exit status says the agent
+    // was refused.
+    assert!(
+        output.contains(
+            r#"{"type":"permission","decision":"denied","title":"write file","kind":null}"#
+        ),
+        "the decision is on the stream:\n{output}"
+    );
+    assert_eq!(
+        tally.exit_code(),
+        5,
+        "denied and nothing approved is exit 5"
+    );
+}
+
+/// The ACP stub every headless-permission test drives: one
+/// `session/request_permission` whose tool call carries the given `kind`,
+/// answered with a message naming the option the client chose.
+fn permission_stub(kind: &str) -> String {
+    format!(
+        r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":1}}}}\n' "$id";;
+            *session/new*)  printf '{{"jsonrpc":"2.0","id":"%s","result":{{"sessionId":"u1"}}}}\n' "$id";;
+            *session/prompt*)
+                printf '{{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{{"sessionId":"u1","toolCall":{{"toolCallId":"tc1","title":"Write src/main.rs","kind":"{kind}"}},"options":[{{"optionId":"allow","name":"Allow","kind":"allow_once"}},{{"optionId":"rej","name":"Reject","kind":"reject_once"}}]}}}}\n'
+                read resp
+                chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"u1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"chose:%s"}}}}}}}}\n' "$chosen"
+                printf '{{"jsonrpc":"2.0","id":"%s","result":{{"stopReason":"end_turn"}}}}\n' "$id";;
+          esac
+        done
+    "#
+    )
+}
+
+/// Run one headless prompt against `script` under `options`, from a temp cwd.
+/// Returns the tally and the bytes written.
+async fn headless(
+    script: String,
+    text: &str,
+    options: bitrouter::acp_cli::PromptOptions,
+) -> (bitrouter::acp_cli::PermissionTally, String) {
+    let base = tempfile::tempdir().expect("tempdir");
+    let orig_dir = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(&script),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        bitrouter::acp_cli::prompt(ctx, text, options, &mut buf),
+    )
+    .await;
+    let _ = std::env::set_current_dir(&orig_dir);
+    let tally = result
+        .expect("a headless prompt must not hang")
+        .expect("prompt should complete");
+    (tally, String::from_utf8(buf).expect("utf8"))
+}
+
+fn policy(mode: bitrouter_tui::permission::Mode) -> bitrouter_tui::permission::Policy {
+    bitrouter_tui::permission::Policy {
+        mode,
+        ..Default::default()
+    }
+}
+
+/// `--approve-all` selects the agent's allow option, says so on the stream,
+/// and exits 0.
+#[tokio::test]
+async fn prompt_approve_all_selects_the_allow_option() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        policy: policy(bitrouter_tui::permission::Mode::ApproveAll),
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
+    assert!(output.contains("chose:allow"), "{output}");
+    assert!(
+        output.contains(
+            r#"{"type":"permission","decision":"approved","title":"Write src/main.rs","kind":"execute"}"#
+        ),
+        "{output}"
+    );
+    assert_eq!(tally.exit_code(), 0);
+}
+
+/// `--approve-reads` reads the tool kind the harness labelled the call with:
+/// a read is approved, an execute is denied and the run exits 5.
+#[tokio::test]
+async fn prompt_approve_reads_reads_the_kind() {
+    let reads = || bitrouter::acp_cli::PromptOptions {
+        policy: policy(bitrouter_tui::permission::Mode::ApproveReads),
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("read"), "read it", reads()).await;
+    assert!(output.contains("chose:allow"), "{output}");
+    assert_eq!(tally.exit_code(), 0);
+
+    let (tally, output) = headless(permission_stub("execute"), "run it", reads()).await;
+    assert!(output.contains("chose:rej"), "{output}");
+    assert_eq!(tally.exit_code(), 5);
+}
+
+/// A per-tool deny outranks the blanket mode, matched on the title's first
+/// word.
+#[tokio::test]
+async fn prompt_permission_policy_title_head_wins() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        policy: bitrouter_tui::permission::Policy {
+            mode: bitrouter_tui::permission::Mode::ApproveAll,
+            auto_deny: vec!["write".to_string()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("edit"), "write it", options).await;
+    assert!(output.contains("chose:rej"), "{output}");
+    assert_eq!(tally.exit_code(), 5);
+}
+
+/// `--format quiet` prints the assistant's text and nothing else.
+#[tokio::test]
+async fn prompt_format_quiet_prints_only_the_text() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        format: bitrouter::acp_cli::PromptFormat::Quiet,
+        ..Default::default()
+    };
+    let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
+    assert_eq!(output, "hi\n");
+}
+
+/// `--format text` prints the transcript as `chat` prints it to a pipe: the
+/// message, the stop reason, and no JSON.
+#[tokio::test]
+async fn prompt_format_text_renders_the_transcript() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        format: bitrouter::acp_cli::PromptFormat::Text,
+        ..Default::default()
+    };
+    let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
+    assert!(output.contains("hi"), "{output}");
+    assert!(output.contains("[end_turn]"), "{output}");
+    assert!(
+        output.starts_with("session u1 · agent stub · direct\n"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("{\"type\""),
+        "no JSON in the text presentation:\n{output}"
     );
 }
 
@@ -904,7 +1076,7 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
     };
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf),
+        bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
     let _ = std::env::set_current_dir(&orig_dir);
@@ -952,7 +1124,7 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
     };
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf),
+        bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
     let _ = std::env::set_current_dir(&orig_dir);
