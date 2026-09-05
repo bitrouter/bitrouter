@@ -6,11 +6,14 @@ use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
 use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
+use chrono::{Days, NaiveDate, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 pub fn validate(root: &Path) -> Result<()> {
     let loaded = load_registry(root)?;
+    load_model_discovery(root)?;
     let advisories = validate_loaded(&loaded)?;
     println!(
         "registry valid: {} canonical models, {} providers",
@@ -62,9 +65,14 @@ pub fn build(root: &Path, check: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn sync(root: &Path, write: bool) -> Result<()> {
+pub async fn sync(root: &Path, write: bool, report_path: Option<&Path>) -> Result<()> {
     let mut loaded = load_registry(root)?;
     validate_loaded(&loaded)?;
+    let report = sync_openrouter_models(root, &loaded, write, Utc::now().date_naive()).await?;
+    if write {
+        loaded = load_registry(root)?;
+        validate_loaded(&loaded)?;
+    }
     sync_models_dev_loaded(root, &loaded, write).await?;
     if write {
         loaded = load_registry(root)?;
@@ -74,6 +82,700 @@ pub async fn sync(root: &Path, write: bool) -> Result<()> {
     if write {
         validate(root)?;
         println!("\nsynced registry source data");
+    }
+    if let Some(path) = report_path {
+        write_model_discovery_report(path, &report)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDiscoveryFile {
+    source_url: String,
+    retain_versions: usize,
+    deprecation_days: u64,
+    #[serde(default)]
+    retired_models: Vec<String>,
+    families: Vec<ModelDiscoveryRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDiscoveryRule {
+    key: String,
+    pattern: String,
+}
+
+struct CompiledDiscoveryRule {
+    key: String,
+    regex: Regex,
+}
+
+struct CompiledModelDiscovery {
+    source_url: String,
+    retain_versions: usize,
+    deprecation_days: u64,
+    retired_models: HashSet<String>,
+    families: Vec<CompiledDiscoveryRule>,
+}
+
+#[derive(Clone)]
+struct ClassifiedModel {
+    family: String,
+    version: String,
+}
+
+#[derive(Default)]
+struct ModelDiscoveryPlan {
+    additions: Vec<CanonicalModel>,
+    schedules: BTreeMap<String, String>,
+    removals: HashSet<String>,
+}
+
+#[derive(Default)]
+struct ModelDiscoveryReport {
+    added: Vec<String>,
+    scheduled: Vec<(String, String)>,
+    removed: Vec<(String, Vec<String>)>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    name: String,
+    created: i64,
+    #[serde(default)]
+    context_length: Option<u64>,
+    #[serde(default)]
+    architecture: OpenRouterArchitecture,
+    #[serde(default)]
+    top_provider: Option<OpenRouterTopProvider>,
+    #[serde(default)]
+    knowledge_cutoff: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenRouterArchitecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    #[serde(default)]
+    output_modalities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterTopProvider {
+    #[serde(default)]
+    max_completion_tokens: Option<u64>,
+}
+
+fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
+    let path = root.join("registry/model-discovery.yaml");
+    let config: ModelDiscoveryFile = read_yaml(&path)?;
+    if config.retain_versions == 0 {
+        bail!(
+            "{}: retain_versions must be greater than zero",
+            path.display()
+        );
+    }
+    if config.families.is_empty() {
+        bail!("{}: families must not be empty", path.display());
+    }
+    if config.deprecation_days == 0 {
+        bail!(
+            "{}: deprecation_days must be greater than zero",
+            path.display()
+        );
+    }
+    if !config.source_url.starts_with("https://")
+        || reqwest::Url::parse(&config.source_url).is_err()
+    {
+        bail!("{}: source_url must be an HTTPS URL", path.display());
+    }
+
+    let mut families = Vec::with_capacity(config.families.len());
+    for family in config.families {
+        let regex = Regex::new(&family.pattern)
+            .with_context(|| format!("{}: invalid pattern for {}", path.display(), family.key))?;
+        if regex.capture_names().all(|name| name != Some("version")) {
+            bail!(
+                "{}: pattern for {} must define a named 'version' capture",
+                path.display(),
+                family.key
+            );
+        }
+        let has_series = regex.capture_names().any(|name| name == Some("series"));
+        if family.key.contains("{series}") != has_series {
+            bail!(
+                "{}: family {} must use '{{series}}' exactly when its pattern captures 'series'",
+                path.display(),
+                family.key
+            );
+        }
+        families.push(CompiledDiscoveryRule {
+            key: family.key,
+            regex,
+        });
+    }
+
+    let mut retired_models = HashSet::new();
+    for id in config.retired_models {
+        if !valid_canonical_id(&id) {
+            bail!("{}: invalid retired model id '{id}'", path.display());
+        }
+        if !retired_models.insert(id.clone()) {
+            bail!("{}: duplicate retired model id '{id}'", path.display());
+        }
+    }
+    let discovery = CompiledModelDiscovery {
+        source_url: config.source_url,
+        retain_versions: config.retain_versions,
+        deprecation_days: config.deprecation_days,
+        retired_models,
+        families,
+    };
+    for id in &discovery.retired_models {
+        if discovery.classify(id)?.is_none() {
+            bail!(
+                "{}: retired model '{id}' does not match a configured family",
+                path.display()
+            );
+        }
+    }
+    Ok(discovery)
+}
+
+impl CompiledModelDiscovery {
+    fn classify(&self, id: &str) -> Result<Option<ClassifiedModel>> {
+        let mut found = None;
+        for rule in &self.families {
+            let Some(captures) = rule.regex.captures(id) else {
+                continue;
+            };
+            if found.is_some() {
+                bail!("model discovery patterns overlap for '{id}'");
+            }
+            let version = captures
+                .name("version")
+                .map(|value| value.as_str().to_string())
+                .with_context(|| {
+                    format!("model discovery pattern did not capture version for {id}")
+                })?;
+            let family = match captures.name("series") {
+                Some(series) => rule.key.replace("{series}", series.as_str()),
+                None => rule.key.clone(),
+            };
+            found = Some(ClassifiedModel { family, version });
+        }
+        Ok(found)
+    }
+}
+
+async fn sync_openrouter_models(
+    root: &Path,
+    loaded: &LoadedRegistry,
+    write: bool,
+    today: NaiveDate,
+) -> Result<ModelDiscoveryReport> {
+    let discovery = load_model_discovery(root)?;
+    // Official API contract: https://openrouter.ai/docs/api/api-reference/models/get-models
+    let body = fetch_v1_models(&discovery.source_url, Vec::new())
+        .await
+        .context("fetching OpenRouter model discovery catalog")?;
+    let catalog: OpenRouterModelsResponse =
+        serde_json::from_str(&body).context("parsing OpenRouter model discovery catalog")?;
+    let plan = plan_openrouter_models(&discovery, loaded, catalog, today)?;
+    let report = report_for_model_discovery(loaded, &plan);
+
+    println!(
+        "\nregistry sync - {} - OpenRouter canonical model lifecycle",
+        if write { "WRITE" } else { "dry-run" }
+    );
+    println!(
+        "add {}; schedule {}; remove {} canonical model(s)",
+        report.added.len(),
+        report.scheduled.len(),
+        report.removed.len()
+    );
+    for id in &report.added {
+        println!("  + {id}");
+    }
+    for (id, date) in &report.scheduled {
+        println!("  ~ {id} (remove on {date})");
+    }
+    for (id, providers) in &report.removed {
+        println!("  - {id} (providers: {})", providers.join(", "));
+    }
+
+    if write {
+        apply_model_discovery_plan(root, loaded, &plan)?;
+    } else {
+        println!("\n(dry run - pass --write to apply)");
+    }
+    Ok(report)
+}
+
+fn plan_openrouter_models(
+    discovery: &CompiledModelDiscovery,
+    loaded: &LoadedRegistry,
+    catalog: OpenRouterModelsResponse,
+    today: NaiveDate,
+) -> Result<ModelDiscoveryPlan> {
+    if catalog.data.is_empty() {
+        bail!("OpenRouter model discovery catalog is empty");
+    }
+
+    let mut candidates = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut version_dates: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for model in catalog.data {
+        if model.id.contains(':') {
+            continue;
+        }
+        let retired = discovery.retired_models.contains(&model.id);
+        let Some(classified) = discovery.classify(&model.id)? else {
+            continue;
+        };
+        if !valid_canonical_id(&model.id) {
+            bail!(
+                "OpenRouter returned invalid canonical model id '{}'",
+                model.id
+            );
+        }
+        if chrono::DateTime::from_timestamp(model.created, 0).is_none() {
+            bail!(
+                "OpenRouter model '{}' has invalid created timestamp",
+                model.id
+            );
+        }
+        if !seen_ids.insert(model.id.clone()) {
+            bail!("OpenRouter returned duplicate model id '{}'", model.id);
+        }
+        let key = (classified.family.clone(), classified.version.clone());
+        version_dates
+            .entry(key)
+            .and_modify(|created| *created = (*created).min(model.created))
+            .or_insert(model.created);
+        if !retired {
+            candidates.push((model, classified));
+        }
+    }
+    if version_dates.is_empty() {
+        bail!("OpenRouter model discovery catalog matched no configured family");
+    }
+
+    for model in loaded.models() {
+        if discovery.retired_models.contains(&model.id) {
+            continue;
+        }
+        let Some(classified) = discovery.classify(&model.id)? else {
+            continue;
+        };
+        let introduced = model
+            .release_date
+            .as_deref()
+            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .map(|date| date.and_utc().timestamp())
+            .unwrap_or(i64::MIN);
+        version_dates
+            .entry((classified.family, classified.version))
+            .and_modify(|created| *created = (*created).min(introduced))
+            .or_insert(introduced);
+    }
+
+    let mut versions_by_family: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
+    for ((family, version), introduced) in version_dates {
+        versions_by_family
+            .entry(family)
+            .or_default()
+            .push((version, introduced));
+    }
+    let mut retained = HashSet::new();
+    for (family, versions) in &mut versions_by_family {
+        versions.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| compare_version_numbers(&b.0, &a.0))
+        });
+        for (version, _) in versions.iter().take(discovery.retain_versions) {
+            retained.insert((family.clone(), version.clone()));
+        }
+    }
+
+    let removal_date = today
+        .checked_add_days(Days::new(discovery.deprecation_days))
+        .context("model discovery deprecation date overflow")?
+        .format("%Y-%m-%d")
+        .to_string();
+    let current_ids: HashSet<&str> = loaded.models().map(|model| model.id.as_str()).collect();
+    let mut plan = ModelDiscoveryPlan::default();
+
+    let today_text = today.format("%Y-%m-%d").to_string();
+    for model in loaded.models() {
+        if model
+            .deprecation_date
+            .as_deref()
+            .is_some_and(|date| date <= today_text.as_str())
+        {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        if discovery.retired_models.contains(&model.id) {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        let Some(classified) = discovery.classify(&model.id)? else {
+            continue;
+        };
+        if !retained.contains(&(classified.family, classified.version))
+            && model.deprecation_date.is_none()
+        {
+            plan.schedules
+                .insert(model.id.clone(), removal_date.clone());
+        }
+    }
+
+    for (model, classified) in candidates {
+        if retained.contains(&(classified.family, classified.version))
+            && !current_ids.contains(model.id.as_str())
+        {
+            plan.additions.push(canonical_model_from_openrouter(model)?);
+        }
+    }
+    plan.additions.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(plan)
+}
+
+fn compare_version_numbers(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |value: &str| {
+        value
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+    };
+    match (parse(a), parse(b)) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.cmp(b),
+    }
+}
+
+fn canonical_model_from_openrouter(model: OpenRouterModel) -> Result<CanonicalModel> {
+    let release_date = chrono::DateTime::from_timestamp(model.created, 0)
+        .with_context(|| {
+            format!(
+                "OpenRouter model '{}' has invalid created timestamp",
+                model.id
+            )
+        })?
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut input_modalities = model.architecture.input_modalities;
+    input_modalities.sort();
+    input_modalities.dedup();
+    let mut output_modalities = model.architecture.output_modalities;
+    output_modalities.sort();
+    output_modalities.dedup();
+    let knowledge_cutoff = model
+        .knowledge_cutoff
+        .filter(|date| valid_yyyy_mm_or_dd(date));
+
+    let canonical = CanonicalModel {
+        id: model.id,
+        name: Some(model.name),
+        description: None,
+        input_modalities,
+        output_modalities,
+        max_input_tokens: model.context_length,
+        max_output_tokens: model
+            .top_provider
+            .and_then(|provider| provider.max_completion_tokens),
+        release_date: Some(release_date),
+        knowledge_cutoff,
+        open_weights: None,
+        family: None,
+        deprecation_date: None,
+        benchmarks: None,
+    };
+    let mut issues = Vec::new();
+    validate_canonical_model(&canonical, &mut issues);
+    if !issues.is_empty() {
+        bail!(
+            "OpenRouter model '{}' cannot be added to the canonical registry:\n  - {}",
+            canonical.id,
+            issues.join("\n  - ")
+        );
+    }
+    Ok(canonical)
+}
+
+fn report_for_model_discovery(
+    loaded: &LoadedRegistry,
+    plan: &ModelDiscoveryPlan,
+) -> ModelDiscoveryReport {
+    let mut report = ModelDiscoveryReport {
+        added: plan
+            .additions
+            .iter()
+            .map(|model| model.id.clone())
+            .collect(),
+        scheduled: plan
+            .schedules
+            .iter()
+            .map(|(id, date)| (id.clone(), date.clone()))
+            .collect(),
+        removed: Vec::new(),
+    };
+    for id in &plan.removals {
+        let mut providers: Vec<String> = loaded
+            .providers
+            .iter()
+            .filter(|provider| provider.data.models.iter().any(|model| model.id == *id))
+            .map(|provider| provider.data.name.clone())
+            .collect();
+        providers.sort();
+        report.removed.push((id.clone(), providers));
+    }
+    report.added.sort();
+    report.scheduled.sort();
+    report.removed.sort_by(|a, b| a.0.cmp(&b.0));
+    report
+}
+
+fn apply_model_discovery_plan(
+    root: &Path,
+    loaded: &LoadedRegistry,
+    plan: &ModelDiscoveryPlan,
+) -> Result<()> {
+    let mut additions_by_vendor: BTreeMap<String, Vec<CanonicalModel>> = BTreeMap::new();
+    for model in &plan.additions {
+        let (vendor, _) = model
+            .id
+            .split_once('/')
+            .context("planned canonical model is missing vendor prefix")?;
+        additions_by_vendor
+            .entry(vendor.to_string())
+            .or_default()
+            .push(model.clone());
+    }
+
+    for model_file in &loaded.model_files {
+        let vendor = model_file
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("canonical model file has no UTF-8 stem")?;
+        let original = fs::read_to_string(&model_file.path)
+            .with_context(|| format!("reading {}", model_file.path.display()))?;
+        let mut raw = original.clone();
+        raw = remove_model_items(&raw, "", &plan.removals);
+        raw = insert_canonical_deprecation_dates(&raw, &plan.schedules);
+        if let Some(additions) = additions_by_vendor.remove(vendor) {
+            append_canonical_models(&mut raw, &additions)?;
+        }
+        let _: Vec<CanonicalModel> = serde_saphyr::from_str(&raw)
+            .with_context(|| format!("validating updated {}", model_file.path.display()))?;
+        if raw != original {
+            fs::write(&model_file.path, raw)
+                .with_context(|| format!("writing {}", model_file.path.display()))?;
+        }
+    }
+    for (vendor, additions) in additions_by_vendor {
+        let path = root.join("registry/models").join(format!("{vendor}.yaml"));
+        let mut raw = String::new();
+        append_canonical_models(&mut raw, &additions)?;
+        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
+    }
+
+    if !plan.removals.is_empty() {
+        for provider in &loaded.providers {
+            if !provider
+                .data
+                .models
+                .iter()
+                .any(|model| plan.removals.contains(&model.id))
+            {
+                continue;
+            }
+            let raw = fs::read_to_string(&provider.path)
+                .with_context(|| format!("reading {}", provider.path.display()))?;
+            let updated = remove_model_items(&raw, "  ", &plan.removals);
+            let parsed: ProviderFile = serde_saphyr::from_str(&updated)
+                .with_context(|| format!("validating updated {}", provider.path.display()))?;
+            if parsed
+                .models
+                .iter()
+                .any(|model| plan.removals.contains(&model.id))
+            {
+                bail!(
+                    "failed to remove expired model from {}",
+                    provider.path.display()
+                );
+            }
+            fs::write(&provider.path, updated)
+                .with_context(|| format!("writing {}", provider.path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String {
+    if ids.is_empty() {
+        return raw.to_string();
+    }
+    let marker = format!("{indent}- id: ");
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        lines.push((offset, line));
+        offset += line.len();
+    }
+    let mut ranges = Vec::new();
+    for (index, (start, line)) in lines.iter().enumerate() {
+        let id = line.trim_end_matches(['\r', '\n']).strip_prefix(&marker);
+        if !id.is_some_and(|id| ids.contains(id)) {
+            continue;
+        }
+        let mut end_index = lines.len();
+        for (candidate, (_, next)) in lines.iter().enumerate().skip(index + 1) {
+            let text = next.trim_end_matches(['\r', '\n']);
+            let next_item = text.starts_with(&format!("{indent}- "));
+            let next_top_level =
+                !indent.is_empty() && !text.is_empty() && !text.starts_with([' ', '\t', '#']);
+            if next_item || next_top_level {
+                end_index = candidate;
+                break;
+            }
+        }
+        while end_index > index + 1 {
+            let text = lines[end_index - 1].1.trim();
+            if text.is_empty() || text.starts_with('#') {
+                end_index -= 1;
+            } else {
+                break;
+            }
+        }
+        let end = lines.get(end_index).map_or(raw.len(), |(start, _)| *start);
+        ranges.push((*start, end));
+    }
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+fn insert_canonical_deprecation_dates(raw: &str, schedules: &BTreeMap<String, String>) -> String {
+    if schedules.is_empty() {
+        return raw.to_string();
+    }
+    let mut inserts = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(id) = trimmed.strip_prefix("- id: ")
+            && let Some(date) = schedules.get(id)
+        {
+            inserts.push((offset + line.len(), format!("  deprecation_date: {date}\n")));
+        }
+        offset += line.len();
+    }
+    let mut updated = raw.to_string();
+    for (at, value) in inserts.into_iter().rev() {
+        updated.insert_str(at, &value);
+    }
+    updated
+}
+
+fn append_canonical_models(raw: &mut String, additions: &[CanonicalModel]) -> Result<()> {
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    for model in additions {
+        raw.push_str(&render_canonical_model(model)?);
+    }
+    Ok(())
+}
+
+fn render_canonical_model(model: &CanonicalModel) -> Result<String> {
+    let mut out = format!("- id: {}\n", model.id);
+    if let Some(name) = &model.name {
+        writeln!(out, "  name: '{}'", name.replace('\'', "''"))?;
+    }
+    if !model.input_modalities.is_empty() {
+        out.push_str("  input_modalities:\n");
+        for modality in &model.input_modalities {
+            writeln!(out, "  - {modality}")?;
+        }
+    }
+    if !model.output_modalities.is_empty() {
+        out.push_str("  output_modalities:\n");
+        for modality in &model.output_modalities {
+            writeln!(out, "  - {modality}")?;
+        }
+    }
+    if let Some(tokens) = model.max_input_tokens {
+        writeln!(out, "  max_input_tokens: {tokens}")?;
+    }
+    if let Some(tokens) = model.max_output_tokens {
+        writeln!(out, "  max_output_tokens: {tokens}")?;
+    }
+    if let Some(date) = &model.release_date {
+        writeln!(out, "  release_date: {date}")?;
+    }
+    if let Some(date) = &model.knowledge_cutoff {
+        writeln!(out, "  knowledge_cutoff: {date}")?;
+    }
+    Ok(out)
+}
+
+fn write_model_discovery_report(path: &Path, report: &ModelDiscoveryReport) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut out = String::from("## Canonical model lifecycle\n\n### Added\n\n");
+    render_report_ids(&mut out, &report.added)?;
+    out.push_str("\n### Scheduled for deprecation\n\n");
+    if report.scheduled.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for (id, date) in &report.scheduled {
+            writeln!(out, "- `{id}` — removal date: {date}")?;
+        }
+    }
+    out.push_str("\n### Removed\n\n");
+    if report.removed.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for (id, providers) in &report.removed {
+            let served_by = if providers.is_empty() {
+                "no provider routes".to_string()
+            } else {
+                providers
+                    .iter()
+                    .map(|provider| format!("`{provider}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            writeln!(out, "- `{id}` — removed from: {served_by}")?;
+        }
+    }
+    fs::write(path, out).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn render_report_ids(out: &mut String, ids: &[String]) -> Result<()> {
+    if ids.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for id in ids {
+            writeln!(out, "- `{id}`")?;
+        }
     }
     Ok(())
 }
@@ -272,7 +974,6 @@ fn models_dev_plan_for_provider(
         .map(|model| model.provider_model_id.as_str())
         .collect();
     let mut staged = HashSet::new();
-    let subscription = provider.billing == Billing::Subscription;
     let mut adds = Vec::new();
 
     for (model_id, model) in &catalog.models {
@@ -285,10 +986,12 @@ fn models_dev_plan_for_provider(
         if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
             continue;
         }
-        let pricing = if subscription {
-            None
-        } else {
-            pricing_from_cost(model.cost.as_ref())
+        let pricing = match provider.billing {
+            Billing::Subscription => None,
+            Billing::UsageToken => match pricing_from_cost(model.cost.as_ref()) {
+                Some(pricing) => Some(pricing),
+                None => continue,
+            },
         };
         adds.push(ProviderModel {
             id: canonical_id,
@@ -1109,7 +1812,10 @@ fn reject_reserved_namespace(model_id: &str, context: &str, issues: &mut Vec<Str
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     for modality in &model.input_modalities {
-        if !matches!(modality.as_str(), "text" | "image" | "audio" | "video") {
+        if !matches!(
+            modality.as_str(),
+            "text" | "image" | "audio" | "video" | "file"
+        ) {
             issues.push(format!(
                 "registry/models: model '{}' has invalid input modality '{}'",
                 model.id, modality
@@ -1117,7 +1823,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
         }
     }
     for modality in &model.output_modalities {
-        if !matches!(modality.as_str(), "text" | "audio") {
+        if !matches!(modality.as_str(), "text" | "image" | "audio") {
             issues.push(format!(
                 "registry/models: model '{}' has invalid output modality '{}'",
                 model.id, modality
@@ -1137,6 +1843,14 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     {
         issues.push(format!(
             "registry/models: model '{}' has invalid knowledge_cutoff '{}'",
+            model.id, date
+        ));
+    }
+    if let Some(date) = &model.deprecation_date
+        && !valid_yyyy_mm_dd(date)
+    {
+        issues.push(format!(
+            "registry/models: model '{}' has invalid deprecation_date '{}'",
             model.id, date
         ));
     }
@@ -1849,6 +2563,8 @@ struct CanonicalModel {
     open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deprecation_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     benchmarks: Option<Benchmarks>,
 }
@@ -2745,6 +3461,31 @@ auto_sync:
     }
 
     #[test]
+    fn models_dev_catalog_skips_usage_token_models_without_pricing() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+billing: usage_token
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        )
+        .unwrap();
+        let catalog: ModelsDevProvider =
+            serde_json::from_str(r#"{"models":{"gpt-5.5":{}}}"#).unwrap();
+        let resolve = canonical_resolver(["openai/gpt-5.5"]);
+
+        let adds = models_dev_plan_for_provider(&provider, &catalog, &resolve);
+
+        assert!(adds.is_empty());
+    }
+
+    #[test]
     fn v1_models_catalog_attaches_known_canonical_models_only() {
         let provider: ProviderFile = serde_saphyr::from_str(
             r#"
@@ -3018,7 +3759,9 @@ auto_sync:
         let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
 
         assert!(workflow.contains(r#"cron: "0 22 * * *""#));
-        assert!(workflow.contains("AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code"));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL:"));
+        assert!(workflow.contains("--report target/registry-sync-lifecycle.md"));
+        assert!(workflow.contains("cp target/registry-sync-lifecycle.md /tmp/registry-sync-pr.md"));
         assert!(workflow.contains("uses: actions/create-github-app-token@v2"));
         assert!(workflow.contains("app-id: ${{ secrets.APP_ID }}"));
         assert!(workflow.contains("private-key: ${{ secrets.APP_PRIVATE_KEY }}"));
@@ -3104,33 +3847,6 @@ EOF
             "no agentic registry providers configured"
         );
         Ok(())
-    }
-
-    #[test]
-    fn tencent_tokenhub_base_urls_match_official_hosts() {
-        let root = crate::workspace_root();
-        let loaded = load_registry(&root).expect("loads checked-in registry");
-        let api_base = |name: &str| {
-            loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == name)
-                .unwrap_or_else(|| panic!("missing provider {name}"))
-                .data
-                .api_base
-                .as_deref()
-                .unwrap_or_else(|| panic!("provider {name} must set api_base"))
-                .to_string()
-        };
-
-        assert_eq!(
-            api_base("tencent"),
-            "https://tokenhub-intl.tencentcloudmaas.com/v1"
-        );
-        assert_eq!(
-            api_base("tencent_cn"),
-            "https://tokenhub.tencentmaas.com/v1"
-        );
     }
 
     #[test]
@@ -3457,404 +4173,238 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
-    fn built_registry_maps_configured_provider_ids_for_recovered_models() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let empty = Vec::new();
-        let provider_data = providers["data"].as_array();
-        assert!(provider_data.is_some(), "provider data array");
-        let provider_data = provider_data.unwrap_or(&empty);
-
-        let gmicloud = provider_data
-            .iter()
-            .find(|provider| provider["name"] == "gmicloud");
-        assert!(gmicloud.is_some(), "GMI Cloud provider");
-        assert_provider_mapping(
-            gmicloud,
-            "GMI Cloud",
-            "qwen/qwen3.7-max",
-            "Qwen/Qwen3.7-Max",
-            2.5,
-            (Some(0.25), Some(3.125)),
-            7.5,
-        );
-
-        let siliconflow = provider_data
-            .iter()
-            .find(|provider| provider["name"] == "siliconflow");
-        assert!(siliconflow.is_some(), "SiliconFlow provider");
-        assert_provider_mapping(
-            siliconflow,
-            "SiliconFlow",
-            "deepseek/deepseek-v4-pro",
-            "deepseek-ai/DeepSeek-V4-Pro",
-            1.74,
-            (Some(0.145), None),
-            3.48,
-        );
-    }
-
-    #[test]
-    fn checked_in_registry_pins_the_official_effort_matrix() -> Result<()> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let loaded = load_registry(&root)?;
-        validate_loaded(&loaded)?;
-        let cases: &[(&str, &str, &[&str], &str)] = &[
+    fn model_discovery_matchers_cover_supported_id_shapes() -> Result<()> {
+        let discovery = load_model_discovery(&crate::workspace_root())?;
+        let cases = [
+            ("anthropic/claude-fable-5", "anthropic/claude/fable", "5"),
+            ("anthropic/claude-opus-4.8", "anthropic/claude/opus", "4.8"),
             (
-                "openai",
-                "openai/gpt-5.6-sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-                "medium",
+                "deepseek/deepseek-v4-flash-0731",
+                "deepseek/deepseek-v",
+                "4",
             ),
-            (
-                "openai",
-                "openai/gpt-5.5",
-                &["none", "low", "medium", "high", "xhigh"],
-                "medium",
-            ),
-            (
-                "openai-codex",
-                "openai/gpt-5.4",
-                &["none", "low", "medium", "high", "xhigh"],
-                "none",
-            ),
-            (
-                "anthropic",
-                "anthropic/claude-opus-4.8",
-                &["low", "medium", "high", "xhigh", "max"],
-                "high",
-            ),
-            (
-                "claude-code",
-                "anthropic/claude-opus-4.6",
-                &["low", "medium", "high", "max"],
-                "high",
-            ),
-            (
-                "google",
-                "google/gemini-3.1-pro-preview",
-                &["low", "medium", "high"],
-                "high",
-            ),
-            (
-                "google",
-                "google/gemini-3.5-flash",
-                &["minimal", "low", "medium", "high"],
-                "medium",
-            ),
-            (
-                "bitrouter",
-                "openai/gpt-5.6-sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-                "medium",
-            ),
+            ("google/gemini-3.1-pro-preview", "google/gemini", "3.1"),
+            ("minimax/minimax-m2.7", "minimax/minimax-m", "2.7"),
+            ("moonshotai/kimi-k2.7-code", "moonshotai/kimi-k", "2.7"),
+            ("openai/gpt-5.6-sol", "openai/gpt", "5.6"),
+            ("qwen/qwen3.8-2.4t-a95b", "qwen/qwen", "3.8"),
+            ("x-ai/grok-4.20-multi-agent", "x-ai/grok", "4.20"),
+            ("x-ai/grok-build-0.1", "x-ai/grok-build", "0.1"),
+            ("xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v", "2.5"),
+            ("z-ai/glm-5.3-flash", "z-ai/glm", "5.3"),
+            ("z-ai/glm-4.5v", "z-ai/glm", "4.5"),
+            ("z-ai/glm-5v-turbo", "z-ai/glm", "5"),
         ];
-
-        for (provider_name, model_id, expected_levels, expected_default) in cases {
-            let provider = loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == *provider_name)
-                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
-            let model = provider
-                .data
-                .models
-                .iter()
-                .find(|model| model.id == *model_id)
-                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
-            let effort = model.reasoning_effort.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing effort matrix for {provider_name}:{model_id}")
-            })?;
-            let actual_levels = effort
-                .levels
-                .iter()
-                .map(|value| value.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                actual_levels, *expected_levels,
-                "{provider_name}:{model_id}"
-            );
-            assert_eq!(
-                effort.default.map(|value| value.as_str()),
-                Some(*expected_default),
-                "{provider_name}:{model_id}"
-            );
+        for (id, family, version) in cases {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert_eq!(classified.family, family, "{id}");
+            assert_eq!(classified.version, version, "{id}");
         }
-        for (provider_name, model_id) in [
-            ("anthropic", "anthropic/claude-sonnet-4.5"),
-            ("google", "google/gemini-3.1-flash-lite-preview"),
+        for alias in [
+            "openai/gpt-5.6-sol:batch",
+            "~anthropic/claude-opus-latest",
+            "openai/gpt-4o",
         ] {
-            let provider = loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == provider_name)
-                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
-            let model = provider
-                .data
-                .models
-                .iter()
-                .find(|model| model.id == model_id)
-                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
-            assert!(
-                model.reasoning_effort.is_none(),
-                "unverified route must not advertise effort support: {provider_name}:{model_id}"
-            );
+            assert!(discovery.classify(alias)?.is_none(), "{alias}");
         }
         Ok(())
     }
 
     #[test]
-    fn built_registry_separates_deepseek_v4_flash_revisions() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let models: Value = serde_json::from_str(&artifacts.models).expect("valid models JSON");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+    fn model_discovery_ranks_versions_by_first_release_not_semver_or_late_variant() -> Result<()> {
+        let root = test_root("model-discovery-ranking");
+        write(
+            &root,
+            "registry/models/x-ai.yaml",
+            r#"
+- id: x-ai/grok-4.20
+  release_date: 2026-03-31
+- id: x-ai/grok-4.20-multi-agent
+  release_date: 2026-03-31
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            retain_versions: 3,
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.20-multi-agent", "name": "Grok 4.20 Multi", "created": 500},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
 
-        let dated = models["data"].as_array().and_then(|models| {
-            models
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert_eq!(
+            plan.schedules.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ]
+        );
+        assert_eq!(
+            plan.additions
                 .iter()
-                .find(|model| model["id"] == "deepseek/deepseek-v4-flash-0731")
-        });
-        assert!(dated.is_some(), "dated canonical model");
-        let Some(dated) = dated else {
-            return;
-        };
-        assert_eq!(dated["name"], "DeepSeek: DeepSeek V4 Flash 0731");
-        assert_eq!(
-            dated["description"],
-            "Official DeepSeek V4 Flash release with enhanced agentic capabilities."
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["x-ai/grok-4.3", "x-ai/grok-4.5", "x-ai/grok-4.6"]
         );
-        assert_eq!(dated["input_modalities"], serde_json::json!(["text"]));
-        assert_eq!(dated["output_modalities"], serde_json::json!(["text"]));
-        assert_eq!(dated["release_date"], "2026-07-31");
-        assert_eq!(dated["max_input_tokens"], 1_000_000);
-        assert_eq!(dated["max_output_tokens"], 384_000);
-        assert_eq!(dated["knowledge_cutoff"], "2025-05");
-        assert_eq!(dated["open_weights"], true);
-        assert_eq!(dated["family"], "deepseek-flash");
-
-        let preview = models["data"].as_array().and_then(|models| {
-            models
-                .iter()
-                .find(|model| model["id"] == "deepseek/deepseek-v4-flash")
-        });
-        assert!(preview.is_some(), "preview canonical model");
-        let Some(preview) = preview else {
-            return;
-        };
-        assert_eq!(preview["name"], "DeepSeek: DeepSeek V4 Flash");
-        assert!(preview.get("description").is_none());
-        assert_eq!(preview["input_modalities"], serde_json::json!(["text"]));
-        assert_eq!(preview["output_modalities"], serde_json::json!(["text"]));
-        assert_eq!(preview["release_date"], "2026-04-24");
-        assert_eq!(preview["max_input_tokens"], 262_144);
-        assert_eq!(preview["max_output_tokens"], 262_144);
-        assert_eq!(preview["knowledge_cutoff"], "2025-05");
-        assert_eq!(preview["open_weights"], true);
-        assert_eq!(preview["family"], "deepseek-flash");
-
-        let provider_data = providers["data"].as_array();
-        assert!(provider_data.is_some(), "provider data array");
-        let Some(provider_data) = provider_data else {
-            return;
-        };
-        let find_mapping = |provider_name: &str, canonical_id: &str| {
-            provider_data
-                .iter()
-                .find(|provider| provider["name"] == provider_name)
-                .and_then(|provider| provider["models"].as_array())
-                .and_then(|models| models.iter().find(|model| model["id"] == canonical_id))
-        };
-
-        let expected = [
-            ("deepseek", "deepseek-v4-flash"),
-            ("opencode-zen", "deepseek-v4-flash"),
-            ("opencode-go", "deepseek-v4-flash"),
-            ("alibaba_cn", "deepseek-v4-flash-0731"),
-            ("ambient", "deepseek/deepseek-v4-flash-0731"),
-            ("atlascloud", "deepseek-ai/deepseek-v4-flash-0731"),
-            ("novita", "deepseek/deepseek-v4-flash-0731"),
-            ("openrouter", "deepseek/deepseek-v4-flash-0731"),
-            ("qianfan", "deepseek-v4-flash-0731"),
-        ];
-        for (provider_name, provider_model_id) in expected {
-            let mapping = find_mapping(provider_name, "deepseek/deepseek-v4-flash-0731");
-            assert!(
-                mapping.is_some(),
-                "{provider_name} should serve the dated canonical model"
-            );
-            assert_eq!(
-                mapping.and_then(|model| model["provider_model_id"].as_str()),
-                Some(provider_model_id),
-                "{provider_name} upstream model ID"
-            );
-        }
-
-        for provider_name in ["deepseek", "opencode-zen", "opencode-go"] {
-            assert!(
-                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_none(),
-                "{provider_name} no longer serves the preview alias"
-            );
-        }
-        for provider_name in [
-            "alibaba_cn",
-            "ambient",
-            "atlascloud",
-            "novita",
-            "openrouter",
-            "qianfan",
-        ] {
-            assert!(
-                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_some(),
-                "{provider_name} keeps its distinct preview model"
-            );
-        }
-
-        let deepseek = find_mapping("deepseek", "deepseek/deepseek-v4-flash-0731");
-        assert_eq!(
-            deepseek.map(|model| model["api_protocol"].clone()),
-            Some(serde_json::json!(["openai", "responses", "anthropic"]))
-        );
-
-        let openrouter = find_mapping("openrouter", "deepseek/deepseek-v4-flash-0731");
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
-            Some(0.09)
-        );
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
-            Some(0.018)
-        );
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
-            Some(0.18)
-        );
+        assert!(plan.schedules.values().all(|date| date == "2026-10-05"));
+        Ok(())
     }
 
     #[test]
-    fn built_registry_refreshes_qianfan_international_catalog() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let qianfan = providers["data"]
-            .as_array()
-            .expect("provider data array")
-            .iter()
-            .find(|provider| provider["name"] == "qianfan");
+    fn retired_models_still_occupy_the_retained_version_window() -> Result<()> {
+        let root = test_root("model-discovery-retired-window");
+        write(
+            &root,
+            "registry/models/other.yaml",
+            r#"
+- id: other/model-1
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            retain_versions: 3,
+            deprecation_days: 30,
+            retired_models: HashSet::from(["x-ai/grok-4.5".to_string()]),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
 
-        assert!(qianfan.is_some(), "Qianfan International provider");
-        assert_provider_mapping(
-            qianfan,
-            "Qianfan International",
-            "deepseek/deepseek-v4-pro",
-            "deepseek-v4-pro",
-            1.69,
-            (Some(0.14), None),
-            3.38,
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert_eq!(
+            plan.additions
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["x-ai/grok-4.3", "x-ai/grok-4.6"]
         );
-        assert_provider_mapping(
-            qianfan,
-            "Qianfan International",
-            "z-ai/glm-5.2",
-            "glm-5.2",
-            1.4,
-            (Some(0.26), None),
-            4.4,
-        );
+        Ok(())
     }
 
     #[test]
-    fn built_registry_uses_current_bitrouter_cloud_kimi_pricing() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let bitrouter = providers["data"]
-            .as_array()
-            .expect("provider data array")
-            .iter()
-            .find(|provider| provider["name"] == "bitrouter");
-
-        assert!(bitrouter.is_some(), "BitRouter Cloud provider");
-        assert_provider_mapping(
-            bitrouter,
-            "BitRouter Cloud",
-            "moonshotai/kimi-k2.7-code",
-            "moonshotai/kimi-k2.7-code",
-            0.7125,
-            (Some(0.1425), None),
-            3.0,
+    fn expired_canonical_model_is_removed_from_every_provider() -> Result<()> {
+        let root = test_root("model-discovery-removal");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/old-1
+  deprecation_date: 2026-09-05
+# Keep this comment with the surviving model.
+- id: acme/new-2
+"#,
         );
-    }
-
-    fn assert_provider_mapping(
-        provider: Option<&Value>,
-        provider_name: &str,
-        canonical_id: &str,
-        provider_model_id: &str,
-        input_price: f64,
-        cache_prices: (Option<f64>, Option<f64>),
-        output_price: f64,
-    ) {
-        let model = provider
-            .and_then(|provider| provider["models"].as_array())
-            .and_then(|models| models.iter().find(|model| model["id"] == canonical_id));
-
-        assert!(
-            model.is_some(),
-            "{provider_name} mapping for {canonical_id}"
-        );
-        assert_eq!(
-            model.and_then(|model| model["id"].as_str()),
-            Some(canonical_id)
-        );
-        assert_eq!(
-            model.and_then(|model| model["provider_model_id"].as_str()),
-            Some(provider_model_id)
-        );
-        assert_eq!(
-            model.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
-            Some(input_price)
-        );
-        let input_tokens = model
-            .and_then(|model| model["pricing"]["input_tokens"].as_object())
-            .expect("input token pricing");
-        match cache_prices.0 {
-            Some(cache_read_price) => {
-                assert_eq!(
-                    input_tokens.get("cache_read").and_then(Value::as_f64),
-                    Some(cache_read_price)
-                );
-            }
-            None => {
-                assert!(
-                    !input_tokens.contains_key("cache_read"),
-                    "{provider_name} {canonical_id} should not advertise cache-read pricing"
-                );
-            }
+        for provider in ["first", "second"] {
+            write(
+                &root,
+                &format!("registry/providers/{provider}.yaml"),
+                &format!(
+                    r#"
+name: {provider}
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/old-1
+    provider_model_id: old
+  # Keep the surviving route comment.
+  - id: acme/new-2
+    provider_model_id: new
+status: active
+billing: subscription
+api_base: https://api.{provider}.test/v1
+"#
+                ),
+            );
         }
-        match cache_prices.1 {
-            Some(cache_write_price) => {
-                assert_eq!(
-                    input_tokens.get("cache_write").and_then(Value::as_f64),
-                    Some(cache_write_price)
-                );
-            }
-            None => {
-                assert!(
-                    !input_tokens.contains_key("cache_write"),
-                    "{provider_name} {canonical_id} should not advertise cache-write pricing"
-                );
-            }
-        }
+        let loaded = load_registry(&root)?;
+        let plan = ModelDiscoveryPlan {
+            additions: Vec::new(),
+            schedules: BTreeMap::from([("acme/new-2".to_string(), "2026-10-05".to_string())]),
+            removals: HashSet::from(["acme/old-1".to_string()]),
+        };
+        let report = report_for_model_discovery(&loaded, &plan);
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let updated = load_registry(&root)?;
         assert_eq!(
-            model.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
-            Some(output_price)
+            updated
+                .models()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/new-2"]
         );
+        assert_eq!(
+            updated
+                .models()
+                .next()
+                .and_then(|model| model.deprecation_date.as_deref()),
+            Some("2026-10-05")
+        );
+        assert!(updated.providers.iter().all(|provider| {
+            provider.data.models.len() == 1 && provider.data.models[0].id == "acme/new-2"
+        }));
+        assert_eq!(
+            report.removed,
+            vec![(
+                "acme/old-1".to_string(),
+                vec!["first".to_string(), "second".to_string()]
+            )]
+        );
+        let report_path = root.join("lifecycle.md");
+        write_model_discovery_report(&report_path, &report)?;
+        let report_raw = fs::read_to_string(report_path)?;
+        assert!(report_raw.contains("### Added\n\nNone."));
+        assert!(report_raw.contains("`acme/new-2` — removal date: 2026-10-05"));
+        assert!(report_raw.contains("`acme/old-1` — removed from: `first`, `second`"));
+        let canonical_raw = fs::read_to_string(root.join("registry/models/acme.yaml"))?;
+        assert!(canonical_raw.contains("# Keep this comment with the surviving model."));
+        for provider in ["first", "second"] {
+            let raw = fs::read_to_string(root.join(format!("registry/providers/{provider}.yaml")))?;
+            assert!(raw.contains("# Keep the surviving route comment."));
+        }
+        Ok(())
     }
 
     fn test_root(name: &str) -> PathBuf {
@@ -3867,6 +4417,18 @@ api_base: https://api.acme.test/v1
             std::process::id()
         ));
         fs::create_dir_all(root.join("registry/providers")).unwrap();
+        write(
+            &root,
+            "registry/model-discovery.yaml",
+            r#"
+source_url: https://openrouter.ai/api/v1/models
+retain_versions: 3
+deprecation_days: 30
+families:
+  - key: acme/model
+    pattern: '^acme/model-(?P<version>[0-9]+(?:\.[0-9]+)*)$'
+"#,
+        );
         root
     }
 

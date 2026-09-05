@@ -22,6 +22,22 @@ Being listed in `models/` is an editorial decision. A model that is *not*
 curated can still be served by any provider that lists it — it just isn't part
 of the blessed default catalog.
 
+Maintainers curate which versioned model families BitRouter follows in
+`model-discovery.yaml`. Within those explicitly selected families, the daily
+registry sync uses OpenRouter's public `GET /api/v1/models` catalog to keep the
+canonical list current: it retains the three newest version numbers and every
+variant belonging to those versions. OpenRouter routing aliases such as
+`:batch`, `:free`, and `~...-latest` are not canonical models.
+Explicit production-health retirements live in the same file as
+`retired_models`; these tombstones override discovery while an upstream catalog
+continues to advertise a broken or withdrawn model.
+
+When a version falls outside the three-version window, every canonical model in
+that version receives the same `deprecation_date`, 30 days in the future. Once
+that date arrives, the sync removes those canonical IDs and all matching
+provider routes. A `deprecation_date` on an individual provider model remains a
+provider-local lifecycle marker and never triggers global removal.
+
 ## How models are curated
 
 Default models are chosen by performance on **three independent benchmarks** —
@@ -185,5 +201,5 @@ cargo run -p dist-helper -- registry docs        # regenerate supported-* docs t
 ```
 
 Commit `dist/registry/` alongside your source changes. The daily automated sync
-refreshes provider catalogs from their `auto_sync` feeds and never touches the
-curated `models/` files.
+updates configured canonical model families first, then refreshes provider
+catalogs from their `auto_sync` feeds.
