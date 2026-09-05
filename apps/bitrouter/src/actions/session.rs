@@ -168,6 +168,64 @@ impl SessionPorts {
     }
 }
 
+/// The user's prompt-expansion commands, or an error naming the first one that
+/// collides with a command BitRouter answers.
+///
+/// **This is what lets the guards over `ACTIONS` stay exhaustive.** They are
+/// silent about this registry, which is correct only if the two sets cannot
+/// overlap — so the overlap is refused here, once, when the config loads,
+/// rather than resolved by a precedence rule at every keystroke.
+///
+/// It cannot live in the SDK: the check needs `ACTIONS`, and `bitrouter-mcp`
+/// depends on `bitrouter-sdk`, not the reverse.
+pub fn prompt_commands(
+    config: &bitrouter_sdk::config::ChatConfig,
+) -> anyhow::Result<Vec<bitrouter_tui::machine::PromptCommand>> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut commands = Vec::with_capacity(config.commands.len());
+    for command in &config.commands {
+        let name = command.name.trim();
+        anyhow::ensure!(
+            !name.is_empty(),
+            "a `chat.commands` entry has an empty name"
+        );
+        anyhow::ensure!(
+            !name.contains(char::is_whitespace),
+            "`chat.commands` name `{name}` contains whitespace; a command is one word"
+        );
+        if let Some(row) = ACTIONS
+            .iter()
+            .find(|row| row.tui_command == Some(name) && row.id != "")
+        {
+            anyhow::bail!(
+                "`chat.commands` defines `/{name}`, which is BitRouter's own `{}` command. \
+                 Rename it: a config command may not shadow one that reaches BitRouter's ports",
+                row.id
+            );
+        }
+        if let Some((alias, target)) = bitrouter_tui::machine::ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == name)
+        {
+            anyhow::bail!(
+                "`chat.commands` defines `/{alias}`, which is BitRouter's alias for \
+                 `/{target}`. Rename it"
+            );
+        }
+        anyhow::ensure!(
+            !seen.contains(&name),
+            "`chat.commands` defines `/{name}` twice"
+        );
+        seen.push(name);
+        commands.push(bitrouter_tui::machine::PromptCommand {
+            name: name.to_string(),
+            description: command.description.clone(),
+            template: command.prompt.clone(),
+        });
+    }
+    Ok(commands)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -193,6 +251,46 @@ providers:
     models:
       - id: demo-model
 "#;
+
+    /// A config command may not take a name BitRouter answers.
+    ///
+    /// This is the check that lets the guards over `ACTIONS` stay exhaustive:
+    /// they are silent about the open registry, which is only correct because
+    /// the two sets cannot overlap.
+    #[test]
+    fn a_config_command_may_not_shadow_a_bitrouter_one() {
+        use bitrouter_sdk::config::{ChatConfig, PromptCommandConfig};
+
+        let entry = |name: &str| PromptCommandConfig {
+            name: name.to_string(),
+            description: String::new(),
+            prompt: "x".to_string(),
+        };
+        let commands = |names: &[&str]| ChatConfig {
+            commands: names.iter().map(|name| entry(name)).collect(),
+        };
+
+        let ok = prompt_commands(&commands(&["review", "ship"])).expect("no clash");
+        assert_eq!(ok.len(), 2);
+
+        // Every row that carries a `tui_command` is refused by that name.
+        for taken in ["status", "models", "preview", "commands", "route"] {
+            let error = prompt_commands(&commands(&[taken]))
+                .expect_err(&format!("`{taken}` is BitRouter's"));
+            assert!(format!("{error}").contains(taken), "{error}");
+        }
+        // And so is an alias.
+        let error = prompt_commands(&commands(&["help"])).expect_err("`help` is an alias");
+        assert!(format!("{error}").contains("alias"), "{error}");
+
+        // A duplicate would make one of the two unreachable.
+        let error = prompt_commands(&commands(&["dup", "dup"])).expect_err("duplicate");
+        assert!(format!("{error}").contains("twice"), "{error}");
+
+        // A name with a space could never be typed as one word.
+        let error = prompt_commands(&commands(&["two words"])).expect_err("whitespace");
+        assert!(format!("{error}").contains("one word"), "{error}");
+    }
 
     /// The third surface answers with the second's bytes.
     ///

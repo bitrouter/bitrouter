@@ -6,7 +6,7 @@ Spec: [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md)
 
 ## Current
 
-Task: T8
+Task: T9
 Sub-step: none
 Consecutive non-green iterations on this task: 0
 
@@ -20,7 +20,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T5 — /models and /preview
 - [x] T6 — CommandsReport and its builder
 - [x] T7 — bitrouter acp commands, /commands through the shared report
-- [ ] T8 — the prompt-expansion registry
+- [x] T8 — the prompt-expansion registry
 - [ ] T9 — acceptance sweep
 
 ## Notes
@@ -178,6 +178,31 @@ Consecutive non-green iterations on this task: 0
   Process note: a piped `cargo build ... | grep | head` reported `rc=0` while
   masking a real compile error. Count `^error` lines; do not read the exit
   code through a pipe.
+
+- **T8** — `chat.commands` in `bitrouter.yaml`, `$ARGUMENTS` expansion shared
+  by the TUI, the piped loop and `acp prompt`, and the load-time collision
+  check. `commands_report` gained its `config` group (T6's deferral
+  discharged). 3050 tests pass (+4).
+
+  The structural point: the two registries are never held in one collection.
+  `State` carries `commands` and `prompt_commands` as separate fields and the
+  closed set is consulted first, which is sound only because the open set
+  cannot contain a name the closed one has — refused once at load. That is
+  what keeps G1-G3 exhaustive over `ACTIONS` while saying nothing about
+  config. It cannot live in the SDK: it needs `ACTIONS`, and `bitrouter-mcp`
+  depends on `bitrouter-sdk`, not the reverse.
+
+  Placement: the check runs before the terminal is taken, so a bad config
+  fails as plain text rather than from inside a raw-mode screen, and
+  `config validate` runs it too. `acp prompt` passes an empty BitRouter half
+  to the resolver deliberately — only the expansion is shared.
+
+  Process note, third variant of one mistake: a test filter that printed
+  neither PASS nor FAIL was read as success when the compile had actually
+  failed (the tests used `serde_yaml`, not a dependency; they now use the
+  crate's own `parse()`). Together with T1's no-op provocation and T7's
+  `rc=0` through a pipe: assert on a positive signal, never on the absence of
+  a negative one.
 
 ## Blocked
 

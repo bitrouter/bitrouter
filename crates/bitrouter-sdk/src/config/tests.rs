@@ -1564,3 +1564,31 @@ fn mcp_upstream_protocol_opts_in_by_version_string() {
         "unknown protocol version must not parse"
     );
 }
+
+/// `chat.commands` deserializes, and `description` is optional.
+#[test]
+fn chat_prompt_commands_deserialize() {
+    let cfg = parse(
+        r#"
+chat:
+  commands:
+    - name: review
+      description: review a diff
+      prompt: "Review this: $ARGUMENTS"
+    - name: ship
+      prompt: "Ship it"
+"#,
+    )
+    .expect("parse");
+    assert_eq!(cfg.chat.commands.len(), 2);
+    assert_eq!(cfg.chat.commands[0].name, "review");
+    assert_eq!(cfg.chat.commands[0].prompt, "Review this: $ARGUMENTS");
+    assert_eq!(cfg.chat.commands[1].description, "", "description defaults");
+}
+
+/// A config with no `chat:` block still loads — the whole section is optional.
+#[test]
+fn chat_is_optional() {
+    let cfg = parse("providers: {}\n").expect("parse");
+    assert!(cfg.chat.commands.is_empty());
+}

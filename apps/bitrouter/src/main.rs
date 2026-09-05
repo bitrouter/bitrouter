@@ -1839,6 +1839,11 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     match action {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            // A `chat.commands` name that shadows one of BitRouter's own is a
+            // configuration error, and this is where a reader expects to be
+            // told — not on the first `bitrouter chat` of the day.
+            let loaded = bitrouter::paths::load_config(&source).await?;
+            bitrouter::actions::session::prompt_commands(&loaded.chat)?;
             validate_config(&source).await
         }
     }

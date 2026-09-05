@@ -40,12 +40,45 @@ pub use pattern::{Pattern, PatternMap};
 pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
 pub use routing_table::ConfigRoutingTable;
 
+/// `bitrouter chat`'s own configuration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Prompt-expansion commands.
+    ///
+    /// `/name args` in `bitrouter chat`, or `bitrouter acp prompt "/name args"`,
+    /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
+    /// name.
+    ///
+    /// There is deliberately no key that *runs* anything. A command here
+    /// produces a prompt and nothing else, which is what lets the registry be
+    /// open — user-authored, unreviewed — while the registry of commands that
+    /// reach BitRouter's own ports stays closed and guarded.
+    pub commands: Vec<PromptCommandConfig>,
+}
+
+/// One user-authored command that expands to a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+pub struct PromptCommandConfig {
+    /// What to type after the slash. May not be a name BitRouter answers —
+    /// that is rejected when the config is loaded, not resolved at runtime.
+    pub name: String,
+    /// One line for `/commands`.
+    #[serde(default)]
+    pub description: String,
+    /// The prompt to send. `$ARGUMENTS` is replaced by whatever was typed
+    /// after the name; a template that uses it twice gets it twice.
+    pub prompt: String,
+}
+
 /// The top-level configuration.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
+    /// The interactive session's own configuration.
+    pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
     pub upstream: UpstreamConfig,
     /// Database connection settings.
@@ -104,6 +137,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             eval: EvalConfig::default(),

@@ -219,6 +219,14 @@ first, then the agent's. A local name wins over an agent command of the same
 name, and the shadowed one is listed and marked rather than hidden. A command
 whose requirement is unmet is listed with the reason and answers with it.
 
+**Your own commands**: `chat.commands` in `bitrouter.yaml` takes
+`{name, description, prompt}` entries; `/name args` sends `prompt` with
+`$ARGUMENTS` replaced by what followed the name, identically in `bitrouter
+chat` and `bitrouter acp prompt`. There is deliberately no key that runs
+anything — an entry produces a prompt, never a command. A name that collides
+with one of BitRouter's own (or `/help`) is refused at launch and by
+`bitrouter config validate`.
+
 **A scrolled-off row can be stale**: rows are repainted only while they are on screen, so a tool call that scrolls away mid-run keeps the status it had when it left. The renderer will not clear your scrollback to fix that. `Ctrl-L` repaints what is on screen.
 
 **Cost honesty**: the cost line always says whose number it is. `USD 0.4200` is the spend BitRouter metered for this session (the `usage_update` carried `_meta["bitrouter.dev/cost"] = "router"`); `agent USD 9.9900` is a figure the harness reported itself, shown as the agent's and never as ours; `cost unreported` means no figure reached the client — a `--direct` or `--base-url` session, a harness with its own auth, or a session with no priced requests — and is never rendered as `$0.00`. The figure lags by one update: the controller answers each `usage_update` from a cache and refreshes it off the forward path, so the number shown at the end of a turn is the spend confirmed as of the previous refresh, which understates rather than invents. Daemon-wide spend is `bitrouter status --requests`, not this line.

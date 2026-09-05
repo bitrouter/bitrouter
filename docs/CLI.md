@@ -541,6 +541,26 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 | `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
 | `/help` | The same list. An alias for `/commands`. |
 
+**Your own commands.** `chat.commands` in `bitrouter.yaml` defines
+prompt-expansion commands — `/name args` sends `prompt` with `$ARGUMENTS`
+replaced by whatever followed the name:
+
+```yaml
+chat:
+  commands:
+    - name: review
+      description: review a diff
+      prompt: "Review this change and list what would break: $ARGUMENTS"
+```
+
+They expand identically in `bitrouter chat` and in `bitrouter acp prompt`.
+There is deliberately **no key that runs anything**: an entry here produces a
+prompt and nothing else, which is what lets this registry be yours and
+unreviewed while the commands that reach BitRouter's own ports stay a closed,
+guarded set. A name that collides with one of BitRouter's own — or with
+`/help` — is a configuration error, reported by `bitrouter config validate` and
+refused at launch rather than resolved by a precedence rule.
+
 `/commands` reports three outcomes for the agent's half of the list, because
 they mean different things: the commands it advertised, *"advertises no
 commands"* when it answered with an empty list, and *"had not sent its command

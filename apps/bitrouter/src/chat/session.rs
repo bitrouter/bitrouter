@@ -104,6 +104,7 @@ pub(crate) async fn run(
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     via: Option<String>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
     ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     let (mut view, mut stdin) = match open_terminal(via) {
@@ -124,6 +125,7 @@ pub(crate) async fn run(
         agent_id,
         recorder,
         commands,
+        prompt_commands,
         ports,
     )
     .await;
@@ -216,6 +218,7 @@ async fn drive(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
     ports: &crate::actions::session::SessionPorts,
 ) -> Result<bool> {
     use agent_client_protocol::schema::v1::{
@@ -259,6 +262,7 @@ async fn drive(
     });
 
     let mut state = State::new(commands);
+    state.prompt_commands = prompt_commands;
     let mut schedule = Schedule::default();
     // One ticker for the session rather than one per turn. The tick arm is
     // gated on `state.streaming()`, so `tokio` never polls it at an idle
@@ -367,6 +371,7 @@ async fn drive(
                         let journal = bitrouter_tui::view::lock(&shared);
                         crate::actions::commands::commands_report(
                             &state.commands,
+                            &state.prompt_commands,
                             journal.commands(),
                             journal.commands_received(),
                         )
@@ -465,6 +470,7 @@ pub(crate) async fn chat_plain(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     commands: Vec<bitrouter_tui::machine::Command>,
+    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
     ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     use std::io::Write as _;
@@ -496,7 +502,7 @@ pub(crate) async fn chat_plain(
         // The same resolver the terminal runs, so a name means one thing on
         // both. What differs is only what can be *done* with the result: the
         // picker and the journal need keys and a screen.
-        let line = match bitrouter_tui::machine::resolve(&commands, &line) {
+        let line = match bitrouter_tui::machine::resolve(&commands, &prompt_commands, &line) {
             bitrouter_tui::machine::Resolution::Owned { action, .. } => {
                 let name = commands
                     .iter()
@@ -523,7 +529,10 @@ pub(crate) async fn chat_plain(
                 writeln!(out, "{reason}").context("writing to stdout")?;
                 continue;
             }
-            bitrouter_tui::machine::Resolution::Prompt(prompt) => prompt,
+            // Expanded identically here and in the terminal, through the one
+            // resolver: a config command means the same thing on both.
+            bitrouter_tui::machine::Resolution::Expand(prompt)
+            | bitrouter_tui::machine::Resolution::Prompt(prompt) => prompt,
         };
         prompts = prompts.saturating_add(1);
         transcript.apply(SessionUpdate::UserMessageChunk(prompt_chunk(

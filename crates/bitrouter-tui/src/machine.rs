@@ -93,6 +93,26 @@ pub struct Command {
     pub unavailable: Option<&'static str>,
 }
 
+/// A user-authored command that expands to a prompt.
+///
+/// Plain data: the reducer substitutes and sends. It never runs anything, which
+/// is why this registry can be open — the config is the user's, unreviewed —
+/// while the commands that reach BitRouter's own ports stay a closed, guarded
+/// table.
+///
+/// Held in a **separate field** from [`Command`], never merged into one map.
+/// The two are checked against each other once, when the config loads, so no
+/// runtime precedence rule between them is ever needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptCommand {
+    /// The word after the slash.
+    pub name: String,
+    /// One line for `/commands`.
+    pub description: String,
+    /// `$ARGUMENTS` is replaced by everything typed after the name.
+    pub template: String,
+}
+
 /// The rows the reducer dispatches itself rather than handing to the app,
 /// because each needs reducer-owned state — the journal's command list, or the
 /// picker's phase.
@@ -123,6 +143,8 @@ pub enum Resolution {
     },
     /// A listed BitRouter command this session cannot run, and why.
     Unavailable(&'static str),
+    /// A prompt-expansion command, already expanded. Sent as a turn.
+    Expand(String),
     /// Not ours — a prompt, including any command the agent advertises.
     Prompt(String),
 }
@@ -136,7 +158,7 @@ pub enum Resolution {
 ///
 /// A free function over a slice, not a method, so the piped loop and the
 /// headless one-shot path can run the same resolution the terminal does.
-pub fn resolve(commands: &[Command], line: &str) -> Resolution {
+pub fn resolve(commands: &[Command], prompt_commands: &[PromptCommand], line: &str) -> Resolution {
     let line = line.trim();
     let Some(rest) = line.strip_prefix('/') else {
         return Resolution::Prompt(line.to_string());
@@ -172,6 +194,19 @@ pub fn resolve(commands: &[Command], line: &str) -> Resolution {
             };
         }
     }
+    // Only after every BitRouter name has missed. A config command can never
+    // reach here under a name BitRouter answers — that config is refused at
+    // load — so this order is a statement of precedence, not a tiebreak.
+    if let Some(expansion) = words
+        .first()
+        .and_then(|name| prompt_commands.iter().find(|command| command.name == *name))
+    {
+        return Resolution::Expand(
+            expansion
+                .template
+                .replace("$ARGUMENTS", &words[1..].join(" ")),
+        );
+    }
     Resolution::Prompt(line.to_string())
 }
 
@@ -198,6 +233,8 @@ pub struct State {
     /// How many prompts this session has sent, so two in a row cannot merge
     /// into one run in the journal.
     pub prompts: usize,
+    /// The user's prompt-expansion commands.
+    pub prompt_commands: Vec<PromptCommand>,
     /// BitRouter's own commands, in `/commands` order.
     ///
     /// Replaces the old `routable` flag: whether `/route` can act is now one
@@ -222,6 +259,7 @@ impl State {
             editor: Editor::default(),
             prompts: 0,
             commands,
+            prompt_commands: Vec::new(),
             queued: VecDeque::new(),
         }
     }
@@ -509,7 +547,7 @@ fn submit(state: &mut State) -> Vec<Effect> {
     // The last turn's word stands until this one starts, so a stop reason is
     // readable for as long as the reader is deciding what to say next.
     let mut effects = vec![Effect::Echo, Effect::ClearNotice];
-    match resolve(&state.commands, &line) {
+    match resolve(&state.commands, &state.prompt_commands, &line) {
         Resolution::Owned {
             action: "commands", ..
         } => {
@@ -544,7 +582,9 @@ fn submit(state: &mut State) -> Vec<Effect> {
         Resolution::Unavailable(reason) => {
             effects.push(Effect::Notice(Notice::Say(reason.to_string())));
         }
-        Resolution::Prompt(prompt) => {
+        // An expansion is a prompt: the turn is what runs, and the journal
+        // records the text actually sent rather than what was typed.
+        Resolution::Expand(prompt) | Resolution::Prompt(prompt) => {
             state.prompts = state.prompts.saturating_add(1);
             state.phase = Phase::Turn;
             effects.push(Effect::Prompt {
@@ -1332,7 +1372,7 @@ mod tests {
     fn the_resolver_reads_the_longest_name_first_then_aliases_then_the_agent() {
         let offered = commands_for(true);
         assert_eq!(
-            resolve(&offered, "/route reset"),
+            resolve(&offered, &[], "/route reset"),
             Resolution::Owned {
                 action: "route_reset",
                 args: Vec::new()
@@ -1340,7 +1380,7 @@ mod tests {
             "`/route reset` is one two-word name, not `/route` with an argument"
         );
         assert_eq!(
-            resolve(&offered, "/route"),
+            resolve(&offered, &[], "/route"),
             Resolution::Owned {
                 action: "route_set",
                 args: Vec::new()
@@ -1348,7 +1388,7 @@ mod tests {
             "the one-word name is still reachable once the two-word one misses"
         );
         assert_eq!(
-            resolve(&offered, "/help"),
+            resolve(&offered, &[], "/help"),
             Resolution::Owned {
                 action: "commands",
                 args: Vec::new()
@@ -1356,30 +1396,75 @@ mod tests {
             "an alias reaches its target"
         );
         assert_eq!(
-            resolve(&offered, "/plan ship it"),
+            resolve(&offered, &[], "/plan ship it"),
             Resolution::Prompt("/plan ship it".to_string()),
             "a command we do not offer is the agent's, and is passed through whole"
         );
         assert_eq!(
-            resolve(&offered, "hello"),
+            resolve(&offered, &[], "hello"),
             Resolution::Prompt("hello".to_string()),
             "a bare line is a prompt"
         );
         // Arguments are split, never handed over as one string.
         assert_eq!(
-            resolve(&offered, "/route  us-east   fast "),
+            resolve(&offered, &[], "/route  us-east   fast "),
             Resolution::Owned {
                 action: "route_set",
                 args: vec!["us-east".to_string(), "fast".to_string()]
             }
         );
         // A listed-but-unrunnable command answers with its reason.
-        match resolve(&commands_for(false), "/route") {
+        match resolve(&commands_for(false), &[], "/route") {
             Resolution::Unavailable(reason) => {
                 assert!(reason.contains("cannot be rerouted"), "got `{reason}`")
             }
             other => panic!("expected the reason, got {other:?}"),
         }
+    }
+
+    /// A config command expands and is sent as a turn; a BitRouter name still
+    /// wins, even against a config command that claims it.
+    #[test]
+    fn a_prompt_command_expands_and_never_outranks_a_bitrouter_name() {
+        let offered = commands_for(true);
+        let configured = vec![
+            PromptCommand {
+                name: "review".to_string(),
+                description: "review a diff".to_string(),
+                template: "Review this: $ARGUMENTS".to_string(),
+            },
+            // A config that names a BitRouter command is refused at load, so
+            // this can only arise from a bug; the resolver must still not
+            // prefer it.
+            PromptCommand {
+                name: "route".to_string(),
+                description: "should never win".to_string(),
+                template: "nope".to_string(),
+            },
+        ];
+        assert_eq!(
+            resolve(&offered, &configured, "/review the diff"),
+            Resolution::Expand("Review this: the diff".to_string())
+        );
+        // No arguments substitutes the empty string rather than leaving the
+        // placeholder visible in what is sent.
+        assert_eq!(
+            resolve(&offered, &configured, "/review"),
+            Resolution::Expand("Review this: ".to_string())
+        );
+        assert_eq!(
+            resolve(&offered, &configured, "/route"),
+            Resolution::Owned {
+                action: "route_set",
+                args: Vec::new()
+            },
+            "local wins: the closed table is consulted before the open one"
+        );
+        assert_eq!(
+            resolve(&offered, &configured, "/unknown thing"),
+            Resolution::Prompt("/unknown thing".to_string()),
+            "neither registry claims it, so it is the agent's"
+        );
     }
 
     /// `/route reset` drops the lease, and what comes back clears the footer

@@ -6,7 +6,7 @@
 
 use agent_client_protocol::schema::v1::{AvailableCommand, AvailableCommandInput};
 use bitrouter_mcp::actions::commands::{CommandRow, CommandSource, CommandsReport};
-use bitrouter_tui::machine::Command;
+use bitrouter_tui::machine::{Command, PromptCommand};
 
 /// Everything this session offers, in precedence order.
 ///
@@ -18,6 +18,7 @@ use bitrouter_tui::machine::Command;
 /// worth showing for a command that takes an argument.
 pub fn commands_report(
     bitrouter: &[Command],
+    config: &[PromptCommand],
     agent: &[AvailableCommand],
     received: bool,
 ) -> CommandsReport {
@@ -28,12 +29,23 @@ pub fn commands_report(
             description: command.summary.to_string(),
             hint: None,
             source: CommandSource::Bitrouter,
-            // Nothing outranks a local name today; `config` rows, when they
-            // arrive, are checked against these at load and cannot collide.
+            // Nothing outranks a local name: a config command that claimed
+            // one is refused when the config loads.
             shadowed: false,
             unavailable: command.unavailable.map(str::to_string),
         })
         .collect();
+    // Between BitRouter's and the agent's, which is where its precedence
+    // sits. A config row is never shadowed — a name BitRouter answers is
+    // refused at load, so the only clash it can win is against the agent.
+    commands.extend(config.iter().map(|command| CommandRow {
+        name: command.name.clone(),
+        description: command.description.clone(),
+        hint: None,
+        source: CommandSource::Config,
+        shadowed: false,
+        unavailable: None,
+    }));
     commands.extend(agent.iter().map(|command| {
         CommandRow {
             name: command.name.clone(),
@@ -44,7 +56,8 @@ pub fn commands_report(
             // two rows that look equally reachable.
             shadowed: bitrouter
                 .iter()
-                .any(|ours| ours.name == command.name.as_str()),
+                .any(|ours| ours.name == command.name.as_str())
+                || config.iter().any(|theirs| theirs.name == command.name),
             unavailable: None,
         }
     }));
@@ -83,7 +96,7 @@ mod tests {
     /// BitRouter's rows come first, and each row says who answers it.
     #[test]
     fn rows_are_grouped_by_source_in_precedence_order() {
-        let report = commands_report(&[ours("route", None)], &[theirs("compact")], true);
+        let report = commands_report(&[ours("route", None)], &[], &[theirs("compact")], true);
         let sources: Vec<_> = report.commands.iter().map(|row| row.source).collect();
         assert_eq!(
             sources,
@@ -99,6 +112,7 @@ mod tests {
     fn a_clashing_agent_command_is_listed_and_marked_shadowed() {
         let report = commands_report(
             &[ours("status", None)],
+            &[],
             &[theirs("status"), theirs("compact")],
             true,
         );
@@ -115,7 +129,7 @@ mod tests {
     /// A command that cannot run keeps its reason all the way into the report.
     #[test]
     fn an_unavailable_command_carries_its_reason() {
-        let report = commands_report(&[ours("route", Some("no route control"))], &[], true);
+        let report = commands_report(&[ours("route", Some("no route control"))], &[], &[], true);
         assert_eq!(
             report.commands[0].unavailable.as_deref(),
             Some("no route control")
@@ -126,8 +140,8 @@ mod tests {
     /// report distinguishes them where an empty list alone could not.
     #[test]
     fn silence_and_an_empty_list_are_different_answers() {
-        let said_none = commands_report(&[], &[], true);
-        let silent = commands_report(&[], &[], false);
+        let said_none = commands_report(&[], &[], &[], true);
+        let silent = commands_report(&[], &[], &[], false);
         assert!(said_none.received && said_none.commands.is_empty());
         assert!(!silent.received && silent.commands.is_empty());
 
@@ -147,6 +161,7 @@ mod tests {
     fn the_rendered_view_carries_no_tabs() {
         let report = commands_report(
             &[ours("route", Some("no route control"))],
+            &[],
             &[theirs("route"), theirs("compact")],
             true,
         );

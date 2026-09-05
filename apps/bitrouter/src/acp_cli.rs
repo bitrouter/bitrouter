@@ -1387,6 +1387,10 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         source.clone(),
         crate::daemon::socket_path_for(source, &config),
     );
+    // Resolved before the terminal is taken, so a config that names one of
+    // BitRouter's own commands fails as a plain line of text rather than from
+    // inside a raw-mode screen.
+    let prompt_commands = crate::actions::session::prompt_commands(&config.chat)?;
 
     // A pipe cannot be drawn on. Everything the terminal branch does — the
     // live row, the modals, raw mode — assumes a screen with a cursor on it,
@@ -1402,6 +1406,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             options,
             &cloud_credentials,
             binding,
+            prompt_commands,
             &ports,
         )
         .await;
@@ -1517,6 +1522,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         observability.recorder,
         routed.via.clone(),
         commands,
+        prompt_commands,
         &ports,
     )
     .await;
@@ -1744,6 +1750,7 @@ async fn chat_piped(
     options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
+    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
     ports: &crate::actions::session::SessionPorts,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
@@ -1789,6 +1796,7 @@ async fn chat_piped(
         agent_id,
         observability.recorder,
         crate::actions::session::offered_commands(&session.client),
+        prompt_commands,
         ports,
     )
     .await;
@@ -1893,8 +1901,10 @@ pub async fn commands(
         }
     }
 
+    let configured = crate::actions::session::prompt_commands(&config.chat)?;
     let report = crate::actions::commands::commands_report(
         &crate::actions::session::offered_commands(&session.client),
+        &configured,
         &advertised,
         received,
     );
@@ -1949,6 +1959,20 @@ where
             return Err(anyhow::Error::new(e));
         }
     };
+
+    // A config command expands identically here and in the terminal, through
+    // the one resolver. The BitRouter half is deliberately empty: `acp prompt
+    // "/status"` is not a scheduled surface, so a name this process answers
+    // goes to the agent exactly as it does today.
+    let expanded = match bitrouter_tui::machine::resolve(
+        &[],
+        &crate::actions::session::prompt_commands(&config.chat)?,
+        text,
+    ) {
+        bitrouter_tui::machine::Resolution::Expand(prompt) => prompt,
+        _ => text.to_string(),
+    };
+    let text = expanded.as_str();
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
