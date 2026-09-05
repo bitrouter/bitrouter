@@ -16,6 +16,15 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   test. Written for
   [#868](https://github.com/bitrouter/bitrouter/issues/868); stands alone
   from #863 and #866.
+- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **proposed, nothing
+  built.** Interrogates the goal "every headless CLI command has the same
+  interactive TUI command" and argues against it: 103 leaves rather than 29, a
+  quarter of them hostile in a session, no mature tool in the field achieving
+  parity, and a three-set topology rather than a subset with a gap. Proposes ~6
+  session commands dispatched through the same action ports the CLI uses, with
+  `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
+  Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
+  form; read its §5 and §16 D1 before agreeing to anything.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.
