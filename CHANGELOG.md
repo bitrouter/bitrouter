@@ -2,104 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Pending changes are not written here. They live one-per-file in
+[`.changes/`](.changes/) and are folded into the release section below when a
+release is cut — see [`.changes/README.md`](.changes/README.md).
+
 ## [Unreleased]
-
-- **Headless permissions and formats for `acp prompt` / `spawn -p`.** A
-  headless run used to deny every `session/request_permission`; now the caller
-  states the rule: `--deny-all` (still the default), `--approve-reads` (the ACP
-  tool kind is `read` or `search`), `--approve-all`, and a per-tool
-  `--permission-policy '{"autoApprove":[…],"autoDeny":[…],"defaultAction":…}'`
-  (or `@path`). Each answer is a new NDJSON line,
-  `{"type":"permission","decision":"approved"|"denied","title":…,"kind":…}`,
-  and the process exits **5** when at least one request was denied and none
-  approved. `--format text` prints the transcript exactly as `bitrouter chat`
-  prints it to a pipe; `--format quiet` prints the assistant's text only;
-  `json` (the default) is the unchanged NDJSON. The decision is made by
-  `bitrouter_tui::permission::Policy` and reaches the agent through one shared
-  interpreter (`chat/effects.rs`) that the interactive TUI, the piped `chat`,
-  and `acp prompt` all run — the first session-verb parity between the
-  terminal and the headless CLI.
-
-- **Breaking (CLI):** `bitrouter skills add`, `remove`, `find`, and `update` are
-  removed, along with the `bitrouter-skills` crate that backed them. Installing
-  skills is the ecosystem's job — `npx skills add`, or the Claude Code / Codex
-  plugin marketplaces (this repo ships as one). BitRouter **reads** the
-  installed-skills directory and serves it over MCP; it does not populate it.
-  That is the same line as "server, not host" applied to content lifecycle:
-  BitRouter handles transport, not distribution.
-
-  `bitrouter skills list` and `bitrouter skills init` remain. `SKILL.md` format
-  support moved into the binary (`apps/bitrouter/src/skills/`), where its only
-  consumers live; the git-clone, source-resolution, install-to-disk, and
-  registry-client code is gone. The `--registry` / `--namespace` flags and the
-  `api.bitrouter.ai` skills-hub client went with them.
-
-- **Skills over MCP (SEP-2640).** BitRouter now serves Agent Skills as an MCP
-  server and proxies them as a gateway, over stdio and Streamable HTTP alike.
-  `bitrouter mcp serve --backend skills` answers `skills/list`, `skills/get`,
-  `resources/list`, and `resources/read` over the installed-skills root, with
-  complete `sha256:` digests per file; the existing `skills_search` /
-  `skills_get` tools are unchanged and still served. The daemon's aggregate
-  `POST /mcp` merges upstream skill catalogs, namespacing each under its
-  configured server name (`skill://<server>/<skill-path>/SKILL.md`) so two
-  upstreams publishing the same URI cannot shadow one another. BitRouter is a
-  skills server and gateway, never a host: no daemon path installs skills, and
-  gateway-sourced content never touches a filesystem skill-discovery path.
-  Caveats are documented in `skills/bitrouter/references/mcp-server.md` — the
-  gateway is not a security boundary, and remote catalogs are daemon-scoped
-  rather than caller-scoped.
-
-- **Breaking (behaviour):** aggregate `resources/read` (`POST /mcp`) no longer
-  tries each member and returns the first success. It resolves exactly one
-  owning member — by skill-URI label, else by which member enumerates the URI —
-  and errors when zero or several match, naming the candidates. First-success
-  scanning let configuration order silently decide which upstream answered a
-  URI two members both served, which is a cross-origin misroute (and the
-  impersonation surface SEP-2640 names for skills). A URI that no member
-  enumerates is now an error on the aggregate endpoint; read it from that
-  server's direct route (`POST /mcp/{server}`) instead.
-
-- The gateway's `initialize` now advertises the `resources` capability and
-  declares the `io.modelcontextprotocol/skills` extension. Skills are read
-  through `resources/read`, so a compliant client that saw no `resources`
-  capability would never issue one. The extension is declared optimistically —
-  upstream capabilities are discovered lazily, so the gateway cannot know at
-  handshake time whether any member serves skills.
-
-- **Breaking (Rust API):** `BenchmarkOutcomeRecord` has a new `request_id`
-  field and strict reward feedback joins it to the persisted
-  `CapturedIngressTrace.id`. Migrate Rust struct literals to
-  `BenchmarkOutcomeRecord::new(session_key, task_id, reward)` followed by
-  `.with_request_id(trace_id)` when producing reward-feedback artifacts. Older
-  outcome JSONL remains serde-compatible (`request_id` defaults to absent),
-  but it is analytical-only and strict feedback rejects it.
-
-- **Breaking (policy routes):** active `policy_table` routing now uses one
-  predictive route contract:
-  `agent_route/v1|<task-family>|<role>|<risk>`. Exact task-family routes fall
-  back to the corresponding `unknown`-family role/risk baseline, then to the
-  policy default. Observed `agent_trace/v2` keys remain telemetry only. Static
-  `agent_trace` routes, three-segment predictive v1 routes, and all v2
-  predictive routes are rejected during config and lock validation. Regenerate
-  policy locks and certificates with the current predictor contract.
-
-  `key_strategy: agent_trace` selects this deterministic predictor; the retired
-  `workflow_state` and `legacy_fingerprint` spellings are rejected.
-  `adequacy.max_downgraded_requests_per_session` is rejected: session identity
-  is diagnostic-only and no longer affects routing. `adequacy.explore_opening`
-  is honored for source-neutral opening projections.
-
-- **Rust API:** `PolicyKeyStrategy` now exposes only the canonical `AgentTrace`
-  variant. `PolicyDecision` keeps
-  `workflow_state_kind` and `workflow_identity`; `PolicyDecisionRecord` keeps
-  `workflow_state` and `workflow_identity`; and `PolicyDecisionSummary` keeps
-  `by_workflow_state`. Their JSON output uses canonical `trace_state`,
-  `trace_identity`, and `by_trace_state` names while accepting the old JSON
-  spellings on input. The matching `trace_*` accessors are available for new
-  Rust callers.
 
 ## [1.0.0-alpha.27](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.26...v1.0.0-alpha.27)
 

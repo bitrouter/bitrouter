@@ -21,6 +21,11 @@ git_release_name = "v{{ version }}" # Match the tag name for the GitHub release 
 git_tag_enable = true                # Enable git tags for this package
 git_release_enable = true            # Enable git releases for this package
 
+# What follows generates the *commit list* for a release. It is no longer what
+# the release says: `dist-helper changelog fold` runs in the release PR, puts
+# the curated `.changes/*.md` prose at the top of the section, and collapses
+# everything generated here into an "All commits" block below it. See
+# `.changes/README.md`.
 [changelog]
 header = """# Changelog
 
