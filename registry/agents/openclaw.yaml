@@ -1,0 +1,47 @@
+- id: openclaw
+  name: OpenClaw
+  description: OpenClaw assistant via its gateway ACP bridge `openclaw acp`
+  project_url: https://github.com/openclaw/openclaw
+  package_marker: openclaw
+  interactive_binary: openclaw
+  acp:
+    protocol_version: 1
+  # The interactive facet synthesizes an isolated profile whose openclaw.json
+  # declares a `bitrouter` custom provider and default model. The ACP facet
+  # (`openclaw acp`) bridges into the user's running gateway, which owns model
+  # routing, so headless spawn launches direct with a note.
+  # Model entries need the full schema (name/cost/window) or openclaw's config
+  # validation rejects the file. `tui --local` runs the embedded runtime.
+  routing:
+    kind: config_file
+    dir: openclaw
+    file: openclaw.json
+    skeleton: |
+      {
+        "gateway": { "mode": "local" },
+        "models": {
+          "mode": "merge",
+          "providers": {
+            "bitrouter": {
+              "baseUrl": "{base_url_v1}",
+              "apiKey": "{auth}",
+              "api": "openai-completions",
+              "models": []
+            }
+          }
+        }
+      }
+    models:
+      at: /models/providers/bitrouter/models
+      shape: array_of_profile
+      order: model_then_catalog
+    default_model:
+      at: /agents/defaults/model
+      format: provider_prefixed
+    env:
+      - name: OPENCLAW_STATE_DIR
+        value: "{dir}"
+      - name: OPENCLAW_CONFIG_PATH
+        value: "{file}"
+    args:
+      always: ["tui", "--local"]

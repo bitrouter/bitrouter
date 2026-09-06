@@ -1,0 +1,65 @@
+# The local runtime — agents execute as child processes on this machine, over
+# ACP's canonical stdio transport.
+#
+# This is the only runtime BitRouter ships today. Container and remote-sandbox
+# runtimes (E2B, Daytona) are specified in `docs/AGENT_REGISTRY_SPEC.md` §12 but
+# are not implemented, so nothing here anticipates them.
+#
+# Exact pins are the security contract for this file: the catalog is fetched
+# over the network and names commands that BitRouter spawns with the user's
+# privileges, so a floating tag means the fetched document chooses which code
+# runs. Two entries below are still unpinned; they carry a VERIFY header on
+# their agent entry and cannot carry a conformance record until pinned.
+name: local
+display_name: Local process
+kind: local
+status: active
+agents:
+  - id: claude-acp
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
+
+  - id: codex-acp
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "@agentclientprotocol/codex-acp@1.7.0"]
+
+  # UNPINNED — `@latest`. See registry/agents/google.yaml.
+  - id: gemini-cli
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "--", "@google/gemini-cli@latest", "--experimental-acp"]
+
+  - id: opencode
+    transport:
+      type: stdio
+      command: opencode
+      args: ["acp"]
+    requires_binary: opencode
+
+  # UNPINNED — `@latest`. See registry/agents/svkozak.yaml.
+  - id: pi-acp
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "pi-acp@latest"]
+    # pi-acp is an adapter over the `pi` binary, which it does not install.
+    requires_binary: pi
+
+  - id: hermes-acp
+    transport:
+      type: stdio
+      command: hermes
+      args: ["acp"]
+    requires_binary: hermes
+
+  - id: openclaw
+    transport:
+      type: stdio
+      command: openclaw
+      args: ["acp"]
+    requires_binary: openclaw

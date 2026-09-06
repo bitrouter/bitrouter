@@ -489,6 +489,30 @@ bitrouter agents install claude-code
 
 Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
 
+### `bitrouter agents conformance <id>`
+
+```
+bitrouter agents conformance local/claude-acp
+```
+
+Runs the `acp_compat_1` ACP-compatibility suite and prints the `conformance:`
+block to record under the agent's entry in `registry/runtimes/<runtime>.yaml`.
+`<id>` is `<runtime>/<harness>`; `local/` is the default runtime and may be
+elided.
+
+Two tiers. **handshake** — the agent answers `initialize` and settles on the
+ACP version its registry entry declares. **routability** — the agent's LLM
+traffic reaches BitRouter when its routing block is applied, carrying the
+gateway credential and the pinned model.
+
+No provider credentials are needed: the agent is launched with its own routing
+pointed at an ephemeral loopback gateway that records what arrived. It does
+spawn the agent, so the package or binary must be installed. A harness routed
+only on the interactive launch path (opencode, pi, hermes, openclaw) reports
+routability as `skipped` — its ACP facet launches direct, so there is no routed
+ACP traffic to observe. Exits non-zero when a tier fails or when nothing was
+verified, and prints no record in either case.
+
 ### `bitrouter acp`
 
 ```

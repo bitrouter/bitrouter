@@ -52,7 +52,7 @@ pub struct CheckRow {
 pub fn list(config: &Config) -> Vec<ListRow> {
     let mut ids: std::collections::BTreeMap<String, ListRow> = Default::default();
     // Catalog entries first.
-    for h in harness::CATALOG {
+    for h in harness::CATALOG.iter() {
         ids.insert(
             h.id.to_string(),
             ListRow {
