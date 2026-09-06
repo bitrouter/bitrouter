@@ -22,6 +22,7 @@ pub mod claude_code;
 pub mod cloud;
 pub mod commands;
 pub mod config_synthesis;
+pub mod conformance;
 pub mod continuation;
 pub mod daemon;
 pub mod db;

@@ -26,8 +26,8 @@ use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
 use bitrouter::output::reports::agents::{
-    AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
-    AgentsListReport,
+    AgentCheckRow, AgentConformanceReport, AgentConformanceTier, AgentInstallReport,
+    AgentRegistryRow, AgentRow, AgentsCheckReport, AgentsListReport,
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
@@ -897,6 +897,18 @@ enum AgentsAction {
         /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
+    },
+    /// Run the ACP-compatibility suite against a catalog agent and print the
+    /// `conformance:` block to record in its runtime entry.
+    ///
+    /// Needs no provider credentials: the agent is launched with its own
+    /// routing pointed at an ephemeral loopback gateway that records what
+    /// reached it. It does spawn the agent, so its package or binary must be
+    /// installed.
+    Conformance {
+        /// Agent id, either `<runtime>/<harness>` or a bare harness id
+        /// (`local/` is the default runtime and may be elided).
+        id: String,
     },
     /// Print a YAML stub for an agent (paste under `agents:` in
     /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
@@ -4851,6 +4863,77 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                 .collect();
             output.emit(&AgentsCheckReport { agents })?;
             Ok(())
+        }
+        AgentsAction::Conformance { id } => {
+            let harness_id = id
+                .split_once('/')
+                .map_or(id.as_str(), |(runtime, harness)| {
+                    if runtime == "local" {
+                        harness
+                    } else {
+                        id.as_str()
+                    }
+                });
+            let harness = bitrouter::harness::by_id(harness_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "'{id}' is not a catalog agent. Run `bitrouter agents list` to see the ids."
+                )
+            })?;
+            // Synthesized configs land in a scratch directory that goes away
+            // with the run: a conformance check must not leave a routed config
+            // behind in the user's repo.
+            let scratch = tempfile::tempdir()?;
+            let report = bitrouter::conformance::run(harness, &id, scratch.path()).await;
+            // A run where every tier skipped verified nothing, so it must not
+            // hand back a record — `bitrouter agents conformance grok` would
+            // otherwise print a paste-able block for an agent with no registry
+            // entry at all.
+            let verified = report
+                .tiers
+                .iter()
+                .any(|result| matches!(result.outcome, bitrouter::conformance::Outcome::Pass));
+            let passed = report.passed() && verified;
+            let registry_block = report.registry_block();
+            output.emit(&AgentConformanceReport {
+                agent: report.agent.clone(),
+                suite: report.suite.to_string(),
+                suite_version: report.suite_version.to_string(),
+                agent_version: report.agent_version.clone(),
+                passed,
+                tiers: report
+                    .tiers
+                    .iter()
+                    .map(|result| {
+                        use bitrouter::conformance::Outcome;
+                        let (outcome, reason) = match &result.outcome {
+                            Outcome::Pass => ("pass".to_string(), None),
+                            Outcome::Fail { reason } => ("fail".to_string(), Some(reason.clone())),
+                            Outcome::Skipped { reason } => {
+                                ("skipped".to_string(), Some(reason.clone()))
+                            }
+                        };
+                        AgentConformanceTier {
+                            tier: result.tier.key().to_string(),
+                            outcome,
+                            reason,
+                            duration_ms: result.duration_ms,
+                        }
+                    })
+                    .collect(),
+                registry_block,
+            })?;
+            // A failing suite is a failing command, so CI does not need to
+            // parse the report to know the answer.
+            if passed {
+                Ok(())
+            } else if verified {
+                anyhow::bail!("{id} did not pass {}", report.suite)
+            } else {
+                anyhow::bail!(
+                    "{} checked nothing for {id} — no record is emitted",
+                    report.suite
+                )
+            }
         }
         AgentsAction::Install { id } => match agents_cmd::install(&id) {
             Ok(yaml) => {
