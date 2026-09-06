@@ -11,7 +11,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,
   the agent registry).
-- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–3 implemented, 4–5
+- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–4 implemented, 5
   proposed.** One actions table so the CLI leaf and the MCP tool that answer
   the same question share one report type, one implementation, and a guard
   test. Written for
@@ -41,8 +41,8 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.
 
-- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **proposed, nothing
-  built.** Interrogates the goal "every headless CLI command has the same
+- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **implemented in
+  #880.** Interrogates the goal "every headless CLI command has the same
   interactive TUI command" and argues against it: 103 leaves rather than 29, a
   quarter of them hostile in a session, no mature tool in the field achieving
   parity, and a three-set topology rather than a subset with a gap. Proposes ~6
@@ -50,23 +50,23 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
   Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
   form; read its §5 and §16 D1 before agreeing to anything.
-- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **proposed,
-  nothing built.** The buildable form of the above: the Rust for the `ACTIONS`
+- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **implemented
+  in #880.** The buildable form of the above: the Rust for the `ACTIONS`
   extension, the resolver that replaces the TUI's string compares, five phases
   with the files each touches, the guards as tests, and what each open decision
   blocks. Written against the actions-table stack tip (#869 → #870 → #875),
   not `main`; its Appendix A lists the research spec's `file:line` references
   that have since moved.
-- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **ready to
-  execute.** The impl spec re-cut for an autonomous agent under `/loop`: a
-  one-task-per-iteration protocol, a resumable ledger
+- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **executed;
+  all ten tasks landed in #880.** The impl spec re-cut for an autonomous agent
+  under `/loop`: a one-task-per-iteration protocol, a resumable ledger
   ([`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md)), ten tasks with
   the impl-spec sections each reads, all fifteen open decisions collapsed into
   instructions, four stop conditions, and fifteen prohibitions. It carries no
   design of its own — every type and function body stays in the impl spec.
 - [`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md) — the build
-  plan's ledger: which task the loop is on and what has landed. Mutable; the
-  only state the loop keeps.
+  plan's ledger, closed out at T9. Records what each task landed and the
+  corrections it made to the impl spec.
 
 ## Where product docs live
 
