@@ -1812,14 +1812,19 @@ fn validate_relative_path(
     file: &str,
     issues: &mut Vec<String>,
 ) {
-    // Windows forms are rejected on every platform: the validator may run on
-    // Unix while the renderer joins these onto a scratch path on Windows,
-    // where `..\\evil` and `C:\\evil` both escape.
+    // Every platform's escaping forms are rejected on every platform: the
+    // validator and the renderer need not run on the same host, so the verdict
+    // may not depend on which one it is. `..\\evil` and `C:\\evil` escape on
+    // Windows, and `/etc/profile` escapes on Unix.
+    //
+    // `has_root`, not `is_absolute`: on Windows a path is absolute only with a
+    // drive or UNC prefix, so `/etc/profile` is merely rooted there and would
+    // pass a validator running on Windows.
     let windows_drive = value.len() >= 2
         && value.as_bytes()[0].is_ascii_alphabetic()
         && value.as_bytes()[1] == b':';
     let offending = value.is_empty()
-        || Path::new(value).is_absolute()
+        || Path::new(value).has_root()
         || windows_drive
         || value.contains('\\')
         || value.split('/').any(|segment| segment == "..");
