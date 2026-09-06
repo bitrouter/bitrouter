@@ -381,9 +381,15 @@ Long-running: its stdout is the JSON-RPC wire, not a result envelope.
 
 **Tools**
 
+Control and introspection only. There is **no inference tool**: to run a
+completion, call the daemon's HTTP API (`/v1/messages`,
+`/v1/chat/completions`) — the transport built for it, with streaming, the full
+parameter surface, and the metering path. `bitrouter mcp serve` tells you which
+models to send there (`list_models`), where they would go (`route_preview`),
+and what it has cost (`status`).
+
 | Tool | Wired on | What it answers |
 |---|---|---|
-| `complete` | every profile | Route a completion through BitRouter and return the full result |
 | `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bitrouter models --provider` does. Returns the same report type as `bitrouter models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
 | `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
 | `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bitrouter route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
@@ -411,12 +417,10 @@ only the skills that are actually loadable; `skills_search` and
 on disk is unusable. Each published entry carries a complete `resources`
 manifest with a `digest` and a byte `size` per file.
 
-On stdio + local, successful `complete` results carry a second content item
-with today's spend, read from the local metering database. `status` carries no
-such footer and needs none: it returns the same spend as **typed structured
-content** under `spend`, which is strictly richer — `unpriced` and a remaining
-cap have no room in a one-line footer. Both read the same metering database, so
-the two tools cannot disagree about what has been spent.
+Spend reaches an MCP client as **typed structured content** under `status`'s
+`spend`, read from the local metering database — the same ledger
+`bitrouter status` and `bitrouter cost` report from, so the surfaces cannot
+disagree about what has been spent.
 
 ### `bitrouter mcp install`
 

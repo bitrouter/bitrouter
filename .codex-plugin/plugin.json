@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the bitrouter setup skill and the origin MCP server for in-session model arbitrage.",
+  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the bitrouter setup skill and the origin MCP server, which reports what is routable, how it would route, and what it has cost.",
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",

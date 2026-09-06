@@ -109,7 +109,7 @@ async fn legacy_handshake_and_list(version: &str) -> (serde_json::Value, serde_j
 }
 
 #[tokio::test]
-async fn stdio_lists_three_tools() {
+async fn stdio_lists_the_introspection_tools() {
     let (_, list) = legacy_handshake_and_list("2025-11-25").await;
     let names: Vec<&str> = list["tools"]
         .as_array()
@@ -119,7 +119,7 @@ async fn stdio_lists_three_tools() {
         .collect();
     // Sorted: SEP-2575 asks servers to return a deterministic order so clients
     // can cache the list, which is also what makes our `ttlMs` hint honest.
-    assert_eq!(names, ["complete", "list_models", "status"]);
+    assert_eq!(names, ["list_models", "status"]);
 }
 
 /// A `2025-11-25` peer must not see the SEP-2549 hints: rmcp strips only
@@ -310,7 +310,7 @@ async fn stateless_draft_tools_list_needs_no_handshake_and_carries_hints() {
     assert_eq!(result["cacheScope"], "public");
     assert_eq!(
         result["tools"].as_array().expect("tools array").len(),
-        3,
+        2,
         "got: {result}"
     );
 }

@@ -26,4 +26,4 @@ types as `bitrouter status` and `bitrouter models`, and advertise them as
   saying how partial it is) and `limit` (a metered account's remaining credit).
   It is no longer served on HTTP + local — nothing on that transport can read the
   daemon's control socket — and no longer carries the free-text spend footer,
-  which is now the typed `spend` block (`complete` keeps its footer).
+  which is now the typed `spend` block.
