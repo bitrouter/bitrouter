@@ -25,14 +25,6 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 0.28
-  - id: minimax/minimax-m2.5
-    provider_model_id: minimax-m2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
   - id: google/gemini-3.5-flash
     provider_model_id: gemini-3.5-flash
     pricing:
@@ -92,14 +84,6 @@ models:
         cache_read: 0.06
       output_tokens:
         text: 1.2
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-        cache_read: 0.08
-      output_tokens:
-        text: 3
   - id: anthropic/claude-fable-5
     provider_model_id: claude-fable-5
     pricing:
@@ -160,14 +144,6 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15
-  - id: z-ai/glm-5
-    provider_model_id: glm-5
-    pricing:
-      input_tokens:
-        no_cache: 1
-        cache_read: 0.2
-      output_tokens:
-        text: 3.2
   - id: qwen/qwen3.6-plus
     provider_model_id: qwen3.6-plus
     pricing:

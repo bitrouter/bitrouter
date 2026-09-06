@@ -115,13 +115,6 @@ models:
             no_cache: 0.66
           output_tokens:
             text: 3.961
-  - id: minimax/minimax-m2.5
-    provider_model_id: MiniMax-M2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-      output_tokens:
-        text: 1.2
   - id: minimax/minimax-m2.7
     provider_model_id: MiniMax/MiniMax-M2.7
     pricing:
@@ -157,13 +150,6 @@ models:
         cache_read: 0.003625
       output_tokens:
         text: 0.87
-  - id: z-ai/glm-5
-    provider_model_id: glm-5
-    pricing:
-      input_tokens:
-        no_cache: 0.86
-      output_tokens:
-        text: 3.15
   - id: z-ai/glm-5.1
     provider_model_id: glm-5.1
     pricing:
@@ -181,13 +167,6 @@ models:
         cache_write: 0
       output_tokens:
         text: 3.851
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.574
-      output_tokens:
-        text: 2.411
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2.6
     pricing:

@@ -47,17 +47,6 @@
   release_date: 2026-06-13
   open_weights: true
   family: glm
-- id: z-ai/glm-5
-  name: 'Zhipu: GLM-5'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 202752
-  max_output_tokens: 65535
-  release_date: 2026-02-11
-  open_weights: true
-  family: glm
 - id: z-ai/glm-4.7
   name: 'Zhipu: GLM-4.7'
   input_modalities:

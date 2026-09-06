@@ -128,13 +128,6 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 30
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-      output_tokens:
-        text: 3
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2.6
     pricing:

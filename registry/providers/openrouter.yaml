@@ -24,14 +24,6 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 3.5
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: moonshotai/kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.57
-        cache_read: 0.095
-      output_tokens:
-        text: 2.85
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/kimi-k2.6
     pricing:
@@ -108,14 +100,6 @@ models:
         cache_read: 0.208
       output_tokens:
         text: 3.52
-  - id: z-ai/glm-5
-    provider_model_id: z-ai/glm-5
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.2
-      output_tokens:
-        text: 2.55
   # OpenRouter catalog: https://openrouter.ai/api/v1/models
   - id: z-ai/glm-5.3
     provider_model_id: z-ai/glm-5.3
@@ -348,14 +332,6 @@ models:
         cache_read: 0.1345
       output_tokens:
         text: 0.4
-  - id: minimax/minimax-m2.5
-    provider_model_id: minimax/minimax-m2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.05
-      output_tokens:
-        text: 0.9
   - id: minimax/minimax-m3
     provider_model_id: minimax/minimax-m3
     pricing:

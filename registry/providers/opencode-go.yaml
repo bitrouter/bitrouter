@@ -32,8 +32,6 @@ models:
   # Live catalog moved this alias to 0731: https://opencode.ai/zen/go/v1/models
   - id: deepseek/deepseek-v4-flash-0731
     provider_model_id: deepseek-v4-flash
-  - id: minimax/minimax-m2.5
-    provider_model_id: minimax-m2.5
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen3.7-plus
   - id: qwen/qwen3.7-max
@@ -53,8 +51,6 @@ models:
     provider_model_id: minimax-m3
   - id: minimax/minimax-m2.7
     provider_model_id: minimax-m2.7
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: kimi-k2.5
   - id: xiaomi/mimo-v2.5
     provider_model_id: mimo-v2.5
   - id: xiaomi/mimo-v2-omni
@@ -65,8 +61,6 @@ models:
     provider_model_id: mimo-v2-pro
   - id: xiaomi/mimo-v2.5-pro
     provider_model_id: mimo-v2.5-pro
-  - id: z-ai/glm-5
-    provider_model_id: glm-5
   - id: qwen/qwen3.6-plus
     provider_model_id: qwen3.6-plus
   - id: x-ai/grok-4.5

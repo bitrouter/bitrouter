@@ -70,8 +70,8 @@ endorsed models in this phase.
 - [x] Report task/role/progress/risk exact counts and macro-F1 ppm.
 - [x] Report per-slice accepted coverage, accepted error risk, OOD detection,
   Brier score, and fixed-bin ECE only when calibrated probabilities exist.
-- [x] Report decision-weighted loss with explicit, versioned weights and no
-  hidden evaluator call.
+- [x] Report classification surrogate loss with explicit, versioned weights and no
+  hidden evaluator call. This does not measure policy decision loss.
 - [x] Preserve hardware measurements as provenance; do not compare absent
   latency, memory, or size values as zero.
 
@@ -106,7 +106,7 @@ endorsed models in this phase.
 4. Abstention and OOD are measurable independently from `unknown` classes.
 5. Candidate provenance binds all artifacts needed to reproduce inference.
 6. Reports show macro quality, calibration, selective risk, slices, resource
-   measurements, and decision-weighted loss without floating-point wire values.
+   measurements, and classification surrogate loss without floating-point wire values.
 7. The current scorecard baseline remains reproducible and visibly
    uncalibrated.
 8. No Phase 1 type or result can change a live route.

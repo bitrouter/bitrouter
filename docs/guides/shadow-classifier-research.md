@@ -86,6 +86,23 @@ removing the case from accepted-risk calculations; it is never rewritten as an
 `unknown` class. Missing probability or OOD metrics stay absent rather than
 being interpreted as zero.
 
+Report and artifact schema v2 correct the ECE scale and represent a slice with
+no accepted predictions as `accepted_error_risk_ppm: null`. ECE is in
+`0..1_000_000` ppm; the unnormalized multiclass Brier score is in
+`0..2_000_000` ppm. Recompute v1 reports from the source predictions rather than
+interpreting a zero ECE as evidence of calibration.
+
+The v2 field `classification_surrogate_loss` replaces `decision_weighted_loss`.
+Its fixed task/role/progress/risk penalties (4/3/2/8, and 17 for abstention)
+measure label errors only. They do not run a policy, price the chosen target,
+or distinguish risk underestimation from overestimation. Actual decision loss
+requires replaying a frozen policy and its guards, including the fallback for
+abstention, and evaluating the resulting model/effort and task outcomes.
+
+The scorecard's unknown-task abstention is a diagnostic convention of this
+bake-off. Live policies can still route unknown task families using role and
+risk; bake-off coverage is not the live routing success rate.
+
 ## Promotion gates
 
 A candidate may advance to a larger shadow trial only when all of the following
@@ -95,14 +112,25 @@ are specified before viewing the sealed results:
   learned candidates;
 - multilingual, short-input, phase, harness, and OOD slices meet minimum sample
   counts and regression limits;
-- ECE, multiclass Brier score, and risk-coverage behavior meet declared limits;
+- ECE, multiclass Brier score, and risk-coverage behavior meet declared limits,
+  with minimum accepted sample counts; an unobserved risk cannot pass a gate;
 - guarded-risk false negatives do not regress; a learned risk score may only
   add evidence and cannot lower deterministic risk;
 - median/p95 CPU latency, peak memory, artifact size, and cold-start cost fit
   the deployment budget;
-- decision-weighted loss and coverage both pass, so abstaining on every case
-  cannot win the bake-off;
+- classification surrogate loss and coverage both pass, so abstaining on every
+  case cannot win the bake-off; claims about routing improvement additionally
+  require policy replay and a task-outcome experiment;
 - results reproduce from committed inputs and artifacts on a second machine.
 
 Only a later phase may use shadow evidence in routing, and that requires a
 separate signed policy change, rollback plan, and online measurement design.
+
+For that experiment, define the task/session randomization unit and the
+quality difference from control before choosing a stopping rule. Non-inferiority
+requires a lower confidence bound on `quality(candidate) - quality(control)`
+above the allowed negative margin; comparing the two arms' lower bounds does
+not establish it. Request rows from one assignment are not independent trials,
+and pre-guard logging propensities are not effective-model propensities after
+guards or continuation pins. Selective evaluators should retain a random audit
+sample and record their sampling probabilities and missing-label reasons.
