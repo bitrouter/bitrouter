@@ -17,6 +17,15 @@ picking good defaults for **agentic and coding** workloads.
   first-party APIs, gateways, and coding-plan subscriptions, including
   **BYOK / BYO-subscription** providers that offer models *beyond* the curated
   set.
+- **`agents/`** — the canonical catalog of **ACP-compatible coding agents**
+  BitRouter drives and routes by default (Claude Code, Codex, opencode, …).
+- **`runtimes/`** — where those agents actually execute. Today that is `local`
+  (a child process on this machine); container and remote-sandbox runtimes are
+  specified in `docs/AGENT_REGISTRY_SPEC.md` but not implemented.
+
+`agents` / `runtimes` is the same relationship as `models` / `providers`: a
+model is routable because an active **provider** serves it, and an agent is
+launchable because an active **runtime** can run it.
 
 Being listed in `models/` is an editorial decision. A model that is *not*
 curated can still be served by any provider that lists it — it just isn't part
@@ -82,6 +91,10 @@ Source lives in two places; `dist/registry/` is generated — never hand-edit it
   serves, transport, auth, pricing, and `billing`. A provider **may list models
   beyond the curated catalog** (BYOK / BYO-subscription extras) — those are
   allowed and surface as non-failing *advisories*, not errors.
+- **`registry/agents/<vendor>.yaml`** — a YAML sequence of ACP agents. See
+  *Agents and runtimes* below.
+- **`registry/runtimes/<name>.yaml`** — one machine class per file: the agents
+  it can run and how it invokes each.
 
 ### Model benchmarks
 
@@ -160,6 +173,109 @@ not `headquarters: SG`).
   hand from the vendor's published model + price list, and the comment header
   should say so.
 
+### Agents and runtimes
+
+An **agent** entry describes what is true about an ACP agent wherever it runs:
+its ACP protocol version, how its LLM traffic can be redirected at the gateway,
+and — when it has a native TUI — its `interactive_binary`. A **runtime** entry
+describes one machine class and lists the agents it can run, each with the
+invocation that starts it.
+
+**Agent ids are bare** — `claude-acp`, not `anthropic/claude-acp`. The only
+prefix an agent id ever carries is the runtime it is addressed through, so
+`local/claude-acp` is the addressable form and `local/` elides. A vendor prefix
+would make the two indistinguishable. Ids must be unique across the whole
+`agents/` catalog; the filename is filing only, so unlike `registry/models`
+there is no id/filename-stem rule.
+
+**An addressable agent is never declared.** `local/opencode` exists because
+`registry/runtimes/local.yaml` lists `opencode`, exactly as a routable model
+exists because a provider lists it. A runtime **may list agents beyond the
+curated catalog**; like non-curated provider models, those are *advisories*.
+
+**Pin every invocation.** The registry is fetched over the network and names
+commands BitRouter spawns with the user's privileges, so a floating tag
+(`@latest`) means the fetched document chooses which code runs. Unpinned
+package-runner specs are advisories today and become errors once an entry
+carries a conformance record — a record has to name the `agent_version` it
+exercised, which a floating tag cannot. A command that is **not** a package
+runner must declare `requires_binary:`: the user installs it, and that
+expectation should be stated rather than left to `$PATH`.
+
+**Routing.** `routing.kind` is one of `env` (set variables on the child),
+`args` (append config-override arguments), or `config_file` (write a config
+into a per-launch directory and point the harness at it). Editing these changes
+what a launched harness actually receives — `apps/bitrouter/build.rs` generates
+the compiled catalog from `dist/registry/agents.json`, so no Rust change is
+needed to add or re-route an agent.
+
+A `config_file` entry carries a JSON `skeleton` plus knobs with **closed sets
+of values**: `models.shape` (`map_of_empty` / `array_of_id` /
+`array_of_profile`), `models.order` (`catalog_then_model` /
+`model_then_catalog`), `default_model.format` (`bare` /
+`provider_prefixed`), and `mcp.entry` (`opencode_typed` /
+`command_args_or_url`). Nothing is evaluated — a registry entry selects among
+behaviours reviewed in this repo, which is why a fetched catalog cannot
+introduce new ones. See `docs/AGENT_REGISTRY_SPEC.md` §7 and D4.
+
+Placeholders are context-specific, because they resolve at different moments:
+`{base_url_v1}` and `{auth}` in the skeleton's string leaves; `{dir}`,
+`{file}` and `{auth}` in `env` values; `{default_model}` in `args`. `dir` and
+`file` must be relative paths inside the per-launch directory. A key the
+renderer fills — `models.at` above all — must already exist in the skeleton, in
+the position the harness expects: values are replaced in place, and only new
+keys are appended. The validator checks all of this.
+
+**Conformance.** A runtime's agent entry may carry what the ACP-compatibility
+suite observed for that (agent, runtime) pair:
+
+```yaml
+  - id: claude-acp
+    transport: { … }
+    conformance:
+      acp_compat_1:
+        handshake: pass       # the agent answers `initialize` on the declared
+                              # ACP version
+        routability: pass     # its LLM traffic reaches BitRouter when the
+                              # entry's routing block is applied
+        suite_version: 1.0.0
+        agent_version: 0.70.0 # what the agent called itself, not what the
+                              # invocation asked for
+        measured_by: bitrouter
+        as_of: 2026-09-06
+```
+
+Produce it with `bitrouter agents conformance <runtime>/<harness>`, which
+prints the block to paste. The suite needs **no provider credentials** — the
+agent is launched with its own routing pointed at an ephemeral loopback gateway
+that records what arrived — so it runs on a pull request. It does spawn the
+agent, so the package or binary has to be installed.
+
+Conformance is to an agent what pricing is to a model: a property of the pair,
+which is why it lives here and not in `registry/agents/`. An agent can route
+correctly in one runtime and fail in another.
+
+What the validator enforces:
+
+- **A tier that did not run is absent**, never `pass`. `skipped` is reserved
+  for the suite deciding there was nothing to check (an own-auth harness has no
+  routability to verify).
+- **An active runtime may not serve an agent whose own record reports a
+  failure.** Recording `handshake: fail` is how you document a broken agent
+  without shipping it — put it under a `staging` runtime.
+- **A third-party record must cite a `source_url`.** `measured_by: bitrouter`
+  means we ran it; anything else needs to be checkable.
+- **A record forces the pin.** An unpinned invocation is normally an advisory,
+  but it becomes an error once a record exists: the record names an
+  `agent_version`, and a floating tag cannot honestly supply one — whatever the
+  suite ran is not what the next install fetches.
+
+An entry with no record is an advisory, not an error; that is how a newly
+contributed agent reads until someone runs the suite.
+
+The **lifecycle** tier (`session/new` → prompt → cancel) is specified in
+`docs/AGENT_REGISTRY_SPEC.md` §9 but not implemented, so no record carries it.
+
 ### Status lifecycle
 
 `status` gates routing: **only `active` is served**; `staging`, `suspended`, and
@@ -179,10 +295,14 @@ Before submitting:
 
 ```sh
 cargo run -p dist-helper -- registry validate   # advisories about non-curated
-                                                 # provider models are expected
+                                                 # provider models and unpinned
+                                                 # agent invocations are expected
 cargo run -p dist-helper -- registry build      # regenerate dist/registry
-cargo run -p dist-helper -- registry docs        # regenerate supported-* docs tables
 ```
+
+The docs site's `supported-*` tables are generated in the **bitrouter-docs**
+repo from the committed `dist/registry/` artifacts — there is no `registry docs`
+step here.
 
 Commit `dist/registry/` alongside your source changes. The daily automated sync
 refreshes provider catalogs from their `auto_sync` feeds and never touches the

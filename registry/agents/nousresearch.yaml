@@ -1,0 +1,32 @@
+- id: hermes-acp
+  name: Hermes Agent
+  description: Nous Research's Hermes Agent via its native `hermes acp`
+  project_url: https://github.com/NousResearch/hermes-agent
+  package_marker: hermes
+  interactive_binary: hermes
+  acp:
+    protocol_version: 1
+  # hermes trusts loopback custom endpoints: the synthesized config.yaml under
+  # HERMES_HOME declares `model.provider: custom` with a loopback base_url, and
+  # carries the default model and the gateway `mcp_servers`. The credential
+  # rides CUSTOM_API_KEY rather than the config file.
+  #
+  # Written as JSON: hermes parses config.yaml with a YAML 1.2 loader, and JSON
+  # is a YAML subset. It carries no model list — only the default.
+  routing:
+    kind: config_file
+    dir: hermes
+    file: config.yaml
+    skeleton: |
+      { "model": { "provider": "custom", "base_url": "{base_url_v1}" } }
+    default_model:
+      at: /model/default
+      format: bare
+    mcp:
+      at: /mcp_servers
+      entry: command_args_or_url
+    env:
+      - name: HERMES_HOME
+        value: "{dir}"
+      - name: CUSTOM_API_KEY
+        value: "{auth}"

@@ -1,0 +1,295 @@
+{
+  "data": [
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "Anthropic Claude via the maintained Claude Agent ACP adapter",
+      "id": "claude-acp",
+      "interactive_binary": "claude",
+      "name": "Claude Agent ACP",
+      "package_marker": "claude-agent-acp",
+      "project_url": "https://github.com/agentclientprotocol/claude-agent-acp",
+      "routing": {
+        "auth_env": "ANTHROPIC_AUTH_TOKEN",
+        "base_url_env": "ANTHROPIC_BASE_URL",
+        "bearer_auth": true,
+        "kind": "env",
+        "model_env": "ANTHROPIC_MODEL"
+      },
+      "runtimes": [
+        {
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "-y",
+              "@agentclientprotocol/claude-agent-acp@0.70.0"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "OpenAI Codex via the Agent Client Protocol adapter",
+      "id": "codex-acp",
+      "interactive_binary": "codex",
+      "name": "Codex ACP",
+      "package_marker": "codex-acp",
+      "project_url": "https://github.com/agentclientprotocol/codex-acp",
+      "routing": {
+        "kind": "codex_args"
+      },
+      "runtimes": [
+        {
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "-y",
+              "@agentclientprotocol/codex-acp@1.7.0"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "Google's Gemini CLI with `--experimental-acp` (best-effort routing)",
+      "id": "gemini-cli",
+      "name": "Gemini CLI",
+      "package_marker": "gemini-cli",
+      "project_url": "https://github.com/google-gemini/gemini-cli",
+      "routing": {
+        "auth_env": "GEMINI_API_KEY",
+        "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+        "bearer_auth": false,
+        "kind": "env",
+        "model_env": "GEMINI_MODEL"
+      },
+      "runtimes": [
+        {
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "-y",
+              "--",
+              "@google/gemini-cli@latest",
+              "--experimental-acp"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "Nous Research's Hermes Agent via its native `hermes acp`",
+      "id": "hermes-acp",
+      "interactive_binary": "hermes",
+      "name": "Hermes Agent",
+      "package_marker": "hermes",
+      "project_url": "https://github.com/NousResearch/hermes-agent",
+      "routing": {
+        "default_model": {
+          "at": "/model/default",
+          "format": "bare"
+        },
+        "dir": "hermes",
+        "env": [
+          {
+            "name": "HERMES_HOME",
+            "value": "{dir}"
+          },
+          {
+            "name": "CUSTOM_API_KEY",
+            "value": "{auth}"
+          }
+        ],
+        "file": "config.yaml",
+        "kind": "config_file",
+        "mcp": {
+          "at": "/mcp_servers",
+          "entry": "command_args_or_url"
+        },
+        "skeleton": "{ \"model\": { \"provider\": \"custom\", \"base_url\": \"{base_url_v1}\" } }\n"
+      },
+      "runtimes": [
+        {
+          "requires_binary": "hermes",
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "hermes",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "OpenClaw assistant via its gateway ACP bridge `openclaw acp`",
+      "id": "openclaw",
+      "interactive_binary": "openclaw",
+      "name": "OpenClaw",
+      "package_marker": "openclaw",
+      "project_url": "https://github.com/openclaw/openclaw",
+      "routing": {
+        "args": {
+          "always": [
+            "tui",
+            "--local"
+          ]
+        },
+        "default_model": {
+          "at": "/agents/defaults/model",
+          "format": "provider_prefixed"
+        },
+        "dir": "openclaw",
+        "env": [
+          {
+            "name": "OPENCLAW_STATE_DIR",
+            "value": "{dir}"
+          },
+          {
+            "name": "OPENCLAW_CONFIG_PATH",
+            "value": "{file}"
+          }
+        ],
+        "file": "openclaw.json",
+        "kind": "config_file",
+        "models": {
+          "at": "/models/providers/bitrouter/models",
+          "order": "model_then_catalog",
+          "shape": "array_of_profile"
+        },
+        "skeleton": "{\n  \"gateway\": { \"mode\": \"local\" },\n  \"models\": {\n    \"mode\": \"merge\",\n    \"providers\": {\n      \"bitrouter\": {\n        \"baseUrl\": \"{base_url_v1}\",\n        \"apiKey\": \"{auth}\",\n        \"api\": \"openai-completions\",\n        \"models\": []\n      }\n    }\n  }\n}\n"
+      },
+      "runtimes": [
+        {
+          "requires_binary": "openclaw",
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "openclaw",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "sst's opencode via its native `opencode acp`",
+      "id": "opencode",
+      "interactive_binary": "opencode",
+      "name": "opencode",
+      "package_marker": "opencode",
+      "project_url": "https://github.com/sst/opencode",
+      "routing": {
+        "default_model": {
+          "at": "/model",
+          "format": "provider_prefixed"
+        },
+        "env": [
+          {
+            "name": "OPENCODE_CONFIG",
+            "value": "{file}"
+          }
+        ],
+        "file": "opencode.json",
+        "kind": "config_file",
+        "mcp": {
+          "at": "/mcp",
+          "entry": "opencode_typed"
+        },
+        "models": {
+          "at": "/provider/bitrouter/models",
+          "order": "catalog_then_model",
+          "shape": "map_of_empty"
+        },
+        "skeleton": "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"provider\": {\n    \"bitrouter\": {\n      \"npm\": \"@ai-sdk/openai-compatible\",\n      \"name\": \"BitRouter\",\n      \"options\": { \"baseURL\": \"{base_url_v1}\", \"apiKey\": \"{auth}\" },\n      \"models\": {}\n    }\n  }\n}\n"
+      },
+      "runtimes": [
+        {
+          "requires_binary": "opencode",
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "opencode",
+            "type": "stdio"
+          }
+        }
+      ]
+    },
+    {
+      "acp": {
+        "protocol_version": 1
+      },
+      "description": "pi coding agent via `pi-acp` (needs `pi` on PATH)",
+      "id": "pi-acp",
+      "interactive_binary": "pi",
+      "name": "pi-acp",
+      "package_marker": "pi-acp",
+      "project_url": "https://github.com/svkozak/pi-acp",
+      "routing": {
+        "args": {
+          "with_default_model": [
+            "--provider",
+            "bitrouter",
+            "--model",
+            "{default_model}"
+          ]
+        },
+        "dir": "pi-agent",
+        "env": [
+          {
+            "name": "PI_CODING_AGENT_DIR",
+            "value": "{dir}"
+          }
+        ],
+        "file": "models.json",
+        "kind": "config_file",
+        "models": {
+          "at": "/providers/bitrouter/models",
+          "order": "catalog_then_model",
+          "shape": "array_of_id"
+        },
+        "skeleton": "{\n  \"providers\": {\n    \"bitrouter\": {\n      \"name\": \"BitRouter\",\n      \"baseUrl\": \"{base_url_v1}\",\n      \"api\": \"openai-completions\",\n      \"apiKey\": \"{auth}\",\n      \"models\": []\n    }\n  }\n}\n"
+      },
+      "runtimes": [
+        {
+          "requires_binary": "pi",
+          "runtime": "local",
+          "transport": {
+            "args": [
+              "-y",
+              "pi-acp@latest"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        }
+      ]
+    }
+  ]
+}

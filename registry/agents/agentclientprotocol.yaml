@@ -1,0 +1,39 @@
+# Maintained ACP adapters published by the Agent Client Protocol project.
+#
+# These two are the only catalog entries with a pinned, provider-configurable
+# adapter contract (`Harness::endpoint_plan`), recorded under
+# `apps/bitrouter/tests/fixtures/acp_adapters/`.
+- id: claude-acp
+  name: Claude Agent ACP
+  description: Anthropic Claude via the maintained Claude Agent ACP adapter
+  project_url: https://github.com/agentclientprotocol/claude-agent-acp
+  package_marker: claude-agent-acp
+  interactive_binary: claude
+  acp:
+    protocol_version: 1
+  # claude-agent-acp passes process env through to the SDK-spawned CLI, which
+  # honors these exactly as interactive Claude Code does. ANTHROPIC_AUTH_TOKEN
+  # becomes `Authorization: Bearer` (and suppresses the login requirement);
+  # ANTHROPIC_API_KEY would be `x-api-key`, not BitRouter's inbound scheme, so
+  # it is never touched.
+  routing:
+    kind: env
+    base_url_env: ANTHROPIC_BASE_URL
+    auth_env: ANTHROPIC_AUTH_TOKEN
+    bearer_auth: true
+    model_env: ANTHROPIC_MODEL
+
+- id: codex-acp
+  name: Codex ACP
+  description: OpenAI Codex via the Agent Client Protocol adapter
+  project_url: https://github.com/agentclientprotocol/codex-acp
+  package_marker: codex-acp
+  interactive_binary: codex
+  acp:
+    protocol_version: 1
+  # codex-acp forwards argv to codex core, so the same `-c` overrides work for
+  # both the ACP and interactive facets. The gateway must speak the OpenAI
+  # Responses API — pinned codex builds dropped `wire_api = "chat"`.
+  # The override list is compiled, not data — hence the harness-specific kind.
+  routing:
+    kind: codex_args
