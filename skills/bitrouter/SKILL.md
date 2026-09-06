@@ -140,10 +140,10 @@ deliberate choice rather than a default.
 **The restart handoff — say it every time.** Wiring cannot reroute the session
 already running; harnesses read their base URL at startup. End with: "run
 `bitrouter launch -a claude` (or restart the harness with the env override) to
-route this session." One exception: the origin MCP server (`bitrouter mcp
-install --client claude|cursor`) exposes a `complete` tool that offloads a
-subtask *inside* the running session — if they cannot relaunch, say it exists
-and send them to `bitrouter mcp --help`.
+route this session." There is no in-session shortcut: the origin MCP server
+(`bitrouter mcp install`) is control and introspection only — it says what is
+routable, how a model would route, and what it has cost, but runs no
+completions. Inference goes to the daemon's HTTP API.
 
 For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
 `bitrouter spawn codex-acp --serve`. Stable ACP v1 on exact adapter pins,
