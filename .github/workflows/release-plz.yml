@@ -69,7 +69,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
 
-      - name: Bump schema $id to match release version
+      # Two edits release-plz cannot make itself, in one commit on its branch:
+      #   1. Fold `.changes/*.md` into the section release-plz just generated,
+      #      so the release reads as curated prose with the commit list below
+      #      it, then delete the consumed change files.
+      #   2. Bump the config schema `$id` to the version being released.
+      - name: Fold change files and bump schema $id
         if: steps.release-plz.outputs.pr != '' && steps.release-plz.outputs.pr != 'null'
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
@@ -79,11 +84,12 @@ jobs:
           [ -z "$branch" ] && exit 0
           git fetch origin "$branch"
           git checkout "$branch"
+          cargo run -p dist-helper -- changelog fold
           cargo run -p dist-helper -- generate-schema
-          git diff --quiet dist/schema/ && exit 0
+          git add -A CHANGELOG.md .changes dist/schema/bitrouter.config.schema.json
+          git diff --cached --quiet && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dist/schema/bitrouter.config.schema.json
-          git commit -m "chore: update config schema \$id for release"
+          git commit -m "chore(release): fold change files and update schema \$id"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "$branch"

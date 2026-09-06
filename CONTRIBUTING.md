@@ -44,11 +44,45 @@ For larger changes, opening an issue before writing code is the fastest way to a
 2. Keep the change scoped to a single bug fix, feature, or documentation improvement.
 3. Add or update tests when behavior changes.
 4. Update docs when user-facing behavior, config, or provider support changes.
-5. Run the required validation commands locally before opening the PR:
+5. Add a change file describing the change for the changelog — see
+   [Changelog entries](#changelog-entries) below.
+6. Run the required validation commands locally before opening the PR:
    - `cargo fmt --all -- --check`
    - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
    - `cargo test --workspace --all-features`
-6. Open a pull request with a clear summary and note any follow-up work.
+   - `cargo run -p dist-helper -- check`
+7. Open a pull request with a clear summary and note any follow-up work.
+
+## Changelog Entries
+
+`CHANGELOG.md` is not written from commit subjects. Every PR that changes
+behavior a user or an SDK caller can observe adds a `.changes/<slug>.md` file
+describing that change in prose — written on the branch, while you still have
+the context. CI fails the PR if one is missing; label the PR `no-changelog` if
+nothing observable changed (refactors, test-only work, CI plumbing).
+
+```markdown
+---
+type: fixed
+title: "Streaming errors no longer settle as a successful turn"
+pr: 812
+---
+
+A provider error raised mid-stream was recorded as a completed turn, so cost
+accounting counted it and retries never fired. It now settles as a failure.
+```
+
+`type` is one of `added`, `changed`, `deprecated`, `removed`, `fixed`,
+`security`; add `breaking: true` for anything that needs a migration, and say
+in the body exactly how to migrate. The full contract, including why the format
+is shaped this way, is in [`.changes/README.md`](.changes/README.md).
+
+Validate with `cargo run -p dist-helper -- changelog check`. The release PR
+folds pending files into `CHANGELOG.md` and deletes them; you never run
+`changelog fold` yourself.
+
+Conventional commit messages still matter — release-plz derives the version
+bump from them — but they no longer decide what the changelog says.
 
 The workspace MSRV is **Rust 1.93**; the `msrv` CI job pins that exact toolchain. Don't rely on a feature stabilised after it.
 
