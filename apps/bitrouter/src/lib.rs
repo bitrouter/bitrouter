@@ -44,7 +44,6 @@ pub mod result_contract;
 pub mod session_identity;
 pub mod skills;
 pub mod skills_catalog;
-pub mod skills_query;
 pub mod spawn;
 pub mod style;
 pub mod tools;
