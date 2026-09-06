@@ -26,9 +26,9 @@
 //! **Not every row carries a schema.** `route_set` and `route_reset` answer on
 //! one surface each — the session — so there is no second shape to hold them
 //! to, and their `output_schema` is permanently `None`; the wire response they
-//! produce belongs to the SDK client, not to a report. `commands` carries
-//! `None` only until its CLI leaf lands, at which point it has two surfaces and
-//! owes them an agreement. Every other row has a real schema.
+//! produce belongs to the SDK client, not to a report. Every other row has a
+//! real schema, `commands` included — it has a CLI leaf and therefore owes its
+//! two surfaces an agreement.
 
 pub mod commands;
 pub mod models;

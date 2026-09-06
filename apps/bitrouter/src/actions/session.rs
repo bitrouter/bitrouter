@@ -83,6 +83,23 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
         .collect()
 }
 
+/// What a session offers, and what answers it.
+///
+/// One value rather than three parameters: both chat loops need all three, and
+/// threading them separately pushed three signatures past the argument count
+/// clippy accepts. Bundling them says the true thing anyway — these are one
+/// concept, the session's command surface.
+pub struct SessionSurface<'a> {
+    /// BitRouter's own commands. Empty until the controller has been asked:
+    /// [`offered_commands`] needs a live client, so the piped path fills this
+    /// in once its session is open.
+    pub commands: Vec<Command>,
+    /// The user's prompt-expansion commands, resolved from config at launch.
+    pub prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
+    /// The ports a read command is answered through.
+    pub ports: &'a SessionPorts,
+}
+
 /// The session's view of the shared actions: the same ports the stdio MCP
 /// profile is built from, handed to the chat driver as one value.
 ///
@@ -193,10 +210,16 @@ pub fn prompt_commands(
             !name.contains(char::is_whitespace),
             "`chat.commands` name `{name}` contains whitespace; a command is one word"
         );
-        if let Some(row) = ACTIONS
-            .iter()
-            .find(|row| row.tui_command == Some(name) && row.id != "")
-        {
+        // The resolver strips one slash before matching, so a name stored with
+        // its slash could never be reached — it would go to the agent as a
+        // prompt and be listed as `//name`. Refused rather than left silent.
+        anyhow::ensure!(
+            !name.starts_with('/'),
+            "`chat.commands` name `{name}` starts with a slash; write it as \
+             `{}` — the slash is how it is typed, not part of the name",
+            name.trim_start_matches('/')
+        );
+        if let Some(row) = ACTIONS.iter().find(|row| row.tui_command == Some(name)) {
             anyhow::bail!(
                 "`chat.commands` defines `/{name}`, which is BitRouter's own `{}` command. \
                  Rename it: a config command may not shadow one that reaches BitRouter's ports",

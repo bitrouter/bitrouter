@@ -208,7 +208,7 @@ Consecutive non-green iterations on this task: 0
 
   | Line | Result |
   |---|---|
-  | fmt / clippy / nextest clean at **every** commit in the range | pass — all 9 commits, fmt ok, 0 clippy errors, 0 test failures (3031 → 3050) |
+  | fmt / clippy / nextest clean at **every** commit in the range | **was recorded wrong.** Every check grepped clippy for `^error` only, so warnings were invisible; clippy warns rather than errors by default. The branch carried 4 warnings it introduced (base had none). Corrected in the review-fix commit; clippy is now clean of warnings *and* errors |
   | G1, G2, G3, G6 from T3's commit; G4, G5, A1 from T4's | pass — 10 guards run green; each provoked once when written |
   | the three pre-existing guards unchanged **in text** | pass — byte-identical to base (15 / 24 / 26 lines) |
   | `multitenant_http.rs` unchanged | pass — 0 diff lines vs base |
@@ -225,6 +225,28 @@ Consecutive non-green iterations on this task: 0
   splits on newlines, so the differential writer's arithmetic stays correct —
   but the rendering assumes single-line descriptions and ACP does not promise
   that. Fix is one line (take the first line, or indent continuations).
+
+- **Review fixes (post-T9).** A `feature-dev:code-reviewer` run on fable found
+  six defects; all fixed, plus the clippy warnings the sweep had missed.
+
+  | Severity | Defect | Fix |
+  |---|---|---|
+  | critical | `acp commands` leaked the harness child: `prompt_commands(..)?` sat between `launch_controlled` and `shutdown()`, and `ControlledSession` has no `Drop` | hoisted above the launch |
+  | important | `/status`, `/models`, `/preview` appeared only on the *next* keystroke — `Resolution::Action` returned before `Effect::Paint`. The route arms get away with it because their wire replies paint | dropped the early return; added a `submit()` test over every arm, provoked |
+  | important | `acp commands` passed `binding: None`, so it reported `/route` unavailable for every agent while `chat` offered it — the exact drift the shared report exists to prevent | opens the same binding `chat` does; verified live, all six rows now AVAILABLE |
+  | important | `chat.commands` accepted `name: /review`; the resolver strips one slash and never matched, so it went to the agent and listed as `//review` | rejected at load with the corrected name in the message |
+  | minor | `&& row.id != ""` — dead conjunct, clippy `comparison_to_empty` | removed |
+  | minor | `commands` was inserted between the `── prompt ──` banner and `pub async fn prompt`, so rustdoc attached prompt's docs to it | moved after `prompt` |
+
+  Three `too_many_arguments` warnings came from threading `commands`,
+  `prompt_commands` and `ports` separately. `#[allow]` is forbidden, so they
+  are bundled as `SessionSurface` — one concept, the session's command
+  surface. `run` 8→6, `drive` 9→7, `chat_piped` 8→7.
+
+  **The lesson the sweep itself missed.** The paint bug survived because the
+  resolver tests exercised `resolve()` directly and nothing exercised
+  `submit()`. A unit test of the pure function proved the mapping and said
+  nothing about the effects the reducer emits around it.
 
 ## Blocked
 

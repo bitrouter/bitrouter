@@ -49,8 +49,9 @@
 //! under and reaches the agent through the same wire as a keystroke would. A
 //! run that denied at least one request and approved none exits 5.
 //!
-//! Both functions load their `Config` via the standard resolution chain (see
-//! `bitrouter::paths`) and launch the agent named under `config.agents`.
+//! Every entry point here — `serve`, `prompt`, `commands`, and the two `chat`
+//! loops — loads its `Config` via the standard resolution chain (see
+//! `bitrouter::paths`) and launches the agent named under `config.agents`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1406,8 +1407,13 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
             options,
             &cloud_credentials,
             binding,
-            prompt_commands,
-            &ports,
+            crate::actions::session::SessionSurface {
+                // The controller does not exist yet; `chat_piped` fills this in
+                // once its session is open.
+                commands: Vec::new(),
+                prompt_commands,
+                ports: &ports,
+            },
         )
         .await;
     }
@@ -1521,9 +1527,11 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         agent_id,
         observability.recorder,
         routed.via.clone(),
-        commands,
-        prompt_commands,
-        &ports,
+        crate::actions::session::SessionSurface {
+            commands,
+            prompt_commands,
+            ports: &ports,
+        },
     )
     .await;
 
@@ -1750,8 +1758,7 @@ async fn chat_piped(
     options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
-    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
-    ports: &crate::actions::session::SessionPorts,
+    mut surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
@@ -1790,14 +1797,14 @@ async fn chat_piped(
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
 
+    // Only now can the controller be asked what it advertised.
+    surface.commands = crate::actions::session::offered_commands(&session.client);
     let ended = crate::chat::session::chat_plain(
         &session.client,
         &ids.acp_session_id,
         agent_id,
         observability.recorder,
-        crate::actions::session::offered_commands(&session.client),
-        prompt_commands,
-        ports,
+        surface,
     )
     .await;
 
@@ -1828,90 +1835,6 @@ async fn chat_piped(
 /// `result`/`schema_ok` (+ `raw` on failure) fields. `options.policy` answers
 /// the harness's permission requests; the tally returned is what the caller
 /// exits with.
-/// List what a session with this agent offers, and tear it down.
-///
-/// A fresh session, deliberately: nothing can name a `bitrouter chat` running
-/// in another terminal, so this reports what a session with this agent *would*
-/// offer rather than what one already open is offering. That is the same
-/// limitation the row's `SessionBound` reach records.
-///
-/// No prompt is sent. The only thing waited on is the agent's own
-/// `available_commands_update`, and `wait_ms` bounds that wait — an agent that
-/// says nothing in time is reported as not having answered, which is a
-/// different answer from an empty list.
-pub async fn commands(
-    ctx: SpawnContext<'_>,
-    wait_ms: u64,
-) -> Result<bitrouter_mcp::actions::commands::CommandsReport> {
-    let SpawnContext {
-        source,
-        mut config,
-        agent_id,
-        options,
-        routing,
-    } = ctx;
-    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    let routed = apply_routing_with_cloud_credentials(
-        source,
-        &mut config,
-        agent_id,
-        &routing,
-        &cloud_credentials,
-    )
-    .await
-    .map_err(anyhow::Error::new)?;
-
-    let cwd = std::env::current_dir().context("resolving current directory")?;
-    let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
-        .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    // Subscribed before the session opens, so an agent that advertises its
-    // commands immediately is not raced.
-    let mut updates = session.client.subscribe_raw_updates();
-    if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
-        let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
-            unauthenticated_message(agent_id, session.client.auth_methods())
-        } else {
-            "opening the harness session".to_string()
-        };
-        session.shutdown().await;
-        return Err(error.context(context));
-    }
-
-    let mut advertised = Vec::new();
-    let mut received = false;
-    let deadline = tokio::time::sleep(std::time::Duration::from_millis(wait_ms));
-    tokio::pin!(deadline);
-    loop {
-        tokio::select! {
-            // The last update wins: the list is a replacement, not a delta.
-            update = updates.next() => match update {
-                Some(agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate(
-                    update,
-                )) => {
-                    advertised = update.available_commands;
-                    received = true;
-                }
-                Some(_) => continue,
-                // The stream ended; nothing more will arrive, so stop waiting.
-                None => break,
-            },
-            () = &mut deadline => break,
-        }
-    }
-
-    let configured = crate::actions::session::prompt_commands(&config.chat)?;
-    let report = crate::actions::commands::commands_report(
-        &crate::actions::session::offered_commands(&session.client),
-        &configured,
-        &advertised,
-        received,
-    );
-    session.shutdown().await;
-    Ok(report)
-}
-
 pub async fn prompt<W>(
     ctx: SpawnContext<'_>,
     text: &str,
@@ -2661,6 +2584,101 @@ where
         .await
         .context("writing to stdout")?;
     out.write_all(b"\n").await.context("writing to stdout")
+}
+
+/// List what a session with this agent offers, and tear it down.
+///
+/// A fresh session, deliberately: nothing can name a `bitrouter chat` running
+/// in another terminal, so this reports what a session with this agent *would*
+/// offer rather than what one already open is offering. That is the same
+/// limitation the row's `SessionBound` reach records.
+///
+/// No prompt is sent. The only thing waited on is the agent's own
+/// `available_commands_update`, and `wait_ms` bounds that wait — an agent that
+/// says nothing in time is reported as not having answered, which is a
+/// different answer from an empty list.
+pub async fn commands(
+    ctx: SpawnContext<'_>,
+    wait_ms: u64,
+) -> Result<bitrouter_mcp::actions::commands::CommandsReport> {
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    let routed = apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
+
+    // Before anything is launched. `ControlledSession` has no `Drop`, so a `?`
+    // between the launch and `shutdown()` would leave the harness child
+    // unreaped — and a `chat.commands` collision is exactly the error this
+    // call exists to raise.
+    let configured = crate::actions::session::prompt_commands(&config.chat)?;
+    // The same binding `chat` opens. Without it the controller advertises no
+    // route control, and this leaf would report `/route` as unavailable for
+    // every agent while `chat` offers it — the drift the shared report exists
+    // to prevent. `shutdown()` revokes it.
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
+
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Subscribed before the session opens, so an agent that advertises its
+    // commands immediately is not raced.
+    let mut updates = session.client.subscribe_raw_updates();
+    if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
+        let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+            unauthenticated_message(agent_id, session.client.auth_methods())
+        } else {
+            "opening the harness session".to_string()
+        };
+        session.shutdown().await;
+        return Err(error.context(context));
+    }
+
+    let mut advertised = Vec::new();
+    let mut received = false;
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(wait_ms));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            // The last update wins: the list is a replacement, not a delta.
+            update = updates.next() => match update {
+                Some(agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate(
+                    update,
+                )) => {
+                    advertised = update.available_commands;
+                    received = true;
+                }
+                Some(_) => continue,
+                // The stream ended; nothing more will arrive, so stop waiting.
+                None => break,
+            },
+            () = &mut deadline => break,
+        }
+    }
+
+    let report = crate::actions::commands::commands_report(
+        &crate::actions::session::offered_commands(&session.client),
+        &configured,
+        &advertised,
+        received,
+    );
+    session.shutdown().await;
+    Ok(report)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -103,9 +103,7 @@ pub(crate) async fn run(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     via: Option<String>,
-    commands: Vec<bitrouter_tui::machine::Command>,
-    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
-    ports: &crate::actions::session::SessionPorts,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     let (mut view, mut stdin) = match open_terminal(via) {
         Ok(terminal) => terminal,
@@ -124,9 +122,7 @@ pub(crate) async fn run(
         session_id,
         agent_id,
         recorder,
-        commands,
-        prompt_commands,
-        ports,
+        surface,
     )
     .await;
 
@@ -217,9 +213,7 @@ async fn drive(
     session_id: &str,
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
-    commands: Vec<bitrouter_tui::machine::Command>,
-    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
-    ports: &crate::actions::session::SessionPorts,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<bool> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
@@ -261,6 +255,11 @@ async fn drive(
         }
     });
 
+    let crate::actions::session::SessionSurface {
+        commands,
+        prompt_commands,
+        ports,
+    } = surface;
     let mut state = State::new(commands);
     state.prompt_commands = prompt_commands;
     let mut schedule = Schedule::default();
@@ -469,14 +468,18 @@ pub(crate) async fn chat_plain(
     session_id: &str,
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
-    commands: Vec<bitrouter_tui::machine::Command>,
-    prompt_commands: Vec<bitrouter_tui::machine::PromptCommand>,
-    ports: &crate::actions::session::SessionPorts,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     use std::io::Write as _;
 
     use futures::FutureExt as _;
     use tokio::io::AsyncBufReadExt as _;
+
+    let crate::actions::session::SessionSurface {
+        commands,
+        prompt_commands,
+        ports,
+    } = surface;
 
     let mut out = std::io::stdout();
     let mut transcript = bitrouter_tui::plain::Transcript::default();

@@ -575,9 +575,13 @@ fn submit(state: &mut State) -> Vec<Effect> {
                 "`{action}` is marked reducer-owned but has no reducer arm"
             ))));
         }
+        // No early return. `route_set` and `route_reset` may return without a
+        // paint because their wire replies arrive as `Action::Routes` /
+        // `Action::Routed`, whose reducers paint; an action's report is
+        // rendered by the driver with nothing coming back, so the frame has to
+        // be asked for here or the notice waits for the next keystroke.
         Resolution::Action { action, args } => {
             effects.push(Effect::Action { action, args });
-            return effects;
         }
         Resolution::Unavailable(reason) => {
             effects.push(Effect::Notice(Notice::Say(reason.to_string())));
@@ -1464,6 +1468,53 @@ mod tests {
             resolve(&offered, &configured, "/unknown thing"),
             Resolution::Prompt("/unknown thing".to_string()),
             "neither registry claims it, so it is the agent's"
+        );
+    }
+
+    /// Every arm of `submit` that shows something asks for the frame that
+    /// shows it.
+    ///
+    /// The arms that legitimately do not paint are the two that hand off to the
+    /// wire — their replies come back as `Routes` / `Routed` and paint then.
+    /// Everything else must paint here, because nothing comes back for it.
+    #[test]
+    fn every_submitted_command_asks_for_the_frame_that_shows_it() {
+        let mut offered = commands_for(true);
+        offered.push(Command {
+            name: "status",
+            action: "status",
+            summary: "a read answered through the ports",
+            unavailable: None,
+        });
+        for (typed, expected) in [
+            // A report is rendered by the driver with no wire reply, so the
+            // frame has to be asked for on submit.
+            ("/status", vec!["echo", "clear-notice", "action", "paint"]),
+            ("/commands", vec!["echo", "clear-notice", "notice", "paint"]),
+            ("/help", vec!["echo", "clear-notice", "notice", "paint"]),
+            // These two hand off; `Action::Routes` / `Routed` paint on reply.
+            ("/route", vec!["echo", "clear-notice", "list-routes"]),
+            ("/route reset", vec!["echo", "clear-notice", "reset-route"]),
+            // A prompt paints too — the editor was cleared.
+            ("hello", vec!["echo", "clear-notice", "prompt", "paint"]),
+        ] {
+            let mut state = State::new(offered.clone());
+            for c in typed.chars() {
+                let _ = step(&mut state, Action::Key(press(KeyCode::Char(c))));
+            }
+            let effects = step(&mut state, Action::Key(press(KeyCode::Enter)));
+            assert_eq!(effects_of(&effects), expected, "submitting `{typed}`");
+        }
+
+        // An unavailable command answers with its reason, and that answer is
+        // shown now rather than at the next keystroke.
+        let mut state = State::new(commands_for(false));
+        for c in "/route".chars() {
+            let _ = step(&mut state, Action::Key(press(KeyCode::Char(c))));
+        }
+        assert_eq!(
+            effects_of(&step(&mut state, Action::Key(press(KeyCode::Enter)))),
+            ["echo", "clear-notice", "notice", "paint"]
         );
     }
 
