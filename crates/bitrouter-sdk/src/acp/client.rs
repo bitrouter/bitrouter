@@ -75,10 +75,10 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification,
-    ClientCapabilities, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
-    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
-    SessionUpdate, TextContent, ToolCallUpdate,
+    ClientCapabilities, ContentBlock, Implementation, InitializeRequest, InitializeResponse,
+    McpServer, NewSessionRequest, PermissionOption, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
+    SessionNotification, SessionUpdate, TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcRequest, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -576,6 +576,19 @@ pub struct AcpClient {
     /// Empty is meaningful: an agent that advertises nothing offers no
     /// authentication this client may drive.
     auth_methods: Vec<AuthMethod>,
+    /// The protocol version the agent settled on.
+    ///
+    /// Retained for the same reason as the two above — handshake is the only
+    /// moment `initialize` is in hand — and read by the conformance suite,
+    /// which checks it against the version the agent's registry entry
+    /// declares. (Declared *capabilities* are not retained: nothing asserts
+    /// them yet, and a field with no reader is state pretending to be a
+    /// contract.)
+    protocol_version: ProtocolVersion,
+    /// The agent's self-reported name and version, when it sends one. This is
+    /// the honest source for a conformance record's `agent_version`: the
+    /// version that actually answered, not the one an invocation asked for.
+    agent_info: Option<Implementation>,
     /// Submits [`Command`]s into the connection's command loop.
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
@@ -636,9 +649,13 @@ impl AcpClient {
             .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
         let route_control = RouteControlCapability::from_init(&init);
         let auth_methods = init.auth_methods.clone();
+        let protocol_version = init.protocol_version;
+        let agent_info = init.agent_info.clone();
         Ok(Self {
             route_control,
             auth_methods,
+            protocol_version,
+            agent_info,
             cmd_tx,
             updates_tx,
             raw_updates_tx,
@@ -667,6 +684,16 @@ impl AcpClient {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("the agent dropped the session/new reply"))?
+    }
+
+    /// The protocol version the agent settled on at handshake.
+    pub fn protocol_version(&self) -> ProtocolVersion {
+        self.protocol_version
+    }
+
+    /// The agent's self-reported identity, when it sends one.
+    pub fn agent_info(&self) -> Option<&Implementation> {
+        self.agent_info.as_ref()
     }
 
     /// Handle to the latest context-window usage reported by the agent

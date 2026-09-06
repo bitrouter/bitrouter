@@ -118,3 +118,63 @@ impl CliReport for AgentInstallReport {
         Ok(())
     }
 }
+
+/// One tier's verdict in `agents conformance`.
+#[derive(Serialize)]
+pub struct AgentConformanceTier {
+    pub tier: String,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub duration_ms: u128,
+}
+
+/// Result of `bitrouter agents conformance <id>`.
+///
+/// `registry_block` is the point of the command: the YAML a contributor pastes
+/// under their runtime's agent entry. Printing it rather than writing it keeps
+/// the recorded claim something a human chose to commit.
+#[derive(Serialize)]
+pub struct AgentConformanceReport {
+    pub agent: String,
+    pub suite: String,
+    pub suite_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    pub passed: bool,
+    pub tiers: Vec<AgentConformanceTier>,
+    pub registry_block: String,
+}
+
+impl CliReport for AgentConformanceReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        h.line(&format!(
+            "{} — {} {}",
+            self.agent, self.suite, self.suite_version
+        ))?;
+        if let Some(version) = &self.agent_version {
+            h.line(&format!("agent reported version {version}"))?;
+        }
+        h.line("")?;
+        let mut t = Table::new(["TIER", "OUTCOME", "TIME", "DETAIL"]);
+        for tier in &self.tiers {
+            t.push([
+                tier.tier.clone(),
+                tier.outcome.clone(),
+                format!("{}ms", tier.duration_ms),
+                tier.reason.clone().unwrap_or_default(),
+            ]);
+        }
+        h.table(&t)?;
+        h.line("")?;
+        if self.passed {
+            h.line("paste this under the agent's entry in registry/runtimes/<runtime>.yaml:")?;
+            h.line("")?;
+            h.line(&self.registry_block)?;
+        } else {
+            h.line("no record is emitted for a run that did not pass — an absent tier means")?;
+            h.line("\"not measured\", which is the honest state until the failure is fixed.")?;
+        }
+        Ok(())
+    }
+}

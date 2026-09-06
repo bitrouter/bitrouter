@@ -19,6 +19,79 @@ use std::collections::HashMap;
 use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 
+// ===== process working directory =====
+//
+// Several tests below need the process to sit in a scratch directory, because
+// `Session::launch` resolves paths against `current_dir()`. The working
+// directory is **process**-global, and how much that matters depends on the
+// runner: `cargo nextest` gives each test its own process, so the original
+// code was safe under it, but `cargo test` runs the whole file as threads in
+// one process — and both are sanctioned by this repo's CLAUDE.md.
+//
+// Under `cargo test` the unsynchronized version raced in a way that was easy
+// to misread as a real failure: each test deletes its scratch directory when
+// it finishes, so a *different* test could find itself standing in a directory
+// that no longer existed. The symptoms landed far from the cause — a panicking
+// `current_dir()`, a prompt that failed for no visible reason, a subprocess
+// that timed out — and a different subset failed on every run.
+//
+// [`CwdGuard`] makes ownership of the directory explicit and exclusive.
+
+/// Serializes every test that depends on the process working directory.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Where the process started, captured before any test has moved it. Restoring
+/// to this rather than to whatever was current at acquisition means a stray
+/// unguarded `set_current_dir` cannot become the "original" that every later
+/// test restores to.
+static ORIGINAL_CWD: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| std::env::current_dir().expect("a valid startup cwd"));
+
+/// Exclusive ownership of the process working directory for one test.
+///
+/// Restoring happens in `Drop`, so it also runs when a test panics while
+/// holding the guard — without that, one failure would leave the directory
+/// pointing at a deleted temp dir and cascade into every test that ran after
+/// it.
+///
+/// The guard is held across `.await`, which is normally a deadlock hazard for
+/// a blocking mutex. It is safe here because every holder is a `#[tokio::test]`
+/// with its own current-thread runtime on its own libtest thread: blocking
+/// while waiting parks that one test's thread, never a runtime shared with the
+/// task that would release the lock.
+struct CwdGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl CwdGuard {
+    /// Take the directory and move into `dir`.
+    fn enter(dir: &std::path::Path) -> Self {
+        let guard = Self::hold();
+        std::env::set_current_dir(dir).expect("set_current_dir");
+        guard
+    }
+
+    /// Take the directory without moving, for a test that only needs it to
+    /// stay put — `serve_subprocess_e2e` spawns a child that inherits it.
+    fn hold() -> Self {
+        // A poisoned lock means some earlier test panicked while holding it.
+        // Its `Drop` already restored the directory, so there is no broken
+        // state to protect and the poison is recovered rather than propagated
+        // into an unrelated failure.
+        let lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::sync::LazyLock::force(&ORIGINAL_CWD);
+        Self { _lock: lock }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&*ORIGINAL_CWD);
+    }
+}
+
 /// Bash ACP stub: initialize → session/new → prompt emits one update then
 /// end_turn. Identical to the stubs used in the substrate engine/down tests.
 const BASH_STUB: &str = r#"
@@ -61,11 +134,7 @@ fn stub_config() -> Config {
 async fn prompt_ndjson() {
     let base = tempfile::tempdir().expect("tempdir");
 
-    // Change cwd to the temp dir; restore on exit. `set_current_dir` is
-    // process-global, but each nextest test runs in its own process, so this
-    // does not race other tests under the default `cargo nextest` runner.
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -82,8 +151,6 @@ async fn prompt_ndjson() {
         },
     };
     let result = bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf).await;
-
-    let _ = std::env::set_current_dir(&orig_dir);
 
     result.expect("acp_cli::prompt should succeed");
 
@@ -244,8 +311,7 @@ const OK_SCHEMA: &str =
 /// terminal result line.
 async fn result_line_for(script: &str) -> serde_json::Value {
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -273,7 +339,6 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         &mut buf,
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
     result.expect("prompt should succeed");
 
     let output = String::from_utf8(buf).expect("valid utf8");
@@ -526,6 +591,18 @@ async fn rpc_round_trip(
     }
 }
 
+/// Budget for the **first** round-trip against a freshly spawned child.
+///
+/// This is not measuring the same thing as the steady-state deadline. Request
+/// id 1 also pays for the process spawn and the dynamic linking of a large
+/// debug binary, which on a loaded machine dominates the handshake itself.
+/// Under CPU saturation it was the *only* round-trip that ever elapsed — the
+/// steady-state ones stayed in the milliseconds — so separating it keeps the
+/// tight stalled-child deadline where it actually detects a stall, instead of
+/// widening every deadline to accommodate one slow step. The test is still
+/// bounded, so a child that never starts fails rather than hanging the runner.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run one round-trip under `timeout`; panic on elapse so a stalled server
 /// never hangs the test runner.
 async fn bounded_round_trip(
@@ -601,6 +678,10 @@ async fn serve_subprocess_e2e() {
     /// handshake, tight enough to fail fast on a stalled child.
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
+    // The spawned child inherits this process's working directory, so this
+    // test needs it to stay put even though it never moves it itself.
+    let _cwd = CwdGuard::hold();
+
     // Write the config YAML to a temp file.
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("bitrouter.yaml");
@@ -667,7 +748,7 @@ async fn serve_subprocess_e2e() {
             "params": { "protocolVersion": 1 }
         }),
         "1",
-        RPC_TIMEOUT,
+        HANDSHAKE_TIMEOUT,
     )
     .await;
     assert!(
@@ -836,8 +917,7 @@ async fn prompt_headless_denies_permission_and_completes() {
     cfg.agents.insert("perm-stub".to_string(), agent_cfg);
 
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -859,8 +939,6 @@ async fn prompt_headless_denies_permission_and_completes() {
         bitrouter::acp_cli::prompt(ctx, "write it", Default::default(), &mut buf),
     )
     .await;
-
-    let _ = std::env::set_current_dir(&orig_dir);
 
     let result = result.expect("headless prompt must not hang on a permission request");
     let tally = result.expect("prompt should complete");
@@ -920,8 +998,7 @@ async fn headless(
     options: bitrouter::acp_cli::PromptOptions,
 ) -> (bitrouter::acp_cli::PermissionTally, String) {
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
     };
@@ -941,7 +1018,6 @@ async fn headless(
         bitrouter::acp_cli::prompt(ctx, text, options, &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
     let tally = result
         .expect("a headless prompt must not hang")
         .expect("prompt should complete");
@@ -1056,8 +1132,7 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         done
     "#;
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -1079,7 +1154,6 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
 
     let result = outcome.expect("--turn-timeout must end the turn, not hang the process");
     let error = format!("{:#}", result.expect_err("a stalled turn must fail"));
@@ -1105,8 +1179,7 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         done
     "#;
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -1127,7 +1200,6 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
 
     let result = outcome.expect("a dead harness must fail the turn, not hang it");
     assert!(
@@ -1244,7 +1316,7 @@ impl ServeFixture {
             serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize",
                                "params":{"protocolVersion":1}}),
             "1",
-            CONFORMANCE_TIMEOUT,
+            HANDSHAKE_TIMEOUT,
         )
         .await;
         assert!(init.get("result").is_some(), "initialize failed: {init}");
