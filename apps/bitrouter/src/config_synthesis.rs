@@ -399,12 +399,23 @@ mod tests {
 
     /// Env values carry absolute paths under the scratch dir, which differs
     /// between the two renders. Normalize so the comparison is about content.
+    ///
+    /// The separator is normalized too, so one golden set covers every host:
+    /// substituting the root leaves the native separator behind, which would
+    /// render `{root}\hermes` on Windows against a `{root}/hermes` fixture.
+    /// Only env values carry paths here — every fixture's `args` are flags —
+    /// so this cannot corrupt a value that means a backslash.
     fn normalize(overlay: &RoutingOverlay, root: &Path) -> (Vec<(String, String)>, Vec<String>) {
         let root = root.display().to_string();
         let env = overlay
             .env
             .iter()
-            .map(|(name, value)| (name.clone(), value.replace(&root, "{root}")))
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    value.replace(&root, "{root}").replace('\\', "/"),
+                )
+            })
             .collect();
         (env, overlay.args.clone())
     }
@@ -426,7 +437,16 @@ mod tests {
     /// intentional change, and read the diff before committing it.
     #[test]
     fn rendered_config_bytes_match_the_golden_fixtures() -> anyhow::Result<()> {
-        let cases: [(&str, Vec<String>, Option<&str>, Vec<McpServer>); 3] = [
+        // One input shape: its fixture suffix, the catalog, the pinned model,
+        // and the MCP servers to render.
+        type Case = (
+            &'static str,
+            Vec<String>,
+            Option<&'static str>,
+            Vec<McpServer>,
+        );
+
+        let cases: [Case; 3] = [
             // No catalog: no default model, so the optional blocks are absent.
             ("empty", Vec::new(), None, Vec::new()),
             // A pinned model outside the catalog — exercises append-vs-dedup.
