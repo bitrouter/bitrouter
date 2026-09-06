@@ -1,56 +1,73 @@
 //! The SEP-2640 skills catalog — the app side of the origin server's
 //! `skills/list` and `skills/get`.
 //!
-//! Implements [`SkillCatalog`] over the installed-skills root, using
+//! Implements [`SkillCatalog`] over the shared skills roots, using
 //! [`crate::skills::format`] for discovery and frontmatter. Read-only.
 //!
-//! Distinct from [`crate::skills_query`], which implements the older
-//! tool-shaped `skills_search` / `skills_get` port over the same root. Both are
-//! served; see `bitrouter_mcp::capabilities::skill_catalog` for why.
+//! Distinct from [`crate::actions::skills`], which implements the tool-shaped
+//! `skills_search` / `skills_get` port over the *same* roots and the *same*
+//! discovery. Both are served; see `bitrouter_mcp::capabilities::skill_catalog`
+//! for why. What differs between them is only what they do with an invalid
+//! skill: the tools mark it, this catalog omits it (see `collect`).
 //!
 //! ## URI derivation
 //!
 //! A published skill must satisfy the Agent Skills format: its directory name
 //! equals `frontmatter.name`, and the name/description obey the format bounds.
-//! Invalid on-disk entries are skipped rather than repaired into a shape whose
-//! `SKILL.md` would still fail host verification.
+//! That judgement is `DiscoveredSkill::problem`, shared with the CLI and the
+//! tools; invalid on-disk entries are skipped here rather than repaired into a
+//! shape whose `SKILL.md` would still fail host verification.
 //!
 //! Project-local `.claude/skills/<name>` entries use the compact
 //! `skill://<name>/SKILL.md` form. A same-named bundled entry under
 //! `skills/<name>` uses `skill://skills/<name>/SKILL.md`; `skills` is the
 //! server-chosen organizational prefix SEP-2640 permits. This keeps two valid
 //! skills from distinct conventional roots addressable without weakening the
-//! directory/name invariant.
+//! directory/name invariant. The user-global root adds a further `global/`
+//! prefix, which is what lets one server publish a project `foo` and a
+//! user-global `foo` at once.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::skills::format::{SkillFrontmatter, discover_all_skills, is_safe_installed_path};
-use crate::skills::{is_valid_skill_description, is_valid_skill_name};
+use crate::skills::format::{SkillFrontmatter, discover_all_skills};
+use crate::skills::root::SkillsRoot;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_sdk::mcp::skills::{
-    GetSkillResult, ListSkillsResult, SKILL_SCHEME, SkillEntry, SkillResource,
+    GetSkillResult, ListSkillsResult, MAX_SKILL_RESOURCES, MAX_SKILL_TOTAL_BYTES, SKILL_SCHEME,
+    SkillEntry, SkillResource, SkillResources,
 };
 use sha2::{Digest, Sha256};
 
-/// Serves the skills installed under a root directory.
+/// One published skill, plus the directory it came from.
 ///
-/// `discover_all_skills` searches `root`, `root/skills`, and
-/// `root/.claude/skills`, so the project root covers the conventional layouts.
+/// Keeping the directory beside the entry is what lets `read` resolve a URI by
+/// lookup instead of re-running discovery to find the path again.
+struct CatalogEntry {
+    entry: SkillEntry,
+    skill_dir: PathBuf,
+}
+
+/// Serves the skills installed under a set of roots.
+///
+/// The roots come from [`SkillsRoot`] — the same resolution the CLI uses — so
+/// an MCP client sees the user-global skills `bitrouter skills list -g` shows,
+/// which it could not before.
 pub struct InstalledSkillCatalog {
-    root: PathBuf,
+    roots: Vec<SkillsRoot>,
 }
 
 impl InstalledSkillCatalog {
-    /// Serve skills installed under `root` (typically the base repo).
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
+    /// Serve the skills under `roots`. Build the set with
+    /// [`SkillsRoot::mcp_scope`] rather than assembling one here.
+    pub fn new(roots: Vec<SkillsRoot>) -> Self {
+        Self { roots }
     }
 
-    /// Every installed skill, keyed by URI.
+    /// Every publishable skill, keyed by URI.
     ///
     /// A `BTreeMap` both dedupes and orders: discovery walks several
     /// conventional roots, so the same frontmatter name can legitimately be
@@ -58,70 +75,84 @@ impl InstalledSkillCatalog {
     /// genuine local conflict rather than something to resolve silently — the
     /// first wins and the loser is logged, because dropping one without a word
     /// is how a shadowed skill goes unnoticed.
-    fn collect(root: &Path) -> BTreeMap<String, SkillEntry> {
-        let mut entries: BTreeMap<String, SkillEntry> = BTreeMap::new();
-        for (skill_md, fm) in discover_all_skills(root) {
-            let Some(skill_dir) = skill_md.parent() else {
-                continue;
-            };
-            if !is_safe_installed_path(root, &skill_md) {
-                tracing::warn!(
-                    path = %skill_md.display(),
-                    "skills catalog: path escapes the configured root or traverses a symlink; skipped",
-                );
-                continue;
-            }
-            let uri = match skill_uri(root, skill_dir, &fm) {
-                Some(uri) => uri,
-                None => {
+    ///
+    /// **Only valid skills are published**, and validity is
+    /// [`DiscoveredSkill::problem`] — the same judgement `bitrouter skills list`
+    /// and `skills_search` render as `valid: false` plus a reason. The SEP
+    /// leaves no room for an invalid entry here: it requires the final URI
+    /// segment to equal `frontmatter.name` and the entry's `frontmatter` to
+    /// match the `SKILL.md` a host fetches field-by-field, so a skill that fails
+    /// those has no conforming entry to publish. Marking it on the tool surfaces
+    /// and omitting it here is one policy applied twice, not two policies.
+    fn collect(roots: &[SkillsRoot]) -> BTreeMap<String, CatalogEntry> {
+        let mut entries: BTreeMap<String, CatalogEntry> = BTreeMap::new();
+        for root in roots {
+            let anchor = root.discovery_root();
+            for found in discover_all_skills(&anchor) {
+                // Containment is already enforced inside `discover_all_skills`,
+                // anchored on this root — and on *this* root only, so one root
+                // can never be used to reach into or past another.
+                if let Some(problem) = found.problem() {
                     tracing::warn!(
-                        path = %skill_md.display(),
-                        "skills catalog: skill does not satisfy Agent Skills name, directory, or description rules; skipped",
+                        path = %found.skill_md.display(),
+                        %problem,
+                        "skills catalog: skill cannot be published; \
+                         `bitrouter skills list` shows it marked",
                     );
                     continue;
                 }
-            };
-            if let Some(existing) = entries.get(&uri) {
-                tracing::warn!(
-                    uri = %uri,
-                    kept = %existing.uri,
-                    dropped = %skill_md.display(),
-                    "skills catalog: two installed skills resolve to the same URI; \
-                     keeping the first. Rename one so both are addressable.",
-                );
-                continue;
-            }
-            let resources = match enumerate_resources(skill_dir, &uri) {
-                Ok(resources) => resources,
-                Err(e) => {
+                let Ok(fm) = &found.frontmatter else {
+                    continue;
+                };
+                let Some(uri) = skill_uri(root.uri_prefix(), &anchor, &found.dir, &fm.name) else {
+                    continue;
+                };
+                if let Some(existing) = entries.get(&uri) {
                     tracing::warn!(
-                        path = %skill_dir.display(),
-                        error = %e,
-                        "skills catalog: could not enumerate skill files; skipped",
+                        uri = %uri,
+                        kept = %existing.skill_dir.display(),
+                        dropped = %found.skill_md.display(),
+                        "skills catalog: two installed skills resolve to the same URI; \
+                         keeping the first. Rename one so both are addressable.",
                     );
                     continue;
                 }
-            };
-            entries.insert(
-                uri.clone(),
-                SkillEntry {
-                    uri,
-                    frontmatter: frontmatter_to_json(&fm),
-                    resources: Some(resources),
-                    // Nothing to carry: this catalog builds entries from the
-                    // filesystem rather than forwarding an upstream's.
-                    extra: serde_json::Map::new(),
-                },
-            );
+                let resources = match enumerate_resources(&found.dir, &uri) {
+                    Ok(resources) => resources,
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %found.dir.display(),
+                            error = %e,
+                            "skills catalog: could not enumerate skill files; skipped",
+                        );
+                        continue;
+                    }
+                };
+                entries.insert(
+                    uri.clone(),
+                    CatalogEntry {
+                        entry: SkillEntry {
+                            uri,
+                            frontmatter: frontmatter_to_json(fm),
+                            resources: SkillResources::Enumerated(resources),
+                            // Nothing to carry: this catalog builds entries from
+                            // the filesystem rather than forwarding an
+                            // upstream's.
+                            extra: serde_json::Map::new(),
+                        },
+                        skill_dir: found.dir.clone(),
+                    },
+                );
+            }
         }
         entries
     }
 
     /// Run [`Self::collect`] off the async runtime — discovery, directory
     /// walking, and hashing are all blocking filesystem work.
-    async fn collect_off_thread(&self) -> Result<BTreeMap<String, SkillEntry>, ToolError> {
-        let root = self.root.clone();
-        tokio::task::spawn_blocking(move || Self::collect(&root))
+    async fn collect_off_thread(&self) -> Result<BTreeMap<String, CatalogEntry>, ToolError> {
+        let roots = self.roots.clone();
+        tokio::task::spawn_blocking(move || Self::collect(&roots))
             .await
             .map_err(|e| ToolError::new(format!("skills catalog task failed: {e}")))
     }
@@ -131,7 +162,12 @@ impl InstalledSkillCatalog {
 impl SkillCatalog for InstalledSkillCatalog {
     async fn list(&self) -> Result<ListSkillsResult, ToolError> {
         Ok(ListSkillsResult {
-            skills: self.collect_off_thread().await?.into_values().collect(),
+            skills: self
+                .collect_off_thread()
+                .await?
+                .into_values()
+                .map(|found| found.entry)
+                .collect(),
         })
     }
 
@@ -139,7 +175,7 @@ impl SkillCatalog for InstalledSkillCatalog {
         self.collect_off_thread()
             .await?
             .remove(uri)
-            .map(|skill| GetSkillResult { skill })
+            .map(|found| GetSkillResult { skill: found.entry })
             .ok_or_else(|| ToolError::new(format!("no installed skill at '{uri}'")))
     }
 
@@ -153,12 +189,12 @@ impl SkillCatalog for InstalledSkillCatalog {
     /// enumeration in exact agreement, which SEP-2640 requires: a host must
     /// treat a read of an unlisted file as a verification failure.
     async fn read(&self, uri: &str) -> Result<SkillFile, ToolError> {
-        let root = self.root.clone();
+        let roots = self.roots.clone();
         let wanted = uri.to_string();
         tokio::task::spawn_blocking(move || {
-            let path = Self::collect(&root)
+            let path = Self::collect(&roots)
                 .values()
-                .find_map(|entry| resource_path(&root, entry, &wanted))
+                .find_map(|found| resource_path(found, &wanted))
                 .ok_or_else(|| {
                     ToolError::new(format!("'{wanted}' is not a file of any installed skill"))
                 })?;
@@ -178,35 +214,22 @@ impl SkillCatalog for InstalledSkillCatalog {
     }
 }
 
-/// The on-disk path for `wanted`, if it is one of `entry`'s enumerated files.
+/// The on-disk path for `wanted`, if it is one of this entry's enumerated
+/// files.
 ///
 /// Re-enumerates the skill and derives each candidate URI with the same
 /// segment encoder as [`enumerate_resources`], so an encoded URI is never
 /// decoded into an ambiguous or traversal-capable path.
-fn resource_path(root: &Path, entry: &SkillEntry, wanted: &str) -> Option<PathBuf> {
-    let resources = entry.resources.as_ref()?;
+fn resource_path(found: &CatalogEntry, wanted: &str) -> Option<PathBuf> {
+    let resources = found.entry.resources.entries()?;
     if !resources.iter().any(|r| r.uri == wanted) {
         return None;
     }
-    let skill_dir = skill_dir_for(root, entry)?;
     let mut files = Vec::new();
-    collect_files(&skill_dir, &mut files).ok()?;
+    collect_files(&found.skill_dir, &mut files).ok()?;
     files.into_iter().find(|path| {
-        resource_uri_for_path(&skill_dir, &entry.uri, path).is_ok_and(|uri| uri == wanted)
-    })
-}
-
-/// The directory holding `entry`'s `SKILL.md`, found by re-running discovery
-/// rather than reversing the URI — the URI is derived from frontmatter, so it
-/// is not invertible to a path.
-fn skill_dir_for(root: &Path, entry: &SkillEntry) -> Option<PathBuf> {
-    discover_all_skills(root).into_iter().find_map(|(md, fm)| {
-        if !is_safe_installed_path(root, &md) {
-            return None;
-        }
-        let dir = md.parent()?;
-        (skill_uri(root, dir, &fm).as_deref() == Some(entry.uri.as_str()))
-            .then(|| dir.to_path_buf())
+        resource_uri_for_path(&found.skill_dir, &found.entry.uri, path)
+            .is_ok_and(|uri| uri == wanted)
     })
 }
 
@@ -228,19 +251,19 @@ fn mime_type_for(path: &Path) -> &'static str {
 
 /// The `skill://` URI for a skill's `SKILL.md`.
 ///
+/// `scope_prefix` is the root's own organizational prefix ([`SkillsRoot`]) — an
+/// empty string for a project root, so project skills keep the URIs they always
+/// had, and `global/` for the user-global root, which is what keeps a
+/// user-global `foo` addressable alongside a project-local one now that one
+/// server serves both.
+///
 /// Returns `None` when the directory has no usable final component, which
-/// would leave nothing to build a path from.
-fn skill_uri(root: &Path, skill_dir: &Path, fm: &SkillFrontmatter) -> Option<String> {
-    let dir_name = skill_dir.file_name()?.to_str()?;
-    if dir_name != fm.name
-        || !is_valid_skill_name(&fm.name)
-        || !is_valid_skill_description(&fm.description)
-    {
-        return None;
-    }
-
+/// would leave nothing to build a path from. The Agent Skills validity rules
+/// are *not* re-checked here: [`DiscoveredSkill::problem`] is the one place
+/// they live, and `collect` has already applied it.
+fn skill_uri(scope_prefix: &str, root: &Path, skill_dir: &Path, name: &str) -> Option<String> {
     let relative = skill_dir.strip_prefix(root).ok()?;
-    let prefix = if relative.as_os_str().is_empty() {
+    let layout = if relative.as_os_str().is_empty() {
         "root-direct/"
     } else if relative == Path::new(".claude/skills") {
         "claude-root/"
@@ -253,7 +276,9 @@ fn skill_uri(root: &Path, skill_dir: &Path, fm: &SkillFrontmatter) -> Option<Str
     } else {
         "root/"
     };
-    Some(format!("{SKILL_SCHEME}{prefix}{}/SKILL.md", fm.name))
+    Some(format!(
+        "{SKILL_SCHEME}{scope_prefix}{layout}{name}/SKILL.md"
+    ))
 }
 
 /// Render parsed frontmatter back to the JSON object the SEP calls for.
@@ -265,7 +290,8 @@ fn frontmatter_to_json(fm: &SkillFrontmatter) -> serde_json::Map<String, serde_j
     fm.raw.clone()
 }
 
-/// Every file in `skill_dir`, paired with the digest of its bytes.
+/// Every file in `skill_dir`, paired with the digest **and byte length** of its
+/// bytes.
 ///
 /// `skill_uri` is the entry's own URI; supporting files are addressed relative
 /// to the skill root by stripping its trailing `SKILL.md`, so
@@ -275,17 +301,50 @@ fn frontmatter_to_json(fm: &SkillFrontmatter) -> serde_json::Map<String, serde_j
 /// Symlinks are skipped rather than followed: a link inside a skill directory
 /// can point anywhere, and serving its target would place bytes from outside
 /// the skill under the skill's URI space.
+///
+/// Nested skills need no special handling here, and SEP-2640 asks for exactly
+/// that: "from the enclosing skill's perspective their files are supporting
+/// files, so the enclosing skill's `resources` lists them too". The recursive
+/// walk does that by construction.
+///
+/// The SEP's two per-skill limits are enforced as they are counted, and
+/// exceeding either is an error rather than a truncated manifest: a manifest
+/// that is not complete is worse than no entry, because a host must treat a
+/// read of an unlisted file as a verification failure. The caller logs the
+/// skill and skips it.
 fn enumerate_resources(skill_dir: &Path, skill_uri: &str) -> std::io::Result<Vec<SkillResource>> {
     let mut files = Vec::new();
     collect_files(skill_dir, &mut files)?;
+    if files.len() > MAX_SKILL_RESOURCES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "skill has {} files, over SEP-2640's limit of {MAX_SKILL_RESOURCES}",
+                files.len()
+            ),
+        ));
+    }
     // Deterministic order: the listing and its digests must not depend on
     // filesystem iteration order.
     files.sort();
     let mut resources = Vec::with_capacity(files.len());
+    let mut total: u64 = 0;
     for path in files {
+        let bytes = std::fs::read(&path)?;
+        let size = bytes.len() as u64;
+        total = total.checked_add(size).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "skill size overflowed")
+        })?;
+        if total > MAX_SKILL_TOTAL_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("skill exceeds SEP-2640's {MAX_SKILL_TOTAL_BYTES}-byte per-skill limit"),
+            ));
+        }
         resources.push(SkillResource {
             uri: resource_uri_for_path(skill_dir, skill_uri, &path)?,
-            digest: digest_file(&path)?,
+            digest: digest_bytes(&bytes),
+            size,
         });
     }
     Ok(resources)
@@ -370,13 +429,6 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// SHA-256 of a file's raw bytes, formatted as the SEP's
-/// `sha256:{64 lowercase hex}`.
-fn digest_file(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(digest_bytes(&bytes))
-}
-
 /// SHA-256 of `bytes`, formatted as `sha256:{64 lowercase hex}`.
 fn digest_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -387,6 +439,14 @@ fn digest_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A catalog over one project root — the CLI's non-`-g` scope. Tests that
+    /// need the global root too build the scope explicitly.
+    fn project_catalog(root: &Path) -> InstalledSkillCatalog {
+        InstalledSkillCatalog::new(
+            SkillsRoot::cli_scope(false, root.to_path_buf()).expect("project scope"),
+        )
+    }
 
     fn install_skill(root: &Path, dir: &str, name: &str, files: &[(&str, &str)]) {
         let skill_dir = root.join(".claude").join("skills").join(dir);
@@ -437,14 +497,14 @@ mod tests {
                 ("scripts/x.py", "print()"),
             ],
         );
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         assert_eq!(listed.skills.len(), 1);
         let entry = &listed.skills[0];
         assert_eq!(entry.uri, "skill://pdf/SKILL.md");
 
-        let resources = entry.resources.as_ref().expect("resources present");
+        let resources = entry.resources.entries().expect("resources present");
         let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
         assert_eq!(
             uris,
@@ -473,7 +533,7 @@ mod tests {
             "---\nname: alpha\ndescription: d\nlicense: Apache-2.0\ncompatibility: Requires jq\nallowed-tools: Bash(jq:*) Read\nx-future:\n  nested: true\n---\n\n# Body\n",
         )
         .expect("write SKILL.md");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         assert_eq!(
@@ -498,7 +558,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         install_skill(dir.path(), "alpha", "alpha", &[]);
         install_skill(dir.path(), "pinned-dir", "upstream-name", &[]);
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         assert_eq!(listed.skills.len(), 1, "invalid skills are not published");
@@ -511,7 +571,7 @@ mod tests {
         for name in ["UPPER", "under_score", "has--gap", "-leading", "trailing-"] {
             install_skill(dir.path(), name, name, &[]);
         }
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         assert!(
             catalog.list().await.expect("list").skills.is_empty(),
@@ -524,7 +584,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let name = "a".repeat(65);
         install_skill(dir.path(), &name, &name, &[]);
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         assert!(catalog.list().await.expect("list").skills.is_empty());
     }
@@ -540,7 +600,7 @@ mod tests {
             .join("alpha")
             .join("SKILL.md");
         std::fs::write(skill_md, "---\nname: alpha\ndescription: ''\n---\n").expect("write");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         assert!(catalog.list().await.expect("list").skills.is_empty());
     }
@@ -560,7 +620,7 @@ mod tests {
             format!("---\nname: alpha\ndescription: {}\n---\n", "d".repeat(1025)),
         )
         .expect("write");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         assert!(catalog.list().await.expect("list").skills.is_empty());
     }
@@ -576,7 +636,7 @@ mod tests {
             "---\nname: refunds\ndescription: bundled\n---\n",
         )
         .expect("write bundled skill");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         assert_eq!(listed.skills.len(), 2, "neither is dropped");
@@ -614,7 +674,7 @@ mod tests {
             )
             .expect("write skill");
         }
-        let catalog = InstalledSkillCatalog::new(root);
+        let catalog = project_catalog(&root);
 
         let listed = catalog.list().await.expect("list");
         let uris: std::collections::BTreeSet<&str> = listed
@@ -630,7 +690,7 @@ mod tests {
     async fn get_returns_the_entry_and_errors_on_an_unknown_uri() {
         let dir = tempfile::tempdir().expect("tempdir");
         install_skill(dir.path(), "alpha", "alpha", &[]);
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let got = catalog
             .get("skill://alpha/SKILL.md")
@@ -660,11 +720,11 @@ mod tests {
             .join("leak.txt");
         std::os::unix::fs::symlink(&outside, &link).expect("symlink");
 
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
         let listed = catalog.list().await.expect("list");
         let resources = listed.skills[0]
             .resources
-            .as_ref()
+            .entries()
             .expect("resources present");
         assert!(
             resources.iter().all(|r| !r.uri.ends_with("leak.txt")),
@@ -691,7 +751,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside_skill, search_root.join("evil"))
             .expect("symlink skill directory");
 
-        let catalog = InstalledSkillCatalog::new(workspace.path().to_path_buf());
+        let catalog = project_catalog(workspace.path());
         assert!(
             catalog.list().await.expect("list").skills.is_empty(),
             "a directory symlink must not publish files outside the configured workspace"
@@ -713,12 +773,12 @@ mod tests {
                 ("unicodé.md", "unicode"),
             ],
         );
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         let resources = listed.skills[0]
             .resources
-            .as_ref()
+            .entries()
             .expect("resources present");
         let uris: std::collections::BTreeSet<&str> = resources
             .iter()
@@ -767,7 +827,7 @@ mod tests {
             "pdf",
             &[("references/FORMS.md", "# Forms")],
         );
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let skill_md = catalog
             .read("skill://pdf/SKILL.md")
@@ -794,7 +854,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         install_skill(dir.path(), "pdf", "pdf", &[]);
         std::fs::write(dir.path().join("secret.txt"), "secret").expect("write secret");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         for hostile in [
             "skill://pdf/../../../etc/passwd",
@@ -823,12 +883,12 @@ mod tests {
             "pinned",
             &[("a.md", "a"), ("nested/b.json", "{}")],
         );
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let listed = catalog.list().await.expect("list");
         let resources = listed.skills[0]
             .resources
-            .as_ref()
+            .entries()
             .expect("resources present");
         assert_eq!(resources.len(), 3);
         for resource in resources {
@@ -862,7 +922,7 @@ mod tests {
             .join("assets")
             .join("logo.bin");
         std::fs::write(&binary, [0xff, 0xfe, 0x00, 0x01]).expect("write binary");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
 
         let file = catalog
             .read("skill://assets/logo.bin")
@@ -882,7 +942,7 @@ mod tests {
     #[tokio::test]
     async fn empty_root_lists_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let catalog = InstalledSkillCatalog::new(dir.path().to_path_buf());
+        let catalog = project_catalog(dir.path());
         assert!(catalog.list().await.expect("list").skills.is_empty());
     }
 }

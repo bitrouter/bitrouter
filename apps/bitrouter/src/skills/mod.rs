@@ -22,14 +22,12 @@
 //! - [`cli`] — the surviving `skills list` / `skills init` verbs.
 //!
 //! Consumers: [`crate::skills_catalog`] (the SEP-2640 `skills/list` /
-//! `skills/get` server), [`crate::skills_query`] (the `skills_search` /
+//! `skills/get` server), [`crate::actions::skills`] (the `skills_search` /
 //! `skills_get` tools), and [`cli`].
 
 pub mod cli;
 pub mod format;
 pub mod root;
-
-pub(crate) use root::home_dir;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]

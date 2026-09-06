@@ -125,7 +125,7 @@ context."** Measured against that line, BitRouter is already compliant:
 | Concern | Where it would live | Actual state |
 |---|---|---|
 | Installs skills onto disk | package-manager code | Removed. Ecosystem tools populate the directories BitRouter reads. |
-| Puts SKILL.md text into a model's context | `skill_body` | Exists **only** in [`skills_query.rs:85`](../apps/bitrouter/src/skills_query.rs#L85), reached when a model calls the `skills_get` tool. Model-driven, not host-injected. |
+| Puts SKILL.md text into a model's context | `skill_body` | Exists **only** in [`skills/format.rs`](../apps/bitrouter/src/skills/format.rs), reached when a model calls the `skills_get` tool (via [`actions/skills.rs`](../apps/bitrouter/src/actions/skills.rs)). Model-driven, not host-injected. |
 | Loads skills into a harness | [`gateways.rs:47`](../apps/bitrouter/src/gateways.rs#L47) | Injects an **MCP server** into the harness. The harness (Claude Code, Codex) is the host; BitRouter is its server. |
 
 Installation is handled by tools such as `npx skills add` and agent plugin

@@ -8,7 +8,7 @@
 //! This module owns only what a *server* must implement, which is why it sits
 //! beside the other capability ports rather than in the SDK.
 //!
-//! Distinct from [`super::skills`], which is the older tool-shaped surface
+//! Distinct from [`crate::actions::skills`], which is the older tool-shaped surface
 //! (`skills_search` / `skills_get`). Both are served: the tool form works with
 //! every MCP client today, while the method form is what SEP-aware hosts will
 //! consume. Neither supersedes the other.

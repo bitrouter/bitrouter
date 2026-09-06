@@ -40,11 +40,15 @@ held there by a guard test in `apps/bitrouter`. See
 | `list_models` | all | Every routable model with **all** the providers that can serve it — the fallback chain, not just the first hop. Optional `provider` filter. Returns the shared `actions::models::ModelsReport`, so the tool advertises an `output_schema` and `bitrouter models --json` is the same bytes. `resolved_via` distinguishes a running router's catalog (`live`) from a static-config projection (`config`); on stdio + local the app-injected port falls back to the latter, so the tool answers with no daemon running |
 | `status` | stdio + local, any cloud | Report BitRouter status: liveness (pid, listen, models, providers, control socket) plus the spend position — `spend.spent` (money gone, a locally metered estimate whose `unpriced` count says how partial it is) on any deployment, `spend.limit` (money left) where a cap exists. Returns the shared `actions::status::StatusReport`, so the tool advertises an `output_schema` and a stopped daemon is `running: false` rather than a tool error |
 | `route_preview` | stdio + local | Preview how a model/prompt would route: the `effective_model` the policy table selects (which can differ from `requested_model`), the provider chain, the decision behind it, and the first hop's per-token rates. Returns the shared `actions::route::RouteReport`, so the tool advertises an `output_schema` and its structured content is byte-identical to `bitrouter route --json`. Config is read per call, so an edited `bitrouter.yaml` needs no restart |
-| `skills_search` | stdio + skills | Search installed BitRouter skills by name/description |
-| `skills_get` | stdio + skills | Fetch a skill's frontmatter + body |
+| `skills_search` | every stdio profile | Every skill on this machine — the project *and* user-global roots, all three conventional layouts — optionally narrowed by `query`. Returns the shared `actions::skills::SkillsReport`, so the tool advertises an `output_schema` and `bitrouter skills list --json` is the same bytes. A skill that cannot be loaded is listed with `valid: false` and a `problem`, rather than silently missing |
+| `skills_get` | every stdio profile | One skill's frontmatter metadata and `SKILL.md` body, as the shared `actions::skills::SkillDetail` |
 
 Only wired capabilities register their tools, so an HTTP client never sees —
-or can call — the host-bound routing and skills tools.
+or can call — the host-bound routing and skills tools. The skills tools ride the
+transport rather than the backend: a stdio server is a subprocess of the caller
+whose machine it is, so a `bitrouter mcp install`-ed client sees them.
+`--backend skills` remains the narrow gateway-subprocess profile that carries
+nothing else.
 
 ## Transports & backends
 

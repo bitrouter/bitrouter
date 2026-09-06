@@ -19,6 +19,7 @@
 
 pub mod models;
 pub mod route;
+pub mod skills;
 pub mod status;
 
 /// One action, and the surfaces that answer it.
@@ -95,14 +96,26 @@ pub const ACTIONS: &[ActionSpec] = &[
         id: "skills_search",
         cli_leaf: Some("skills list"),
         mcp_tool: Some("skills_search"),
-        output_schema: None,
+        output_schema: Some(|| {
+            rmcp::handler::server::tool::schema_for_output::<skills::SkillsReport>()
+                .as_ref()
+                .clone()
+        }),
     },
     ActionSpec {
         // No CLI twin, and adding `bitrouter skills show` for the table's sake
-        // would be dead surface.
+        // would be dead surface — so this row has one surface, and the schema
+        // it carries pins nothing against a second one. It is here because the
+        // tool returns `Json<SkillDetail>` and therefore *does* advertise a
+        // schema; a `None` beside a tool that advertises one would be the table
+        // understating what it knows.
         id: "skills_get",
         cli_leaf: None,
         mcp_tool: Some("skills_get"),
-        output_schema: None,
+        output_schema: Some(|| {
+            rmcp::handler::server::tool::schema_for_output::<skills::SkillDetail>()
+                .as_ref()
+                .clone()
+        }),
     },
 ];
