@@ -23,6 +23,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `acp prompt` all run — the first session-verb parity between the
   terminal and the headless CLI.
 
+- **Breaking (MCP wire, SEP-2640):** the skills extension's `resources` field
+  now matches the specification the MCP Core Maintainers **accepted on
+  2026-09-03**. BitRouter previously implemented an earlier draft and emitted
+  entries a conforming host must refuse. Three changes:
+
+  ```jsonc
+  // before — a skill entry BitRouter published
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…" }
+    ]
+  }
+
+  // after
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…",
+        "size": 5120 }                 // new, REQUIRED on every entry
+    ]
+  }
+  ```
+
+  1. **`size` is required** on every `resources` entry — the file's raw byte
+     length. It lets a host budget a skill from the listing alone, and a read
+     whose length differs from `size` is now a verification failure *equivalent
+     to a digest mismatch*, whether or not the digest is computed.
+  2. **`resources` is required, and "dynamic" is a string marker.** The draft
+     let the key be omitted to mean "generated dynamically"; the accepted
+     specification requires the key and takes either the complete array or the
+     literal string `"dynamic"`. An entry with neither "is invalid, and hosts
+     MUST NOT load it". The gateway therefore no longer republishes an upstream
+     entry that omits `resources`; it skips it, as it already skipped other
+     malformed entries.
+  3. **Per-skill limits are fixed**: 512 `resources` entries and 16 MiB
+     (16,777,216 bytes) summed over `size`. BitRouter will not serve or
+     re-publish a skill exceeding either.
+
+  **Breaking (Rust API):** `bitrouter_sdk::mcp::skills::SkillResource` gains
+  `size: u64`, and `SkillEntry::resources` changes from
+  `Option<Vec<SkillResource>>` to the new `SkillResources` enum
+  (`Enumerated(Vec<SkillResource>)` | `Dynamic`).
+
+- **Breaking (CLI):** `bitrouter skills list --json` changes shape, and the
+  command sees more skills than it used to. `bitrouter skills list` and the MCP
+  `skills_search` tool are now one action over one report type.
+
+  ```jsonc
+  // before
+  { "skills": [{ "name": "alpha", "path": "/p/.claude/skills/alpha" }] }
+
+  // after
+  { "skills": [{
+      "name": "alpha",
+      "description": "What alpha does",          // new
+      "dir": "/p/.claude/skills/alpha",          // was `path`
+      "skill_md": "/p/.claude/skills/alpha/SKILL.md",  // new
+      "valid": true,                             // new
+      "problem": "…"                             // new, omitted when valid
+  }] }
+  ```
+
+  `path` meant the skill *directory* to the CLI and the *`SKILL.md` file* to the
+  MCP tool. Neither was wrong; sharing one key for both was, so both surfaces
+  now carry `dir` and `skill_md`.
+
+  Three behaviour fixes ride along, all from collapsing three discovery rules
+  over two roots into one:
+
+  - **All three conventional layouts are listed.** `bitrouter skills list` read
+    only `<root>/.claude/skills`, so a `./skills/foo` skill was invisible to it
+    while the agent could see it.
+  - **A skill that cannot be loaded is listed and explained**, with
+    `valid: false` and a `problem`, instead of being listed unmarked by the CLI
+    and dropped silently by the agent's surface. SEP-2640's `skills/list` still
+    publishes only the loadable ones, which the specification requires.
+  - **The MCP surfaces read the user-global root**, which only `-g` used to
+    reach. An agent no longer misses a skill because of where it was installed.
+
+- **Fixed (MCP):** a `bitrouter mcp install`-ed client now sees the skills
+  tools. `mcp install` writes `["mcp", "serve"]`, but the skills and SEP-2640
+  surfaces were wired only under `mcp serve --backend skills`, so an installed
+  client never saw a skill. Every **stdio** profile now carries them — the
+  identity argument that makes `--backend skills` stdio-only (the server is a
+  subprocess of the caller whose machine it is) holds identically for stdio
+  `mcp serve`. The multi-tenant HTTP profile is unchanged and still carries
+  neither.
+
+- **Breaking (CLI):** `bitrouter route --json` changes shape. `bitrouter route`
+  and the MCP `route_preview` tool are now one action over one report type, and
+  the report keeps `route_preview`'s richer vocabulary — it was the superset,
+  and it is the one an agent reads. Duplicated keys for one fact are exactly the
+  drift the unification exists to remove, so the old names are gone rather than
+  deprecated.
+
+  ```jsonc
+  // before — `bitrouter route gpt-5 --json`
+  {
+    "model": "gpt-5",
+    "resolved_via": "config",
+    "chain": [{ "provider": "openai", "service_id": "gpt-5", "protocol": "openai" }]
+  }
+
+  // after
+  {
+    "requested_model": "gpt-5",          // was `model`
+    "effective_model": "gpt-5-codex",    // new: what the policy table selects
+    "effective_effort": "high",          // new, omitted when policy selects none
+    "resolved_via": "config",            // now live | config | zero_config
+                                         // (was live daemon | config | zero-config)
+    "policy_decision": { … },            // new, omitted on the live-daemon path
+    "provider_chain": [                  // was `chain`
+      { "provider": "openai", "service_id": "gpt-5-codex", "api_protocol": "openai" }
+                                         // `protocol` → `api_protocol`
+    ],
+    "estimated_cost": { … }              // new, omitted when the registry prices nothing
+  }
+  ```
+
+  Migration is mechanical: `.model` → `.requested_model` (read
+  `.effective_model` if you want what would actually run), `.chain` →
+  `.provider_chain`, `.chain[].protocol` → `.provider_chain[].api_protocol`,
+  and `.resolved_via == "live daemon"` → `"live"` / `"zero-config"` →
+  `"zero_config"`. The `resolved_via` values are now the same words
+  `bitrouter models --json` uses for the same fact (`live` / `config`), instead
+  of two spellings that almost matched.
+
+  Two behaviour fixes ride along. `bitrouter route` now runs the **policy
+  table** in its config fallback, as `route_preview` always did — it could
+  previously name a model the daemon would never pick, which is why
+  `effective_model` is a separate field from `requested_model`. (The
+  live-daemon path is unchanged on both surfaces: the daemon's `route` verb
+  resolves the model as given, so a `live` answer reports
+  `effective_model == requested_model` and no `policy_decision`.) And
+  `route_preview` now resolves config **per call** instead of snapshotting it at
+  `bitrouter mcp serve` start, so an edited `bitrouter.yaml` is visible to a
+  long-lived MCP server, as it always was to the CLI.
+
+- **Breaking (Rust API):** `bitrouter_mcp::capabilities::routing` is gone. The
+  routing port moved to `bitrouter_mcp::actions::route` and is now typed:
+  `RoutingQuery::preview(RoutePreviewArgs) -> serde_json::Value` becomes
+  `RouteQuery::route(RouteInput) -> RouteReport`. `ServeOptions::routing` takes
+  the new trait object.
+
+- **Breaking (MCP tools):** the origin server's `status` and `list_models`
+  tools return the same report types as `bitrouter status` and
+  `bitrouter models`, and advertise them as `output_schema`.
+  - `list_models` was a bare `[{ id, provider }]` that kept only the **first**
+    provider of each model. It is now
+    `{ models: [{ id, providers: [...] }], resolved_via: "live" | "config" }`
+    — the whole fallback chain per model — with an optional `provider`
+    argument (the same filter as `bitrouter models --provider`). On
+    stdio + local it reads the daemon's live routing table over the control
+    socket and falls back to a config parse, so it **answers with no daemon
+    running**; `resolved_via` says which view it is.
+  - `status` was a `GET /v1/models` in disguise (`{ listen, models, providers }`
+    locally, the raw balance on cloud). It is now
+    `{ running, pid?, listen?, models?, providers, socket?, spend? }`: a
+    stopped daemon is `running: false`, **not a tool error**, and `spend`
+    carries two independent halves — `spent` (today's locally metered
+    estimate, with `unpriced` saying how partial it is) and `limit` (a
+    metered account's remaining credit). It is no longer served on HTTP +
+    local — nothing on that transport can read the daemon's control socket —
+    and no longer carries the free-text spend footer, which is now the typed
+    `spend` block (`complete` keeps its footer).
+
+- `bitrouter status --json` gains `providers[]` (the distinct providers
+  behind the routable models) and `spend`; `bitrouter models --json` gains
+  `resolved_via`. Both are additive — every pre-existing key is unchanged.
+  `bitrouter models` now prefers the running daemon's catalog, like
+  `bitrouter route`, and falls back to the config parse it always used;
+  standalone answers (`models`, `route`, `spawn`'s Codex preflight) now
+  resolve a config the way the daemon does, so a subscription-backed
+  provider (`claude-code`, `google-ai`) is no longer missing from them.
+
+- **Breaking (Rust API):** `bitrouter_mcp::backend::{ModelInfo, StatusInfo,
+  ProviderStatus}` and `Backend::{list_models, status}` are gone; `Backend`
+  gains `status_port` / `models_port` (`Option<Arc<dyn StatusQuery>>` /
+  `Option<Arc<dyn ModelsQuery>>`), `Builder::completion_local` is replaced by
+  `completion(Arc<LocalBackend>)` + `models(...)`, and `ServeOptions` gains
+  `status` and `models`. `bitrouter_sdk::language_model::routing::ModelInfo`
+  is the element type of the shared report and now derives `JsonSchema`,
+  `PartialEq` and `Eq`.
+
 - **Breaking (CLI):** `bitrouter skills add`, `remove`, `find`, and `update` are
   removed, along with the `bitrouter-skills` crate that backed them. Installing
   skills is the ecosystem's job — `npx skills add`, or the Claude Code / Codex

@@ -5,15 +5,35 @@
 
 use std::sync::Arc;
 
+use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
+use bitrouter_mcp::backend::CallerAuth;
+use bitrouter_mcp::backend::local::LocalBackend;
 use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillFileBody};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
-use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult, SkillEntry, SkillResource};
+use bitrouter_sdk::mcp::skills::{
+    GetSkillResult, ListSkillsResult, SkillEntry, SkillResource, SkillResources,
+};
 use rmcp::model::{
     CacheScope, CustomRequest, CustomResult, ListToolsResult, PaginatedRequestParams, ResultType,
     ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
+
+/// A stopped daemon, so the stdio tests see the same tool surface the shipping
+/// stdio profile has (where `bitrouter` injects a control-socket port) without
+/// needing a daemon on the machine running them.
+struct FixtureStatus;
+
+#[async_trait::async_trait]
+impl StatusQuery for FixtureStatus {
+    async fn status(&self, _: &CallerAuth) -> Result<StatusReport, ToolError> {
+        // No spend either: a fixture has no metering database to read one
+        // from, and inventing a figure is the one thing a spend report may
+        // not do.
+        Ok(StatusReport::stopped("/tmp/bitrouter.sock".into(), None))
+    }
+}
 
 /// A fixed one-skill catalog, so the roundtrip tests exercise the SEP-2640
 /// surface without needing skills installed on the machine running them.
@@ -33,18 +53,20 @@ impl FixtureCatalog {
         SkillEntry {
             uri: Self::SKILL_MD.into(),
             frontmatter,
-            resources: Some(vec![
+            resources: SkillResources::Enumerated(vec![
                 SkillResource {
                     uri: Self::SKILL_MD.into(),
                     digest:
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .into(),
+                    size: 14,
                 },
                 SkillResource {
                     uri: Self::GUIDE.into(),
                     digest:
                         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                             .into(),
+                    size: 7,
                 },
             ]),
             extra: serde_json::Map::new(),
@@ -228,8 +250,14 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // One `LocalBackend`, wired as both the completion backend and the
+    // `list_models` port — the shape the shipping stdio profile has, minus the
+    // control-socket models port the CLI injects on top.
+    let backend = Arc::new(LocalBackend::new("http://127.0.0.1:4356"));
     let server = BitrouterMcp::builder()
-        .completion_local("http://127.0.0.1:4356")
+        .completion(backend.clone())
+        .models(backend)
+        .status(Arc::new(FixtureStatus))
         .build();
     bitrouter_mcp::server::serve_stdio(server, None).await
 }

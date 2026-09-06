@@ -6,11 +6,13 @@ use anyhow::{Context, Result};
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::language_model::routing::ModelInfo;
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use crate::auth::{NewApiKey, db as auth_db, generate};
 use crate::daemon::RouteHop;
-use crate::output::reports::skills::{SkillEntry, SkillInitReport, SkillsListReport};
+use crate::output::reports::skills::SkillInitReport;
+use bitrouter_mcp::actions::skills::SkillsReport;
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Mirrors
 /// the zero-config in-memory default so a user who runs `init` and
@@ -184,38 +186,49 @@ pub async fn key_sign(
     })
 }
 
-/// `bitrouter models [--provider <id>]` — list routable models, optionally
-/// filtered to those a given provider declares.
-pub async fn list_models(
-    config: &Config,
-    provider_filter: Option<&str>,
-) -> Result<Vec<(String, Vec<String>)>> {
-    let mut resolved = config.clone();
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
-    // Best-effort `/models` discovery for any provider with
-    // `auto_discover: true`. Zero-config built-ins set the flag, so
-    // this turns `bitrouter models` from "empty" into a useful catalog
-    // when the user has the API key set. Failures log and leave the
-    // provider with no models — no error bubbles to the user.
+/// The routable catalog a config alone can describe — the fallback the
+/// `list_models` action uses when no daemon answers.
+///
+/// Unfiltered by design: `bitrouter models --provider` and the MCP tool's
+/// `provider` argument are one filter applied to the shared report
+/// (`ModelsReport::filtered`), so neither surface can narrow it its own way.
+///
+/// **Does network I/O.** `discover_models` probes each `auto_discover: true`
+/// provider's `/models` endpoint, which is what turns a zero-config install
+/// from "empty" into a useful catalog. Per-request timeouts bound it (2s
+/// connect, 5s total) and failures leave the provider with no models rather
+/// than bubbling an error, but a caller on a hot path should prefer the
+/// daemon: see `crate::actions::models`.
+pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
+    let mut resolved = resolve_static(config.clone());
     bitrouter_sdk::config::discover_models(&mut resolved).await;
-    let table = ConfigRoutingTable::from_config(resolved);
-    Ok(table
-        .list_models()
-        .into_iter()
-        .filter(|m| match provider_filter {
-            Some(p) => m.providers.iter().any(|x| x == p),
-            None => true,
-        })
-        .map(|m| (m.id, m.providers))
-        .collect())
+    Ok(ConfigRoutingTable::from_config(resolved).list_models())
+}
+
+/// A config as the daemon sees it at start-up, minus network discovery: the
+/// built-in provider defaults applied, then every provider with a credential
+/// in the OAuth store re-activated.
+///
+/// The second step is what a plain `apply_builtin_defaults` pass misses. A
+/// subscription / "use your Claude Code session" login stores its credential in
+/// the store, not the config, so the defaults pass marks that provider inactive
+/// for want of an api key and the routing table drops it — and a standalone
+/// answer (`bitrouter models` / `route` with no daemon, `spawn`'s preflight)
+/// would then be missing exactly the providers the daemon routes to. Mirrors
+/// `assemble.rs`; best-effort, an unreadable store is a no-op.
+pub fn resolve_static(mut config: Config) -> Config {
+    bitrouter_providers::apply_builtin_defaults(&mut config);
+    if let Ok(store) = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+    {
+        bitrouter_providers::activate_stored_credential_providers(&mut config, &store);
+    }
+    config
 }
 
 /// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
-    let mut resolved = config.clone();
-    bitrouter_providers::apply_builtin_defaults(&mut resolved);
-    let table = ConfigRoutingTable::from_config(resolved);
+    let table = ConfigRoutingTable::from_config(resolve_static(config.clone()));
     let chain = table
         .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
         .await
@@ -1017,27 +1030,17 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
 // reads the installed-skills directory and scaffolds a `SKILL.md`. See
 // `crate::skills` for the reasoning.
 
-/// Which `.claude/skills` directory a command reads.
-fn skills_root(global: bool) -> Result<crate::skills::root::SkillsRoot> {
-    use crate::skills::root::SkillsRoot;
-    if global {
-        Ok(SkillsRoot::Global)
-    } else {
-        let cwd = std::env::current_dir().context("resolving the current directory")?;
-        Ok(SkillsRoot::Project { project_root: cwd })
-    }
-}
-
-/// `bitrouter skills list` — installed skills under the chosen root.
-pub fn skills_list(global: bool) -> Result<SkillsListReport> {
-    let skills = crate::skills::root::list_installed(&skills_root(global)?)?
-        .into_iter()
-        .map(|(name, path)| SkillEntry {
-            name,
-            path: path.display().to_string(),
-        })
-        .collect();
-    Ok(SkillsListReport { skills })
+/// `bitrouter skills list` — the skills under the chosen root.
+///
+/// One [action](crate::actions::skills), so this leaf and the origin MCP
+/// server's `skills_search` tool return the same report from the same walk. It
+/// gains two things the old single `read_dir` could not do: the `./skills/foo`
+/// and root-level layouts, and a `problem` on any skill that cannot actually be
+/// loaded.
+pub fn skills_list(global: bool) -> Result<SkillsReport> {
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    let roots = crate::skills::root::SkillsRoot::cli_scope(global, cwd)?;
+    Ok(crate::actions::skills::InstalledSkills::new(roots).report())
 }
 
 /// `bitrouter skills init` — scaffold a SKILL.md.
@@ -1466,16 +1469,20 @@ providers:
         bitrouter_sdk::config::parse_with(yaml, |_| None).unwrap()
     }
 
+    /// The config projection is unfiltered and keeps every provider of every
+    /// model — `shared` is declared by both, and both must survive. Filtering
+    /// is the shared report's job (`ModelsReport::filtered`), so that one
+    /// filter serves `bitrouter models --provider` and the MCP tool alike.
     #[tokio::test]
-    async fn list_models_filters_by_provider() {
+    async fn list_models_keeps_every_provider_of_a_model() {
         let cfg = sample_config();
-        let all = list_models(&cfg, None).await.unwrap();
+        let all = list_models(&cfg).await.unwrap();
         assert_eq!(all.len(), 2); // gpt-5, shared
-        let openai_only = list_models(&cfg, Some("openai")).await.unwrap();
-        assert_eq!(openai_only.len(), 2); // gpt-5 + shared (openai declares both)
-        let anthropic_only = list_models(&cfg, Some("anthropic")).await.unwrap();
-        assert_eq!(anthropic_only.len(), 1); // only `shared`
-        assert_eq!(anthropic_only[0].0, "shared");
+        let shared = all.iter().find(|m| m.id == "shared").expect("shared");
+        assert_eq!(
+            shared.providers,
+            vec!["anthropic".to_string(), "openai".to_string()]
+        );
     }
 
     #[tokio::test]
