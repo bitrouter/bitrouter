@@ -273,6 +273,19 @@
       },
       "type": "object"
     },
+    "ChatConfig": {
+      "description": "`bitrouter chat`'s own configuration.",
+      "properties": {
+        "commands": {
+          "description": "Prompt-expansion commands.\n\n`/name args` in `bitrouter chat`, or `bitrouter acp prompt \"/name args\"`,\nsends `prompt` with `$ARGUMENTS` replaced by everything typed after the\nname.\n\nThere is deliberately no key that *runs* anything. A command here\nproduces a prompt and nothing else, which is what lets the registry be\nopen — user-authored, unreviewed — while the registry of commands that\nreach BitRouter's own ports stays closed and guarded.",
+          "items": {
+            "$ref": "#/$defs/PromptCommandConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ChatTokenLimitField": {
       "description": "Chat Completions field used to carry the output-token budget.\n\nOpenAI-compatible providers are split between the legacy `max_tokens`\nspelling and the current `max_completion_tokens` spelling. The canonical\nprompt keeps one semantic token budget; this enum only records which wire\nspelling should be used when the prompt is rendered back to Chat\nCompletions.",
       "oneOf": [
@@ -943,6 +956,29 @@
       },
       "required": [
         "above_input_tokens"
+      ],
+      "type": "object"
+    },
+    "PromptCommandConfig": {
+      "description": "One user-authored command that expands to a prompt.",
+      "properties": {
+        "description": {
+          "default": "",
+          "description": "One line for `/commands`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "What to type after the slash. May not be a name BitRouter answers —\nthat is rejected when the config is loaded, not resolved at runtime.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "The prompt to send. `$ARGUMENTS` is replaced by whatever was typed\nafter the name; a template that uses it twice gets it twice.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "prompt"
       ],
       "type": "object"
     },
@@ -1945,6 +1981,10 @@
       "default": {},
       "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bitrouter agents` CLI (list / check / install). Empty by default.",
       "type": "object"
+    },
+    "chat": {
+      "$ref": "#/$defs/ChatConfig",
+      "description": "The interactive session's own configuration."
     },
     "continuation": {
       "$ref": "#/$defs/ContinuationConfig",
