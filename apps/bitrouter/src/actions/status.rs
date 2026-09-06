@@ -23,8 +23,8 @@ use crate::metering::store::TimeWindow;
 use crate::paths::ConfigSource;
 
 /// The window `status` reports spend over, and the label it carries in the
-/// report. `bitrouter status --requests` and the MCP `complete` footer both
-/// roll up the same day, so the three agent-facing spend surfaces agree.
+/// report. `bitrouter status --requests` rolls up the same day, so the
+/// agent-facing spend surfaces agree.
 const SPEND_WINDOW: TimeWindow = TimeWindow::Today;
 
 /// The `window` label on [`Spent`] — the wire name for [`SPEND_WINDOW`].
