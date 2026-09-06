@@ -1354,6 +1354,59 @@ enum AcpCmd {
         /// The prompt text to send.
         text: String,
     },
+    /// List the slash commands a session offers, and who answers each.
+    ///
+    /// Opens a session, waits briefly for the agent to advertise its
+    /// commands, prints the list, and tears the session down. **No prompt is
+    /// sent.** The session is a fresh one, so this reports what a session with
+    /// this agent *would* offer — it cannot report on a `bitrouter chat`
+    /// already running elsewhere.
+    Commands {
+        /// Agent id — a bundled-catalog id or an entry under `agents:`.
+        #[arg(long)]
+        agent: String,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// How long to wait for the agent's command list, in milliseconds.
+        ///
+        /// An agent that has not answered by then is reported as not having
+        /// answered — distinct from one that answered with an empty list.
+        #[arg(long, value_name = "MS", default_value_t = 2000)]
+        wait_ms: u64,
+        /// Show only the commands one source answers.
+        #[arg(long, value_enum)]
+        source: Option<CommandSourceArg>,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+/// `--source` as clap spells it.
+///
+/// A separate enum from [`bitrouter_mcp::actions::commands::CommandSource`]
+/// so that the wire type owes clap nothing: the report is a schema shared with
+/// the MCP surface, and a `ValueEnum` derive on it would make a CLI concern
+/// part of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum CommandSourceArg {
+    /// BitRouter's own commands.
+    Bitrouter,
+    /// Prompt-expansion commands from the config.
+    Config,
+    /// Commands the agent advertises.
+    Agent,
+}
+
+impl From<CommandSourceArg> for bitrouter_mcp::actions::commands::CommandSource {
+    fn from(arg: CommandSourceArg) -> Self {
+        match arg {
+            CommandSourceArg::Bitrouter => Self::Bitrouter,
+            CommandSourceArg::Config => Self::Config,
+            CommandSourceArg::Agent => Self::Agent,
+        }
+    }
 }
 
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -1743,7 +1796,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Skills { action } => bitrouter::skills::cli::run(action, output),
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
-        Command::Acp { cmd } => acp_cmd(cmd).await,
+        Command::Acp { cmd } => acp_cmd(cmd, output).await,
         Command::Chat {
             agent,
             turn_timeout,
@@ -1798,6 +1851,11 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     match action {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            // A `chat.commands` name that shadows one of BitRouter's own is a
+            // configuration error, and this is where a reader expects to be
+            // told — not on the first `bitrouter chat` of the day.
+            let loaded = bitrouter::paths::load_config(&source).await?;
+            bitrouter::actions::session::prompt_commands(&loaded.chat)?;
             validate_config(&source).await
         }
     }
@@ -5010,7 +5068,7 @@ async fn run_launch(
 
 // ===== `bitrouter acp …` (per-session ACP substrate) =====
 
-async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
+async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
         AcpCmd::Serve {
             agent,
@@ -5058,6 +5116,30 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             };
             let tally = bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
             exit_with(tally.exit_code())
+        }
+        AcpCmd::Commands {
+            agent,
+            routing,
+            wait_ms,
+            source: only,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options: bitrouter::acp_cli::launch_options(None),
+                routing,
+            };
+            let mut report = bitrouter::acp_cli::commands(ctx, wait_ms).await?;
+            if let Some(only) = only {
+                let only = only.into();
+                report.commands.retain(|row| row.source == only);
+            }
+            output.emit(&report)?;
+            Ok(())
         }
     }
 }
@@ -5968,6 +6050,71 @@ mod tests {
             .routing(Arc::new(Stub))
             .skills(Arc::new(Stub))
             .build()
+    }
+
+    /// Every command a session can offer is a row, and every row it names is
+    /// reachable.
+    ///
+    /// Lives here rather than beside the table because it is the only place
+    /// that can see `bitrouter_tui::machine` and `bitrouter_mcp::actions`
+    /// together: the TUI crate depends on nothing of BitRouter's, so the two
+    /// halves of this agreement meet only in the app that wires them.
+    #[test]
+    fn every_tui_command_has_an_actions_row() {
+        use bitrouter_mcp::actions::ACTIONS;
+        use bitrouter_tui::machine::{ALIASES, REDUCER_OWNED};
+
+        let named: Vec<&str> = ACTIONS.iter().filter_map(|row| row.tui_command).collect();
+
+        // 1. The reducer claims only ids the table has, and only ones a
+        //    session can actually type.
+        for owned in REDUCER_OWNED {
+            let row = ACTIONS.iter().find(|row| &row.id == owned);
+            match row {
+                Some(row) => assert!(
+                    row.tui_command.is_some(),
+                    "`{owned}` is dispatched by the reducer but its row carries no \
+                     `tui_command`, so nothing can reach it"
+                ),
+                None => panic!(
+                    "`{owned}` is dispatched by the reducer but is not an `ACTIONS` row. \
+                     Known rows: {:?}",
+                    ACTIONS.iter().map(|row| row.id).collect::<Vec<_>>()
+                ),
+            }
+        }
+
+        // 2. Two rows cannot answer to one name; the resolver would reach
+        //    whichever came first and the other would be unreachable.
+        for (index, name) in named.iter().enumerate() {
+            assert!(
+                !named[index + 1..].contains(name),
+                "two rows both claim `/{name}`; a name reaches one action"
+            );
+        }
+
+        // 3. An alias points at a real name and is not itself one, so an alias
+        //    can never shadow a command.
+        for (alias, target) in ALIASES {
+            assert!(
+                named.contains(target),
+                "alias `/{alias}` points at `{target}`, which no row offers"
+            );
+            assert!(
+                !named.contains(alias),
+                "`/{alias}` is both an alias and a command's own name"
+            );
+        }
+
+        // 4. Every offered row has a line of help. The reducer renders
+        //    `summary` unconditionally, so a missing arm is a blank row.
+        for row in ACTIONS.iter().filter(|row| row.tui_command.is_some()) {
+            assert!(
+                !bitrouter::actions::session::summary_for(row.id).is_empty(),
+                "`{}` is offered in a session but `summary_for` has no arm for it",
+                row.id
+            );
+        }
     }
 
     /// Every remotable action must be inventoried. A tool added to the origin

@@ -2,9 +2,9 @@
 //! No I/O — unit-tested without spawning a process.
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, PermissionOption, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
-    RequestPermissionOutcome, SelectedPermissionOutcome, SessionUpdate, ToolCallContent,
-    ToolCallStatus,
+    AvailableCommandInput, ContentBlock, PermissionOption, PermissionOptionKind, PlanEntryPriority,
+    PlanEntryStatus, RequestPermissionOutcome, SelectedPermissionOutcome, SessionUpdate,
+    ToolCallContent, ToolCallStatus,
 };
 
 /// Tool execution status, mirroring `bitrouter_gui_core::protocol::ToolStatus`.
@@ -61,6 +61,13 @@ pub struct AgentCommand {
     pub name: String,
     /// Human-readable description of what the command does.
     pub description: String,
+    /// What to type after the name, when the command takes an argument.
+    ///
+    /// ACP carries this inside `input`; it is flattened here so an NDJSON
+    /// consumer sees it without having to know the input union's shape.
+    /// `None` when the command takes nothing, or when a future input variant
+    /// this build does not know about carries no hint.
+    pub hint: Option<String>,
 }
 
 /// One session configuration option and the value it currently holds.
@@ -227,6 +234,15 @@ pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
                 .map(|c| AgentCommand {
                     name: c.name,
                     description: c.description,
+                    // `AvailableCommandInput` is `#[non_exhaustive]`: a variant
+                    // this build does not know yields no hint rather than
+                    // failing to compile against a newer schema.
+                    hint: c.input.and_then(|input| match input {
+                        AvailableCommandInput::Unstructured(unstructured) => {
+                            Some(unstructured.hint)
+                        }
+                        _ => None,
+                    }),
                 })
                 .collect(),
         }),
@@ -494,6 +510,7 @@ mod tests {
                 commands: vec![AgentCommand {
                     name: "create_plan".into(),
                     description: "draft a plan for the task".into(),
+                    hint: None,
                 }],
             })
         );

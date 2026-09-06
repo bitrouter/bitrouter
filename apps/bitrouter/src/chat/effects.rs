@@ -123,7 +123,21 @@ impl<'a> Wire<'a> {
             // read differently without parsing text.
             Effect::SetRoute(route) => self.replies.push_back(Action::Routed(
                 match self.client.route_set(self.session_id, &route).await {
-                    Ok(in_force) => Ok(in_force),
+                    Ok(in_force) => Ok(Some(in_force)),
+                    Err(RouteError::InvalidRoute(message)) => {
+                        Err(format!("route unchanged: {message}"))
+                    }
+                    Err(RouteError::Unavailable(message)) => Err(format!(
+                        "route unchanged: route control is unavailable ({message})"
+                    )),
+                    Err(RouteError::Other(error)) => Err(format!("route unchanged: {error:#}")),
+                },
+            )),
+            // `Ok(None)` is the lease being gone: the footer stops naming a
+            // route, because what is in force is now the daemon's own choice.
+            Effect::ResetRoute => self.replies.push_back(Action::Routed(
+                match self.client.route_reset(self.session_id).await {
+                    Ok(()) => Ok(None),
                     Err(RouteError::InvalidRoute(message)) => {
                         Err(format!("route unchanged: {message}"))
                     }

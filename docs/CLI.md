@@ -558,7 +558,47 @@ Routing flags are shared verbatim with `acp serve` / `acp prompt`.
 | Input | Effect |
 |---|---|
 | `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
-| `/commands` | List the slash commands the **agent** advertises, with their descriptions. |
+| `/route reset` | Drop this session's route lease, so the daemon's own choice applies again. The footer stops naming a route. |
+| `/status` | Whether the daemon is up, what it is serving, and what it has spent. The same report `bitrouter status --human` prints, rendered with the palette off. |
+| `/models [provider]` | The models this config can route to, optionally only those a provider declares. What `bitrouter models --human` prints. |
+| `/preview <model>` | Where that model would be routed, and through which provider chain — without sending anything. What `bitrouter route <model> --human` prints. |
+| `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
+| `/help` | The same list. An alias for `/commands`. |
+
+**Your own commands.** `chat.commands` in `bitrouter.yaml` defines
+prompt-expansion commands — `/name args` sends `prompt` with `$ARGUMENTS`
+replaced by whatever followed the name:
+
+```yaml
+chat:
+  commands:
+    - name: review
+      description: review a diff
+      prompt: "Review this change and list what would break: $ARGUMENTS"
+```
+
+They expand identically in `bitrouter chat` and in `bitrouter acp prompt`.
+There is deliberately **no key that runs anything**: an entry here produces a
+prompt and nothing else, which is what lets this registry be yours and
+unreviewed while the commands that reach BitRouter's own ports stay a closed,
+guarded set. A name that collides with one of BitRouter's own — or with
+`/help` — is a configuration error, reported by `bitrouter config validate` and
+refused at launch rather than resolved by a precedence rule.
+
+`/commands` reports three outcomes for the agent's half of the list, because
+they mean different things: the commands it advertised, *"advertises no
+commands"* when it answered with an empty list, and *"had not sent its command
+list yet"* when it had not answered at all. `bitrouter acp commands --agent
+<id>` prints the same report headlessly — it opens a session of its own to ask,
+so it describes what a session with that agent **would** offer rather than one
+already running elsewhere.
+
+BitRouter's commands are listed **above** the agent's, and a name BitRouter
+answers wins: if the agent advertises a command of the same name, `/commands`
+lists it marked *shadowed* rather than dropping it, so which half of the list
+answers a name is visible rather than inferred. A command the session cannot
+run — `/route` under `--direct` — is still listed, with the reason, and typing
+it answers with that reason rather than failing.
 
 **The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
 

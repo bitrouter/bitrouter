@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 
 use agent_client_protocol::schema::v1::SessionUpdate;
-use bitrouter_sdk::acp::client::{AcpClient, RouteMethod};
+use bitrouter_sdk::acp::client::AcpClient;
 
 use crate::chat::effects::Wire;
 
@@ -78,18 +78,6 @@ pub(crate) fn report_failed_launch() {
     let _ = write_session_log_tail(&mut std::io::stderr());
 }
 
-/// Whether this session's route can be changed from the picker.
-///
-/// The contract's three-condition gate, asked of what the controller
-/// advertised at handshake and of nothing else: the picker lists with one
-/// method and sets with another, so both must be there. A controller with no
-/// local control binding — `--direct`, an explicit `--base-url` — advertises
-/// neither, and the picker is then absent rather than dead.
-pub(crate) fn can_reroute(client: &AcpClient) -> bool {
-    let capability = client.route_control();
-    capability.allows(RouteMethod::List) && capability.allows(RouteMethod::Set)
-}
-
 /// Draw a launched session until it ends.
 ///
 /// Everything this needs was decided by the caller: the harness is running
@@ -115,6 +103,7 @@ pub(crate) async fn run(
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
     via: Option<String>,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     let (mut view, mut stdin) = match open_terminal(via) {
         Ok(terminal) => terminal,
@@ -133,6 +122,7 @@ pub(crate) async fn run(
         session_id,
         agent_id,
         recorder,
+        surface,
     )
     .await;
 
@@ -223,6 +213,7 @@ async fn drive(
     session_id: &str,
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<bool> {
     use agent_client_protocol::schema::v1::{
         ContentBlock, PromptRequest, PromptResponse, SessionId, TextContent,
@@ -264,7 +255,13 @@ async fn drive(
         }
     });
 
-    let mut state = State::new(can_reroute(client));
+    let crate::actions::session::SessionSurface {
+        commands,
+        prompt_commands,
+        ports,
+    } = surface;
+    let mut state = State::new(commands);
+    state.prompt_commands = prompt_commands;
     let mut schedule = Schedule::default();
     // One ticker for the session rather than one per turn. The tick arm is
     // gated on `state.streaming()`, so `tokio` never polls it at an idle
@@ -366,9 +363,33 @@ async fn drive(
                 // journal that holds the agent's own command list and the
                 // machine never reads the journal.
                 Effect::Notice(Notice::Commands) => {
-                    view.notice_lines(bitrouter_tui::render::session::commands(
-                        bitrouter_tui::view::lock(&shared).commands(),
-                    ));
+                    // The same function and the same renderer the headless
+                    // leaf uses, so the two cannot describe one session
+                    // differently.
+                    let report = {
+                        let journal = bitrouter_tui::view::lock(&shared);
+                        crate::actions::commands::commands_report(
+                            &state.commands,
+                            &state.prompt_commands,
+                            journal.commands(),
+                            journal.commands_received(),
+                        )
+                    };
+                    let rendered = crate::output::Output::new(crate::output::Format::Human)
+                        .render_to_vec(&report);
+                    view.notice_lines(bitrouter_tui::render::session::plain_lines(&rendered));
+                }
+                // One renderer for all three surfaces. `render_to_vec` hard-codes
+                // `Theme::none()`, so no escape sequence can reach the
+                // differential writer's screen, and the driver never names the
+                // report type it is rendering.
+                Effect::Action { action, args } => {
+                    let rendered = match ports.run(action, &args).await {
+                        Ok(report) => crate::output::Output::new(crate::output::Format::Human)
+                            .render_to_vec(report.as_ref()),
+                        Err(error) => format!("{error}").into_bytes(),
+                    };
+                    view.notice_lines(bitrouter_tui::render::session::plain_lines(&rendered));
                 }
                 Effect::ClearNotice => view.clear_notice(),
                 Effect::Modal(Some(row)) => view.open_modal(row),
@@ -396,7 +417,8 @@ async fn drive(
                 Effect::Resolve { .. }
                 | Effect::Cancel
                 | Effect::ListRoutes
-                | Effect::SetRoute(_) => {}
+                | Effect::SetRoute(_)
+                | Effect::ResetRoute => {}
             }
         }
     }
@@ -446,11 +468,18 @@ pub(crate) async fn chat_plain(
     session_id: &str,
     agent_id: &str,
     recorder: Option<std::sync::Arc<bitrouter_telemetry::otel::acp::AcpSpanRecorder>>,
+    surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     use std::io::Write as _;
 
     use futures::FutureExt as _;
     use tokio::io::AsyncBufReadExt as _;
+
+    let crate::actions::session::SessionSurface {
+        commands,
+        prompt_commands,
+        ports,
+    } = surface;
 
     let mut out = std::io::stdout();
     let mut transcript = bitrouter_tui::plain::Transcript::default();
@@ -473,10 +502,41 @@ pub(crate) async fn chat_plain(
         if line.trim().is_empty() {
             continue;
         }
-        if line.trim() == "/route" {
-            writeln!(out, "/route needs a terminal").context("writing to stdout")?;
-            continue;
-        }
+        // The same resolver the terminal runs, so a name means one thing on
+        // both. What differs is only what can be *done* with the result: the
+        // picker and the journal need keys and a screen.
+        let line = match bitrouter_tui::machine::resolve(&commands, &prompt_commands, &line) {
+            bitrouter_tui::machine::Resolution::Owned { action, .. } => {
+                let name = commands
+                    .iter()
+                    .find(|command| command.action == action)
+                    .map_or(action, |command| command.name);
+                writeln!(out, "/{name} needs a terminal").context("writing to stdout")?;
+                continue;
+            }
+            // The same ports, rendered the same way; a pipe gets the bytes
+            // where a terminal gets a notice.
+            bitrouter_tui::machine::Resolution::Action { action, args } => {
+                match ports.run(action, &args).await {
+                    Ok(report) => out
+                        .write_all(
+                            &crate::output::Output::new(crate::output::Format::Human)
+                                .render_to_vec(report.as_ref()),
+                        )
+                        .context("writing to stdout")?,
+                    Err(error) => writeln!(out, "{error}").context("writing to stdout")?,
+                }
+                continue;
+            }
+            bitrouter_tui::machine::Resolution::Unavailable(reason) => {
+                writeln!(out, "{reason}").context("writing to stdout")?;
+                continue;
+            }
+            // Expanded identically here and in the terminal, through the one
+            // resolver: a config command means the same thing on both.
+            bitrouter_tui::machine::Resolution::Expand(prompt)
+            | bitrouter_tui::machine::Resolution::Prompt(prompt) => prompt,
+        };
         prompts = prompts.saturating_add(1);
         transcript.apply(SessionUpdate::UserMessageChunk(prompt_chunk(
             &line, prompts,

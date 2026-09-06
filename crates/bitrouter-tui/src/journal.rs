@@ -123,6 +123,12 @@ pub struct Journal {
     tools: HashMap<ToolCallId, ToolCall>,
     plan: Option<Plan>,
     commands: Vec<AvailableCommand>,
+    /// Whether an `available_commands_update` has arrived at all.
+    ///
+    /// Separate from `commands` being empty, because the two mean different
+    /// things: an agent that has said nothing yet may still speak, and one
+    /// that said *none* will not.
+    commands_received: bool,
     mode: Option<SessionModeId>,
     config: Vec<SessionConfigOption>,
     title: Option<String>,
@@ -177,6 +183,7 @@ impl Journal {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
+                self.commands_received = true;
             }
             SessionUpdate::CurrentModeUpdate(update) => self.mode = Some(update.current_mode_id),
             SessionUpdate::ConfigOptionUpdate(update) => self.config = update.config_options,
@@ -225,6 +232,12 @@ impl Journal {
     /// The slash commands the agent offers.
     pub fn commands(&self) -> &[AvailableCommand] {
         &self.commands
+    }
+
+    /// Whether the agent has sent its command list at all — as distinct from
+    /// having sent an empty one.
+    pub fn commands_received(&self) -> bool {
+        self.commands_received
     }
 
     /// The session's current mode, if the agent reports one.

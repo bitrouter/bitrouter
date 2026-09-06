@@ -207,7 +207,26 @@ The interactive counterpart to `acp serve`: same launch, same routing flags, sam
 
 Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
 
-**In-session commands**: `/route` opens the route picker; `/commands` lists the slash commands the agent itself advertises.
+**In-session commands**: `/status` prints what `bitrouter status --human`
+prints, through the same action port the CLI leaf and the MCP tool use — it is
+rendered once, on request, and never held or polled; `/models [provider]` and
+`/preview <model>` print what `bitrouter models` and `bitrouter route` print;
+`/route` opens the route picker; `/route reset` drops
+the session's route lease so the daemon's default applies again; `/commands`
+(alias `/help`, headless twin `bitrouter acp commands --agent <id>`, which opens
+its own session to ask and so cannot report on one already running) lists
+everything the session offers — BitRouter's own commands
+first, then the agent's. A local name wins over an agent command of the same
+name, and the shadowed one is listed and marked rather than hidden. A command
+whose requirement is unmet is listed with the reason and answers with it.
+
+**Your own commands**: `chat.commands` in `bitrouter.yaml` takes
+`{name, description, prompt}` entries; `/name args` sends `prompt` with
+`$ARGUMENTS` replaced by what followed the name, identically in `bitrouter
+chat` and `bitrouter acp prompt`. There is deliberately no key that runs
+anything — an entry produces a prompt, never a command. A name that collides
+with one of BitRouter's own (or `/help`) is refused at launch and by
+`bitrouter config validate`.
 
 **A scrolled-off row can be stale**: rows are repainted only while they are on screen, so a tool call that scrolls away mid-run keeps the status it had when it left. The renderer will not clear your scrollback to fix that. `Ctrl-L` repaints what is on screen.
 

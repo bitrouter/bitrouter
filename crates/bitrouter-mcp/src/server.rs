@@ -1254,6 +1254,12 @@ mod tests {
     /// tools read its installed-skills root, so neither means anything to a
     /// multi-tenant caller. Nor may it regrow an inference tool: this transport
     /// is not what completions go over.
+    ///
+    /// The two literal assertions say *which* tools; the third says *why* they
+    /// are the only two, by reading the reason off the table instead of
+    /// restating it here. A tool wired onto this profile without its row being
+    /// `Portable` fails the third assertion naming the row, which is the
+    /// failure a hand-written list cannot give.
     #[test]
     fn http_profile_never_carries_host_bound_tools() {
         assert_eq!(
@@ -1268,6 +1274,25 @@ mod tests {
             tool_names(&http_profile(Arc::new(StatuslessBackend))),
             ["list_models"]
         );
+        for tool in tool_names(&http_profile(Arc::new(StubBackend))) {
+            let Some(row) = crate::actions::ACTIONS
+                .iter()
+                .find(|action| action.mcp_tool == Some(tool.as_str()))
+            else {
+                panic!(
+                    "the HTTP profile carries `{tool}`, which has no `ACTIONS` row. Every \
+                     remotable action is inventoried before it is served"
+                )
+            };
+            assert_eq!(
+                row.reach,
+                crate::actions::Reach::Portable,
+                "the HTTP profile carries `{tool}`, but its row `{}` is `{:?}`. Only \
+                 `Portable` rows may be served to a caller on another host",
+                row.id,
+                row.reach
+            );
+        }
     }
 
     /// A stopped daemon is a *result*, not a tool error: an agent polling for

@@ -7,7 +7,7 @@
 //! | Variant | Where |
 //! |---|---|
 //! | `Plan` | the document, in order, patched in place like a tool call |
-//! | `AvailableCommandsUpdate` | listed on request, because a list of commands is not a thing to keep on screen |
+//! | `AvailableCommandsUpdate` | the journal holds it; the *app* renders it, through the report `bitrouter acp commands` shares, so one session is not described two ways |
 //! | `CurrentModeUpdate` | the footer |
 //! | `ConfigOptionUpdate` | the footer |
 //! | `SessionInfoUpdate` | the footer, as the title |
@@ -18,8 +18,8 @@
 //! unconditional in v1.
 
 use agent_client_protocol_schema::v1::{
-    AvailableCommand, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionConfigKind,
-    SessionConfigOption, SessionModeId, UsageUpdate,
+    Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionConfigKind, SessionConfigOption,
+    SessionModeId, UsageUpdate,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -61,32 +61,47 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
     ])
 }
 
-/// The agent's own slash commands.
+/// Plain bytes as lines, one `Line` per line of text.
 ///
-/// Listed when asked for rather than kept on screen: the list is static for
-/// most of a session and long for some agents, and rows on screen are rows the
-/// transcript does not get.
-pub fn commands(commands: &[AvailableCommand]) -> Vec<Line<'static>> {
-    if commands.is_empty() {
-        return vec![Line::from(Span::styled(
-            "this agent advertises no commands",
-            Style::default().fg(Color::DarkGray),
-        ))];
+/// The seam between a report the CLI rendered and the screen. It lives here
+/// rather than app-side because `apps/bitrouter` deliberately has no `ratatui`
+/// dependency — the app forwards `Vec<Line>` it never names. Taking bytes
+/// rather than a report is also what lets the chat guard assert the driver
+/// cannot name, and therefore cannot retain, a report type.
+pub fn plain_lines(bytes: &[u8]) -> Vec<Line<'static>> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| Line::from(expand_tabs(line)))
+        .collect()
+}
+
+/// Expand tabs to the next eight-column stop.
+///
+/// A CLI report may hold a real tab — `bitrouter models --human` separates its
+/// two columns with one so a shell can `cut -f1`, which is right for a pipe and
+/// unsafe here. The differential writer measures a row with `unicode-width`,
+/// where a tab counts one column, while the terminal advances the cursor to the
+/// next tab stop; the two disagree and the screen model drifts. Expanding at
+/// this seam is what keeps the writer's arithmetic true, and it puts the same
+/// columns on screen that the terminal would have shown.
+fn expand_tabs(line: &str) -> String {
+    const STOP: usize = 8;
+    if !line.contains('\t') {
+        return line.to_string();
     }
-    let mut lines = vec![Line::from(Span::styled(
-        format!("commands · {}", commands.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    lines.extend(commands.iter().map(|command| {
-        Line::from(vec![
-            Span::styled(
-                format!("  /{}", command.name),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::raw(format!("  {}", command.description)),
-        ])
-    }));
-    lines
+    let mut out = String::with_capacity(line.len());
+    let mut column = 0;
+    for character in line.chars() {
+        if character == '\t' {
+            let pad = STOP - (column % STOP);
+            out.extend(std::iter::repeat_n(' ', pad));
+            column += pad;
+        } else {
+            out.push(character);
+            column += unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        }
+    }
+    out
 }
 
 /// Mode, configuration, and title, as spans for the caller's footer row.
@@ -320,29 +335,23 @@ mod tests {
         assert!(out.contains("· delete the old renderer (low)"), "{out:?}");
     }
 
-    /// `AvailableCommandsUpdate` renders — the surface that matters most,
-    /// because `/route` is ours and everything else the agent offers was
-    /// invisible.
+    /// A report's tabs become spaces before they reach the screen.
+    ///
+    /// The writer measures rows with `unicode-width`, where a tab is one
+    /// column, and the terminal advances to the next tab stop. Left alone the
+    /// two disagree and every row after the tab is misplaced.
     #[test]
-    fn available_commands_render_with_their_descriptions() {
-        let rendered = commands(&[
-            AvailableCommand::new("compact", "summarize the conversation"),
-            AvailableCommand::new("init", "write an AGENTS.md"),
-        ]);
-        let out = text(&rendered);
-        assert!(out.contains("commands · 2"), "{out:?}");
+    fn plain_lines_expand_tabs_to_the_next_stop() {
+        let rendered = plain_lines(b"demo-model\tdemo\nab\tcd\n");
+        let text: Vec<String> = rendered
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["demo-model      demo", "ab      cd"]);
         assert!(
-            out.contains("/compact  summarize the conversation"),
-            "{out:?}"
+            !text.iter().any(|line| line.contains('\t')),
+            "no tab may reach the writer: {text:?}"
         );
-        assert!(out.contains("/init  write an AGENTS.md"), "{out:?}");
-    }
-
-    /// An agent that advertises none says so, rather than rendering a heading
-    /// over nothing.
-    #[test]
-    fn no_commands_says_so() {
-        assert!(text(&commands(&[])).contains("no commands"));
     }
 
     /// `CurrentModeUpdate` renders, in the footer.
