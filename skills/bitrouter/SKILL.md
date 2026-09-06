@@ -127,10 +127,10 @@ bitrouter launch -a claude
 bitrouter launch -a codex -- -p "summarize this repo"
 ```
 
-`-a` accepts `claude`, `codex`, `opencode`, and `pi` (catalog ids `claude-acp`,
-`codex-acp`, `pi-acp` also resolve). Everything after `--` is forwarded verbatim,
-and a session spend summary prints on exit. For durable wiring instead of a
-wrapper, see the harness references.
+`-a` accepts any catalog harness with an interactive binary: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, and `agy`
+(catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp`, and `antigravity` also resolve).
+`grok` and `agy` are own-auth launches: not redirected or metered. Everything
+after `--` is forwarded verbatim, and a session spend summary prints on exit.
 
 Leave the harness's own model on its subscription and let BitRouter carry the
 rest — subagents, bulk work, models the plan does not include. Pinning the whole
@@ -189,11 +189,8 @@ ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
-- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
-  everything else `providers login <id>`; there is no top-level `login`.
-- **`init --harness` only accepts `claude` and `codex`**; `launch -a` adds
-  `opencode` and `pi`. `hermes`, `openclaw`, `grok`, and `agy` are no longer
-  `launch`-supported — run them directly or via `spawn`; they remain providers.
+- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow); everything else `providers login <id>`; there is no top-level `login`.
+- **`init --harness` only accepts `claude` and `codex`**; `launch -a` accepts every catalog harness with an interactive binary. `grok` and `agy` use own auth and are not routed or metered; `opencode`, `pi`, `hermes`, and `openclaw` route through synthesized config.
 - **`providers add/remove/use/test/stats` and `bitrouter doctor` do not exist.**
   Manage with `providers list|login|logout` + `bitrouter.yaml`/`reload`; diagnose
   with `status`, `route <model>`, `models`, `~/.bitrouter/bitrouter.log`.

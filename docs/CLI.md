@@ -419,7 +419,7 @@ manifest with a `digest` and a byte `size` per file.
 
 Spend reaches an MCP client as **typed structured content** under `status`'s
 `spend`, read from the local metering database — the same ledger
-`bitrouter status` and `bitrouter cost` report from, so the surfaces cannot
+`bitrouter status` and `bitrouter status --requests` report from, so the surfaces cannot
 disagree about what has been spent.
 
 ### `bitrouter mcp install`
@@ -621,7 +621,7 @@ launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skil
 launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
 ```
 
-`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
+`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp`, and `antigravity` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
 
 | Harness | How it reaches BitRouter |
 | --- | --- |
@@ -1074,7 +1074,7 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
+`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for Cloud API requests that do not yet have typed CLI sugar; access is governed by the signed-in credential's scopes.
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
@@ -1109,7 +1109,7 @@ bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
 
 With explicit `GET`, fields are query parameters. Otherwise fields form a JSON body unless `--input` owns the body. Only one consumer may read stdin. Non-TTY response bytes and SSE are streamed unchanged; interactive JSON is pretty-printed. On HTTP 4xx/5xx, the response body remains on stdout, the diagnostic goes to stderr, and the process exits non-zero.
 
-Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. Documented endpoints include `/v1/models`, `/v1/providers`, `/v1/stats/usage`, `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, Google-style `:generateContent` / `:streamGenerateContent` routes under `/v1beta/models/*`, namespace-scoped management routes under `/v1/namespaces/*`, and user-level routes under `/v1/account`, `/v1/billing/*`, and `/v1/byok/*`.
+Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. The endpoint must be relative to the signed-in Cloud origin; available paths are governed by the Cloud API contract and the credential's scopes.
 
 This first release intentionally omits `gh api`'s GraphQL, pagination/slurp, `--jq`, Go templates, cache, hostname, preview, and placeholder expansion features. See the [Cloud API guide](/docs/guides/cloud-api) for copyable requests.
 
@@ -1166,7 +1166,7 @@ bitrouter cloud billing checkout --amount-cents <N> [--json]
 
 `checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter cloud login` to request it.
 
-Use `bitrouter cloud api /v1/billing/transactions` for the billing ledger, and `/v1/billing/checkout/sessions/<session-id>/status` for checkout status.
+Use `bitrouter cloud api` for billing ledger and checkout-status calls that do not have typed CLI sugar yet.
 
 ### `bitrouter cloud policy`
 

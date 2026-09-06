@@ -11,9 +11,9 @@ Status: **D1 is SUPERSEDED. Kept for its constraints, not its conclusion.**
 > It was reversed on the axis this document *conceded* rather than answered.
 > D1 below records that SDK placement is "measurably worse on three axes, and
 > the decision is to accept that" — semver, graph position, containment cost —
-> and buys all three with one convenience: cloud already takes `bitrouter-sdk`,
-> so a standalone crate "would be a second published dependency delivering code
-> the first one could carry." That trade was declined once
+> and buys all three with one convenience: a standalone crate would be a second
+> published dependency delivering code the SDK can carry behind a default-off
+> feature. That trade was declined once
 > [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) D4 made the semver cost
 > **permanent**, and once its phase 0 turned the span schema into a declared
 > artifact — which is what let the contract stay while the renderer left. See
@@ -129,13 +129,12 @@ decision is to accept that, not to deny it:
   tool, `public-api-deps.txt`, and most of this document exist because the
   code is now public-API-adjacent.
 
-What buys those costs is a single consumer fact: **`bitrouter-cloud` links
-`bitrouter-sdk` and enables an `otel` transport feature.** It is closed-source
-and out-of-tree, so it needs the exporter from a published library crate, and
-it already takes `bitrouter-sdk` — the standalone crate would be a second
-published dependency delivering code the first one could carry. That, and not
-the "domain model rendered into an open standard" sentence, is the load-bearing
-argument for where this lives.
+What buys those costs is a deployment requirement: **hosted BitRouter
+deployments may need the exporter from a published library crate.** A
+standalone crate would be a second published dependency delivering code the SDK
+can carry behind a default-off feature. That, and not the "domain model
+rendered into an open standard" sentence, is the load-bearing argument for
+where this lives.
 
 **Revisit if either fact changes:** if `tracing-subscriber` 0.4 ships, or if a
 second in-repo consumer wants `otel` while another wants a lean build, the
@@ -197,7 +196,7 @@ exporter, and `tracer_clone` stays crate-private.
 
 The original file mixed an axum-free helper with an axum router wrapper.
 Gating the whole file on `server` would force the axum HTTP server feature on
-consumers (e.g. `bitrouter-cloud`) that want only the tracing bridge.
+consumers that want only the tracing bridge.
 
 | Module               | Gate                          | Contents                                                        |
 | -------------------- | ----------------------------- | --------------------------------------------------------------- |

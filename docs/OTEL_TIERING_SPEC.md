@@ -6,7 +6,7 @@ see [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).**
 > **Read this first.** D1 ("tier the dependency") was withdrawn below on
 > measured benefit, and those measurements stand: the crate-count saving has no
 > beneficiary and the build-cache saving is roughly zero. **The reversal did not
-> reuse either argument** — see *The cloud question*'s own closing sentence,
+> reuse either argument** — see *The downstream deployment question*'s own closing sentence,
 > which reserves reopening for "a positioning decision needing different
 > evidence than this section gathered." That is what happened. The renderer
 > moved to `crates/bitrouter-telemetry` on naming, semver and timing:
@@ -31,10 +31,9 @@ see [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).**
 > gate, the frozen strings, and the `Interest`-cache reasoning for the separate
 > test binary all still apply verbatim.
 >
-> The one finding this document flags as outranking all of it — that
-> `bitrouter-cloud` still depends on the deleted `bitrouter-observe` — is
-> **still open**, and is what made the reversal cheap: cloud performs one
-> migration either way.
+> The downstream compatibility requirement this document flags as outranking
+> all of it is still open: deployment consumers can need the tracing bridge and
+> exporter from published library crates without depending on the CLI binary.
 
 Original status: complete. Phases 0, 1 and 2 landed; phases 3 and 4 are
 withdrawn.
@@ -45,24 +44,24 @@ exporter into `bitrouter-sdk`.
 | Decision | State |
 | --- | --- |
 | **D2** — span schema as a committed artifact | **done.** Declared, committed, conformance-checked; the `SpanAttributes` hole closed as an open extension region. See *Phase 0, as built*. |
-| **D4** — `tracing_subscriber_layer` | **done: it stays.** The blocking cloud grep returned hits, so `tracing_subscriber` / `tracing_core` are permanent public dependencies. |
+| **D4** — `tracing_subscriber_layer` | **done: it stays.** Downstream compatibility keeps the bridge public, so `tracing_subscriber` / `tracing_core` are permanent public dependencies. |
 | **D3** — OTel-native ingress span | **done.** Built as an axum middleware; `tower-http` dropped; `RUST_LOG` can no longer suppress a span. See *Phase 2, as built*. |
-| **D1** — tier the dependency | **withdrawn.** The cloud question is answered: option 3. See below. |
+| **D1** — tier the dependency | **withdrawn.** The downstream deployment question is answered: option 3. See below. |
 | **D5** — `ObserveHook` conformance suite | **withdrawn as a phase.** It was only a prerequisite under a D1 option that is no longer live. |
 
 **The headline reversal: D1 does not ship, and the reason is not the one this
-document was braced for.** The cloud question is closed — the owner was willing
-to migrate, so availability was never the binding constraint. Benefit was. Both
-of phase 3's justifications were measured and neither survived: the crate-count
-saving has no beneficiary that exists, and the build-cache saving is roughly
-zero for a real OTel release. The numbers are in *The cloud question*. What
-phase 3 was actually for — a swappable renderer — was delivered by phase 0,
-which gives a second implementation a specification instead of a file layout.
+document was braced for.** The downstream question is closed for this spec:
+availability was never the binding constraint. Benefit was. Both of phase 3's
+justifications were measured and neither survived: the crate-count saving has
+no beneficiary that exists, and the build-cache saving is roughly zero for a
+real OTel release. The numbers are in *The downstream deployment question*.
+What phase 3 was actually for — a swappable renderer — was delivered by phase
+0, which gives a second implementation a specification instead of a file
+layout.
 
-**One finding outranks all of it and is not this document's to fix:**
-`bitrouter-cloud` `origin/main` still depends on `bitrouter-observe`, the crate
-PR 1 deleted. Its migration is overdue independently of every phase here, and
-withdrawing phases 3–4 does not reduce it.
+**One requirement outranks all of it:** downstream deployments may need the
+public tracing bridge without taking the app server wrapper. That remains true
+independently of every phase here.
 
 Splits the one `otel` module into three tiers so the OTLP renderer becomes the
 swappable part rather than the load-bearing one, and so a consumer that wants
@@ -76,7 +75,7 @@ BitRouter's span semantics without OTLP has a path that is not "read
 > a different way: the *schema* became a committed, conformance-checked
 > artifact (D2, shipped), which is what actually gives a second renderer
 > something to implement. Moving files between crates was the means, not the
-> end, and it was withdrawn on measured benefit — see *The cloud question*.
+> end, and it was withdrawn on measured benefit — see *The downstream deployment question*.
 > Everything about tier 3's placement, the dependency move, and the `+N crates`
 > arithmetic is **historical**. Do not act on it.
 
@@ -87,7 +86,7 @@ not about access but weight: `OTEL_SDK_MIGRATION_SPEC.md:76-83` records that
 `otel-http`, so a consumer taking the exporter from the binary would take
 sea-orm, ratatui, clap and the whole CLI with it, on the CLI's release
 cadence."* Both counts still reproduce. This spec **is** a partial adoption of
-issue #808, and it owes that objection an answer — see *The cloud question*
+issue #808, and it owes that objection an answer — see *The downstream deployment question*
 below. Do not read the tier table without reading that section.
 
 *(Postscript: the answer that section eventually gave was "don't move it at
@@ -109,8 +108,8 @@ Three measurements motivate this. All are reproducible; see *Evidence* below.
    **Name the beneficiary, or don't claim one.** `default = []`, so a consumer
    who does not want OTLP already pays **+0** today — the 30 crates are opt-in
    and always have been. No workspace member other than `apps/bitrouter`
-   enables any `otel` feature, and the one known out-of-tree consumer
-   (`bitrouter-cloud`) *wants* OTLP. The +30 figure is therefore a bound on a
+   enables any `otel` feature, and downstream OTLP deployments want OTLP by
+   definition. The +30 figure is therefore a bound on a
    **hypothetical** consumer, not a cost anyone is paying. This measurement
    motivates the shape; it does not on its own justify the work.
 
@@ -119,7 +118,7 @@ Three measurements motivate this. All are reproducible; see *Evidence* below.
    remaining justification (build-cache invalidation) was finally measured it
    came out at roughly zero. D1 is withdrawn on exactly this basis. Both
    figures are also stale — 124/154 no longer reproduces; it is 159/201 today.
-   See *The cloud question* and *Cost*.
+   See *The downstream deployment question* and *Cost*.
 
 2. **The doctrine is broader than the code supports.** Of ~2,556 production
    lines under `src/otel/`, a whole-file attribution gives roughly **66% span
@@ -153,7 +152,7 @@ schema* the wrong shape for a surface that will churn.
 
 ### D1 — tier the dependency the way `opentelemetry-rust` tiers it — WITHDRAWN
 
-**Withdrawn — see *The cloud question*.** Tier 1 shipped anyway, as D2's
+**Withdrawn — see *The downstream deployment question*.** Tier 1 shipped anyway, as D2's
 artifact; tiers 2 and 3 stay where they are. The section is kept whole because
 the tier *vocabulary* is still how this codebase talks about the module, and
 because the constraints below (tracer binding order, the file inventory) are
@@ -233,31 +232,31 @@ crate; it does not own the transport. This *re-applies* the previous spec's D1
 boundary rather than replacing it — auth, policy, charging, metering and
 content policy stay out of the SDK, exactly as before.
 
-#### The cloud question
+#### The downstream deployment question
 
-`bitrouter-cloud` links `bitrouter-sdk` and enables an `otel` transport
-feature. `OTEL_SDK_MIGRATION_SPEC.md:102-108` names that single consumer fact
-as *"the load-bearing argument for where this lives."* Moving tier 3 into
-`apps/bitrouter` does not delete that requirement; it relocates it into a
-408-crate binary crate that cloud cannot reasonably depend on.
+The public compatibility requirement is that deployment consumers can use the
+OTLP exporter from a published library crate without depending on
+`apps/bitrouter`. Moving tier 3 into `apps/bitrouter` does not delete that
+requirement; it relocates it into a 408-crate binary crate that deployment
+consumers cannot reasonably depend on.
 
 The options were:
 
 1. Tier 3 becomes its own thin published crate (`bitrouter-otel`) that
-   `apps/bitrouter` and cloud both take — the "keep it a separate published
-   crate" option `OTEL_SDK_MIGRATION_SPEC.md:76-78` says was the question
-   actually live, and which neither spec has yet answered on the merits.
-2. Cloud reimplements tier 3 against the D2 artifact and the D5 conformance
-   suite — which makes D5 a **prerequisite**, not a deferred nicety.
+   `apps/bitrouter` and downstream deployments both take — the "keep it a
+   separate published crate" option `OTEL_SDK_MIGRATION_SPEC.md:76-78` says was
+   the question actually live, and which neither spec has yet answered on the
+   merits.
+2. Deployment consumers reimplement tier 3 against the D2 artifact and the D5
+   conformance suite — which makes D5 a **prerequisite**, not a deferred nicety.
 3. Tier 3 stays in `bitrouter-sdk` behind the existing default-off feature and
    only tiers 1–2 are extracted, leaving today's dependency weight unchanged.
 
 ##### ANSWERED: option 3. Phase 3 is withdrawn.
 
-The question is closed, and not because cloud refused to migrate — the owner
-was willing, which is what makes the answer worth recording. **Availability was
-never the binding constraint. Benefit was.** Both of phase 3's justifications
-were put to measurement and neither survived.
+The question is closed for this spec. **Availability was never the binding
+constraint. Benefit was.** Both of phase 3's justifications were put to
+measurement and neither survived.
 
 **1 — the crate-count argument has no beneficiary.** `default = []`, so this
 document's own *"Name the beneficiary, or don't claim one"* paragraph already
@@ -267,12 +266,11 @@ option 1, run the ledger for the consumers that exist:
 | Consumer | today | after phase 3 |
 | --- | --- | --- |
 | `apps/bitrouter` | wants OTLP → 201 crates | `bitrouter-sdk` + `bitrouter-otel` → the same |
-| `bitrouter-cloud` | wants OTLP → 201 crates | `bitrouter-sdk` + `bitrouter-otel` → the same |
+| downstream OTLP deployment | wants OTLP → 201 crates | `bitrouter-sdk` + `bitrouter-otel` → the same |
 | a consumer wanting the schema without OTLP | **already +0** | +0 |
 
 Nobody gets lighter. Phase 3 moves crates between nodes; it deletes them for
-no one. Cloud's willingness to migrate cannot change this, because cloud
-*wants* OTLP.
+no one. The downstream requirement cannot change this, because it *wants* OTLP.
 
 **2 — the graph-position argument is measured at roughly zero.** This was the
 better argument, inherited from `OTEL_SDK_MIGRATION_SPEC.md:95-97` (*"any OTel
@@ -323,9 +321,9 @@ at approximately nothing. It does not buy swappability, because swappability
 already shipped.
 
 Option 2 is rejected on separate grounds and would be even if the numbers had
-come out the other way: a cloud-side reimplementation creates a second renderer
-of a schema whose entire value is being identical everywhere, and makes D5 a
-prerequisite for the privilege.
+come out the other way: a deployment-side reimplementation creates a second
+renderer of a schema whose entire value is being identical everywhere, and
+makes D5 a prerequisite for the privilege.
 
 **Consequence: this document ends at phase 2.** Phases 3 and 4 are withdrawn,
 not deferred — see *Migration*. Reopen only on the trigger in *Abandon
@@ -356,22 +354,21 @@ opposite at `:38-42` — *"**The OTLP renderer ships alongside it because there
 is exactly one renderer and it is default-off** — not because OTLP transport,
 bearer refresh, batch processing or endpoint configuration are SDK concerns in
 their own right"* — and names its real reason at `:102-108`: the
-`bitrouter-cloud` consumer fact, *"and not the 'domain model rendered into an
+downstream-deployment requirement, *"and not the 'domain model rendered into an
 open standard' sentence."*
 
 A schema artifact answers neither of those. **D2 does not make D1, D3 or D4
-optional; the cloud question does.** D2 is worth doing on its own merits — a
+optional; the downstream question does.** D2 is worth doing on its own merits — a
 reviewable, diffable schema is the cheapest guard in this document — but it
 must not be sold as the keystone.
 
 #### The artifact has a hole in it before it is written
 
 `span_attributes.rs` ships `pub struct SpanAttributes(pub Map<String, Value>)`,
-documented for *"A deployment (e.g. `bitrouter-cloud`) that computes attributes
-the SDK does not know about"*, whose *"keys are used verbatim as span-attribute
-keys."* The exporter stamps them unvalidated, and the SDK's own test injects
-`bitrouter.retry_count` — a key **inside the `bitrouter.*` vocabulary tier 1
-claims to own**.
+documented for deployments that compute attributes the SDK does not know
+about, whose keys are used verbatim as span-attribute keys. The exporter stamps
+them unvalidated, and the SDK's own test injects `bitrouter.retry_count` — a
+key **inside the `bitrouter.*` vocabulary tier 1 claims to own**.
 
 So phase 0's gate ("artifact matches emitted spans") must either ignore this
 class of key — gutting the guarantee for exactly the cross-deployment case D2
@@ -429,7 +426,7 @@ exists to avoid.
   so the guard is not vacuous.
 
 What phase 0 did **not** do, per D2's own warning: it does not unlock D1, D3 or
-D4, and the +30-crate reduction is untouched. The cloud question still governs.
+D4, and the +30-crate reduction is untouched. The downstream deployment question still governs.
 
 One pre-existing test was changed, and not cosmetically.
 `streamed_pipeline_exports_canonical_latency_and_first_token_timing` asserted
@@ -479,9 +476,9 @@ Shipped as described, as an `axum` middleware rather than a hand-rolled tower
 - **The bridge read in `exporter.rs` stays.** D3 claimed to remove two of the
   three `tracing-opentelemetry` uses. It removes one. `exporter.rs`'s
   `tracing::Span::current().context()` arm is how a host that builds its own
-  `tracing` ingress span reaches the exporter, and phase 1 established that
-  `bitrouter-cloud` is exactly that host — removing it would have exported
-  orphaned `chat` roots for cloud, silently. It is now an explicit
+  `tracing` ingress span reaches the exporter, and deployment consumers may be
+  exactly that kind of host — removing it could export orphaned `chat` roots
+  silently. It is now an explicit
   precedence chain (native → bridge → inbound `traceparent`) with a test per
   arm. The dependency argument for removing it evaporated anyway when D4 kept
   the bridge and D1 was withdrawn.
@@ -534,13 +531,12 @@ every minor is breaking — are public dependencies of the foundation crate.
 
 D3 removes the bridge from *BitRouter's own request path*. It does **not**
 establish that the SDK can stop *offering* the bridge. A consumer that wants its
-**own** `tracing` spans in the same trace still needs this function, and
-`bitrouter-cloud` is known to link `bitrouter-sdk` and enable an `otel`
-transport feature.
+**own** `tracing` spans in the same trace still needs this function; that is
+the supported deployment shape D4 preserves.
 
-**In-tree callers exist and must be migrated regardless of what cloud says:**
+**In-tree callers exist and must be migrated regardless of downstream timing:**
 `apps/bitrouter/src/main.rs:2667` (`init_serve_tracing_subscriber`) and
-`apps/bitrouter/tests/observe_hierarchy.rs:65`. The cloud grep decides
+`apps/bitrouter/tests/observe_hierarchy.rs:65`. The downstream check decides
 delete-vs-keep, not whether work is needed.
 
 **A third consumer is easy to miss:** `.github/workflows/ci.yml:406` pins the
@@ -550,41 +546,24 @@ Deleting the function fails that step *before* the deps diff is computed — so
 removal deletes the vacuity guard rather than repairing it. **D4's phase must
 swap in another proven-public `otel` item in the same commit.**
 
-**The blocking question is answered: hits.** Run against `bitrouter-cloud`
-`origin/main` at `e224842f` (v0.23.0):
-
-```
-src/main.rs:7:use bitrouter_observe::otel::http_layer::tracing_subscriber_layer;
-src/main.rs:1624:        Some(exp) => registry.with(tracing_subscriber_layer(exp)).init(),
-```
+**The blocking question is answered by the public compatibility contract:**
+deployment consumers may use the tracing bridge without the app's router
+wrapper, so the keep branch is required.
 
 So: **it stays, and its cost stays with it.** `tracing_subscriber` 0.3 and
 `tracing_core` 0.1 remain public dependencies of the foundation crate. That is
 now a settled cost, not an open question — stop pricing phase 3 as if removing
 it were available.
 
-Three things the grep turned up that change more than the branch:
+Three public consequences matter:
 
-1. **Cloud is not on the migrated SDK at all.** It imports from
-   `bitrouter_observe` — the crate PR 1 deleted — and from `http_layer`, the
-   module the same PR split the bridge *out of*. Its manifest pins
-   `bitrouter-observe = { version = "1.0.0-alpha.27", features = ["otel-http"] }`
-   alongside `bitrouter-sdk = "1.0.0-alpha.27"`. It builds only because
-   crates.io is append-only. **Cloud has an outstanding migration from PR 1
-   that predates this document**, and every "sequence it into one release
-   window with cloud's migration" sentence below inherits it.
-2. **Cloud owns its ingress span on purpose, and does not use
-   `http_layer::router_wrapper`.** `src/main.rs::server_span_layer` installs
-   its own `TraceLayer` and deliberately does *not* bind inbound W3C context —
-   the comment's reason is that a public multi-tenant edge must not let callers
-   control its trace ids, sampling, or what leaks to upstream providers. The
-   bridge is what maps that `tracing` span into OTel, so D3 removing
-   BitRouter's *own* two bridge uses does nothing for cloud. This is the
-   strongest argument for the keep branch, and it is not the argument the
-   section was written around.
-3. **The one other cloud consumer of this module is `SpanAttributes`**
-   (`src/v1/settlement.rs:19`), which is phase 0's subject, not D4's. Its keys
-   are checked below.
+1. **The bridge stays public.** Removing it would strand deployments that build
+   their own ingress spans and still need OTel export.
+2. **The router wrapper stays separately gated.** Consumers that only need the
+   bridge should not compile axum for it.
+3. **`SpanAttributes` stays open.** Deployment-specific attributes are phase
+   0's subject, not D4's, and the schema treats them as an explicit extension
+   region.
 
 #### The re-signature option: bound verified, option still dead
 
@@ -597,9 +576,8 @@ checked rather than assumed, and it splits in two:
   `Tracer::Span: Send + Sync`, and `opentelemetry::global::BoxedTracer`
   satisfies it (`type Span = BoxedSpan`). `subscriber.rs`'s comment has been
   corrected; the signature is not forced by a trait bound.
-- **The conclusion drawn from it does not hold.** "Serves cloud unchanged" is
-  wrong twice. Cloud passes `&OtelExporter`, so its call site changes either
-  way — minor. The fatal half is that **nothing installs the global tracer
+- **The conclusion drawn from it does not hold.** "Serves downstream consumers
+  unchanged" is wrong. The fatal half is that **nothing installs the global tracer
   provider**: `global::set_tracer_provider` still has zero call sites, and
   `OtelExporter` deliberately builds a per-exporter provider (same reasoning
   `OtelMetrics` records for meters — installing globally clobbers any other
@@ -664,14 +642,14 @@ than *we ship the only implementation*.
 attribute, mis-parents `chat`, or drops `traceparent` — fails the suite; the
 in-tree `OtelObserveHook` passes it unmodified.
 
-~~**Not simply deferrable.** If D1 resolves the cloud question via option 2
-(cloud reimplements tier 3), D5 is a **prerequisite** for phase 3, not a
+~~**Not simply deferrable.** If D1 resolves the downstream deployment question
+via option 2 (deployment consumers reimplement tier 3), D5 is a **prerequisite** for phase 3, not a
 post-script — it is the only thing that would make a second implementation
 checkable. Under options 1 and 3 it stays a deferred nicety.~~
 
 **D1 took option 3, so this reverts to "deferred nicety" — and phase 4 is
-withdrawn.** The escalation was conditional on a cloud-side reimplementation
-that is not happening. Two notes for whoever picks this up later:
+withdrawn.** The escalation was conditional on a deployment-side
+reimplementation that is not happening. Two notes for whoever picks this up later:
 
 - The gap D5 named is real and partly closed. Phase 0's committed artifact
   gives an implementor the required attributes and the invariants to satisfy;
@@ -824,55 +802,28 @@ ingress seam and the sub-tree together.** Every migration gate below must name
 all three, and phase 1 — which swaps the tracer that emits `route`/hop/`settle`
 — must not be gated on the one test that never looks at them.
 
-### `bitrouter-cloud` is a real out-of-tree consumer
+### Downstream deployment requirements
 
-Read at `origin/main` `e224842f` (v0.23.0), so this is inventory, not
-inference. Its whole surface against this module is three imports:
+This public spec records only the compatibility contract, not external
+deployment details. The contract has three requirements:
 
-| Cloud call site | Uses | Bears on |
-| --- | --- | --- |
-| `src/main.rs:7` | `otel::http_layer::tracing_subscriber_layer` | D4 — decided the keep branch |
-| `src/main.rs:8` | `otel::{MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook, SamplerKind}` | D1 — these are the re-exports needing a destination |
-| `src/v1/settlement.rs:19` | `otel::SpanAttributes` | D2 — checked below |
+- the tracing bridge remains available as public library API;
+- exporter/config types keep a published-library home;
+- `SpanAttributes` remains an open extension region for deployment-specific
+  attributes outside `bitrouter.*`.
 
-Three consequences, in order of how much they change the plan:
-
-- **Cloud still depends on `bitrouter-observe`, which no longer exists.** Its
-  manifest pins that crate at `1.0.0-alpha.27` and imports the exporter, the
-  config types and `SpanAttributes` from it. Cloud's migration debt is
-  therefore *already* one PR deeper than this document assumed, and it is not
-  optional: the next `bitrouter-sdk` bump it takes will not have that crate to
-  pair with. **This is due regardless of whether phases 1–4 ever ship.**
-- **Phase 0 is compatible with cloud, verified.** Cloud forwards exactly three
-  keys through `SpanAttributes` (`src/v1/settlement.rs:552`):
-  `$ai_total_cost_usd`, `byok` (a bool), `routing_profile`. None is under a
-  reserved prefix and none collides with a declared key, so all three still
-  land. The open-extension-region decision cost the one known consumer
-  nothing; a validated key list — D2's other option — would have had to know
-  these three names in advance and would have broken cloud the day it added a
-  fourth.
-- **Nothing here is breaking for cloud any more.** D4's keep branch leaves the
-  bridge's signature intact, and D1's withdrawal leaves the exporter, the
-  config types and `SpanAttributes` exactly where cloud's next SDK bump will
-  find them — in `bitrouter_sdk::otel`. The only change cloud must make is the
-  one it already owed: `bitrouter_observe::otel::…` → `bitrouter_sdk::otel::…`,
-  plus dropping the dead `bitrouter-observe` dependency. Table row 1's import
-  also moves module (`http_layer` → `subscriber`), which is the single
-  non-mechanical edit in the set.
-
-**D1's cloud question is answered — option 3 — so no crate changes hands and
-no migration note is owed on that account.** The second table row was that
-question in concrete form: five re-exported names, one consumer, no home yet.
-They keep the home they have.
+**D1's downstream question is answered — option 3 — so no crate changes hands
+and no migration note is owed on that account.** The relevant exported names
+keep the home they have.
 
 ## Migration
 
 | Phase | Change | Breaking? | Gate |
 | --- | --- | --- | --- |
 | **0** | D2 — schema artifact + CI diff + the `SpanAttributes` extension-region decision — **landed** | no | artifact matches emitted spans; all three tests green |
-| **1** | D4 — resolve `tracing_subscriber_layer` (was phase 4) — **landed: it stays** | **no** (keep branch) | cloud grep answered: hits; sentinel unchanged, because nothing was removed |
+| **1** | D4 — resolve `tracing_subscriber_layer` (was phase 4) — **landed: it stays** | **no** (keep branch) | downstream bridge requirement preserved; sentinel unchanged, because nothing was removed |
 | **2** | D3 — OTel-native ingress span; re-add the pinned `http` target; update `docs/CLI.md` — **landed** | **yes, for the documented operator contract** (and for `router_wrapper`'s signature, which the plan missed) | met: `tests/ingress_log_target.rs` asserts the target + level and fails without the pin; all three tests green |
-| ~~**3**~~ | ~~D1 — the dep move~~ — **withdrawn**, see *The cloud question* | — | — |
+| ~~**3**~~ | ~~D1 — the dep move~~ — **withdrawn**, see *The downstream deployment question* | — | — |
 | ~~**4**~~ | ~~D5 — conformance suite~~ — **withdrawn as a phase**, see below | — | — |
 
 **Phase 2 is the entire remaining scope, and it lands on its own.** The
@@ -883,7 +834,7 @@ tracer swap, no dep move, and nothing for phase 2 to be sequenced against.
 
 **Why D5 is withdrawn as a *phase* rather than deferred.** It was promoted to
 "prerequisite, not deferred nicety" only under D1's option 2, where a
-cloud-side reimplementation would have needed something to check itself
+deployment-side reimplementation would have needed something to check itself
 against. Option 2 is not the answer taken. What remains of D5's value — giving
 an implementor a way to verify a hook — is now substantially served by phase
 0's artifact and the conformance tests behind it. Reopen it on its own merits
@@ -929,9 +880,8 @@ stand unchanged, and the feature set they guard is now the permanent one rather
 than a pre-change invariant.
 
 Phase 0 was worth doing on its own and was done. Phase 2 has no external
-dependency: it touches `apps/bitrouter`'s ingress path and `docs/CLI.md`, and
-cloud does not use `http_layer::router_wrapper` — it builds its own SERVER span
-— so phase 2 needs no release window with cloud and no migration note.
+dependency: it touches `apps/bitrouter`'s ingress path and `docs/CLI.md`; with
+D1 withdrawn, it needs no downstream release window or migration note.
 
 ### Cost
 
@@ -947,17 +897,17 @@ stated destination; the previous spec built the entire `sdk-public-api` job
 around that surface.
 
 Weighed honestly, the trade was: **a four-figure-line relocation plus a
-breaking release for cloud, to remove some opt-in crates that no current
-consumer pays for.** Phases 0 and 2 carry most of the durable value — a
+breaking release for downstream users of the old paths, to remove some opt-in
+crates that no current consumer pays for.** Phases 0 and 2 carry most of the durable value — a
 diffable schema and an ingress span that does not depend on a `tracing` bridge
 — at a fraction of that cost.
 
 **That trade was declined.** The sentence this section ended on — *"if the
-cloud question resolves to option 3, stopping after phase 2 is the better
-outcome, not a failure"* — is the outcome. It resolved to option 3 on measured
-benefit rather than on cloud's unavailability; the ledger and the timings are
-in *The cloud question*. The cost side below stands as the record of what was
-not spent.
+downstream deployment question resolves to option 3, stopping after phase 2 is
+the better outcome, not a failure"* — is the outcome. It resolved to option 3
+on measured benefit; the ledger and the timings are in *The downstream
+deployment question*. The cost side below stands as the record of what was not
+spent.
 
 **"30 crates" is withdrawn on both halves.** Re-measured on the current tree
 with this document's own command:
@@ -993,9 +943,9 @@ command, not by citing this table.
 ### Rollback
 
 ~~`crates.io`'s index is append-only, so a bad phase-3 release cannot be
-withdrawn — only yanked and superseded. Before that release: land the phase-3
-diff behind a branch that cloud can build against, and keep the previous SDK
-minor supported until cloud's migration is merged.~~ **Moot with phase 3
+withdrawn — only yanked and superseded. Before that release: stage the phase-3
+diff where downstream consumers can validate it, and keep the previous SDK
+minor supported through their public-crate migration.~~ **Moot with phase 3
 withdrawn — and worth noting as part of what the withdrawal bought.** The one
 irreversible step in this plan is gone; **phases 0 and 2 are revertible by
 ordinary means**, and phase 0 is already in the tree behind an
@@ -1040,14 +990,13 @@ kept only so a reader does not mistake their absence for an oversight.
    `SpanAttributes` extension region explicitly in or out of scope. **Met by
    phase 0**: in scope, as an open region, enforced by a staleness test plus
    two conformance tests, each checked against injected violations.
-6. ~~Every public `otel::*` re-export has a documented destination, and cloud
-   has a written migration naming the crate its exporter now comes from.~~
+6. ~~Every public `otel::*` re-export has a documented destination, and
+   downstream consumers have a written migration naming the crate their
+   exporter now comes from.~~
    **Retired: nothing moves, so every re-export's destination is where it
-   already is.** The cloud-facing obligation does not disappear, it changes
-   subject — cloud's outstanding migration is off the deleted
-   `bitrouter-observe` and onto `bitrouter-sdk`'s `otel` module, which this
-   document does not own. See *`bitrouter-cloud` is a real out-of-tree
-   consumer*.
+   already is.** The downstream compatibility obligation does not disappear,
+   but no phase-3 migration note is owed by this document. See *Downstream
+   deployment requirements*.
 
 ## Abandon triggers
 
@@ -1058,24 +1007,22 @@ Stop and re-open the decision if:
   Note the inverse failure too: a green `observe_hierarchy.rs` after D3 is
   *not* evidence the target pin survived — see *Constraints*. Do not read this
   trigger as satisfied by the old gate.
-- **The cloud grep in D4 returns hits and cloud cannot migrate.** ~~Then the
-  public-API liability stays regardless, and phase 3 loses most of its value —
-  do phases 0–2 and stop.~~ **Half-fired, and read it carefully.** The grep
-  returned hits, so the public-API liability does stay regardless — that half
-  is now fact, and phase 3's value is correspondingly lower (see *Cost*). The
-  second condition did not fire: cloud *can* migrate, and in fact already owes
-  a migration from PR 1. So this is not yet "do phases 0–2 and stop" — it is
-  "phase 3 is worth less than advertised, and D1's cloud question now carries
-  the whole decision." If that question also fails, the trigger below is the
+- **The downstream bridge requirement remains.** ~~Then the public-API
+  liability stays regardless, and phase 3 loses most of its value — do phases
+  0–2 and stop.~~ **Half-fired, and read it carefully.** The public-API
+  liability does stay regardless, so phase 3's value is correspondingly lower
+  (see *Cost*). This is not yet "do phases 0–2 and stop" — it is "phase 3 is
+  worth less than advertised, and D1's downstream question now carries the
+  whole decision." If that question also fails, the trigger below is the
   operative one and the answer is the same: stop after phase 2.
-- **D1's cloud question has no acceptable answer.** ~~If tier 3 can live
-  neither in a thin published crate nor in a cloud-side reimplementation, phase
-  3 is not executable at all.~~ **FIRED, and the outcome is the one this bullet
-  prescribes: take option 3, keep the exporter where it is, and ship phases 0
-  and 2 as the whole change.** Note it fired for a reason the bullet did not
-  anticipate. Tier 3 *could* have lived in a thin published crate — that option
-  was available, and cloud was willing to migrate to it. It fired on benefit,
-  not feasibility: no consumer gets lighter, and the build-cache saving
+- **D1's downstream question has no acceptable answer.** ~~If tier 3 can live
+  neither in a thin published crate nor in a deployment-side
+  reimplementation, phase 3 is not executable at all.~~ **FIRED, and the
+  outcome is the one this bullet prescribes: take option 3, keep the exporter
+  where it is, and ship phases 0 and 2 as the whole change.** Note it fired for
+  a reason the bullet did not anticipate. Tier 3 *could* have lived in a thin
+  published crate. It fired on benefit, not feasibility: no consumer gets
+  lighter, and the build-cache saving
   measures at roughly zero. A trigger written as "no acceptable home" was
   really "no demonstrable benefit"; whoever reopens this should test the second
   question, which is harder to answer and the only one that mattered.
@@ -1088,7 +1035,7 @@ Since the decision is now closed, the triggers that would **reopen** it are:
   implement against the committed artifact.
 - **`bitrouter-otel` is wanted as a published product surface**, adopted
   without the SDK. A positioning decision, needing evidence this document did
-  not gather; do not let it borrow *The cloud question*'s arguments, which are
+  not gather; do not let it borrow *The downstream deployment question*'s arguments, which are
   about internal dependency shape.
 - **The build-cache measurement changes materially** — `apps/bitrouter` stops
   dominating rebuild time, or OTel starts shipping its crates out of lockstep
@@ -1114,15 +1061,11 @@ Since the decision is now closed, the triggers that would **reopen** it are:
 - `docs/CLI.md:40,46` describe the `RUST_LOG` → SERVER-span coupling that D3
   removes. They are in phase 2's scope, not a follow-up — listed here only so
   the lockstep requirement is not lost if phase 2 is descoped.
-- ~~Answer D1's cloud question in writing before phase 3 is scheduled. It is
-  the one open item that can invalidate the whole migration, and it is not
-  resolvable inside this repo.~~ **Done — and it did invalidate the migration.**
-  Answered as option 3 in *The cloud question*; phase 3 is withdrawn. It turned
-  out to be resolvable inside this repo after all: the deciding evidence was a
-  consumer ledger and a rebuild-timing run, not a negotiation with cloud.
-- **Open, and now the largest OTel item on the board: cloud's migration off
-  `bitrouter-observe`.** It pins a crate that no longer exists in this tree,
-  and imports the exporter, the config types and `SpanAttributes` from it. This
-  document does not own that work, does not block on it, and does not reduce it
-  by withdrawing phases 3–4. Someone should schedule it against
-  `bitrouter-sdk`'s `otel` module.
+- ~~Answer D1's downstream deployment question in writing before phase 3 is
+  scheduled. It is the one open item that can invalidate the whole migration,
+  and it is not resolvable inside this repo.~~ **Done — and it did invalidate
+  the migration.**
+  Answered as option 3 in *The downstream deployment question*; phase 3 is withdrawn. It turned
+  out to be resolvable from the recorded measurements after all: the deciding
+  evidence was a crate-count ledger and a rebuild-timing run, not a migration
+  negotiation.
