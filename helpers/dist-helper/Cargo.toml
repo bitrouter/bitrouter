@@ -16,7 +16,9 @@ bitrouter-sdk = { workspace = true, features = ["config_file", "mcp"] }
 schemars.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true
 reqwest.workspace = true

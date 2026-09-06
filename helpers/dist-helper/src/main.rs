@@ -51,11 +51,14 @@ enum RegistryCommand {
         #[arg(long)]
         check: bool,
     },
-    /// Keyless models.dev sync for `auto_sync: { feed: models_dev }` providers.
+    /// Sync canonical model lifecycle and provider catalog feeds.
     Sync {
         /// Write provider YAML updates. Without this, print a dry-run report.
         #[arg(long)]
         write: bool,
+        /// Write a Markdown summary suitable for the registry sync PR body.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Render the prompt used by the headless agentic registry sync step.
     AgenticPrompt,
@@ -82,7 +85,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Registry { command } => match command {
             RegistryCommand::Validate => registry::validate(&root),
             RegistryCommand::Build { check } => registry::build(&root, check),
-            RegistryCommand::Sync { write } => registry::sync(&root, write).await,
+            RegistryCommand::Sync { write, report } => {
+                registry::sync(&root, write, report.as_deref()).await
+            }
             RegistryCommand::AgenticPrompt => {
                 print!("{}", registry::agentic_prompt(&root)?);
                 Ok(())
