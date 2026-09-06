@@ -1,0 +1,36 @@
+{
+  "env": [
+    [
+      "HERMES_HOME",
+      "{root}/hermes"
+    ],
+    [
+      "CUSTOM_API_KEY",
+      "brk_test"
+    ]
+  ],
+  "args": [],
+  "file": "config.yaml",
+  "config": {
+    "model": {
+      "provider": "custom",
+      "base_url": "http://127.0.0.1:4356/v1",
+      "default": "a/one"
+    },
+    "mcp_servers": {
+      "bitrouter_tools": {
+        "command": "bitrouter",
+        "args": [
+          "mcp",
+          "serve"
+        ]
+      },
+      "bitrouter_skills": {
+        "url": "http://127.0.0.1:4356/mcp",
+        "headers": {
+          "Authorization": "Bearer brk_test"
+        }
+      }
+    }
+  }
+}
