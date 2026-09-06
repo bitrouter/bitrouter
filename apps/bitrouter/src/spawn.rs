@@ -650,13 +650,7 @@ fn launch_gateways(
 /// carries an explicit model list. Env/args and own-auth harnesses ignore it,
 /// so they never pay for the `/v1/models` probe.
 fn needs_model_catalog(h: &crate::harness::Harness) -> bool {
-    matches!(
-        h.routing,
-        crate::harness::Routing::OpencodeConfig
-            | crate::harness::Routing::PiConfigDir
-            | crate::harness::Routing::HermesHome
-            | crate::harness::Routing::OpenclawProfile
-    )
+    matches!(h.routing, crate::harness::Routing::ConfigFile(_))
 }
 
 /// Where `launch` writes the throwaway configs it synthesizes for the harnesses

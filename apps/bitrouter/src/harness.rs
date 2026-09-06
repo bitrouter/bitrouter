@@ -40,6 +40,10 @@ pub struct Harness {
     pub description: &'static str,
     /// Upstream project URL — the source of the recommended invocation.
     pub project_url: &'static str,
+    /// The ACP major version this agent's registry entry declares. The
+    /// conformance suite's handshake tier checks the negotiated version
+    /// against it.
+    pub acp_protocol_version: u32,
     /// The ACP adapter invocation (`command` + `args`) for `bitrouter spawn`,
     /// when the harness has one. `None` for interactive-only harnesses
     /// (grok, antigravity) — they have no headless ACP adapter today.
@@ -89,34 +93,14 @@ pub enum Routing {
     /// speak the OpenAI **Responses** API — pinned codex builds dropped
     /// `wire_api = "chat"`.
     CodexArgs,
-    /// Config-file synthesis (opencode): the harness loads the JSON config
-    /// `OPENCODE_CONFIG` points at, and routing, the default model, and MCP
-    /// injection all ride that one synthesized file. There is no pure
-    /// env/args overlay — headless spawn launches direct with a note; the
-    /// interactive facets synthesize via [`Harness::launch_overlay`].
-    OpencodeConfig,
-    /// Config-dir synthesis (pi — SPAWN_SPEC §6.4): pi has no base-URL env
-    /// var, so routing synthesizes a `models.json` in a per-launch dir and
-    /// points `PI_CODING_AGENT_DIR` at it, selecting the provider/model by
-    /// CLI flag. Interactive facet only; headless spawn launches direct
-    /// with a note.
-    PiConfigDir,
-    /// Home-dir synthesis (hermes): routing synthesizes a `config.yaml`
-    /// (`model.provider: custom` + a loopback `base_url` — hermes trusts
-    /// loopback custom endpoints) in a per-launch dir, points `HERMES_HOME`
-    /// at it, and passes the credential via `CUSTOM_API_KEY`. The same file
-    /// carries the default model and `mcp_servers` (the gateway servers).
-    /// Interactive facet only; headless spawn launches direct with a note
-    /// (hermes then uses the user's own `~/.hermes` provider).
-    HermesHome,
-    /// Profile-dir synthesis (openclaw): the interactive facet synthesizes
-    /// an isolated profile (`OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`)
-    /// whose `openclaw.json` declares a `bitrouter` custom provider and
-    /// default model, and runs the embedded runtime (`tui --local`). The
-    /// ACP facet (`openclaw acp`) bridges into the user's running gateway,
-    /// which owns model routing — headless spawn launches direct with a
-    /// note.
-    OpenclawProfile,
+    /// Config-file synthesis: the harness exposes neither a base-URL variable
+    /// nor a CLI override, so routing writes a config into a per-launch
+    /// directory and points the harness at it. The shape is registry data
+    /// ([`crate::config_synthesis`]), which is why one variant covers
+    /// opencode, pi, hermes and openclaw. There is no pure env/args overlay —
+    /// headless spawn launches direct with a note; the interactive facet
+    /// synthesizes via [`Harness::launch_overlay`].
+    ConfigFile(&'static crate::config_synthesis::ConfigSynthesis),
     /// No gateway redirection, by design: the harness IS a subscription
     /// client whose session the daemon itself borrows as a provider (grok →
     /// `supergrok`, agy → `google-ai`) — routing it through the daemon would
@@ -272,111 +256,23 @@ impl HarnessEndpointPlan {
     }
 }
 
-/// The bundled catalog. Limited to publicly-available, actively-maintained
-/// harnesses. Extend by PR to bitrouter.
-pub const CATALOG: &[Harness] = &[
-    Harness {
-        id: "claude-acp",
-        description: "Anthropic Claude via the maintained Claude Agent ACP adapter",
-        project_url: "https://github.com/agentclientprotocol/claude-agent-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"],
-        // A substring of both the pinned npm spec and the globally-installed
-        // binary name, so either invocation catalog-matches.
-        package_marker: "claude-agent-acp",
-        interactive_binary: Some("claude"),
-        // claude-agent-acp passes process env through to the SDK-spawned CLI,
-        // which honors these exactly as interactive Claude Code does.
-        // ANTHROPIC_AUTH_TOKEN → `Authorization: Bearer` (also suppresses the
-        // login requirement); ANTHROPIC_API_KEY would be `x-api-key`, not
-        // BitRouter's inbound scheme, so we never touch it.
-        routing: Routing::Env {
-            base_url_env: "ANTHROPIC_BASE_URL",
-            auth_env: "ANTHROPIC_AUTH_TOKEN",
-            bearer_auth: true,
-            model_env: Some("ANTHROPIC_MODEL"),
-            extra: &[],
-        },
-    },
-    Harness {
-        id: "codex-acp",
-        description: "OpenAI Codex via the Agent Client Protocol adapter",
-        project_url: "https://github.com/agentclientprotocol/codex-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "@agentclientprotocol/codex-acp@1.7.0"],
-        package_marker: "codex-acp",
-        interactive_binary: Some("codex"),
-        routing: Routing::CodexArgs,
-    },
-    Harness {
-        id: "gemini-cli",
-        description: "Google's Gemini CLI with `--experimental-acp` (best-effort routing)",
-        project_url: "https://github.com/google-gemini/gemini-cli",
-        acp_command: Some("npx"),
-        acp_args: &[
-            "-y",
-            "--",
-            "@google/gemini-cli@latest",
-            "--experimental-acp",
-        ],
-        // Substring of both `@google/gemini-cli` and the `gemini-cli` binary.
-        package_marker: "gemini-cli",
-        interactive_binary: None,
-        // Best-effort: gemini-cli is deprecated upstream (Antigravity). Sends
-        // GEMINI_API_KEY as `x-goog-api-key`, which the daemon accepts only
-        // under skip_auth; GOOGLE_GEMINI_BASE_URL auto-selects GATEWAY auth.
-        routing: Routing::Env {
-            base_url_env: "GOOGLE_GEMINI_BASE_URL",
-            auth_env: "GEMINI_API_KEY",
-            // gemini sends GEMINI_API_KEY as `x-goog-api-key`, not Bearer —
-            // the daemon accepts it only under `skip_auth: true`.
-            bearer_auth: false,
-            model_env: Some("GEMINI_MODEL"),
-            extra: &[],
-        },
-    },
-    Harness {
-        id: "opencode",
-        description: "sst's opencode via its native `opencode acp`",
-        project_url: "https://github.com/sst/opencode",
-        acp_command: Some("opencode"),
-        acp_args: &["acp"],
-        package_marker: "opencode",
-        interactive_binary: Some("opencode"),
-        routing: Routing::OpencodeConfig,
-    },
-    Harness {
-        id: "pi-acp",
-        description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
-        project_url: "https://github.com/svkozak/pi-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "pi-acp@latest"],
-        package_marker: "pi-acp",
-        interactive_binary: Some("pi"),
-        routing: Routing::PiConfigDir,
-    },
-    Harness {
-        id: "hermes-acp",
-        description: "Nous Research's Hermes Agent via its native `hermes acp`",
-        project_url: "https://github.com/NousResearch/hermes-agent",
-        acp_command: Some("hermes"),
-        acp_args: &["acp"],
-        package_marker: "hermes",
-        interactive_binary: Some("hermes"),
-        routing: Routing::HermesHome,
-    },
-    Harness {
-        id: "openclaw",
-        description: "OpenClaw assistant via its gateway ACP bridge `openclaw acp`",
-        project_url: "https://github.com/openclaw/openclaw",
-        acp_command: Some("openclaw"),
-        acp_args: &["acp"],
-        package_marker: "openclaw",
-        interactive_binary: Some("openclaw"),
-        routing: Routing::OpenclawProfile,
-    },
+// The ACP half of the catalog, generated by `build.rs` from
+// `dist/registry/agents.json`. Adding or changing an ACP agent is a PR against
+// `registry/`, not against this file.
+include!(concat!(env!("OUT_DIR"), "/catalog_generated.rs"));
+
+/// Harnesses with no ACP adapter, kept here rather than in the registry.
+///
+/// `registry/agents/` is scoped to **ACP** agents, and these two have no ACP
+/// facet to register: they are subscription clients whose sessions the daemon
+/// borrows as providers, so nothing about them is conformance-testable and
+/// there is no routing to describe. That they are also the only two entries
+/// with [`Routing::OwnAuth`] is why splitting them out duplicates nothing —
+/// see `docs/AGENT_REGISTRY_SPEC.md` §13.
+static INTERACTIVE_ONLY: &[Harness] = &[
     Harness {
         id: "grok",
+        acp_protocol_version: 1,
         description: "xAI's Grok CLI (interactive only; own SuperGrok auth)",
         project_url: "https://x.ai/",
         acp_command: None,
@@ -387,6 +283,7 @@ pub const CATALOG: &[Harness] = &[
     },
     Harness {
         id: "antigravity",
+        acp_protocol_version: 1,
         description: "Google's Antigravity CLI `agy` (interactive only; own Google auth)",
         project_url: "https://antigravity.google/",
         acp_command: None,
@@ -396,6 +293,16 @@ pub const CATALOG: &[Harness] = &[
         routing: Routing::OwnAuth,
     },
 ];
+
+/// Every harness BitRouter can drive: the registry's ACP agents, then the
+/// interactive-only ones.
+pub static CATALOG: std::sync::LazyLock<Vec<Harness>> = std::sync::LazyLock::new(|| {
+    ACP_CATALOG
+        .iter()
+        .chain(INTERACTIVE_ONLY.iter())
+        .copied()
+        .collect()
+});
 
 /// Look up a harness by its catalog id.
 pub fn by_id(id: &str) -> Option<&'static Harness> {
@@ -510,8 +417,8 @@ impl Harness {
     /// traffic through `base_url`, authenticating with `auth` (already
     /// resolved by precedence — see [`resolve_gateway_auth`]). `model` pins
     /// the model when the harness supports it. Returns an empty overlay for
-    /// harnesses env/args can't route ([`OpencodeConfig`](Routing::OpencodeConfig)
-    /// / [`PiConfigDir`](Routing::PiConfigDir) / [`OwnAuth`](Routing::OwnAuth)
+    /// harnesses env/args can't route ([`ConfigFile`](Routing::ConfigFile) /
+    /// [`OwnAuth`](Routing::OwnAuth)
     /// — the caller warns and runs direct; see [`env_args_routable`](Self::env_args_routable)).
     pub fn routing_overlay(
         &self,
@@ -546,11 +453,7 @@ impl Harness {
             // Config-synthesis harnesses have no pure env/args overlay —
             // callers that can't synthesize launch direct (and say so) —
             // and own-auth harnesses are never redirected at all.
-            Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
-            | Routing::OwnAuth => RoutingOverlay::default(),
+            Routing::ConfigFile(_) | Routing::OwnAuth => RoutingOverlay::default(),
         }
     }
 
@@ -572,10 +475,7 @@ impl Harness {
             Routing::Env {
                 model_env: None, ..
             }
-            | Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
+            | Routing::ConfigFile(_)
             | Routing::OwnAuth => RoutingOverlay::default(),
         }
     }
@@ -609,11 +509,7 @@ impl Harness {
         match self.routing {
             Routing::Env { model_env, .. } => model_env.is_some(),
             Routing::CodexArgs => true,
-            Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
-            | Routing::OwnAuth => false,
+            Routing::ConfigFile(_) | Routing::OwnAuth => false,
         }
     }
 
@@ -648,10 +544,28 @@ impl Harness {
     /// `injects_mcp_matches_the_launch_overlay` — the predicate is declarative,
     /// and the test proves it agrees with what the overlay actually does.
     pub fn injects_mcp(&self) -> bool {
-        matches!(
-            self.id,
-            "claude-acp" | "codex-acp" | "opencode" | "hermes-acp"
-        )
+        match &self.routing {
+            // Whether a synthesized config has somewhere to put MCP servers is
+            // part of its registry shape, so this follows the data.
+            Routing::ConfigFile(synthesis) => {
+                !matches!(synthesis.mcp, crate::config_synthesis::McpShape::None)
+            }
+            // claude's `--mcp-config` file and codex's `-c mcp_servers.*`
+            // overrides are compiled MCP injection layered on env/args
+            // routing, so they stay named here.
+            Routing::Env { .. } | Routing::CodexArgs => {
+                matches!(self.id, "claude-acp" | "codex-acp")
+            }
+            Routing::OwnAuth => false,
+        }
+    }
+
+    /// This harness's config-file synthesis, when routing uses one.
+    pub fn config_synthesis(&self) -> Option<&'static crate::config_synthesis::ConfigSynthesis> {
+        match self.routing {
+            Routing::ConfigFile(synthesis) => Some(synthesis),
+            _ => None,
+        }
     }
 
     /// Interactive-launch overlay (`bitrouter launch`): the full routing
@@ -683,6 +597,12 @@ impl Harness {
         mcp: &[McpServer],
         state_dir: &std::path::Path,
     ) -> anyhow::Result<RoutingOverlay> {
+        // Harnesses that env/args cannot route synthesize a config file. The
+        // shape rides the routing itself, as registry data; the rendered bytes
+        // are pinned by `rendered_config_bytes_match_the_golden_fixtures`.
+        if let Routing::ConfigFile(synthesis) = &self.routing {
+            return synthesis.render(base_url, auth, model, catalog, mcp, state_dir);
+        }
         match self.id {
             // Claude Code loads extra MCP servers from `--mcp-config <file>`.
             // Stdio entries are `{command, args}`; HTTP entries need an
@@ -754,188 +674,6 @@ impl Harness {
                 }
                 Ok(overlay)
             }
-            // opencode: one synthesized JSON config carries the provider,
-            // the default model, and the MCP bridge; OPENCODE_CONFIG points
-            // at it.
-            "opencode" => {
-                std::fs::create_dir_all(state_dir)
-                    .with_context(|| format!("creating {}", state_dir.display()))?;
-                let path = state_dir.join("opencode.json");
-                let config = opencode_config(base_url, auth, model, catalog, mcp);
-                std::fs::write(&path, serde_json::to_string_pretty(&config)?)
-                    .context("writing opencode config")?;
-                Ok(RoutingOverlay {
-                    env: vec![("OPENCODE_CONFIG".to_string(), path.display().to_string())],
-                    args: Vec::new(),
-                })
-            }
-            // pi: synthesize `models.json` in a dir, point
-            // PI_CODING_AGENT_DIR at it, and select provider/model by flag
-            // (SPAWN_SPEC §6.4). No MCP mechanism — `mcp` is ignored.
-            "pi-acp" => {
-                let dir = state_dir.join("pi-agent");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let mut models: Vec<serde_json::Value> = catalog
-                    .iter()
-                    .map(|id| serde_json::json!({ "id": id }))
-                    .collect();
-                if let Some(m) = model
-                    && !catalog.iter().any(|id| id == m)
-                {
-                    models.push(serde_json::json!({ "id": m }));
-                }
-                let config = serde_json::json!({
-                    "providers": {
-                        "bitrouter": {
-                            "name": "BitRouter",
-                            "baseUrl": v1_base_url(base_url),
-                            "api": "openai-completions",
-                            "apiKey": auth,
-                            "models": models,
-                        }
-                    }
-                });
-                std::fs::write(
-                    dir.join("models.json"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing pi models.json")?;
-                let mut args = Vec::new();
-                // Select the routed provider only when it has a model to
-                // offer; otherwise pi falls back to its own defaults.
-                if let Some(default) = model
-                    .map(str::to_string)
-                    .or_else(|| catalog.first().cloned())
-                {
-                    args.extend([
-                        "--provider".to_string(),
-                        "bitrouter".to_string(),
-                        "--model".to_string(),
-                        default,
-                    ]);
-                }
-                Ok(RoutingOverlay {
-                    env: vec![("PI_CODING_AGENT_DIR".to_string(), dir.display().to_string())],
-                    args,
-                })
-            }
-            // hermes: synthesize an isolated `HERMES_HOME` whose config.yaml
-            // routes via a `custom` loopback provider (hermes trusts loopback
-            // custom endpoints) and carries the injected MCP servers; the
-            // credential rides `CUSTOM_API_KEY`. The file is written as JSON
-            // — hermes parses config.yaml with a YAML 1.2 loader, and JSON
-            // is a YAML subset — so no YAML serializer dependency is needed.
-            "hermes-acp" => {
-                let dir = state_dir.join("hermes");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let default = model
-                    .map(str::to_string)
-                    .or_else(|| catalog.first().cloned());
-                let mut config = serde_json::json!({
-                    "model": {
-                        "provider": "custom",
-                        "base_url": v1_base_url(base_url),
-                    }
-                });
-                if let Some(default) = default {
-                    config["model"]["default"] = serde_json::Value::String(default);
-                }
-                if !mcp.is_empty() {
-                    let mut entries = serde_json::Map::new();
-                    for s in mcp {
-                        let entry = match &s.transport {
-                            McpTransport::Stdio { command, args } => {
-                                serde_json::json!({ "command": command, "args": args })
-                            }
-                            // hermes selects the HTTP transport by `url`
-                            // presence.
-                            McpTransport::Http { url, headers } => serde_json::json!({
-                                "url": url,
-                                "headers": headers_map(headers),
-                            }),
-                        };
-                        entries.insert(s.name.clone(), entry);
-                    }
-                    config["mcp_servers"] = serde_json::Value::Object(entries);
-                }
-                std::fs::write(
-                    dir.join("config.yaml"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing hermes config.yaml")?;
-                Ok(RoutingOverlay {
-                    env: vec![
-                        ("HERMES_HOME".to_string(), dir.display().to_string()),
-                        ("CUSTOM_API_KEY".to_string(), auth.to_string()),
-                    ],
-                    args: Vec::new(),
-                })
-            }
-            // openclaw: synthesize an isolated profile (state dir + config)
-            // whose `openclaw.json` declares a `bitrouter` custom provider,
-            // and run the embedded local runtime (`tui --local` — no gateway
-            // needed). Model entries need the full schema (name/cost/window)
-            // or config validation rejects the file. No MCP injection yet —
-            // openclaw's MCP surface is gateway-scoped.
-            "openclaw" => {
-                let dir = state_dir.join("openclaw");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let ids: Vec<&str> = model
-                    .into_iter()
-                    .chain(catalog.iter().map(String::as_str))
-                    .collect();
-                let models: Vec<serde_json::Value> = ids
-                    .iter()
-                    .map(|id| {
-                        serde_json::json!({
-                            "id": id,
-                            "name": id,
-                            "reasoning": false,
-                            "input": ["text"],
-                            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-                            "contextWindow": 200000,
-                            "maxTokens": 8192,
-                        })
-                    })
-                    .collect();
-                let mut config = serde_json::json!({
-                    "gateway": { "mode": "local" },
-                    "models": {
-                        "mode": "merge",
-                        "providers": {
-                            "bitrouter": {
-                                "baseUrl": v1_base_url(base_url),
-                                "apiKey": auth,
-                                "api": "openai-completions",
-                                "models": models,
-                            }
-                        }
-                    }
-                });
-                if let Some(default) = ids.first() {
-                    config["agents"] = serde_json::json!({
-                        "defaults": { "model": format!("bitrouter/{default}") }
-                    });
-                }
-                std::fs::write(
-                    dir.join("openclaw.json"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing openclaw.json")?;
-                Ok(RoutingOverlay {
-                    env: vec![
-                        ("OPENCLAW_STATE_DIR".to_string(), dir.display().to_string()),
-                        (
-                            "OPENCLAW_CONFIG_PATH".to_string(),
-                            dir.join("openclaw.json").display().to_string(),
-                        ),
-                    ],
-                    args: vec!["tui".to_string(), "--local".to_string()],
-                })
-            }
             // Own-auth harnesses (grok, agy): no redirection, no MCP
             // mechanism we can inject non-invasively — hosted with their own
             // subscription auth; `--model` forwards as their native flag.
@@ -983,71 +721,13 @@ pub enum McpTransport {
 
 /// Render ordered header pairs as the JSON object shape harness config files
 /// expect (`{"Authorization": "Bearer …"}`).
-fn headers_map(headers: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+pub(crate) fn headers_map(
+    headers: &[(String, String)],
+) -> serde_json::Map<String, serde_json::Value> {
     headers
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect()
-}
-
-/// The synthesized opencode config: a `bitrouter` provider over the OpenAI
-/// wire, the daemon's catalog as its model list, an optional default model,
-/// and the injected MCP servers.
-fn opencode_config(
-    base_url: &str,
-    auth: &str,
-    model: Option<&str>,
-    catalog: &[String],
-    mcp: &[McpServer],
-) -> serde_json::Value {
-    let mut models = serde_json::Map::new();
-    for id in catalog {
-        models.insert(id.clone(), serde_json::json!({}));
-    }
-    if let Some(m) = model {
-        models
-            .entry(m.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-    }
-    let mut config = serde_json::json!({
-        "$schema": "https://opencode.ai/config.json",
-        "provider": {
-            "bitrouter": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "BitRouter",
-                "options": { "baseURL": v1_base_url(base_url), "apiKey": auth },
-                "models": serde_json::Value::Object(models),
-            }
-        },
-    });
-    if let Some(default) = model
-        .map(str::to_string)
-        .or_else(|| catalog.first().cloned())
-    {
-        config["model"] = serde_json::json!(format!("bitrouter/{default}"));
-    }
-    if !mcp.is_empty() {
-        let mut entries = serde_json::Map::new();
-        for s in mcp {
-            let entry = match &s.transport {
-                // opencode folds command+args into one invocation array.
-                McpTransport::Stdio { command, args } => {
-                    let mut invocation = vec![command.clone()];
-                    invocation.extend(args.iter().cloned());
-                    serde_json::json!({ "type": "local", "command": invocation, "enabled": true })
-                }
-                McpTransport::Http { url, headers } => serde_json::json!({
-                    "type": "remote",
-                    "url": url,
-                    "enabled": true,
-                    "headers": headers_map(headers),
-                }),
-            };
-            entries.insert(s.name.clone(), entry);
-        }
-        config["mcp"] = serde_json::Value::Object(entries);
-    }
-    config
 }
 
 /// Resolve the gateway credential by precedence: a real `BITROUTER_API_KEY`
@@ -1104,7 +784,7 @@ fn codex_overlay(base_url: &str, auth: &str, model: Option<&str>) -> RoutingOver
 
 /// `/v1`-suffixed base URL — the shape codex custom providers, opencode's
 /// openai-compatible provider, and pi's `baseUrl` all expect.
-fn v1_base_url(base_url: &str) -> String {
+pub(crate) fn v1_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     if trimmed.ends_with("/v1") {
         trimmed.to_string()
@@ -1161,6 +841,69 @@ mod tests {
                 "../tests/fixtures/acp_adapters/codex-acp-1.7.0.json"
             ))?,
         ])
+    }
+
+    // ===== the registry/catalog split (AGENT_REGISTRY_SPEC §13) =====
+    //
+    // `ACP_CATALOG` is generated from `dist/registry/agents.json`, so a test
+    // comparing the two would only prove that `build.rs` ran. What is worth
+    // pinning is the invariant the split rests on: registry membership follows
+    // having an ACP adapter, and the harnesses held back are exactly the ones
+    // with nothing to route.
+
+    #[test]
+    fn registry_membership_follows_having_an_acp_adapter() {
+        // Non-vacuity: a `build.rs` that silently emitted nothing would
+        // otherwise satisfy everything below.
+        // Non-vacuity only — deliberately not a count, so retiring an agent
+        // stays a registry-only change.
+        assert!(
+            !ACP_CATALOG.is_empty(),
+            "the generated catalog is empty — did build.rs read dist/registry?"
+        );
+        for harness in ACP_CATALOG {
+            assert!(
+                harness.acp_command.is_some(),
+                "{}: a registry agent must have an ACP invocation",
+                harness.id
+            );
+        }
+        for harness in INTERACTIVE_ONLY {
+            assert!(
+                harness.acp_command.is_none(),
+                "{}: an agent with an ACP adapter belongs in registry/agents/",
+                harness.id
+            );
+            // Held back precisely because there is no routing to describe —
+            // this is what makes the split duplicate nothing.
+            assert!(
+                matches!(harness.routing, Routing::OwnAuth),
+                "{}: only own-auth harnesses may stay out of the registry",
+                harness.id
+            );
+        }
+    }
+
+    #[test]
+    fn config_file_routing_reaches_its_synthesis_through_the_catalog() {
+        // The four synthesized harnesses carry their shape as registry data,
+        // so the routing itself is the lookup — there is no id table left.
+        for id in ["opencode", "pi-acp", "hermes-acp", "openclaw"] {
+            let harness = by_id(id).expect("catalog entry");
+            let synthesis = harness
+                .config_synthesis()
+                .unwrap_or_else(|| panic!("{id} should route through a config file"));
+            assert!(
+                !synthesis.file.is_empty(),
+                "{id} synthesis names no config file"
+            );
+        }
+        assert!(
+            by_id("claude-acp")
+                .expect("catalog")
+                .config_synthesis()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1435,8 +1178,8 @@ mod tests {
     #[test]
     fn catalog_markers_are_mutually_non_substrings() {
         // A false-positive would mis-route one harness as another.
-        for a in CATALOG {
-            for b in CATALOG {
+        for a in CATALOG.iter() {
+            for b in CATALOG.iter() {
                 if a.id != b.id {
                     assert!(
                         !a.package_marker.contains(b.package_marker),
