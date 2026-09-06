@@ -2,8 +2,8 @@
 
 Status: **built.** Reverses `OTEL_SDK_MIGRATION_SPEC.md` D1 — the OTLP renderer
 has left `bitrouter-sdk` for `crates/bitrouter-telemetry`. Landed inside the
-window described below, on PR #809's own branch, so cloud migrates once rather
-than twice.
+window described below, on PR #809's own branch, so downstream consumers avoid
+two public-crate migration hops.
 
 Keeps everything `OTEL_TIERING_SPEC.md` phases 0 and 2 built. This is a
 placement decision, not a rewrite: the span schema artifact, the OTel-native
@@ -35,8 +35,8 @@ the wrong argument.**
 
 - **Crate count.** `default = []`, so no consumer pays the +42 today. The
   tiering spec's own ledger shows nobody gets lighter under the move: the app
-  wants OTLP, cloud wants OTLP, and a schema-only consumer is already at +0.
-  Do not quote 30, 42, or 36.
+  wants OTLP, downstream OTLP deployments want OTLP, and a schema-only consumer
+  is already at +0. Do not quote 30, 42, or 36.
 - **Build-cache position.** Measured at roughly zero: 22.8s to invalidate the
   whole OTel family against 10.9s for the residue that stays, inside a build
   where `apps/bitrouter` alone costs 27.3s and rebuilds in every scenario.
@@ -50,9 +50,9 @@ the wrong argument.**
   described was a handful of `use` lines.
 
 What is left after subtracting all of that is three arguments, none of which
-the tiering spec's *cloud question* section measured, because none of them is
-about weight. The withdrawal anticipated exactly this and left the door on the
-latch:
+the tiering spec's *downstream deployment question* section measured, because
+none of them is about weight. The withdrawal anticipated exactly this and left
+the door on the latch:
 
 > Reopen only on the trigger in *Abandon triggers*, or if `bitrouter-otel` is
 > wanted as a **published product surface** that consumers adopt without the
@@ -132,11 +132,11 @@ renderer of it* has no structural marker at all.
 type and bound put them there, deliberately."* One function does it —
 `otel::subscriber::tracing_subscriber_layer`.
 
-`OTEL_TIERING_SPEC.md` D4 resolved that function's fate: **it stays.** The
-blocking cloud grep returned hits, and cloud builds its own ingress `TraceLayer`
-on purpose, so the bridge is load-bearing for the one out-of-tree consumer. D4
-records the consequence in its own words: *"it stays, and its cost stays with
-it… That is now a settled cost, not an open question."*
+`OTEL_TIERING_SPEC.md` D4 resolved that function's fate: **it stays.**
+Downstream compatibility keeps the bridge public for deployments that build
+their own ingress spans and still need OTel export. D4 records the consequence
+in its own words: *"it stays, and its cost stays with it… That is now a settled
+cost, not an open question."*
 
 The cost, spelled out: `tracing_subscriber` 0.3 and `tracing_core` 0.1 are
 **permanent public dependencies of the foundation crate**, both 0.x, where every
@@ -147,15 +147,15 @@ that never enable `otel`.
 `OTEL_SDK_MIGRATION_SPEC.md` D1 does not dispute this. It says SDK placement is
 *"measurably worse on three axes, and the decision is to accept that, not to
 deny it"* — semver, graph position, containment cost — and buys all three with
-a single fact: cloud already takes `bitrouter-sdk`, so a standalone crate
-*"would be a second published dependency delivering code the first one could
-carry."*
+a single convenience: a standalone crate *"would be a second published
+dependency delivering code the first one could carry."*
 
 That is one line of `Cargo.toml`, weighed against a permanent semver liability
-on the crate every other crate depends on. Cloud takes two crates today. The
-same section names its own revisit trigger — *"if `tracing-subscriber` 0.4
-ships… the standalone crate becomes the better shape again"* — but that trigger
-is written backwards: it fires when the bill arrives, not when the debt is
+on the crate every other crate depends on. A deployment can take two crates;
+the SDK cannot make `tracing_subscriber` disappear from its public API without
+a breaking release. The same section names its own revisit trigger — *"if
+`tracing-subscriber` 0.4 ships… the standalone crate becomes the better shape
+again"* — but that trigger is written backwards: it fires when the bill arrives, not when the debt is
 booked. D4 booked it.
 
 ### 4. Phase 0 changed the facts under the decision
@@ -230,11 +230,11 @@ deliver:
   they are today.
 
 **`SpanAttributes` stays on the contract side** and this is deliberate, not
-incidental. Cloud imports it (`src/v1/settlement.rs`), the extension-region
-enforcement point (`schema::is_reserved_attribute_key`) is already in
-`schema.rs`, and the type is how a deployment adds attributes the contract does
-not know about — which makes it contract vocabulary, not renderer machinery.
-It names no `opentelemetry` type.
+incidental. The extension-region enforcement point
+(`schema::is_reserved_attribute_key`) is already in `schema.rs`, and the type
+is how a deployment adds attributes the contract does not know about — which
+makes it contract vocabulary, not renderer machinery. It names no
+`opentelemetry` type.
 
 **`schema.rs` and `span_attributes.rs` come out from behind the feature gate.**
 They carry no dependency beyond `serde`, and the reason they were gated —
@@ -480,25 +480,21 @@ would be preserving nothing. One breaking change to communicate, not two.
 
 ## The window
 
-**Cloud has not migrated.** `OTEL_TIERING_SPEC.md` D4 read `bitrouter-cloud` at
-`origin/main` `e224842f` (v0.23.0) and found it still pinning
-`bitrouter-observe = { version = "1.0.0-alpha.27", features = ["otel-http"] }`
-from crates.io, importing `otel::http_layer::tracing_subscriber_layer`,
-`otel::{MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook, SamplerKind}`
-and `otel::SpanAttributes`. It builds only because the crates.io index is
-append-only. It owes a migration that predates this document.
+The relevant migration fact is public API shape: downstream consumers of the
+old `bitrouter-observe` OTel surface
+need one public-crate move if #809 is redirected now, and two if this decision
+waits until after the intermediate SDK placement ships.
 
 That makes the cost asymmetric and time-boxed:
 
-| | cloud migrations |
+| | downstream public-crate migrations |
 | --- | --- |
 | decide now, redirect #809 | **one** — `bitrouter_observe::otel::` → `bitrouter_telemetry::otel::` |
 | merge #809, decide later | **two** — first to `bitrouter_sdk::otel::`, then again |
 
-Both migrations are the same mechanical shape (three files, seven items, one
-module move for `tracing_subscriber_layer`: `http_layer` → `subscriber`). The
-question is only how many times cloud does it. **The window closes when #809
-merges**, and nothing else about this decision is urgent.
+Both migrations are the same public API shape. The question is only how many
+times downstream consumers do it. **The window closes when #809 merges**, and
+nothing else about this decision is urgent.
 
 ## Evidence
 
@@ -519,7 +515,7 @@ Verified in-tree at `pr809` unless marked otherwise.
 **Inherited, not re-verified.** Cited from `OTEL_TIERING_SPEC.md` rather than
 re-run, and a reviewer should treat them as that document's evidence:
 
-- the cloud grep at `e224842f` and everything in *The window* that rests on it;
+- the downstream migration-shape conclusion and everything in *The window* that rests on it;
 - the build-cache timings and the 159/201 crate counts;
 - the eager-tracer-binding read of `opentelemetry-0.32.0/src/global/trace.rs`.
 
@@ -615,8 +611,8 @@ decision and this one should not be.
   grounds that document reserved. Neither is deleted; both are marked, because
   the reasoning in them is what stops the next reader relitigating this from
   scratch.
-- **Cloud does one migration** (see *The window*) — the one it already owes.
-- **`bitrouter-cloud` takes two published dependencies instead of one.** This
+- **Downstream consumers do one public-crate migration** (see *The window*).
+- **OTLP deployments take two published dependencies instead of one.** This
   is the entire cost `OTEL_SDK_MIGRATION_SPEC.md` D1 paid its three conceded
   axes to avoid, and it is one line of `Cargo.toml`.
 
@@ -628,7 +624,7 @@ See *The arguments that are dead*.
 | Phase | Change | Breaking? | Gate |
 | --- | --- | --- | --- |
 | **1** | Lift `schema.rs` + `span_attributes.rs` + `span-schema.json` out of the `otel` gate into an ungated `observe` module on the SDK root — **done** | no | met: staleness test green under **default** features, once a pre-existing gated-import defect was fixed (see *As built*); no new dependency |
-| **2** | `git mv` the rest of `otel/` into `bitrouter-telemetry`; repoint `apps/bitrouter`; swap the `ci.yml` sentinels; move `ingress_log_target.rs`; rework `feature-isolation` — **done** | **yes** for cloud | met: all four tests green; `public-api-deps.txt` lost exactly two lines |
+| **2** | `git mv` the rest of `otel/` into `bitrouter-telemetry`; repoint `apps/bitrouter`; swap the `ci.yml` sentinels; move `ingress_log_target.rs`; rework `feature-isolation` — **done** | **yes** for downstream users of old observe paths | met: all four tests green; `public-api-deps.txt` lost exactly two lines |
 | **3** | Rewrite the doctrine text; mark both predecessor specs; update `docs/DEVELOPMENT.md`'s crate table and `release-plz.toml` — **done** | no | met: lockstep list below, minus `.github/copilot-instructions.md` — see its note there |
 | **4** | D6's guard: unknown `plugins.*` keys reported at `config validate` and at daemon startup, plus a named check for the renamed env vars — **done** | no | met: a typo'd `bitrouter-guardrail` is reported, and the deferral that makes it visible on `serve` is pinned by a test |
 | **5** | D6's rename: `plugins.bitrouter-observe.*` → `plugins.bitrouter-telemetry.*`, `BITROUTER_OBSERVE_*` → `BITROUTER_TELEMETRY_*`, legacy `otlp_endpoint` removed. No alias — pre-1.0 — **done** | **yes**, and loudly, because phase 4 shipped first | met: the three frozen names in D5 are untouched; 2,872 tests pass |
@@ -667,9 +663,9 @@ decision; all six are things the next reader would otherwise rediscover.
 - **The telemetry crate needs a `server` feature.** The spec listed
   `http_layer.rs` as moving without saying what gates it. It is gated `server`,
   which pulls `axum`, `http-body`, `pin-project-lite` and `bitrouter-sdk/server`.
-  Folding it into `__otel-core` would have been simpler and wrong: the known
-  out-of-tree consumer wants the bridge (`otel::subscriber`) and builds its own
-  ingress span on purpose, so it would have compiled axum for nothing.
+  Folding it into `__otel-core` would have been simpler and wrong: consumers
+  that only need the bridge (`otel::subscriber`) should not compile axum for
+  it.
 
 - **A pre-existing defect had to be fixed for acceptance to be checkable.**
   `language_model/context.rs`'s test module imported `PromptOverrides` through
@@ -914,8 +910,9 @@ which this decision should be reversed in turn.
 Stop and keep #809 as it stands if:
 
 - **#809 merges before this is decided.** The window argument is the load-bearing
-  one and it does not survive the merge; from that point the cost is two cloud
-  migrations and the case has to be remade on semver alone.
+  one and it does not survive the merge; from that point the cost is two
+  downstream public-crate migrations and the case has to be remade on semver
+  alone.
 - **Acceptance 4 comes back larger than two lines.** If something else public
   depends on `tracing_subscriber`, the semver argument in *Why* 3 loses most of
   its force and what remains is naming — which is real but is not worth a
@@ -928,9 +925,8 @@ Stop and keep #809 as it stands if:
   its one renderer — which weakens, but does not defeat, the rest of the
   document.
 
-Note which trigger is **not** listed: cloud's willingness. `OTEL_TIERING_SPEC.md`
-established the owner was willing to migrate, and cloud's migration is owed
-either way.
+Note which trigger is **not** listed: downstream willingness. This decision is
+about public API shape and measured semver cost, not an external negotiation.
 
 ## Lockstep (CLAUDE.md)
 
@@ -942,7 +938,8 @@ either way.
 table) · `docs/CLI.md` (log targets) · `docs/README.md` (spec index) ·
 `.github/workflows/ci.yml` (`feature-isolation`, `sdk-public-api`) ·
 `release-plz.toml` (`changelog_include`) · `Cargo.toml`
-(`[workspace.dependencies]`) · `.github/copilot-instructions.md` · **`bitrouter-cloud`**.
+(`[workspace.dependencies]`) · `.github/copilot-instructions.md` · hosted
+deployment dependency notes.
 
 `.github/copilot-instructions.md` needed no change *from this work* — #809 had
 already removed its `bitrouter-observe` mention — but it was gutted separately,
