@@ -1640,15 +1640,19 @@ pub struct Usage {
     pub reasoning_tokens: u64,
     /// Cache-read input tokens — already-cached prompt content that the
     /// provider served from cache. Subset of `prompt_tokens`. Maps to
-    /// Messages' `usage.cache_read_input_tokens`
-    /// (<https://docs.anthropic.com/en/api/messages>) and to Chat Completions'
-    /// `usage.prompt_tokens_details.cached_tokens`. Default 0 when the
-    /// upstream reports no cache stats.
+    /// Messages' `usage.cache_read_input_tokens`, Chat Completions'
+    /// `usage.prompt_tokens_details.cached_tokens`, Responses'
+    /// `usage.input_tokens_details.cached_tokens`, and Gemini's
+    /// `usageMetadata.cachedContentTokenCount`. Default 0 when the upstream
+    /// reports no cache stats.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_read_tokens: u64,
     /// Cache-write input tokens — prompt content written to the cache this
     /// turn. Subset of `prompt_tokens`. Maps to Messages'
-    /// `usage.cache_creation_input_tokens`.
+    /// `usage.cache_creation_input_tokens`, Chat Completions'
+    /// `usage.prompt_tokens_details.cache_write_tokens`, and Responses'
+    /// `usage.input_tokens_details.cache_write_tokens`. Gemini exposes no
+    /// corresponding write-side counter.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_write_tokens: u64,
     /// Provider-executed web-search calls this turn. Maps to Anthropic

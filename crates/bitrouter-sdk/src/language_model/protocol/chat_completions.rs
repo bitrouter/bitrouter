@@ -1463,12 +1463,17 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_write = value
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens,
         completion_tokens,
         reasoning_tokens,
         cache_read_tokens: cache_read,
-        cache_write_tokens: 0,
+        cache_write_tokens: cache_write,
         web_search_count: 0,
         origin: UsageOrigin::ProviderReported,
         raw: Some(Box::new(value.clone())),
@@ -1502,9 +1507,18 @@ fn render_usage(usage: &Usage) -> serde_json::Value {
         obj["completion_tokens_details"] =
             serde_json::json!({ "reasoning_tokens": usage.reasoning_tokens });
     }
-    if usage.cache_read_tokens > 0 {
-        obj["prompt_tokens_details"] =
-            serde_json::json!({ "cached_tokens": usage.cache_read_tokens });
+    if usage.cache_read_tokens > 0 || usage.cache_write_tokens > 0 {
+        let mut details = serde_json::Map::new();
+        if usage.cache_read_tokens > 0 {
+            details.insert("cached_tokens".to_string(), usage.cache_read_tokens.into());
+        }
+        if usage.cache_write_tokens > 0 {
+            details.insert(
+                "cache_write_tokens".to_string(),
+                usage.cache_write_tokens.into(),
+            );
+        }
+        obj["prompt_tokens_details"] = serde_json::Value::Object(details);
     }
     obj
 }
