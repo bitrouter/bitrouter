@@ -16,6 +16,12 @@ use crate::language_model::context::StreamContext;
 use crate::language_model::hooks::{ObserveHook, StreamHook};
 use crate::language_model::types::{StreamPart, Usage};
 
+/// Stable identifier for the SDK's character-count fallback estimator.
+pub const STREAM_USAGE_ESTIMATOR_VERSION: &str = "bitrouter-sdk/stream-char-div-ceil-4-v1";
+
+/// Characters per token used by the SDK's fallback stream estimator.
+pub const STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN: u64 = 4;
+
 /// A bitset of the `StreamPart` kinds a hook cares about. Lets the pipeline skip
 /// hooks on parts they declared no interest in (keeps the per-token hot path
 /// proportional to declared interest).
@@ -228,8 +234,97 @@ where
     }
 }
 
-/// Accumulates token usage seen across a stream. The last `Usage` part wins
-/// (providers send a running or final total, not deltas).
+/// One flat bracket used to compare provider-reported usage snapshots.
+///
+/// Rates are micro-USD per token. This type deliberately performs no billing:
+/// it only gives the stream normalizer enough information to choose the most
+/// conservative snapshot when an upstream emits conflicting cumulative usage.
+#[derive(Debug, Clone, Default)]
+pub struct UsagePricingBracket {
+    /// Uncached prompt-token rate.
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Cache-read prompt-token rate; missing falls back to `input`.
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Cache-write prompt-token rate; missing falls back to `input`.
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Non-reasoning completion-token rate.
+    pub output_micro_usd_per_token: Option<f64>,
+    /// Reasoning-token rate; missing falls back to `output`.
+    pub reasoning_output_micro_usd_per_token: Option<f64>,
+}
+
+/// A higher context-pricing bracket. The greatest threshold strictly below
+/// the reported prompt-token count wins.
+#[derive(Debug, Clone, Default)]
+pub struct UsagePricingTier {
+    /// Exclusive lower bound for selecting this tier.
+    pub above_input_tokens: u64,
+    /// Complete pricing bracket active above the threshold.
+    pub bracket: UsagePricingBracket,
+}
+
+/// Route-local pricing used only for conservative stream-usage selection.
+#[derive(Debug, Clone, Default)]
+pub struct UsagePricing {
+    /// Pricing for the lowest context range.
+    pub base: UsagePricingBracket,
+    /// Optional higher context brackets.
+    pub context_tiers: Vec<UsagePricingTier>,
+}
+
+impl UsagePricing {
+    fn bracket_for(&self, input_tokens: u64) -> &UsagePricingBracket {
+        self.context_tiers
+            .iter()
+            .filter(|tier| input_tokens > tier.above_input_tokens)
+            .max_by_key(|tier| tier.above_input_tokens)
+            .map_or(&self.base, |tier| &tier.bracket)
+    }
+
+    fn nominal_cost(&self, usage: &Usage) -> Option<f64> {
+        if usage.web_search_count > 0 {
+            return None;
+        }
+        let bracket = self.bracket_for(usage.prompt_tokens);
+        let input_rate = valid_rate(bracket.input_micro_usd_per_token)?;
+        let output_rate = valid_rate(bracket.output_micro_usd_per_token)?;
+        let cache_total = usage
+            .cache_read_tokens
+            .checked_add(usage.cache_write_tokens)?;
+        let uncached_input = usage.prompt_tokens.checked_sub(cache_total)?;
+        let text_output = usage
+            .completion_tokens
+            .checked_sub(usage.reasoning_tokens)?;
+        let cache_read_rate =
+            optional_rate(bracket.cache_read_micro_usd_per_token)?.unwrap_or(input_rate);
+        let cache_write_rate =
+            optional_rate(bracket.cache_write_micro_usd_per_token)?.unwrap_or(input_rate);
+        let reasoning_rate =
+            optional_rate(bracket.reasoning_output_micro_usd_per_token)?.unwrap_or(output_rate);
+        let cost = uncached_input as f64 * input_rate
+            + usage.cache_read_tokens as f64 * cache_read_rate
+            + usage.cache_write_tokens as f64 * cache_write_rate
+            + text_output as f64 * output_rate
+            + usage.reasoning_tokens as f64 * reasoning_rate;
+        cost.is_finite().then_some(cost)
+    }
+}
+
+fn valid_rate(rate: Option<f64>) -> Option<f64> {
+    rate.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn optional_rate(rate: Option<f64>) -> Option<Option<f64>> {
+    match rate {
+        Some(value) if value.is_finite() && value >= 0.0 => Some(Some(value)),
+        Some(_) => None,
+        None => Some(None),
+    }
+}
+
+/// Accumulates token usage seen across a stream. With complete route pricing,
+/// the highest-cost cumulative snapshot wins; without usable pricing, the last
+/// snapshot wins. Provider usage frames are cumulative totals, never deltas.
 ///
 /// Also tracks the total *character* count of text and reasoning deltas
 /// observed so that — when the consumer hangs up before the upstream `Usage`
@@ -247,6 +342,9 @@ where
 pub struct UsageAccumulator {
     usage: Usage,
     seen: bool,
+    pricing: Option<UsagePricing>,
+    priced_winner: Option<(f64, Usage)>,
+    every_snapshot_priced: bool,
     /// Total `char` count of `TextDelta` + `ReasoningDelta` text observed.
     delta_chars: u64,
     /// `char` count of the request prompt's text, seeded at stream start. Lets a
@@ -258,15 +356,22 @@ pub struct UsageAccumulator {
 impl UsageAccumulator {
     /// Chars-per-token estimate for the disconnect-time billing heuristic.
     /// Conservative-ish: too small bills extra, too large bills less.
-    const CHARS_PER_TOKEN_ESTIMATE: u64 = 4;
-
     /// A fresh accumulator seeded with the request prompt's `char` count, so a
     /// disconnect before the upstream usage frame can still estimate prompt
     /// tokens. Pass `0` when no prompt-token estimate is wanted.
     pub fn with_prompt_chars(prompt_chars: u64) -> Self {
         Self {
             prompt_chars,
+            every_snapshot_priced: true,
             ..Default::default()
+        }
+    }
+
+    /// Supply the selected route's immutable pricing snapshot.
+    pub fn set_pricing(&mut self, pricing: Option<UsagePricing>) {
+        self.pricing = pricing;
+        if !self.seen {
+            self.every_snapshot_priced = true;
         }
     }
 
@@ -281,6 +386,22 @@ impl UsageAccumulator {
             } => {
                 self.usage = usage.clone();
                 self.seen = true;
+                match self
+                    .pricing
+                    .as_ref()
+                    .and_then(|pricing| pricing.nominal_cost(usage))
+                {
+                    Some(cost) => {
+                        if self
+                            .priced_winner
+                            .as_ref()
+                            .is_none_or(|(winner, _)| cost >= *winner)
+                        {
+                            self.priced_winner = Some((cost, usage.clone()));
+                        }
+                    }
+                    None => self.every_snapshot_priced = false,
+                }
             }
             StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text } => {
                 self.delta_chars = self.delta_chars.saturating_add(text.chars().count() as u64);
@@ -291,21 +412,32 @@ impl UsageAccumulator {
 
     /// The accumulated usage, if any `Usage` part was seen.
     pub fn finalized(&self) -> Option<Usage> {
-        self.seen.then_some(self.usage.clone())
+        if !self.seen {
+            return None;
+        }
+        if self.pricing.is_some()
+            && self.every_snapshot_priced
+            && let Some((_, usage)) = &self.priced_winner
+        {
+            return Some(usage.clone());
+        }
+        Some(self.usage.clone())
     }
 
     /// Estimated output-token count from accumulated delta text, for the
     /// disconnect-billing fallback. Returns `0` when no text deltas were
     /// observed.
     pub fn estimated_output_tokens(&self) -> u64 {
-        self.delta_chars.div_ceil(Self::CHARS_PER_TOKEN_ESTIMATE)
+        self.delta_chars
+            .div_ceil(STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN)
     }
 
     /// Estimated prompt-token count from the seeded prompt char count, for the
     /// disconnect-billing fallback. Returns `0` when the accumulator was not
     /// seeded with a prompt char count.
     pub fn estimated_prompt_tokens(&self) -> u64 {
-        self.prompt_chars.div_ceil(Self::CHARS_PER_TOKEN_ESTIMATE)
+        self.prompt_chars
+            .div_ceil(STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN)
     }
 }
 
@@ -347,13 +479,39 @@ impl StreamProcessor {
     ///
     /// Each hook in registration order sees the (possibly rewritten) output of
     /// the previous hook. The accumulator always observes the *original*
-    /// upstream part so usage is never lost to a rewrite.
+    /// upstream part so usage is never lost to a rewrite. Standalone provider
+    /// usage snapshots are buffered; immediately before the terminal, hooks
+    /// and downstream observers see exactly one normalized snapshot.
     pub async fn process_part(&mut self, part: StreamPart) -> Result<Vec<StreamPart>> {
         self.ctx.accumulated_usage.observe(&part);
         self.ctx.observe_upstream_part(&part);
         self.ctx.parts_emitted += 1;
 
-        let mut current = vec![part];
+        let mut current = match part {
+            StreamPart::Usage { .. } => Vec::new(),
+            StreamPart::Finish { reason } => {
+                let mut parts = Vec::new();
+                if let Some(usage) = self.ctx.accumulated_usage.finalized() {
+                    parts.push(StreamPart::Usage { usage });
+                }
+                parts.push(StreamPart::Finish { reason });
+                parts
+            }
+            StreamPart::ResponseCompleted {
+                id,
+                source_protocol,
+                status,
+                response_output_commitment,
+                ..
+            } => vec![StreamPart::ResponseCompleted {
+                id,
+                source_protocol,
+                status,
+                usage: self.ctx.accumulated_usage.finalized(),
+                response_output_commitment,
+            }],
+            part => vec![part],
+        };
         for hook in &self.hooks {
             let interest = hook.interest();
             let mut next = Vec::with_capacity(current.len());
@@ -516,6 +674,97 @@ mod tests {
         ));
         ctx.set_stream_provider_started_at(std::time::Instant::now());
         ctx.stream_context()
+    }
+
+    fn usage(prompt_tokens: u64, completion_tokens: u64) -> Usage {
+        Usage {
+            prompt_tokens,
+            completion_tokens,
+            origin: crate::language_model::types::UsageOrigin::ProviderReported,
+            ..Usage::default()
+        }
+    }
+
+    fn asymmetric_pricing() -> UsagePricing {
+        UsagePricing {
+            base: UsagePricingBracket {
+                input_micro_usd_per_token: Some(1.0),
+                output_micro_usd_per_token: Some(10.0),
+                ..UsagePricingBracket::default()
+            },
+            context_tiers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn usage_accumulator_uses_highest_nominal_cost_when_priced() {
+        let expensive = usage(1_000, 1);
+        let last = usage(10, 50);
+        let mut accumulator = UsageAccumulator::default();
+        accumulator.set_pricing(Some(asymmetric_pricing()));
+        accumulator.observe(&StreamPart::Usage {
+            usage: expensive.clone(),
+        });
+        accumulator.observe(&StreamPart::Usage {
+            usage: last.clone(),
+        });
+
+        assert_eq!(accumulator.finalized(), Some(expensive));
+    }
+
+    #[test]
+    fn usage_accumulator_uses_last_snapshot_without_complete_pricing() {
+        let first = usage(1_000, 1);
+        let last = usage(10, 50);
+        let mut accumulator = UsageAccumulator::default();
+        accumulator.observe(&StreamPart::Usage { usage: first });
+        accumulator.observe(&StreamPart::Usage {
+            usage: last.clone(),
+        });
+
+        assert_eq!(accumulator.finalized(), Some(last));
+    }
+
+    #[tokio::test]
+    async fn processor_emits_one_selected_usage_immediately_before_terminal() -> Result<()> {
+        let expensive = usage(1_000, 1);
+        let last = usage(10, 50);
+        let mut context = timed_stream_context();
+        context
+            .accumulated_usage
+            .set_pricing(Some(asymmetric_pricing()));
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), context);
+
+        assert!(
+            processor
+                .process_part(StreamPart::Usage {
+                    usage: expensive.clone(),
+                })
+                .await?
+                .is_empty()
+        );
+        assert!(
+            processor
+                .process_part(StreamPart::Usage { usage: last })
+                .await?
+                .is_empty()
+        );
+        let emitted = processor
+            .process_part(StreamPart::Finish {
+                reason: FinishReason::Stop,
+            })
+            .await?;
+
+        assert_eq!(
+            emitted,
+            vec![
+                StreamPart::Usage { usage: expensive },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]
+        );
+        Ok(())
     }
 
     #[tokio::test]

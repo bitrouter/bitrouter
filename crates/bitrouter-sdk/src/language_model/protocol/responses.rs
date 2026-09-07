@@ -2230,6 +2230,7 @@ impl InboundAdapter for ResponsesAdapter {
             completed_items: Vec::new(),
             annotation_index: 0,
             pending_mcp_call: None,
+            pending_usage: None,
         })
     }
 }
@@ -3761,6 +3762,7 @@ struct ResponsesStreamEncoder {
     /// pair emits as one `mcp_call` output item (OpenAI carries arguments +
     /// output on a single item).
     pending_mcp_call: Option<PendingMcpCall>,
+    pending_usage: Option<Usage>,
 }
 
 /// A buffered router tool call awaiting its [`StreamPart::ServerToolResult`].
@@ -4353,7 +4355,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     ));
                 }
             }
-            StreamPart::Usage { .. } => {}
+            StreamPart::Usage { usage } => self.pending_usage = Some(usage.clone()),
             StreamPart::ResponseStarted { .. } => {
                 // Provider response identity is request-local continuation
                 // metadata. The public lifecycle remains on the gateway id.
@@ -4367,11 +4369,13 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     _ => "completed",
                 };
                 let response_id = self.response_id.clone()?;
-                self.emit_terminal(&mut frames, status, &response_id, None);
+                let usage = self.pending_usage.take();
+                self.emit_terminal(&mut frames, status, &response_id, usage);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
                 let response_id = self.response_id.clone()?;
-                self.emit_terminal(&mut frames, status, &response_id, usage.clone());
+                let usage = usage.clone().or_else(|| self.pending_usage.take());
+                self.emit_terminal(&mut frames, status, &response_id, usage);
             }
         }
         Ok(frames)

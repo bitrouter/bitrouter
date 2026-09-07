@@ -1480,6 +1480,7 @@ fn parse_usage_retains_provider_payload_and_origin() {
 #[derive(Default)]
 struct GenerateContentStreamDecoder {
     finished: bool,
+    pending_finish: Option<FinishReason>,
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats `responseId`; we surface it only once.
     response_started_emitted: bool,
@@ -1592,12 +1593,32 @@ impl StreamDecoder for GenerateContentStreamDecoder {
             {
                 if let Some(usage) = chunk.get("usageMetadata").and_then(parse_usage) {
                     parts.push(StreamPart::Usage { usage });
+                    parts.push(StreamPart::Finish { reason });
+                    self.finished = true;
+                } else {
+                    self.pending_finish = Some(reason);
                 }
+            }
+        } else if let Some(usage) = chunk.get("usageMetadata").and_then(parse_usage) {
+            parts.push(StreamPart::Usage { usage });
+            if let Some(reason) = self.pending_finish.take() {
                 parts.push(StreamPart::Finish { reason });
                 self.finished = true;
             }
         }
         Ok(parts)
+    }
+
+    fn finish(&mut self) -> Result<Vec<StreamPart>> {
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        self.finished = true;
+        Ok(self
+            .pending_finish
+            .take()
+            .map(|reason| vec![StreamPart::Finish { reason }])
+            .unwrap_or_default())
     }
 }
 

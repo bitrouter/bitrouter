@@ -135,6 +135,14 @@ pub(crate) struct PreparedStreamPart {
 pub(crate) struct PreparedPipelineResponse {
     pub(crate) response: PipelineResponse,
     pub(crate) delivery: DeliveryPermit,
+    #[cfg(feature = "server")]
+    pub(crate) model_id: String,
+}
+
+pub(crate) struct PreparedPipelineStream {
+    pub(crate) parts: Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>,
+    #[cfg(feature = "server")]
+    pub(crate) model_id: String,
 }
 
 enum DeliveryAuthorizationOutcome {
@@ -619,6 +627,11 @@ impl Pipeline {
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
         let response = ctx.response();
+        #[cfg(feature = "server")]
+        let model_id = ctx
+            .successful_target()
+            .and_then(|target| self.routing_table.canonical_model_id(ctx.model(), &target))
+            .unwrap_or_else(|| ctx.model().to_owned());
         let (delivery, authorization) = finalization.begin_delivery();
         let observe_hooks = self.observe_hooks.clone();
         self.spawn_stream_finalization(async move {
@@ -637,7 +650,12 @@ impl Pipeline {
             }
         });
 
-        Ok(PreparedPipelineResponse { response, delivery })
+        Ok(PreparedPipelineResponse {
+            response,
+            delivery,
+            #[cfg(feature = "server")]
+            model_id,
+        })
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -648,7 +666,7 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
         let prepared = self.execute_stream_prepared(req).await?;
-        Ok(Box::pin(prepared.then(|item| async move {
+        Ok(Box::pin(prepared.parts.then(|item| async move {
             let PreparedStreamPart { part, delivery } = item?;
             if let Some(delivery) = delivery {
                 delivery.deliver().await?;
@@ -660,7 +678,7 @@ impl Pipeline {
     pub(crate) async fn execute_stream_prepared(
         self: Arc<Self>,
         req: PipelineRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>> {
+    ) -> Result<PreparedPipelineStream> {
         let mut ctx = PipelineContext::new(req);
         self.observe_start(&ctx).await;
 
@@ -764,16 +782,26 @@ impl Pipeline {
         });
         self.observe_after(Phase::Execution, &ctx).await;
 
+        let mut stream_context = ctx.stream_context();
+        stream_context.accumulated_usage.set_pricing(
+            self.routing_table
+                .usage_pricing(ctx.model(), &upstream.target),
+        );
         let processor = StreamProcessor::new(
             self.stream_hooks.clone(),
             self.observe_hooks.clone(),
-            ctx.stream_context(),
+            stream_context,
         );
 
         // The guard owns the processor + context. Whatever happens to the
         // returned stream — drained to completion, errored, or **dropped early
         // by the client** — `on_stream_end` and Settlement run exactly once
         // so streaming settlement is never lost.
+        #[cfg(feature = "server")]
+        let model_id = self
+            .routing_table
+            .canonical_model_id(ctx.model(), &upstream.target)
+            .unwrap_or_else(|| ctx.model().to_owned());
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
             latest_attempt,
@@ -786,7 +814,11 @@ impl Pipeline {
             ))),
         };
 
-        Ok(Box::pin(self.drive_stream(upstream.stream, guard)))
+        Ok(PreparedPipelineStream {
+            parts: Box::pin(self.drive_stream(upstream.stream, guard)),
+            #[cfg(feature = "server")]
+            model_id,
+        })
     }
 
     /// The streaming driver: feeds upstream parts through the guard's
