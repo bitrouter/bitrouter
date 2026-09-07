@@ -5497,6 +5497,40 @@
       "release_date": "2026-06-25"
     },
     {
+      "family": "gpt",
+      "id": "openai/gpt-6-astra",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "name": "OpenAI: GPT-6 Astra",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-6-astra",
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "description": "Qwen3.5 open-source native vision-language MoE (122B total, 10B active).",
       "family": "qwen3.5",
       "id": "qwen/qwen3.5-122b-a10b",

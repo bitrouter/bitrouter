@@ -964,10 +964,10 @@ pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    // Fetched dist when reachable; otherwise the disk cache. `None` (never
-    // fetched + unreachable) means an empty registry — skip the merge entirely.
-    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
-    else {
+    crate::bundled_registry::enable_logged_in(config);
+    // Supplement the public registry with the ACP providers shipped in this
+    // binary. Explicitly disabled/custom registries keep their own policy.
+    let Some(data) = crate::bundled_registry::load(&config.registry).await else {
         bitrouter_providers::apply_builtin_defaults(config);
         return;
     };

@@ -537,11 +537,13 @@ pub async fn login_provider_with_options(
 ) -> Result<LoginOutcome> {
     use bitrouter_providers::builtin;
 
-    // The `bitrouter` cloud gateway is compiled in; every other provider's
-    // auth shape (handler + public OAuth params) comes from the fetched-or-
-    // cached registry — the same mapper the built-ins once used.
-    let entry: bitrouter_providers::ProviderEntry = match builtin::find(provider_id) {
-        Some(e) => e.clone(),
+    // Cloud and the maintained ACP subscription providers have bundled login
+    // defaults. Other providers resolve against the fetched/cached registry.
+    let entry: bitrouter_providers::ProviderEntry = match builtin::find(provider_id)
+        .cloned()
+        .or(crate::bundled_registry::provider(provider_id)?)
+    {
+        Some(e) => e,
         None => {
             let data = bitrouter_providers::registry::apply::load_or_cached(
                 &bitrouter_sdk::config::RegistryConfig::default(),

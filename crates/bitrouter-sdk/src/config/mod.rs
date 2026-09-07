@@ -44,6 +44,10 @@ pub use routing_table::ConfigRoutingTable;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ChatConfig {
+    /// Default ACP harness for bare `bitrouter` (catalog id or configured agent).
+    pub agent: Option<String>,
+    /// Default daemon-routable model for the chat session.
+    pub model: Option<String>,
     /// Prompt-expansion commands.
     ///
     /// `/name args` in `bitrouter chat`, or `bitrouter acp prompt "/name args"`,

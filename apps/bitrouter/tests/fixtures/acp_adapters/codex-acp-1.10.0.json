@@ -1,8 +1,8 @@
 {
   "harnessId": "codex-acp",
   "package": "@agentclientprotocol/codex-acp",
-  "version": "1.7.0",
-  "gitHead": "2b48e9822330fc09f3a94a81563e5c4bb779601a",
+  "version": "1.10.0",
+  "gitHead": "061f9a4a2e463a220d7a3ab2ae5e9732837085ef",
   "providerId": "openai",
   "protocol": "openai",
   "fallbackEnv": [

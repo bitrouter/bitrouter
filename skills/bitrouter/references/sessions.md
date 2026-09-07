@@ -99,8 +99,8 @@ reports.
 The maintained catalog commands are exact pins:
 
 ```bash
-npx -y @agentclientprotocol/claude-agent-acp@0.70.0
-npx -y @agentclientprotocol/codex-acp@1.7.0
+npx -y @agentclientprotocol/claude-agent-acp@0.75.1
+npx -y @agentclientprotocol/codex-acp@1.10.0
 ```
 
 When routing is active, one endpoint plan drives both provider setup and its

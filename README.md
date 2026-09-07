@@ -232,22 +232,25 @@ actually resolves. Full catalog in [`registry/`](registry/).
 
 ## Harness integrations
 
-BitRouter runs *under* Claude Code, Codex, and the rest — not instead of them.
-Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` for OpenAI-compatible clients or `ANTHROPIC_BASE_URL=http://localhost:4356` for Anthropic-compatible clients. For catalog harnesses with an interactive binary, `bitrouter launch` starts the harness's own native TUI without editing its config files. Routed harnesses start with traffic pointed at the daemon; own-auth harnesses start directly and say so in the startup line.
+Run `bitrouter` to complete first-run setup and choose a default ACP harness.
+The same command then opens BitRouter's terminal UI with that saved harness.
+Codex (`codex-acp`) and Claude (`claude-acp`) are built in; no agent YAML is
+required. A compatible local CLI is discovered automatically and used behind
+its ACP adapter; otherwise the adapter uses its bundled worker.
 
-| Name | Launch behavior |
-| ---- | ----------- |
-| Claude Code | Child env overrides (`ANTHROPIC_BASE_URL`) — see the [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway) for the manual form |
-| OpenAI Codex | One-shot `-c` overrides — see [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) for the manual form |
-| OpenCode | Synthesized `OPENCODE_CONFIG`; models via [models.dev](https://github.com/anomalyco/models.dev) |
-| Pi-Agent | Synthesized `PI_CODING_AGENT_DIR` — see the [model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) for the manual form |
-| Hermes | Synthesized `HERMES_HOME` with a loopback `custom` provider |
-| OpenClaw | Synthesized `OPENCLAW_STATE_DIR` plus `OPENCLAW_CONFIG_PATH` |
-| Grok / Antigravity (`agy`) | Own-auth launch: not redirected or metered by `launch`; those sessions remain usable by the daemon as provider capacity |
+```bash
+bitrouter                              # onboarding, then the default ACP TUI
+bitrouter chat codex-acp                # choose an ACP harness for one session
+bitrouter spawn claude-acp -p "summarize this repo"
+```
 
-Routing and gateway injection are per-harness promises, so the table calls out the maintained mechanisms instead of implying one universal redirect path.
+The built-in adapters require Node.js 22+ and `npx`. BitRouter only launches ACP
+agents; the native CLI launcher has been removed. Other API clients can still
+use `OPENAI_BASE_URL=http://localhost:4356/v1` or
+`ANTHROPIC_BASE_URL=http://localhost:4356` to send traffic to the daemon.
 
-Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+The full provider and ACP agent catalog lives in
+[registry/](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
 

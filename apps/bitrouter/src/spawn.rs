@@ -1093,7 +1093,7 @@ pub(crate) async fn ensure_local_daemon(
 /// Locate an executable on `PATH`. Pure-`std` (no `which` crate) so the
 /// `#![forbid(unsafe_code)]` lib stays dependency-light: split `$PATH` and
 /// probe each entry. Returns the first match.
-fn resolve_binary(name: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_binary(name: &str) -> Option<PathBuf> {
     find_on_path(name, std::env::var_os("PATH"), &extra_search_dirs())
 }
 
@@ -1522,15 +1522,6 @@ mod tests {
         assert!(pi.contains("no MCP mechanism"), "{pi}");
 
         // Own-auth: degrade honestly rather than showing blanks.
-        let grok = line("grok");
-        assert!(
-            grok.contains("own-auth · not routed · not metered"),
-            "{grok}"
-        );
-        assert!(
-            !grok.contains("tools"),
-            "an unrouted harness must not advertise gateways at all: {grok}"
-        );
     }
 
     #[test]
@@ -1760,9 +1751,7 @@ mod tests {
         // deliberate CLI change.
         assert_eq!(
             launchable(),
-            vec![
-                "agy", "claude", "codex", "grok", "hermes", "openclaw", "opencode", "pi"
-            ]
+            vec!["claude", "codex", "hermes", "openclaw", "opencode", "pi"]
         );
     }
 
@@ -1779,9 +1768,7 @@ mod tests {
         // supports, which is now every catalog entry with an interactive
         // binary. It never advertises one that would then be refused, and
         // never omits one that would have worked.
-        for id in [
-            "claude", "codex", "opencode", "pi", "hermes", "openclaw", "grok", "agy",
-        ] {
+        for id in ["claude", "codex", "opencode", "pi", "hermes", "openclaw"] {
             assert!(msg.contains(id), "{msg} should list {id}");
         }
         // A typo is the caller's mistake, not a BitRouter fault: the error
@@ -1802,7 +1789,7 @@ mod tests {
             let h = crate::harness::by_id(id).expect("catalog harness");
             assert!(needs_model_catalog(h), "{id} synthesizes a model list");
         }
-        for id in ["claude-acp", "codex-acp", "grok", "antigravity"] {
+        for id in ["claude-acp", "codex-acp"] {
             let h = crate::harness::by_id(id).expect("catalog harness");
             assert!(!needs_model_catalog(h), "{id} needs no /v1/models probe");
         }
