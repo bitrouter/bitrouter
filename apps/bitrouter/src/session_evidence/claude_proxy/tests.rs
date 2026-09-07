@@ -49,6 +49,7 @@ async fn partial_and_oversized_frames_forward_with_bounded_gap_evidence() -> Res
 
 #[test]
 fn native_and_script_overrides_keep_their_execution_semantics() -> Result<()> {
+    let directory = tempfile::tempdir()?;
     let root = NativeRoot {
         harness: Harness::ClaudeCode,
         namespace: "profile".into(),
@@ -56,16 +57,14 @@ fn native_and_script_overrides_keep_their_execution_semantics() -> Result<()> {
     };
     for original in ["/native/claude", "/runtime/cli.js", "/runtime/cli.ts"] {
         let mut env = HashMap::from([("CLAUDE_CODE_EXECUTABLE".into(), original.into())]);
-        let capture = prepare_env(
-            &mut env,
-            Path::new("/spool"),
-            Path::new("/bitrouter"),
-            &root,
-        )?;
+        let capture = prepare_env(&mut env, directory.path(), Path::new("/bitrouter"), &root)?;
         if original == "/native/claude" && cfg!(unix) {
             assert!(capture);
             assert_eq!(env[UPSTREAM_ENV], original);
-            assert_eq!(env["CLAUDE_CODE_EXECUTABLE"], "/bitrouter");
+            assert_eq!(
+                Path::new(&env["CLAUDE_CODE_EXECUTABLE"]),
+                directory.path().join(PROXY_NAME)
+            );
         } else {
             assert!(!capture);
             assert_eq!(

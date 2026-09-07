@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 use super::collector::NativeRoot;
 use super::types::{Harness, MAX_RECORD_BYTES};
 
+pub const PROXY_NAME: &str = "bitrouter-claude-proxy";
+
 pub const SPOOL_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_SPOOL";
 pub const UPSTREAM_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_UPSTREAM";
 pub const ADAPTER_ENTRY_ENV: &str = "BITROUTER_CLAUDE_ADAPTER_ENTRY";
@@ -49,11 +51,16 @@ pub fn prepare_env(
         ensure!(!original.is_empty(), "CLAUDE_CODE_EXECUTABLE is empty");
         env.insert(UPSTREAM_ENV.into(), original);
     }
+    let proxy = spool.join(PROXY_NAME);
+    // A distinct argv[0] separates adapter CLI probes from ordinary BitRouter
+    // commands launched by MCP servers with the adapter's inherited env.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(executable, &proxy)?;
     env.insert(
         "CLAUDE_CODE_EXECUTABLE".into(),
-        executable
+        proxy
             .to_str()
-            .context("controller executable must be UTF-8")?
+            .context("proxy executable must be UTF-8")?
             .into(),
     );
     env.insert(
@@ -88,24 +95,17 @@ pub(super) fn instrument_scope(params: &mut Value, spool: &Path, namespace: &str
     Ok(())
 }
 
-/// Called before Clap: the SDK supplies Claude flags, not a BitRouter command.
-/// Requiring the native stream flags also prevents inherited private variables
-/// from redirecting ordinary BitRouter hook or tool invocations.
+/// The private executable alias owns all native CLI invocations, including
+/// auth probes. Ordinary BitRouter tools can inherit the same environment.
 pub fn selected() -> bool {
-    std::env::var_os(SPOOL_ENV).is_some()
-        && std::env::args_os().any(|arg| arg == "--input-format")
-        && std::env::args_os().any(|arg| arg == "--output-format")
+    std::env::args_os().next().is_some_and(|arg| {
+        Path::new(&arg)
+            .file_name()
+            .is_some_and(|name| name == PROXY_NAME)
+    })
 }
 
 pub async fn run() -> Result<i32> {
-    let directory =
-        PathBuf::from(std::env::var_os(SPOOL_ENV).context("Claude proxy spool missing")?);
-    ensure!(directory.is_absolute(), "native spool must be absolute");
-    let namespace = std::env::var(NAMESPACE_ENV).context("Claude proxy namespace missing")?;
-    let actual = super::service::native_root(Harness::ClaudeCode, &HashMap::new(), &[]);
-    let scope_valid = actual
-        .as_ref()
-        .is_ok_and(|root| root.namespace == namespace);
     let program = resolve_upstream(
         std::env::var_os(UPSTREAM_ENV).map(PathBuf::from),
         std::env::var_os("PATH"),
@@ -116,9 +116,23 @@ pub async fn run() -> Result<i32> {
         std::fs::canonicalize(&program)? != std::fs::canonicalize(std::env::current_exe()?)?,
         "Claude proxy cannot launch itself"
     );
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let streaming = args.iter().any(|arg| arg == "--input-format")
+        && args.iter().any(|arg| arg == "--output-format");
+    if !streaming {
+        return passthrough(program, args).await;
+    }
+    let directory =
+        PathBuf::from(std::env::var_os(SPOOL_ENV).context("Claude proxy spool missing")?);
+    ensure!(directory.is_absolute(), "native spool must be absolute");
+    let namespace = std::env::var(NAMESPACE_ENV).context("Claude proxy namespace missing")?;
+    let actual = super::service::native_root(Harness::ClaudeCode, &HashMap::new(), &[]);
+    let scope_valid = actual
+        .as_ref()
+        .is_ok_and(|root| root.namespace == namespace);
     run_with(
         program,
-        std::env::args_os().skip(1).collect(),
+        args,
         directory,
         namespace,
         scope_valid,
@@ -126,6 +140,42 @@ pub async fn run() -> Result<i32> {
         tokio::io::stdout(),
     )
     .await
+}
+
+/// Auth output never enters the evidence journal. Unix exec retains the
+/// adapter's original timeout/signal ownership and native stdio/exit semantics.
+/// https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+async fn passthrough(program: PathBuf, args: Vec<OsString>) -> Result<i32> {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    restore_environment(&mut command)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec().into())
+    }
+    #[cfg(not(unix))]
+    {
+        let status = Command::from(command).kill_on_drop(true).status().await?;
+        Ok(exit_code(status))
+    }
+}
+
+fn restore_environment(command: &mut std::process::Command) -> Result<()> {
+    let executable = std::fs::canonicalize(std::env::current_exe()?)?;
+    if std::env::var_os("CLAUDE_CODE_EXECUTABLE")
+        .is_some_and(|path| std::fs::canonicalize(path).is_ok_and(|path| path == executable))
+    {
+        if let Some(original) = std::env::var_os(UPSTREAM_ENV) {
+            command.env("CLAUDE_CODE_EXECUTABLE", original);
+        } else {
+            command.env_remove("CLAUDE_CODE_EXECUTABLE");
+        }
+    }
+    for key in [SPOOL_ENV, UPSTREAM_ENV, ADAPTER_ENTRY_ENV, NAMESPACE_ENV] {
+        command.env_remove(key);
+    }
+    Ok(())
 }
 
 async fn resolve_upstream(
@@ -223,20 +273,7 @@ async fn run_with(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
-    // Restore the original executable environment. Per-session env overrides
-    // that differ from our proxy path are already the user's native selection.
-    let executable = std::env::current_exe()?;
-    if std::env::var_os("CLAUDE_CODE_EXECUTABLE").is_some_and(|path| path == executable.as_os_str())
-    {
-        if let Some(original) = std::env::var_os(UPSTREAM_ENV) {
-            command.env("CLAUDE_CODE_EXECUTABLE", original);
-        } else {
-            command.env_remove("CLAUDE_CODE_EXECUTABLE");
-        }
-    }
-    for key in [SPOOL_ENV, UPSTREAM_ENV, ADAPTER_ENTRY_ENV, NAMESPACE_ENV] {
-        command.env_remove(key);
-    }
+    restore_environment(command.as_std_mut())?;
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {

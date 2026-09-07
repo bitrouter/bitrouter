@@ -36,8 +36,10 @@ async fn term_reaps_unresponsive_native_child_before_sdk_five_second_kill() -> R
     )?;
     std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700))?;
     let binary = env!("CARGO_BIN_EXE_bitrouter");
+    let alias = root.join(claude_proxy::PROXY_NAME);
+    std::os::unix::fs::symlink(binary, &alias)?;
     let pid_file = root.join("native.pid");
-    let mut proxy = Command::new(binary)
+    let mut proxy = Command::new(&alias)
         .args([
             "--input-format",
             "stream-json",
@@ -45,7 +47,7 @@ async fn term_reaps_unresponsive_native_child_before_sdk_five_second_kill() -> R
             "stream-json",
         ])
         .env("CLAUDE_CONFIG_DIR", &profile)
-        .env("CLAUDE_CODE_EXECUTABLE", binary)
+        .env("CLAUDE_CODE_EXECUTABLE", &alias)
         .env(claude_proxy::SPOOL_ENV, &spool)
         .env(claude_proxy::NAMESPACE_ENV, namespace)
         .env(claude_proxy::UPSTREAM_ENV, &native)
@@ -99,5 +101,48 @@ async fn term_reaps_unresponsive_native_child_before_sdk_five_second_kill() -> R
     assert_eq!(stopped["method"], "runtime/stopped");
     assert_eq!(stopped["clean"], false);
     assert_eq!(stopped["exit_code"], 137);
+    Ok(())
+}
+
+#[tokio::test]
+async fn private_alias_preserves_native_auth_probes_without_capturing_credentials() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = std::fs::canonicalize(directory.path())?;
+    let alias = root.join(claude_proxy::PROXY_NAME);
+    let binary = env!("CARGO_BIN_EXE_bitrouter");
+    std::os::unix::fs::symlink(binary, &alias)?;
+    let spool = root.join("spool");
+    std::fs::create_dir(&spool)?;
+    let native = root.join("claude");
+    std::fs::write(
+        &native,
+        "#!/bin/sh\n[ \"$1\" = auth ] || exit 91\n[ \"$CLAUDE_CODE_EXECUTABLE\" = \"$0\" ] || exit 92\n[ -z \"$BITROUTER_CLAUDE_EVIDENCE_SPOOL\" ] || exit 93\nprintf '%s' '{\"loggedIn\":true,\"fixtureCredential\":\"private\"}'\nexit 7\n",
+    )?;
+    std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700))?;
+    for args in [vec!["auth", "status", "--json"], vec!["auth", "logout"]] {
+        let output = Command::new(&alias)
+            .args(args)
+            .env("CLAUDE_CODE_EXECUTABLE", &alias)
+            .env(claude_proxy::SPOOL_ENV, &spool)
+            .env(claude_proxy::UPSTREAM_ENV, &native)
+            .output()
+            .await?;
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout)?["fixtureCredential"],
+            "private"
+        );
+    }
+    assert_eq!(std::fs::read_dir(spool)?.count(), 0);
+    // The real BitRouter executable must still parse its own commands even
+    // when an MCP server inherits every private adapter environment variable.
+    let output = Command::new(binary)
+        .arg("--version")
+        .env(claude_proxy::SPOOL_ENV, &root)
+        .env(claude_proxy::UPSTREAM_ENV, native)
+        .output()
+        .await?;
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)?.starts_with("bitrouter "));
     Ok(())
 }

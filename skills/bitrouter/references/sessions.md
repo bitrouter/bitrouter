@@ -196,7 +196,11 @@ wiring, not a user-facing model or provider setting.
 On Unix, Claude native executables also run through a private stdio proxy.
 The controller saves `CLAUDE_CODE_EXECUTABLE` in child-only
 `BITROUTER_CLAUDE_EVIDENCE_UPSTREAM` and temporarily points the adapter at
-BitRouter. Without an explicit override, resolution follows the adapter's own
+a private `bitrouter-claude-proxy` executable alias. The alias distinguishes
+native CLI calls from ordinary BitRouter commands launched by MCP tools with
+inherited environment variables. Auth probes and other non-stream commands
+execute the original CLI directly; their output is not journaled. Without an
+explicit override, resolution follows the adapter's own
 SDK dependency and platform-specific native package. Custom adapter launchers
 can set `BITROUTER_CLAUDE_ADAPTER_ENTRY` when their entry cannot be located on
 PATH. `BITROUTER_CLAUDE_EVIDENCE_SPOOL` and

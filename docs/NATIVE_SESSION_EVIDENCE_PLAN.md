@@ -116,7 +116,10 @@ attribution, complete multi-root coverage and Eval manifests still require work.
 
 Claude native CLI processes now have independent observation spools on Unix.
 The maintained adapter's executable override starts a private BitRouter proxy;
-its native argv, stdin/stdout bytes and exit code are preserved. Resolution uses
+its native argv, stdin/stdout bytes and exit code are preserved. A distinct
+executable alias also forwards the adapter's auth status/logout calls directly
+to the original CLI without capturing their output or changing ordinary
+BitRouter commands in inherited MCP environments. Resolution uses
 the adapter's SDK-local optional dependency, including Linux libc preference.
 Explicit script executables and platforms without signal supervision retain
 SDK ownership and expose a durable process-capture gap. Each process has a new
@@ -143,7 +146,7 @@ Abrupt wrapper death without a durable stop remains unknown. Correlating these
 process scopes to ACP operations, hooks, live Query caches and exact task ranges
 still requires implementation; early ACP SDK journal records remain unbound.
 Independent stage review passed after termination, persistent-gap, identity-gate
-and ambient-field fixes. The workspace check ran 3,208 tests with 12 skipped;
+and ambient-field fixes. The workspace check ran 3,209 tests with 12 skipped;
 Clippy, formatting, doctests, rustdoc and distribution checks also passed.
 
 Still required: complete execution-relation parsing, native SDK lifecycle
