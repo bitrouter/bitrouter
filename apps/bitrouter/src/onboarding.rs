@@ -1247,7 +1247,6 @@ mod tests {
         assert!(!outcome.cloud_cleared); // no cloud file this call
         assert_eq!(outcome.providers_removed, 2);
         assert!(store.providers().is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -1259,7 +1258,6 @@ mod tests {
         let mut store = CredentialStore::load(dir.join("oauth-tokens.json")).unwrap();
         let outcome = reset_with(Some(&missing_cloud), Some(&mut store), true).unwrap();
         assert_eq!(outcome, ResetOutcome::default());
-        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
