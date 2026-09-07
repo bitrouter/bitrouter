@@ -548,7 +548,7 @@ enum Command {
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
         /// configured `agents:` entry. A catalog id needs no config entry; run
         /// `--check` to see whether it will route or run direct in headless mode.
-        #[arg(required_unless_present = "agent_compat")]
+        #[arg(required_unless_present = "legacy_agent")]
         agent: Option<String>,
         /// Send one prompt, stream NDJSON to stdout, then exit.
         #[arg(short = 'p', long, value_name = "TEXT")]
@@ -2192,9 +2192,27 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             routing,
             config,
         } => {
+            use std::io::IsTerminal as _;
+
             eprintln!(
                 "note: `bitrouter chat` is a compatibility alias; use `bitrouter code {agent}`."
             );
+            // Keep the retired alias safe for existing scripts: the canonical
+            // `code <agent>` owns an interactive terminal, while a redirected
+            // legacy invocation retains its plain-text transcript renderer.
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                let source = bitrouter::paths::resolve_config(config.as_deref())?;
+                let cfg = bitrouter::paths::load_config(&source).await?;
+                let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
+                return bitrouter::acp_cli::chat(bitrouter::acp_cli::SpawnContext {
+                    source: &source,
+                    config: cfg,
+                    agent_id: &agent,
+                    options: bitrouter::acp_cli::launch_options(turn_timeout),
+                    routing,
+                })
+                .await;
+            }
             run_code(
                 CodeArgs {
                     agent: Some(agent),
