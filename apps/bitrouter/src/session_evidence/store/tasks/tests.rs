@@ -454,7 +454,7 @@ async fn verify_concurrent_read_snapshot(url: &str) -> Result<()> {
     let node = root("session");
     let journal = journal(&writer, "writer", &node).await?;
     journal.append(request("one", "session")).await?;
-    let transaction = reader.task_read_transaction().await?;
+    let transaction = reader.read_snapshot().await?;
     let old_task = reader
         .active_task(&transaction, &node)
         .await?

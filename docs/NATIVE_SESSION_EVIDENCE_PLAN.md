@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership. | Explicit task/attempt switching, native execution membership and immutable per-attempt source cuts. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. | Explicit task/attempt switching, native execution membership and exact per-attempt execution ranges. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Collection state is available in an application snapshot. | User-facing evaluation status, checkpoint feedback and task/attempt actions. |
@@ -356,13 +356,54 @@ The workspace run passed all 3,256 tests with 12 skipped. Clippy, formatting,
 doctests, rustdoc and distribution checks passed. These fixtures do not certify
 pinned native-runtime conformance or complete task execution attribution.
 
+Prompt requests and original responses now bind immutable native observation
+frontiers after a reconciliation pass bounded to 30 seconds. Each object pins
+its ACP operation, phase and conversation key, parser version, source descriptors,
+generations, revisions, cursor positions, terminal record references and gaps.
+The database snapshot covers one owner's sources in the conversation's harness
+and native-root namespace, including multiplexed journals. It is an inventory
+boundary, not proof that every source belongs to this task. It scans at most
+1,024 owned registrations in 16-row pages; overflow, damaged registrations,
+uninitialized sources and invalid terminal records remain explicit gaps.
+
+The original prompt selects the task baseline, while the latest recorded prompt
+response selects a candidate result. New references are checked in the prompt's
+writer transaction against the exact controller, operation, phase and original
+session. A response uses its durable original request even when live profile
+state is uncertain. Later source appends or generation changes cannot mutate a
+saved frontier; original terminal records are rechecked when loading it. Missing
+checkpoint bodies leave task identity readable with an unavailable checkpoint.
+Old prompt records without these fields remain readable with missing evidence.
+
+Historical checkpoint gaps stay with their checkpoint and cannot drive current
+inventory epochs, freeze SDK cuts or contaminate a new capture with old backlog.
+Captures may include genuine concurrent work, prior unbound sources or incomplete
+collection. They do not establish producer quiescence, native command membership,
+causal ordering between sources, or integrity of every preceding record. The
+production manifest compiler still needs those proofs and must check each
+included record, final artifact and metered request separately.
+
+Independent stage review found and corrected a feedback loop where a frozen
+backlog could hold the live inventory epoch open. A 130-process-spool regression
+freezes a backlog, drains current inventory, imports a later process and SDK
+observation, and verifies a new response does not inherit the old backlog. Other
+regressions cover immutable frontiers after append/replacement/file removal and
+database reopen, missing terminal records, corrupt and foreign sources, paged
+inventory overflow, cross-operation admission rollback, replay stability, old
+prompts without checkpoints, and observer cancellation after checkpoint commit.
+Both maintained controller launch paths automatically retain checkpoint references.
+The final workspace run passed all 3,263 tests with 12 skipped. Clippy,
+formatting, doctests, rustdoc and distribution checks passed. These checks cover
+this source-frontier stage, not exact task execution attribution or the complete
+pinned native-runtime conformance matrix.
+
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace
 checkpoints and deltas; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
 conformance, workspace checks, final review and PR delivery. Automatic first-attempt
-creation is wired; explicit task/attempt switching, immutable native source cuts,
+creation is wired; explicit task/attempt switching, exact native execution ranges,
 final artifact selection, dangling-RPC resolution, final settlement and score submission
 are not. Manifest storage exists, but no application path yet compiles a complete
 evaluation manifest. The live collection snapshot exposes history, candidate

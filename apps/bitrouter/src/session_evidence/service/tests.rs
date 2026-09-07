@@ -148,6 +148,25 @@ async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Resu
             .context("visible attempt")?;
         assert_eq!(shown.phase, AttemptPhase::Settling);
         assert!(shown.effective_manifest.is_none());
+        let checkpoint = snapshot
+            .native_checkpoints
+            .get(&attempt.id)
+            .context("automatic native checkpoints")?;
+        let baseline = checkpoint.baseline.as_ref().context("native baseline")?;
+        let result = checkpoint
+            .latest_prompt_result
+            .as_ref()
+            .context("native result")?;
+        assert_ne!(baseline, result);
+        assert_eq!(
+            service
+                .store
+                .native_checkpoint_evidence(&root)
+                .await?
+                .baseline
+                .as_ref(),
+            Some(baseline)
+        );
         service
             .observe(observation(
                 "synthetic",

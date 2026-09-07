@@ -63,30 +63,44 @@ async fn committed_prompt_is_visible_after_observer_cancellation_on_the_same_con
         .into_iter()
         .find(|source| source.descriptor.format == SourceFormat::Acp)
         .context("controller journal")?;
-    let reader = EvidenceStore::new(
-        crate::db::connect(&crate::db::anchor_url(
-            "sqlite:evidence.db?mode=ro",
-            &directory.path().join("router"),
-        ))
-        .await?,
-        service.store.owner(),
-    )?;
+    let reader_db = crate::db::connect(&crate::db::anchor_url(
+        "sqlite:evidence.db?mode=ro",
+        &directory.path().join("router"),
+    ))
+    .await?;
+    let reader = EvidenceStore::new(reader_db.clone(), service.store.owner())?;
     let mut pending = Box::pin(service.observe(observation(
         "cancelled",
         "session/prompt",
         "request",
         json!({"sessionId":"public","prompt":[]}),
     )));
-    std::future::poll_fn(|cx| {
-        use std::future::Future;
-        match pending.as_mut().poll(cx) {
-            std::task::Poll::Pending => std::task::Poll::Ready(Ok(())),
-            std::task::Poll::Ready(_) => {
-                std::task::Poll::Ready(Err(anyhow::anyhow!("observer must reach a database await")))
+    // Native collection needs the state lock before the final journal append.
+    // Advance the real observer until its immutable checkpoint is committed,
+    // then block publication after the prompt transaction, not collection.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            std::future::poll_fn(|cx| {
+                use std::future::Future;
+                match pending.as_mut().poll(cx) {
+                    std::task::Poll::Pending => std::task::Poll::Ready(Ok(())),
+                    std::task::Poll::Ready(_) => std::task::Poll::Ready(Err(anyhow::anyhow!(
+                        "observer finished before its checkpoint could be inspected"
+                    ))),
+                }
+            }).await?;
+            let row = reader_db.query_one(Statement::from_string(DbBackend::Sqlite,
+                "SELECT object_json FROM native_evidence_objects WHERE kind = 'native_checkpoint'".to_owned()
+            )).await?;
+            if let Some(row) = row {
+                let value: Value = serde_json::from_str(&row.try_get::<String>("", "object_json")?)?;
+                if value.pointer("/checkpoint/operation_id").and_then(Value::as_str) == Some("cancelled") {
+                    return anyhow::Ok(());
+                }
             }
+            tokio::task::yield_now().await;
         }
-    })
-    .await?;
+    }).await??;
     let state = service.state.lock().await;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {

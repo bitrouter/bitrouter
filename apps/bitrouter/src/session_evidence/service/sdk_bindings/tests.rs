@@ -234,6 +234,127 @@ async fn recover(service: &ControllerEvidence) -> Result<CollectionSnapshot> {
 }
 
 #[tokio::test]
+async fn frozen_checkpoint_backlog_does_not_block_later_prompts_or_sdk_inventory() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let handle = service(directory.path()).await?;
+    let prepared = prepare(&handle.service, directory.path(), "profile").await?;
+    handle
+        .service
+        .observe(observation(
+            "profile",
+            "session/new",
+            "response",
+            json!({"sessionId":"public"}),
+        ))
+        .await?;
+    for index in 0..130 {
+        write_process(
+            &prepared,
+            &[],
+            &format!("f0000000-0000-4000-8000-{index:012x}"),
+        )
+        .await?;
+    }
+    handle
+        .service
+        .observe(observation(
+            "one",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"public","prompt":[]}),
+        ))
+        .await?;
+    let attempt = handle.service.store.attempts(None, 16).await?.remove(0);
+    let first = handle
+        .service
+        .store
+        .native_checkpoint_evidence(&attempt.session)
+        .await?;
+    assert!(
+        first.gaps.contains("native_spool_backlog"),
+        "{:?}",
+        first.gaps
+    );
+    handle
+        .service
+        .observe(observation(
+            "one",
+            "session/prompt",
+            "response",
+            json!({"stopReason":"end_turn"}),
+        ))
+        .await?;
+    let settled_inventory = recover(&handle.service).await?;
+    assert!(!handle.service.state.lock().await.inventory_cycle_active);
+    assert!(
+        settled_inventory.native_checkpoints[&attempt.id]
+            .gaps
+            .contains("native_spool_backlog")
+    );
+    assert!(!settled_inventory.gaps.contains("native_spool_backlog"));
+    let epoch = handle.service.state.lock().await.inventory_epoch;
+    let late = init("native-late", "late-event");
+    process(&prepared, std::slice::from_ref(&late)).await?;
+    sdk(&handle.service, "public", &late).await?;
+    let visible = recover(&handle.service).await?;
+    assert!(handle.service.state.lock().await.inventory_epoch > epoch);
+    assert!(visible.sdk_bindings.observations.iter().any(|binding| {
+        binding.process_id.is_some()
+            && binding
+                .node
+                .as_ref()
+                .is_some_and(|node| node.native_id == "native-late")
+    }));
+    handle
+        .service
+        .observe(observation(
+            "two",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"public","prompt":[]}),
+        ))
+        .await?;
+    handle
+        .service
+        .observe(observation(
+            "two",
+            "session/prompt",
+            "response",
+            json!({"stopReason":"end_turn"}),
+        ))
+        .await?;
+    let latest = handle
+        .service
+        .store
+        .native_checkpoint_evidence(&attempt.session)
+        .await?;
+    assert_eq!(latest.baseline, first.baseline);
+    assert!(latest.gaps.contains("native_spool_backlog"));
+    // The baseline's old backlog remains historical evidence, but is not
+    // copied to a fresh checkpoint after the current inventory has drained.
+    let db = crate::db::connect(&crate::db::anchor_url(
+        "sqlite:evidence.db?mode=ro",
+        &directory.path().join("router"),
+    ))
+    .await?;
+    let row = db.query_one(Statement::from_sql_and_values(DbBackend::Sqlite,
+        "SELECT object_json FROM native_evidence_objects WHERE kind = 'native_checkpoint' AND object_key = ?",
+        [latest.latest_prompt_result.context("latest result")?.into()],
+    )).await?.context("checkpoint body")?;
+    let stored: Value = serde_json::from_str(&row.try_get::<String>("", "object_json")?)?;
+    let gaps = stored
+        .pointer("/checkpoint/gaps")
+        .and_then(Value::as_array)
+        .context("checkpoint gaps")?;
+    assert!(
+        !gaps
+            .iter()
+            .any(|gap| gap.as_str() == Some("native_spool_backlog"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn early_sdk_events_and_reset_keep_exact_profile_and_native_identity_after_restart()
 -> Result<()> {
     let directory = tempfile::tempdir()?;

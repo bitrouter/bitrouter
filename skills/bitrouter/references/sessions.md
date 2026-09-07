@@ -165,6 +165,19 @@ RPCs owned by another controller remain explicit uncertainty. Task state is
 currently available in the application evidence snapshot; TUI feedback and
 automatic evaluation submission are not yet wired.
 
+Confirmed prompt requests and their original responses also pin immutable native
+source positions after a bounded reconciliation pass (up to 30 seconds). The
+first prompt selects the task baseline; later responses select candidate result
+boundaries without changing previous checkpoints. Each checkpoint preserves
+source generations, positions, terminal record references and collection gaps
+within its owner, harness and native-root namespace. Source inventory is bounded
+to 1,024 inspected registrations; overflow remains an explicit gap. Historical
+checkpoint gaps do not hold the live collector in a stale inventory cycle.
+These positions do not establish which native executions belong to the task,
+whether late or background work has finished, or whether every earlier record
+is intact. Native command attribution, final settlement and complete evaluation
+manifests still require those separate proofs.
+
 Confirmed prompt boundaries also save local workspace checkpoints. The first
 prompt preserves the actual dirty baseline; response checkpoints preserve later
 file contents even after further edits or workspace removal. Capture covers Git

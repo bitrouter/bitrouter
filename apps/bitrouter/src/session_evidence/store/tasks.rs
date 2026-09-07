@@ -285,6 +285,62 @@ impl EvidenceStore {
             )
             .await?;
         }
+        if let Some(id) = record.raw.get("native_checkpoint") {
+            ensure!(
+                record.raw.get("method").and_then(Value::as_str) == Some("session/prompt"),
+                "native checkpoint requires a prompt boundary"
+            );
+            let controller = source
+                .descriptor
+                .locator
+                .strip_prefix("controller:")
+                .context("checkpoint controller missing")?;
+            let operation = record
+                .raw
+                .get("operation_id")
+                .and_then(Value::as_str)
+                .context("checkpoint operation missing")?;
+            let phase = record
+                .raw
+                .get("phase")
+                .and_then(Value::as_str)
+                .context("checkpoint phase missing")?;
+            let session = if phase == "request" {
+                ensure!(
+                    record.raw.get("native_scope").and_then(Value::as_str) == Some("session"),
+                    "checkpoint request scope is unconfirmed"
+                );
+                AcpSessionKey {
+                    namespace: source.descriptor.namespace.clone(),
+                    harness: source.descriptor.harness,
+                    session_id: record
+                        .raw
+                        .pointer("/payload/sessionId")
+                        .and_then(Value::as_str)
+                        .context("checkpoint ACP session missing")?
+                        .into(),
+                }
+            } else {
+                ensure!(phase == "response", "invalid prompt checkpoint phase");
+                self.prompt_operation(&transaction, &PromptOperation::key(controller, operation)?)
+                    .await?
+                    .context("checkpoint response has no original prompt")?
+                    .session
+            };
+            let checkpoint = self
+                .checkpoint_on(
+                    &transaction,
+                    id.as_str().context("invalid checkpoint reference")?,
+                )
+                .await?;
+            ensure!(
+                checkpoint.controller_id == controller
+                    && checkpoint.operation_id == operation
+                    && checkpoint.phase == phase
+                    && checkpoint.session == session,
+                "checkpoint does not belong to this prompt boundary"
+            );
+        }
         if record.raw.get("method").and_then(Value::as_str) == Some("session/prompt") {
             let controller = source
                 .descriptor
@@ -570,6 +626,13 @@ impl EvidenceStore {
             // than loading every historical filesystem image on every prompt.
             digest_identifier(workspace.as_str().context("invalid workspace reference")?)?;
         }
+        if let Some(checkpoint) = record.input.raw.get("native_checkpoint") {
+            digest_identifier(
+                checkpoint
+                    .as_str()
+                    .context("invalid checkpoint reference")?,
+            )?;
+        }
         Ok(())
     }
 
@@ -633,7 +696,7 @@ impl EvidenceStore {
     }
 
     pub(crate) async fn active_attempt(&self, session: &AcpSessionKey) -> Result<Option<Attempt>> {
-        let transaction = self.task_read_transaction().await?;
+        let transaction = self.read_snapshot().await?;
         let attempt = match self.active_task(&transaction, session).await? {
             Some(task) => self.task_attempt(&transaction, &task).await.map(Some),
             None => Ok(None),
@@ -642,12 +705,110 @@ impl EvidenceStore {
         Ok(attempt)
     }
 
+    pub(crate) async fn prompt_session(
+        &self,
+        controller: &str,
+        operation: &str,
+    ) -> Result<Option<AcpSessionKey>> {
+        let transaction = self.read_snapshot().await?;
+        let session = self
+            .prompt_operation(&transaction, &PromptOperation::key(controller, operation)?)
+            .await?
+            .map(|operation| operation.session);
+        transaction.commit().await?;
+        Ok(session)
+    }
+
+    pub(crate) async fn native_checkpoint_evidence(
+        &self,
+        session: &AcpSessionKey,
+    ) -> Result<crate::session_evidence::checkpoint::NativeCheckpointEvidence> {
+        use crate::session_evidence::checkpoint::NativeCheckpointEvidence;
+        let transaction = self.read_snapshot().await?;
+        let mut evidence = NativeCheckpointEvidence::default();
+        if let Some(task) = self.active_task(&transaction, session).await? {
+            self.task_attempt(&transaction, &task).await?;
+            let origin = self
+                .prompt_operation(&transaction, &task.origin_operation)
+                .await?
+                .context("checkpoint origin missing")?;
+            if let Some((id, checkpoint)) = self
+                .boundary_checkpoint(&transaction, &origin, &origin.request, "request")
+                .await?
+            {
+                evidence.baseline = Some(id);
+                evidence.gaps.extend(checkpoint.gaps);
+            } else {
+                evidence
+                    .gaps
+                    .insert("native_checkpoint_baseline_unavailable".into());
+            }
+            if let Some(id) = &task.last_response {
+                let operation = self
+                    .prompt_operation(&transaction, id)
+                    .await?
+                    .context("checkpoint prompt result missing")?;
+                let boundary = operation
+                    .response
+                    .as_ref()
+                    .context("checkpoint response missing")?;
+                if let Some((id, checkpoint)) = self
+                    .boundary_checkpoint(&transaction, &operation, boundary, "response")
+                    .await?
+                {
+                    evidence.latest_prompt_result = Some(id);
+                    evidence.gaps.extend(checkpoint.gaps);
+                }
+            }
+            if evidence.latest_prompt_result.is_none() {
+                evidence
+                    .gaps
+                    .insert("native_checkpoint_result_unavailable".into());
+            }
+        }
+        transaction.commit().await?;
+        Ok(evidence)
+    }
+
+    async fn boundary_checkpoint(
+        &self,
+        db: &impl ConnectionTrait,
+        operation: &PromptOperation,
+        boundary: &Boundary,
+        phase: &str,
+    ) -> Result<
+        Option<(
+            String,
+            crate::session_evidence::checkpoint::NativeCheckpoint,
+        )>,
+    > {
+        let records = range_records(db, &self.owner_key, &boundary.range).await?;
+        let raw = &records
+            .first()
+            .context("checkpoint boundary record missing")?
+            .input
+            .raw;
+        let Some(id) = raw.get("native_checkpoint") else {
+            return Ok(None);
+        };
+        let id = id.as_str().context("invalid checkpoint reference")?;
+        let checkpoint = self.checkpoint_on(db, id).await?;
+        ensure!(
+            checkpoint.controller_id == operation.controller_id
+                && checkpoint.operation_id == operation.operation_id
+                && checkpoint.phase == phase
+                && checkpoint.session == operation.session,
+            "checkpoint boundary provenance mismatch"
+        );
+        Ok(Some((id.into(), checkpoint)))
+    }
+
     pub(crate) async fn has_unobserved_prompts(
         &self,
         session: &AcpSessionKey,
         controller: &str,
     ) -> Result<bool> {
-        let transaction = self.task_read_transaction().await?;
+        let transaction = self.read_snapshot().await?;
         let mut unobserved = false;
         if let Some(task) = self.active_task(&transaction, session).await? {
             for id in &task.open_operations {
@@ -662,7 +823,7 @@ impl EvidenceStore {
         Ok(unobserved)
     }
 
-    async fn task_read_transaction(&self) -> Result<DatabaseTransaction> {
+    pub(super) async fn read_snapshot(&self) -> Result<DatabaseTransaction> {
         // Every boundary and membership row must come from the same snapshot.
         // PostgreSQL's default READ COMMITTED does not provide this across
         // multiple SELECTs. SQLite read transactions already pin a snapshot.
@@ -687,7 +848,7 @@ impl EvidenceStore {
     ) -> Result<crate::session_evidence::types::WorkspaceEvidence> {
         use crate::session_evidence::types::WorkspaceEvidence;
 
-        let transaction = self.task_read_transaction().await?;
+        let transaction = self.read_snapshot().await?;
         let mut evidence = WorkspaceEvidence::default();
         if let Some(task) = self.active_task(&transaction, session).await? {
             self.task_attempt(&transaction, &task).await?;

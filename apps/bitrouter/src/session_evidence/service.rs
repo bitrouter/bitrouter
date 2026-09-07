@@ -22,6 +22,7 @@ use super::types::{
 };
 use crate::eval::types::canonical_digest;
 
+mod checkpoints;
 pub mod processes;
 mod recovery;
 mod roots;
@@ -98,6 +99,8 @@ pub struct CollectionSnapshot {
     pub graph: super::execution::ExecutionGraph,
     pub attempts: Vec<super::types::Attempt>,
     pub workspace_checkpoints: BTreeMap<String, super::types::WorkspaceEvidence>,
+    #[serde(default)]
+    pub native_checkpoints: BTreeMap<String, super::checkpoint::NativeCheckpointEvidence>,
     #[serde(default)]
     pub processes: Vec<processes::ProcessBinding>,
     #[serde(default)]
@@ -457,6 +460,7 @@ impl ControllerEvidence {
         }
         let mut attempts = Vec::new();
         let mut workspace_checkpoints = BTreeMap::new();
+        let mut native_checkpoints = BTreeMap::new();
         let namespaces = collectors.keys().cloned().collect();
         let (task_sessions, task_gaps) = self
             .store
@@ -494,6 +498,25 @@ impl ControllerEvidence {
                     }
                     gaps.extend(workspace.gaps.iter().cloned());
                     workspace_checkpoints.insert(attempt.id.clone(), workspace);
+                    match self.store.native_checkpoint_evidence(session).await {
+                        Ok(checkpoint) => {
+                            // Historical gaps describe the frozen boundary;
+                            // they must not keep today's inventory epoch open
+                            // or enter the next checkpoint as live backlog.
+                            native_checkpoints.insert(attempt.id.clone(), checkpoint);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "native checkpoint could not be read");
+                            gaps.insert("native_checkpoint_invalid".into());
+                            native_checkpoints.insert(
+                                attempt.id.clone(),
+                                super::checkpoint::NativeCheckpointEvidence {
+                                    gaps: BTreeSet::from(["native_checkpoint_invalid".into()]),
+                                    ..super::checkpoint::NativeCheckpointEvidence::default()
+                                },
+                            );
+                        }
+                    }
                     attempts.push(attempt);
                 }
                 Ok((None, _, _)) => {}
@@ -518,6 +541,7 @@ impl ControllerEvidence {
             graph,
             attempts,
             workspace_checkpoints,
+            native_checkpoints,
             processes,
             sdk_bindings,
             gaps,
@@ -910,6 +934,30 @@ impl SessionObserver for ControllerEvidence {
                     super::workspace::capture(workspace.map(|scope| scope.cwd), exclusions, gaps)
                         .await?;
                 event["workspace_artifact"] = json!(self.store.save_workspace(artifact).await?);
+                let session = if observation.phase == "request" && scope == "session" {
+                    Some(super::types::AcpSessionKey {
+                        namespace: context.collector.root().namespace.clone(),
+                        harness: context.collector.root().harness,
+                        session_id: observation
+                            .payload
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .context("confirmed ACP session missing")?
+                            .into(),
+                    })
+                } else if observation.phase == "response" {
+                    self.store
+                        .prompt_session(&self.controller_id, &observation.operation_id)
+                        .await?
+                } else {
+                    None
+                };
+                if let Some(session) = session {
+                    event["native_checkpoint"] = json!(
+                        self.capture_native_checkpoint(&observation, session)
+                            .await?
+                    );
+                }
             }
             event["observed_at"] = json!(chrono::Utc::now().to_rfc3339());
             event["native_scope"] = json!(scope);
