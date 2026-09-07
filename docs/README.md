@@ -20,6 +20,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.
+- [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — **implemented.**
+  Read-only remote status/models/route/requests and dashboard views over an
+  authenticated, loopback-only HTTP control listener; ACP stays local.
+- [`REMOTE_CLI_TUI_SUPPORT_SPEC.md`](REMOTE_CLI_TUI_SUPPORT_SPEC.md) — **Phase 2
+  RFD, deferred.** Remote ACP sessions over a versioned WebSocket transport,
+  constrained execution, and reconnect behavior.
 - [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md) — **the live one.** Why
   the OTLP renderer ships as `crates/bitrouter-telemetry` while `bitrouter-sdk`
   keeps only the contract it renders (`observe::schema`, `SpanAttributes`).

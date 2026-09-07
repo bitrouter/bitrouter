@@ -171,6 +171,24 @@ and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
 ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 `references/diagnose.md` has the full spelling rules.
 
+For read-only control from another computer, add a named context and select it
+explicitly:
+
+```bash
+bitrouter context add workstation \
+  --endpoint https://router.example/control/v1 \
+  --token-env WORKSTATION_BITROUTER_TOKEN
+bitrouter --context workstation status
+bitrouter --context workstation status --requests
+bitrouter --context workstation models
+bitrouter --context workstation route openai/gpt-5
+bitrouter --context workstation tui
+```
+
+The context stores only the environment-variable name. Remote errors never
+fall back to this machine. The HTTP-only MVP supports those reads; agent
+sessions and lifecycle commands remain local (use SSH for a remote native TUI).
+
 ## References — read on demand, not upfront
 
 | File | When to read |
@@ -182,7 +200,7 @@ ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve`, `run`, native sessions, NDJSON, `bitrouter tui <agent>`); `bitrouter update` and channels |
 
 ## Gotchas
 
@@ -191,6 +209,12 @@ ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
 - **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
   everything else `providers login <id>`; there is no top-level `login`.
+- **Remote control is separate from inference and ACP.** `control.enabled: true`
+  starts a read-only API on `127.0.0.1:4358` and requires a dedicated
+  `BITROUTER_CONTROL_TOKEN` of at least 32 bytes. Keep it loopback-only behind a
+  private tunnel or TLS reverse proxy. `server.skip_auth` never disables this
+  authentication, changes under `control:` require a daemon restart, and the
+  HTTP-only MVP does not run remote ACP sessions.
 - **`init --harness` only accepts `claude` and `codex`**; `launch -a` adds
   `opencode` and `pi`. `hermes`, `openclaw`, `grok`, and `agy` are no longer
   `launch`-supported — run them directly or via `spawn`; they remain providers.

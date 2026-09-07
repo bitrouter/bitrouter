@@ -8,6 +8,8 @@ Every command prints a single **formatted JSON object** to **stdout** — succes
 
 - `-j`, `--json` — force JSON (the default).
 - `--human` — render a human-readable view to stdout instead of JSON.
+- `--context <name>` — run a supported read action against a named remote
+  BitRouter target; `local` explicitly selects normal local behavior.
 - `-H` before the subcommand (for example, `bitrouter -H cloud whoami`) — compatibility spelling for `--human`. Under `bitrouter cloud api`, `-H` means `--header`, matching `gh api`.
 - `-h`, `--help` — unchanged (`-h` is **not** human output).
 
@@ -25,7 +27,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` is a stdio JSON-RPC bridge, `acp prompt` streams NDJSON, `cloud api` streams the remote response body, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol, raw response, or the child's terminal—not a JSON result envelope.
+> Non-reporting commands are exempt: `serve` and `mcp serve` are long-running servers; `acp serve` is a stdio JSON-RPC bridge; `run`, `acp prompt`, and `spawn -p` stream NDJSON by default; `tui` and `launch` own the terminal; and `cloud api` streams the remote response body. Their stdout is a wire protocol, raw response, or terminal—not a JSON result envelope.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -59,7 +61,7 @@ process starts anyway. Two places report it:
   fail validation — an ignored block is a misconfiguration, not a malformed
   config, and this command is CI-gating.
 - Every runtime surface logs one WARN per unread id on start: the daemon, and
-  `bitrouter acp serve|prompt` and `bitrouter chat`, none of which build the
+  `bitrouter acp serve|prompt`, `bitrouter run`, and `bitrouter tui <agent>`, none of which build the
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
@@ -97,6 +99,35 @@ Local router subcommands that load a config accept an optional `-c / --config <p
 
 Daemon-control subcommands (`stop`, `reload`, `status`) also accept `--socket <path>` to override the control socket path derived from the config.
 
+## Remote contexts (HTTP-only MVP)
+
+```console
+bitrouter context add workstation \
+  --endpoint https://router.example/control/v1 \
+  --token-env WORKSTATION_BITROUTER_TOKEN
+bitrouter context list
+bitrouter context show workstation
+bitrouter --context workstation status
+bitrouter --context workstation models --provider openai
+bitrouter --context workstation route openai/gpt-5
+bitrouter context remove workstation
+```
+
+Contexts live in `contexts.toml` under `$BITROUTER_HOME`, or under
+`~/.bitrouter` when that variable is unset. They contain the endpoint and token
+environment-variable **name**, never the bearer value. Endpoints must use HTTPS;
+plain HTTP is accepted only for `localhost`/loopback, including an SSH-forwarded
+port. The client performs the `/control/v1/capabilities` handshake before its
+first action (and caches it for a long-lived TUI), follows no redirects, and
+never falls back to this computer's config, socket, or database after a remote
+error.
+
+The MVP supports `status`, `status --requests`, `models`, `route`, and the
+operations `tui`. Daemon mutations, configuration/provider/key administration,
+agent lifecycle, ACP sessions, native harness launch, and `tui <agent>` remain
+local and reject a remote context before doing anything. Use SSH for an agent
+TUI on the server until remote ACP is implemented.
+
 ---
 
 ## Daemon lifecycle
@@ -110,6 +141,23 @@ bitrouter serve [-c <path>]
 ```
 
 Starts the proxy on the configured listen address (default `127.0.0.1:4356`) and opens a Unix domain control socket. Logs to stdout.
+
+An opt-in, read-only remote-control listener can expose the existing typed
+status/models/route/requests actions to a trusted operator through a private tunnel or
+TLS reverse proxy:
+
+```yaml
+control:
+  enabled: true
+  listen: 127.0.0.1:4358
+```
+
+Set a dedicated bearer token of at least 32 bytes in
+`BITROUTER_CONTROL_TOKEN` before starting the daemon. This listener is disabled
+by default, accepts loopback addresses only, and is never affected by inference
+`server.skip_auth`. Its versioned endpoints live under `/control/v1`; remote ACP
+sessions are not part of this HTTP-only MVP. Changes under `control:` are
+restart-only because they govern listener creation and binding.
 
 ### `bitrouter start`
 
@@ -170,7 +218,7 @@ The same report the origin MCP server's `status` tool returns — one shared typ
 
 The read is best-effort and never fails the command: no config, no database file, or an unreadable one gives no `spend` key at all — which is a different answer from `estimated_micro_usd: 0` over `0` requests, meaning "nothing spent today". It also works with **no daemon running**, so a `stopped` report still carries spend: what a past daemon spent is on disk and does not stop being true when it exits.
 
-The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `--requests` reports. Per-session spend is `bitrouter chat`'s cost line.
+The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `--requests` reports. Per-session spend is `bitrouter tui <agent>`'s cost line.
 
 `bitrouter status --json` gained `spend` additively; every pre-existing key is unchanged.
 
@@ -178,9 +226,9 @@ The figure is **machine-wide**, not per-caller: it rolls up every caller of this
 
 Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Its per-row detail is what bare `bitrouter status` does not carry: `spend` there is the one rollup, not the rows behind it.
 
-The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter chat`'s cost line is the per-session figure.
+The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter tui <agent>`'s cost line is the per-session figure.
 
-**Spend is reported only where there is evidence.** Each row carries a `charge_status` — `computed` and `not_charged` are evidence, `unknown` and `legacy_unknown` are not — and only evidenced rows contribute to the total. A request the daemon recorded but could not price shows `?` in the cost column rather than `—` (which would claim it was free) or `$0.00` (which would claim it was measured). When nothing in the window has evidence, `spend_micro_usd` is `null` and the human view reads `unreported`; when only some does, the total is labelled a floor. This is the rule `bitrouter chat`'s cost line keeps: a client that cannot see a price has not observed a free turn.
+**Spend is reported only where there is evidence.** Each row carries a `charge_status` — `computed` and `not_charged` are evidence, `unknown` and `legacy_unknown` are not — and only evidenced rows contribute to the total. A request the daemon recorded but could not price shows `?` in the cost column rather than `—` (which would claim it was free) or `$0.00` (which would claim it was measured). When nothing in the window has evidence, `spend_micro_usd` is `null` and the human view reads `unreported`; when only some does, the total is labelled a floor. This is the rule `bitrouter tui <agent>`'s cost line keeps: a client that cannot see a price has not observed a free turn.
 
 Each row also carries `episode_id` — the trajectory episode to hand to `bitrouter trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
@@ -513,6 +561,18 @@ routability as `skipped` — its ACP facet launches direct, so there is no route
 ACP traffic to observe. Exits non-zero when a tier fails or when nothing was
 verified, and prints no record in either case.
 
+### `bitrouter run` — headless agent
+
+```
+bitrouter run <agent> <prompt> [--format json|text|quiet] [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--result-schema JSON|@PATH] [--no-wait] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--model <id>] [--no-start] [-c <path>]
+```
+
+The canonical always-headless agent surface. It opens one ACP session, sends
+one prompt, and streams NDJSON by default; text and quiet formats are explicit.
+Permissions, result validation, routing, timeouts, session identity, and exit
+codes are the same implementation used by the compatibility `acp prompt` and
+`spawn <agent> -p` forms.
+
 ### `bitrouter acp`
 
 ```
@@ -520,12 +580,29 @@ bitrouter acp serve --agent <id> [-c <path>]
 bitrouter acp prompt --agent <id> [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [-c <path>] <text>
 ```
 
-Runs a configured ACP agent. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout — or, under `--format text`, the transcript as `chat` prints it to a pipe, or under `--format quiet` the assistant's text alone. Nobody is at a headless terminal to broker permissions, so the caller states the rule: `--deny-all` (the default) answers every request with the agent's reject option, `--approve-reads` approves calls the harness labels `read` or `search` and denies the rest, `--approve-all` approves everything, and `--permission-policy` overrides per tool (`autoApprove`/`autoDeny` lists matching the tool kind, title, or title's first word; `defaultAction` for the rest). Each answer is a `{"type":"permission",…}` line, and the process **exits 5** when at least one request was denied and none approved. The decision runs through the same `Policy` and the same wire the interactive TUI's keystroke takes. Session identity, history, and storage are the harness's own on every path; BitRouter keeps no session records. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, attempt to route the agent's model calls through the daemon when the headless adapter supports redirection (`--direct` opts out).
+Runs a configured ACP agent as an integration surface. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` is the compatibility spelling of the one-prompt `run` path and carries the same NDJSON/text/quiet, permission, routing, timeout, identity, and exit-code behavior. BitRouter keeps no session records.
 
-### `bitrouter chat`
+### `bitrouter tui` — operations dashboard
 
 ```
-bitrouter chat <agent> [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+bitrouter tui [-c <path>] [--socket <path>]
+bitrouter --context <name> tui
+```
+
+Opens a full-screen dashboard over the same status, models, recent-requests,
+and route-preview actions the headless CLI uses. `Tab` switches pages, `1`–`4`
+jump directly, `r` refreshes, and `q`/`Esc`/`Ctrl-C` exits. On the Route page,
+type a model selector and press `Enter`; `Ctrl-U` clears it. Status, model, and
+request pages refresh every two seconds.
+
+A named remote context uses authenticated HTTP only. A local dashboard uses the
+normal config, control socket, and metering database. No dashboard control
+starts or mutates a daemon.
+
+### `bitrouter tui <agent>`
+
+```
+bitrouter tui <agent> [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 ```
 
 Chat with an ACP agent in your terminal, routed through BitRouter. The interactive counterpart to `acp serve`: instead of exposing the session to a manager over stdio, it renders the session for you — streamed messages, agent reasoning, tool calls with diffs, permission prompts, and what the turn cost.
@@ -536,7 +613,7 @@ A tool call is **one entity, repainted in place**: a call going pending → in p
 
 **One row can go stale.** Rows are only repainted while they are still on screen. A tool call that scrolls off while still running keeps the status it had when it left, so scrolling back may show `◍ Edit src/lib.rs` on a call that has since finished. This is the price of never clearing your scrollback to fix it, which is the one thing the renderer will not do. `Ctrl-L` repaints what is on screen.
 
-`chat` holds the terminal in **raw mode** for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are handled by its own single-line editor rather than by your shell. The editor supports typing, backspace, word-delete (`Ctrl-W` or `Alt-Backspace`) and bracketed paste; there is no history and no multi-line entry yet. A redirected stdout (`bitrouter chat agent | tee log`) takes no raw mode at all and prints the session as plain text with no escape sequences.
+The session TUI holds the terminal in **raw mode** for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are handled by its own single-line editor rather than by your shell. The editor supports typing, backspace, word-delete (`Ctrl-W` or `Alt-Backspace`) and bracketed paste; there is no history and no multi-line entry yet. A redirected stdout (`bitrouter tui agent | tee log`) takes no raw mode at all and prints the session as plain text with no escape sequences. `bitrouter chat <agent>` remains a hidden compatibility alias and prints a migration note.
 
 **Keys**
 
@@ -577,7 +654,7 @@ chat:
       prompt: "Review this change and list what would break: $ARGUMENTS"
 ```
 
-They expand identically in `bitrouter chat` and in `bitrouter acp prompt`.
+They expand identically in `bitrouter tui <agent>` and in `bitrouter acp prompt`.
 There is deliberately **no key that runs anything**: an entry here produces a
 prompt and nothing else, which is what lets this registry be yours and
 unreviewed while the commands that reach BitRouter's own ports stay a closed,
@@ -612,7 +689,7 @@ On a failed turn, or a session whose agent could not be shut down cleanly, `chat
 bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
 ```
 
-Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
+Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the native-harness compatibility surface — the human drives the harness's own TUI; for a headless prompt use `bitrouter run`.
 
 Before handing over, `launch` prints one line stating what the harness actually got — whether it is routed, and whether the tools/skills gateways reached it. That ceiling is the harness's, not BitRouter's: `pi` exposes no MCP mechanism to inject into.
 

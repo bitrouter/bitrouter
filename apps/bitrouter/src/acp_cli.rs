@@ -37,7 +37,7 @@
 //! {"type":"submitted"}
 //! ```
 //!
-//! `--format text` prints the transcript exactly as `bitrouter chat` prints
+//! `--format text` prints the transcript exactly as `bitrouter tui <agent>` prints
 //! it to a pipe; `--format quiet` prints the assistant's text and nothing else.
 //!
 //! ## Permissions
@@ -80,7 +80,7 @@ use crate::paths::ConfigSource;
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
 /// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoutingOptions {
     /// Do NOT route this session's LLM traffic through the daemon — let the
     /// harness use its own provider auth. Routing is attempted by default
@@ -106,7 +106,7 @@ pub enum PromptFormat {
     /// One self-describing JSON object per line.
     #[default]
     Json,
-    /// The transcript as `bitrouter chat` prints it to a pipe.
+    /// The transcript as `bitrouter tui <agent>` prints it to a pipe.
     Text,
     /// The assistant's text and nothing else.
     Quiet,
@@ -133,8 +133,8 @@ pub struct HeadlessOptions {
     /// an unmatched request uses `defaultAction`, else the mode flag.
     #[arg(long, value_name = "JSON|@PATH")]
     pub permission_policy: Option<String>,
-    /// Output: `json` (NDJSON, the default), `text` (the transcript as `chat`
-    /// prints it to a pipe), or `quiet` (assistant text only).
+    /// Output: `json` (NDJSON, the default), `text` (the transcript as
+    /// `tui <agent>` prints it to a pipe), or `quiet` (assistant text only).
     #[arg(long, value_enum, default_value_t)]
     pub format: PromptFormat,
 }
@@ -1745,7 +1745,7 @@ fn unauthenticated_message(
     } else {
         format!(
             "'{agent_id}' is not authenticated. It offers: {offered}. \
-             Run `bitrouter chat {agent_id}` in a terminal to sign in, or use the \
+             Run `bitrouter tui {agent_id}` in a terminal to sign in, or use the \
              harness's own tooling"
         )
     }

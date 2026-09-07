@@ -2,8 +2,9 @@
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
-//! `policy create` / `providers (list|login|logout)` / `agents` /
-//! `spawn` / `cloud` / `skills` / `mcp (serve|install|search|list|add)`.
+//! `policy create` / `providers (list|login|logout)` / `agents` / `run` /
+//! `tui` / `spawn` / `cloud` / `skills` /
+//! `mcp (serve|install|search|list|add)`.
 //! Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
@@ -38,7 +39,7 @@ use bitrouter::output::reports::optimization::{
     ArmReport, OptimizationControllerReport, TreatmentReport,
 };
 use bitrouter::output::reports::policy::PolicyReport;
-use bitrouter::output::reports::requests::{DaemonView, RequestsReport};
+use bitrouter::output::reports::requests::RequestsReport;
 use bitrouter::output::reports::routing::{ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
@@ -118,6 +119,10 @@ struct Cli {
     /// Compatibility spelling for `--human` when placed before the subcommand.
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
+    /// Run a supported read action against a named remote context. The
+    /// built-in `local` context keeps the normal local behavior.
+    #[arg(long, global = true, value_name = "NAME")]
+    context: Option<String>,
     /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
     /// the wizard when unconfigured, a one-line status + `bitrouter launch`
     /// hint when configured.
@@ -308,6 +313,12 @@ enum Command {
         #[arg(short, long)]
         provider: Option<String>,
     },
+    /// Manage named remote-control targets. Contexts store a token environment
+    /// variable name, never the token value.
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
+    },
     /// MCP server introspection — list/status/discover against the upstreams
     /// declared under `mcp_servers` in `bitrouter.yaml`. v1.0 does not maintain
     /// a global tool registry; these are one-shot queries.
@@ -354,8 +365,8 @@ enum Command {
     // non-functional `wallet` command; uncomment this variant AND restore its
     // match arm in `run` when wiring OWS in.
     // Wallet,
-    /// ACP agent lifecycle — list the catalog, check configured agents,
-    /// print install stubs.
+    /// Inspect ACP agent adapters — list the catalog, check configured agents,
+    /// and print install stubs.
     Agents {
         #[command(subcommand)]
         action: AgentsAction,
@@ -363,7 +374,7 @@ enum Command {
     /// Launch a coding-agent harness as an interactive native-TUI child. Routed
     /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
     /// launch directly and are not redirected. The human drives the harness's
-    /// own TUI directly (use `bitrouter spawn` for headless ACP sub-agents).
+    /// own TUI directly (use `bitrouter run` for a headless ACP prompt).
     /// Follows `cargo run`'s separator convention: bitrouter options come
     /// before `--`, everything after `--` is forwarded to the agent verbatim,
     /// e.g. `bitrouter launch -a codex -- --search`.
@@ -422,6 +433,30 @@ enum Command {
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
+    },
+    /// Run one ACP agent prompt headlessly. Streams NDJSON by default, or text
+    /// / quiet output when selected explicitly.
+    Run {
+        /// ACP agent id from the bundled catalog or `agents:` config.
+        agent: String,
+        /// Prompt to send.
+        prompt: String,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// Per-turn deadline in seconds.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        /// Return after the prompt is submitted.
+        #[arg(long)]
+        no_wait: bool,
+        /// JSON Schema — inline JSON or `@path` — required of the final reply.
+        #[arg(long, value_name = "JSON|@PATH", conflicts_with = "no_wait")]
+        result_schema: Option<String>,
+        #[command(flatten)]
+        headless: bitrouter::acp_cli::HeadlessOptions,
+        /// Path to `bitrouter.yaml`.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Spawn an ACP-compatible harness as a headless *sub-agent*. Routing is
     /// attempted by default when the harness supports headless redirection;
@@ -544,7 +579,7 @@ enum Command {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Per-session ACP substrate — headless agent session management.
+    /// ACP manager integration over stdio, plus compatibility commands.
     ///
     /// `serve` exposes one agent session as a vanilla ACP Agent over stdio.
     /// `prompt` launches a session, sends one prompt, and streams NDJSON output.
@@ -552,7 +587,25 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Chat with an ACP agent in your terminal, routed through BitRouter.
+    /// Open BitRouter's operations dashboard, or an ACP session when an agent
+    /// id is supplied.
+    Tui {
+        /// Optional ACP agent id. Omit for the local/remote operations
+        /// dashboard; supply one for the interactive session UI.
+        agent: Option<String>,
+        /// Per-turn deadline in seconds for an agent session.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// Path to `bitrouter.yaml` for a local dashboard or agent session.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit local control socket for the operations dashboard.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Compatibility alias for `bitrouter tui <agent>`.
     ///
     /// The interactive counterpart to `acp serve`: instead of exposing the
     /// session to a manager over stdio, this renders it for you — messages,
@@ -560,6 +613,7 @@ enum Command {
     ///
     /// Output lands in your terminal's real scrollback, so search, selection,
     /// and copy keep working. `Ctrl-C` leaves a readable transcript behind.
+    #[command(hide = true)]
     Chat {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
@@ -578,6 +632,28 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ContextAction {
+    /// Add a named remote target.
+    Add {
+        /// Context name used by `--context`.
+        name: String,
+        /// HTTPS origin or endpoint ending in `/control/v1`. Plain HTTP is
+        /// accepted only for loopback/SSH-forwarded endpoints.
+        #[arg(long)]
+        endpoint: String,
+        /// Environment variable containing this context's bearer token.
+        #[arg(long, value_name = "NAME")]
+        token_env: String,
+    },
+    /// List configured remote targets.
+    List,
+    /// Show one remote target without reading its token.
+    Show { name: String },
+    /// Remove one remote target.
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -1359,7 +1435,7 @@ enum AcpCmd {
     /// Opens a session, waits briefly for the agent to advertise its
     /// commands, prints the list, and tears the session down. **No prompt is
     /// sent.** The session is a fresh one, so this reports what a session with
-    /// this agent *would* offer — it cannot report on a `bitrouter chat`
+    /// this agent *would* offer — it cannot report on a `bitrouter tui`
     /// already running elsewhere.
     Commands {
         /// Agent id — a bundled-catalog id or an entry under `agents:`.
@@ -1486,13 +1562,13 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // lock the bridge to the default no-op and silently drop every later
     // span. The two-stage init is the simplest way around that.
     //
-    // Both `acp` subcommands keep stdout exclusively for their machine-readable
-    // protocol — JSON-RPC for `acp serve`, NDJSON for `acp prompt` — so their
-    // logging must go to stderr instead of the default (stdout) writer, or it
-    // would interleave with and corrupt that stream. The exclusion of
+    // The ACP integration commands and headless agent commands keep stdout
+    // exclusively for their machine-readable protocol — JSON-RPC or NDJSON —
+    // so their logging must go to stderr instead of the default (stdout)
+    // writer, or it would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    // `chat` shares this rule with the `acp` verbs, and goes further: it owns
+    // The interactive TUI shares this rule and goes further: it owns
     // the terminal, stderr included. Its renderer paints rows in place against
     // its own model of where they are, so a log line arriving between frames
     // does not merely interleave — it scrolls the screen out from under the
@@ -1500,9 +1576,18 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // the session file **only** (see TUI_RENDERER_SPEC §4.6).
     let is_acp = matches!(
         &cli.command,
-        Some(Command::Acp { .. } | Command::Chat { .. })
+        Some(
+            Command::Acp { .. }
+                | Command::Run { .. }
+                | Command::Spawn { .. }
+                | Command::Chat { .. }
+                | Command::Tui { .. }
+        )
     );
-    let owns_the_terminal = matches!(&cli.command, Some(Command::Chat { .. }));
+    let owns_the_terminal = matches!(
+        &cli.command,
+        Some(Command::Chat { .. } | Command::Tui { .. })
+    );
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
@@ -1521,11 +1606,49 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     }
 
     let Some(command) = cli.command else {
+        if cli.context.as_deref().is_some_and(|name| name != "local") {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "a remote context requires an explicit supported action: `status`, `models`, \
+                 `route`, or the operations `tui`",
+            )
+            .into());
+        }
         // Bare `bitrouter` — the onboarding front door (wizard when
         // unconfigured; status + hint when configured). Never re-onboards a
         // configured user, never silently spawns a daemon/harness.
         return bitrouter::onboarding::entry(output).await;
     };
+
+    let remote_context = if matches!(&command, Command::Context { .. }) {
+        if cli.context.as_deref().is_some_and(|name| name != "local") {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "`bitrouter context` manages targets and does not run against a remote context",
+            )
+            .into());
+        }
+        None
+    } else {
+        cli.context
+            .as_deref()
+            .map(bitrouter::contexts::resolve)
+            .transpose()?
+            .flatten()
+    };
+    if remote_context.is_some()
+        && !matches!(
+            &command,
+            Command::Status { .. }
+                | Command::Route { .. }
+                | Command::Models { .. }
+                | Command::Tui { agent: None, .. }
+        )
+    {
+        return Err(bitrouter_sdk::BitrouterError::bad_request(
+            "this command is local-only in the HTTP remote-control MVP; remote contexts \
+             currently support `status`, `models`, `route`, and the operations `tui`",
+        )
+        .into());
+    }
 
     match command {
         Command::Serve { config } => {
@@ -1564,6 +1687,15 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             socket,
             requests,
         } => {
+            if let Some(context) = &remote_context {
+                reject_remote_local_target_flags(config.as_deref(), socket.as_deref())?;
+                if requests {
+                    output.emit(&context.client()?.requests(None).await?)?;
+                } else {
+                    output.emit(&context.client()?.status().await?)?;
+                }
+                return Ok(());
+            }
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
             if requests {
                 output.emit(&request_table(config.as_deref(), &socket).await?)?;
@@ -1578,6 +1710,16 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             config,
             socket,
         } => {
+            if let Some(context) = &remote_context {
+                reject_remote_local_target_flags(config.as_deref(), socket.as_deref())?;
+                output.emit(
+                    &context
+                        .client()?
+                        .route(&RouteInput { model, prompt })
+                        .await?,
+                )?;
+                return Ok(());
+            }
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&route(RouteInput { model, prompt }, &source, &socket).await?)?;
@@ -1631,8 +1773,28 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
         Command::Models { config, provider } => {
+            if let Some(context) = &remote_context {
+                reject_remote_local_target_flags(config.as_deref(), None)?;
+                output.emit(&context.client()?.models(provider.as_deref()).await?)?;
+                return Ok(());
+            }
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             output.emit(&models(&source, provider.as_deref()).await?)?;
+            Ok(())
+        }
+        Command::Context { action } => {
+            match action {
+                ContextAction::Add {
+                    name,
+                    endpoint,
+                    token_env,
+                } => output.emit(&bitrouter::contexts::add(&name, &endpoint, &token_env)?)?,
+                ContextAction::List => output.emit(&bitrouter::contexts::list()?)?,
+                ContextAction::Show { name } => output.emit(&bitrouter::contexts::show(&name)?)?,
+                ContextAction::Remove { name } => {
+                    output.emit(&bitrouter::contexts::remove(&name)?)?
+                }
+            }
             Ok(())
         }
         Command::Tools { action } => tools(action, output).await,
@@ -1665,6 +1827,33 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 check,
             };
             run_launch(config.as_deref(), opts, output).await
+        }
+        Command::Run {
+            agent,
+            prompt,
+            routing,
+            turn_timeout,
+            no_wait,
+            result_schema,
+            headless,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            run_agent_prompt(
+                &source,
+                cfg,
+                &agent,
+                AgentPromptRequest {
+                    prompt: &prompt,
+                    routing,
+                    turn_timeout,
+                    no_wait,
+                    result_schema: result_schema.as_deref(),
+                    headless,
+                },
+            )
+            .await
         }
         Command::Spawn {
             agent,
@@ -1761,30 +1950,24 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 };
                 bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
-                let options = bitrouter::acp_cli::launch_options(turn_timeout);
-                // A malformed schema or policy fails fast, before any session
-                // side effect.
-                let contract = result_schema
-                    .as_deref()
-                    .map(bitrouter::result_contract::ResultContract::from_flag)
-                    .transpose()?;
-                let prompt_options = bitrouter::acp_cli::PromptOptions {
-                    no_wait,
-                    contract,
-                    policy: headless.policy()?,
-                    format: headless.format,
-                };
-                let mut stdout = tokio::io::stdout();
-                let ctx = bitrouter::acp_cli::SpawnContext {
-                    source: &source,
-                    config: cfg,
-                    agent_id: &agent,
-                    options,
-                    routing,
-                };
-                let tally =
-                    bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
-                exit_with(tally.exit_code())
+                eprintln!(
+                    "note: `bitrouter spawn <agent> -p` is a compatibility form; use \
+                     `bitrouter run <agent> <prompt>`."
+                );
+                run_agent_prompt(
+                    &source,
+                    cfg,
+                    &agent,
+                    AgentPromptRequest {
+                        prompt: &text,
+                        routing,
+                        turn_timeout,
+                        no_wait,
+                        result_schema: result_schema.as_deref(),
+                        headless,
+                    },
+                )
+                .await
             } else {
                 anyhow::bail!(
                     "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
@@ -1797,12 +1980,60 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd, output).await,
+        Command::Tui {
+            agent,
+            turn_timeout,
+            routing,
+            config,
+            socket,
+        } => {
+            if let Some(agent) = agent {
+                if socket.is_some() {
+                    return Err(bitrouter_sdk::BitrouterError::bad_request(
+                        "`tui <agent>` does not accept --socket",
+                    )
+                    .into());
+                }
+                let source = bitrouter::paths::resolve_config(config.as_deref())?;
+                let cfg = bitrouter::paths::load_config(&source).await?;
+                let options = bitrouter::acp_cli::launch_options(turn_timeout);
+                let ctx = bitrouter::acp_cli::SpawnContext {
+                    source: &source,
+                    config: cfg,
+                    agent_id: &agent,
+                    options,
+                    routing,
+                };
+                bitrouter::acp_cli::chat(ctx).await
+            } else {
+                if turn_timeout.is_some()
+                    || routing != bitrouter::acp_cli::RoutingOptions::default()
+                {
+                    return Err(bitrouter_sdk::BitrouterError::bad_request(
+                        "--turn-timeout, --direct, --base-url, --model, and --no-start apply to \
+                         `tui <agent>`, not the operations dashboard",
+                    )
+                    .into());
+                }
+                let remote = remote_context.map(|context| {
+                    let name = match cli.context.as_deref() {
+                        Some(name) => name.to_string(),
+                        None => "remote".to_string(),
+                    };
+                    (name, context)
+                });
+                bitrouter::dashboard::run(remote, config.as_deref(), socket.as_deref()).await
+            }
+        }
         Command::Chat {
             agent,
             turn_timeout,
             routing,
             config,
         } => {
+            eprintln!(
+                "note: `bitrouter chat` is a compatibility alias; use `bitrouter tui {agent}`."
+            );
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
@@ -2814,6 +3045,17 @@ async fn resolve_client_socket_from(
     }
 }
 
+fn reject_remote_local_target_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
+    if config.is_some() || socket.is_some() {
+        return Err(bitrouter_sdk::BitrouterError::bad_request(
+            "a remote context does not accept --config or --socket; the named context is the \
+             complete target",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // Ensure the bitrouter home directory exists (zero-config first-run
     // creates `~/.bitrouter` on demand) and chdir into it. Every
@@ -2845,6 +3087,15 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // `<home>/bitrouter.sock`. Shared with `start`/`spawn` via `socket_path_for`.
     let socket_path = daemon::socket_path_for(source, &cfg);
     let pid_path = pid_path_for(&socket_path);
+    let remote_control = bitrouter::remote_control::ControlServer::from_config(
+        &cfg.control,
+        source.clone(),
+        socket_path.clone(),
+    )?;
+    let remote_control = match remote_control {
+        Some(server) => Some(server.bind().await?),
+        None => None,
+    };
 
     let config_path_for_reload = match source {
         bitrouter::paths::ConfigSource::File(path) => Some(path.as_path()),
@@ -2911,6 +3162,13 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         bitrouter::VERSION,
         socket_path.display()
     );
+    if let Some(server) = &remote_control {
+        println!(
+            "bitrouter {} — remote control on {}",
+            bitrouter::VERSION,
+            server.listen()
+        );
+    }
 
     let http_app = app.clone();
     let http_listen = listen.clone();
@@ -2925,40 +3183,84 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
     let http = async move {
+        let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
+        let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
         // Open an OTel SERVER span per inbound request and publish it on the
         // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
         let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
             Some(wrapper) => wrapper(router),
             None => router,
         };
-        let shutdown = async move {
-            let _ = http_shutdown_rx.await;
+        let inference_shutdown = async move {
+            let _ = inference_shutdown_rx.await;
         };
-        match workflow_trace_capture {
-            Some(capture) => {
-                let workflow_wrapper = capture.router_wrapper();
-                let eval_router = eval_router.clone();
-                http_app
-                    .serve_with_router_wrapper_and_shutdown(
-                        &http_listen,
-                        move |router| {
-                            workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
-                        },
-                        shutdown,
-                    )
-                    .await
+        let inference = async move {
+            match workflow_trace_capture {
+                Some(capture) => {
+                    let workflow_wrapper = capture.router_wrapper();
+                    let eval_router = eval_router.clone();
+                    http_app
+                        .serve_with_router_wrapper_and_shutdown(
+                            &http_listen,
+                            move |router| {
+                                workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
+                            },
+                            inference_shutdown,
+                        )
+                        .await
+                }
+                None => {
+                    http_app
+                        .serve_with_router_wrapper_and_shutdown(
+                            &http_listen,
+                            move |router| otel_wrapper(router.merge(eval_router.clone())),
+                            inference_shutdown,
+                        )
+                        .await
+                }
             }
-            None => {
-                http_app
-                    .serve_with_router_wrapper_and_shutdown(
-                        &http_listen,
-                        move |router| otel_wrapper(router.merge(eval_router.clone())),
-                        shutdown,
-                    )
-                    .await
+            .map_err(anyhow::Error::from)
+        };
+        let remote = async move {
+            match remote_control {
+                Some(server) => {
+                    server
+                        .serve_with_shutdown(async move {
+                            let _ = remote_shutdown_rx.await;
+                        })
+                        .await
+                }
+                None => {
+                    let _ = remote_shutdown_rx.await;
+                    Ok(())
+                }
+            }
+        };
+        let mut inference = Box::pin(inference);
+        let mut remote = Box::pin(remote);
+        let mut shutdown = Box::pin(async move {
+            let _ = http_shutdown_rx.await;
+        });
+
+        tokio::select! {
+            result = &mut inference => {
+                let _ = remote_shutdown_tx.send(());
+                remote.await?;
+                result
+            }
+            result = &mut remote => {
+                let _ = inference_shutdown_tx.send(());
+                inference.await?;
+                result
+            }
+            _ = &mut shutdown => {
+                let _ = inference_shutdown_tx.send(());
+                let _ = remote_shutdown_tx.send(());
+                let (inference_result, remote_result) = tokio::join!(inference, remote);
+                inference_result?;
+                remote_result
             }
         }
-        .map_err(anyhow::Error::from)
     };
     let control = daemon::run_control_socket_with_acp_runtime(
         socket_path,
@@ -3448,14 +3750,6 @@ async fn status(config: Option<&Path>, socket: &Path) -> Result<StatusReport> {
     Ok(report)
 }
 
-/// Bound on the control-socket probe.
-///
-/// `send_command` has no timeout of its own. A daemon that accepts the
-/// connection but never answers — busy, half-dead, paused under a debugger —
-/// would otherwise hang the command. This surface is least useful exactly when
-/// the daemon is misbehaving, so it must never wait on one.
-const REQUESTS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
-
 /// `bitrouter status --requests` — the settled-request table.
 ///
 /// Never fails: every source degrades to absence, because a monitoring view
@@ -3463,60 +3757,10 @@ const REQUESTS_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_mi
 /// and works with no daemon running, which is why "nothing recorded" and
 /// "nothing listening" stay distinguishable in the report.
 async fn request_table(config: Option<&Path>, socket: &Path) -> Result<RequestsReport> {
-    use bitrouter::metering::store::TimeWindow;
-
     let source = bitrouter::paths::resolve_config(config)?;
-    let window = TimeWindow::Today;
-    let daemon = request_daemon_view(socket).await;
-
-    let Some(store) = bitrouter::metering::reader::open_readonly(&source).await else {
-        return Ok(RequestsReport::new(
-            daemon,
-            window,
-            Default::default(),
-            Default::default(),
-            Vec::new(),
-        ));
-    };
-    Ok(RequestsReport::new(
-        daemon,
-        window,
-        store.spend_summary(window).await.unwrap_or_default(),
-        store.get_total_rate().await.unwrap_or_default(),
-        store
-            .recent_requests(window, REQUEST_ROWS, None)
-            .await
-            .unwrap_or_default(),
-    ))
-}
-
-/// How many rows the table ever holds: one tall screen plus scrollback margin.
-/// The query is `LIMIT`ed to this so a day-long window costs the same as an
-/// empty one.
-const REQUEST_ROWS: u64 = 500;
-
-/// The daemon as its control socket describes it, or `None` when nothing is
-/// listening or it does not answer in time.
-async fn request_daemon_view(socket: &Path) -> Option<DaemonView> {
-    let probe = daemon::send_command(socket, &DaemonCommand::Status);
-    let Ok(response) = tokio::time::timeout(REQUESTS_PROBE_TIMEOUT, probe).await else {
-        // Unresponsive reads as absent: the state line then says the daemon is
-        // not answering, which is true and more useful than hanging.
-        return None;
-    };
-    match response {
-        Ok(DaemonResponse::Status {
-            pid,
-            listen,
-            models,
-            ..
-        }) => Some(DaemonView {
-            pid,
-            listen,
-            models,
-        }),
-        _ => None,
-    }
+    bitrouter::actions::requests::RequestsAction::new(source, socket.to_path_buf())
+        .report(bitrouter::actions::requests::MAX_REQUEST_ROWS)
+        .await
 }
 
 /// `bitrouter route` — the CLI surface of the shared `route` action.
@@ -5099,23 +5343,20 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let prompt_options = bitrouter::acp_cli::PromptOptions {
-                no_wait,
-                contract: None,
-                policy: headless.policy()?,
-                format: headless.format,
-            };
-            let mut stdout = tokio::io::stdout();
-            let ctx = bitrouter::acp_cli::SpawnContext {
-                source: &source,
-                config: cfg,
-                agent_id: &agent,
-                options,
-                routing,
-            };
-            let tally = bitrouter::acp_cli::prompt(ctx, &text, prompt_options, &mut stdout).await?;
-            exit_with(tally.exit_code())
+            run_agent_prompt(
+                &source,
+                cfg,
+                &agent,
+                AgentPromptRequest {
+                    prompt: &text,
+                    routing,
+                    turn_timeout,
+                    no_wait,
+                    result_schema: None,
+                    headless,
+                },
+            )
+            .await
         }
         AcpCmd::Commands {
             agent,
@@ -5142,6 +5383,45 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             Ok(())
         }
     }
+}
+
+struct AgentPromptRequest<'a> {
+    prompt: &'a str,
+    routing: bitrouter::acp_cli::RoutingOptions,
+    turn_timeout: Option<u64>,
+    no_wait: bool,
+    result_schema: Option<&'a str>,
+    headless: bitrouter::acp_cli::HeadlessOptions,
+}
+
+async fn run_agent_prompt(
+    source: &bitrouter::paths::ConfigSource,
+    config: bitrouter_sdk::config::Config,
+    agent: &str,
+    request: AgentPromptRequest<'_>,
+) -> Result<()> {
+    // A malformed schema or policy fails fast, before any session side effect.
+    let contract = request
+        .result_schema
+        .map(bitrouter::result_contract::ResultContract::from_flag)
+        .transpose()?;
+    let prompt_options = bitrouter::acp_cli::PromptOptions {
+        no_wait: request.no_wait,
+        contract,
+        policy: request.headless.policy()?,
+        format: request.headless.format,
+    };
+    let mut stdout = tokio::io::stdout();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source,
+        config,
+        agent_id: agent,
+        options: bitrouter::acp_cli::launch_options(request.turn_timeout),
+        routing: request.routing,
+    };
+    let tally =
+        bitrouter::acp_cli::prompt(ctx, request.prompt, prompt_options, &mut stdout).await?;
+    exit_with(tally.exit_code())
 }
 
 /// Leave with a status a successful command chose for itself — `spawn
@@ -5203,6 +5483,52 @@ fn process_is_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_is_the_unambiguous_headless_agent_surface() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "run",
+            "claude-acp",
+            "summarize this repository",
+            "--format",
+            "quiet",
+        ])?;
+        match cli.command {
+            Some(Command::Run {
+                agent,
+                prompt,
+                headless,
+                ..
+            }) => {
+                assert_eq!(agent, "claude-acp");
+                assert_eq!(prompt, "summarize this repository");
+                assert_eq!(headless.format, bitrouter::acp_cli::PromptFormat::Quiet);
+            }
+            _ => anyhow::bail!("run did not parse as the headless agent command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tui_distinguishes_dashboard_from_agent_session() -> anyhow::Result<()> {
+        let dashboard = Cli::try_parse_from(["bitrouter", "--context", "work", "tui"])?;
+        assert_eq!(dashboard.context.as_deref(), Some("work"));
+        assert!(matches!(
+            dashboard.command,
+            Some(Command::Tui { agent: None, .. })
+        ));
+
+        let session = Cli::try_parse_from(["bitrouter", "tui", "codex-acp"])?;
+        assert!(matches!(
+            session.command,
+            Some(Command::Tui {
+                agent: Some(agent),
+                ..
+            }) if agent == "codex-acp"
+        ));
+        Ok(())
+    }
 
     // ===== tracing filter resolution =====
 

@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-tui"
-description = "Terminal renderer for an ACP agent session: messages, tool calls, permissions, and the router's own surfaces."
+description = "Terminal renderers for BitRouter operations and ACP agent sessions."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
