@@ -31,6 +31,116 @@ async fn transcript(native: &Path, id: &str) -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn corrupt_lifecycle_index_keeps_later_raw_sessions_recoverable_after_restart() -> Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let mut origin = claude_service(directory.path()).await?;
+    stop_worker(&mut origin).await?;
+    for id in ["early", "later"] {
+        origin
+            .service
+            .observe(observation(
+                id,
+                "session/new",
+                "request",
+                json!({"cwd":directory.path()}),
+            ))
+            .await?;
+        origin
+            .service
+            .observe(observation(
+                id,
+                "session/new",
+                "response",
+                json!({"sessionId":id}),
+            ))
+            .await?;
+        transcript(&directory.path().join("default"), id).await?;
+    }
+    let source = origin
+        .service
+        .store
+        .sources(None, 128)
+        .await?
+        .into_iter()
+        .find(|source| source.descriptor.format == SourceFormat::Acp)
+        .context("original controller journal")?;
+    let controller = source
+        .descriptor
+        .locator
+        .strip_prefix("controller:")
+        .context("original controller id")?
+        .to_owned();
+    let db = crate::db::connect(&crate::db::anchor_url(
+        "sqlite:evidence.db?mode=rwc",
+        &directory.path().join("router"),
+    ))
+    .await?;
+    let early_key = crate::eval::types::canonical_digest(&(&controller, "early"))?;
+    let later_key = crate::eval::types::canonical_digest(&(&controller, "later"))?;
+    let changed = db
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE native_evidence_objects SET object_json = '{}' WHERE kind = 'lifecycle_request' AND object_key = ?",
+            [early_key.clone().into()],
+        ))
+        .await?;
+    assert_eq!(changed.rows_affected(), 1);
+    // The later operation must be rebuilt from raw evidence, not merely read
+    // from the healthy index left behind by its original controller.
+    let removed = db
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM native_evidence_objects WHERE kind IN ('lifecycle_request', 'lifecycle_response') AND object_key = ?",
+            [later_key.into()],
+        ))
+        .await?;
+    assert_eq!(removed.rows_affected(), 2);
+    drop(origin);
+
+    for _ in 0..2 {
+        let mut resumed = claude_service(directory.path()).await?;
+        stop_worker(&mut resumed).await?;
+        let snapshot = finish_recovery(&resumed.service).await?;
+        assert!(snapshot.gaps.contains("native_lifecycle_index_invalid"));
+        assert!(!snapshot.gaps.contains("native_recovery_source_failed"));
+        assert_eq!(
+            snapshot
+                .histories
+                .iter()
+                .map(|history| history.node.native_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["early", "later"])
+        );
+        let later = resumed
+            .service
+            .store
+            .lifecycle_operation(&controller, "later")
+            .await?;
+        assert!(later.request.is_some());
+        assert!(later.response.is_some());
+        assert!(
+            resumed
+                .service
+                .store
+                .lifecycle_operation(&controller, "early")
+                .await
+                .is_err()
+        );
+        let damaged = db
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT object_json FROM native_evidence_objects WHERE kind = 'lifecycle_request' AND object_key = ?",
+                [early_key.clone().into()],
+            ))
+            .await?
+            .context("original damaged index")?;
+        assert_eq!(damaged.try_get::<String>("", "object_json")?, "{}");
+    }
+    Ok(())
+}
+
 async fn codex_service(directory: &Path) -> Result<EvidenceHandle> {
     let mut env = HashMap::from([
         (

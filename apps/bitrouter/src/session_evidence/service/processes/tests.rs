@@ -345,3 +345,149 @@ async fn each_binding_read_rechecks_original_records_and_owner() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn original_lifecycle_response_binds_acp_identity_without_claiming_current_conversation()
+-> Result<()> {
+    for (method, response, expected, error) in [
+        (
+            "session/new",
+            json!({"sessionId":"created"}),
+            Some("created"),
+            None,
+        ),
+        ("session/load", json!({}), Some("requested"), None),
+        ("session/resume", json!({}), Some("requested"), None),
+        (
+            "session/fork",
+            json!({"sessionId":"forked"}),
+            Some("forked"),
+            None,
+        ),
+        (
+            "session/load",
+            json!({"error_code":-32603}),
+            None,
+            Some(-32603),
+        ),
+    ] {
+        let directory = tempfile::tempdir()?;
+        let handle = service(directory.path()).await?;
+        let mut request = params(directory.path(), "profile");
+        if method != "session/new" {
+            request["sessionId"] = json!("requested");
+        }
+        let prepared = prepare(&handle.service, "create", method, request).await?;
+        let reference = configuration(&prepared)?;
+        let (before, path) = capture(&handle.service, &prepared, Some(reference.clone())).await?;
+        assert!(before.session_response.is_none());
+        handle
+            .service
+            .observe(observation("create", method, "response", response))
+            .await?;
+        let after = handle
+            .service
+            .process_binding(before.source_id.clone())
+            .await;
+        assert!(after.gaps.is_empty(), "{method}: {:?}", after.gaps);
+        let outcome = after
+            .session_response
+            .context("original lifecycle response")?;
+        assert_eq!(outcome.acp_session_id.as_deref(), expected);
+        assert_eq!(outcome.error_code, error);
+        // The transport fixture emits early-session as the native id. The
+        // recorded ACP id is an attachment to that configuration, not a claim
+        // that subsequent native conversation ids must equal the ACP alias.
+        let (recreated, another_path) =
+            capture(&handle.service, &prepared, Some(reference)).await?;
+        assert_eq!(
+            recreated
+                .session_response
+                .context("saved creation outcome")?
+                .record,
+            outcome.record
+        );
+        assert_ne!(before.process_id, recreated.process_id);
+        std::fs::remove_file(path)?;
+        std::fs::remove_file(another_path)?;
+        drop(handle);
+        let resumed = service(directory.path()).await?;
+        let snapshot = recover(&resumed.service).await?;
+        let restored = snapshot
+            .processes
+            .iter()
+            .find(|process| process.source_id == before.source_id)
+            .context("restored process")?;
+        assert_eq!(
+            restored
+                .session_response
+                .as_ref()
+                .context("restored response")?
+                .record,
+            outcome.record
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fork_without_returned_child_id_and_corrupt_response_never_bind_a_session() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let handle = service(directory.path()).await?;
+    let mut request = params(directory.path(), "profile");
+    request["sessionId"] = json!("parent");
+    let prepared = prepare(&handle.service, "fork", "session/fork", request).await?;
+    let (process, _) = capture(&handle.service, &prepared, Some(configuration(&prepared)?)).await?;
+    handle
+        .service
+        .observe(observation("fork", "session/fork", "response", json!({})))
+        .await?;
+    let invalid = handle.service.process_binding(process.source_id).await;
+    assert!(invalid.session_response.is_none());
+    assert!(invalid.gaps.contains("native_process_lifecycle_invalid"));
+
+    let prepared = prepare(
+        &handle.service,
+        "new",
+        "session/new",
+        params(directory.path(), "profile"),
+    )
+    .await?;
+    let (process, _) = capture(&handle.service, &prepared, Some(configuration(&prepared)?)).await?;
+    handle
+        .service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"created"}),
+        ))
+        .await?;
+    let bound = handle
+        .service
+        .process_binding(process.source_id.clone())
+        .await;
+    let response = bound.session_response.context("valid response")?;
+    let db = crate::db::connect(&crate::db::anchor_url(
+        "sqlite:evidence.db?mode=rwc",
+        &directory.path().join("router"),
+    ))
+    .await?;
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "UPDATE native_evidence_records SET digest = ? WHERE id = ?",
+        [
+            canonical_digest(&"corrupt")?.into(),
+            response.record.record_id.into(),
+        ],
+    ))
+    .await?;
+    let invalid = handle.service.process_binding(process.source_id).await;
+    assert!(
+        invalid.configured_by.is_some(),
+        "valid configuration remains visible"
+    );
+    assert!(invalid.session_response.is_none());
+    assert!(invalid.gaps.contains("native_process_lifecycle_invalid"));
+    Ok(())
+}

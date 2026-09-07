@@ -226,6 +226,15 @@ its originating operation is not proof of what triggered a later restart. These
 bindings survive deletion of imported spool files. Older or invalid references
 remain visible as gaps and do not establish task membership or completion.
 
+Lifecycle requests and responses have separate immutable evidence boundaries
+for both maintained controllers. They can be recovered from different profile
+journals without inventing missing responses. Claude process snapshots also
+show the verified response to their configuration's original lifecycle request,
+including its ACP id or rejection. That historical ACP attachment is distinct
+from the current native conversation id after a reset and from Query liveness.
+Damaged derived boundaries remain gaps while intact raw history and later
+operations in the same journal continue to recover.
+
 Claude collection adds invocation-local lifecycle hooks through the adapter's
 session settings, preserving existing hooks. `native-session-hook` and
 `app-server` are internal entry points; users do not run them to collect or

@@ -364,6 +364,9 @@ impl ControllerEvidence {
                 "historical source records missing"
             );
             self.store.index_execution_range(&range).await?;
+            recovery
+                .gaps
+                .extend(self.store.index_lifecycle_range(&range).await?);
             for row in rows {
                 let raw = &row.input.raw;
                 let nodes = if replay.source.descriptor.format == SourceFormat::Acp {

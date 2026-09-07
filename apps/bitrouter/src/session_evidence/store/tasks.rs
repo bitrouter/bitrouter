@@ -146,6 +146,8 @@ impl EvidenceStore {
         let next = self
             .append_on(&transaction, source, std::slice::from_ref(&record), cursor)
             .await?;
+        self.index_lifecycle_record(&transaction, source, &record)
+            .await?;
         // append_on acquires SQLite's writer lock before any reads. Starting
         // with artifact SELECTs would introduce a read-to-write upgrade race.
         if let Some(workspace) = record.raw.get("workspace_artifact") {

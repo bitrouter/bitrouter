@@ -251,6 +251,23 @@ async fn real_proxy_header_binds_the_controllers_committed_configuration() -> Re
         configured.request.range.source_id,
         configured.configuration.range.source_id
     );
+    assert!(binding.session_response.is_none());
+    handle
+        .service
+        .observe(SessionObservation {
+            operation_id: "create".into(),
+            method: "session/new".into(),
+            phase: "response".into(),
+            payload: json!({"sessionId":"native-session"}),
+        })
+        .await?;
+    let completed = handle.service.reconcile().await?;
+    let response = completed.processes[0]
+        .session_response
+        .as_ref()
+        .context("bound lifecycle response")?;
+    assert_eq!(response.acp_session_id.as_deref(), Some("native-session"));
+    assert!(response.error_code.is_none());
     assert!(
         snapshot.attempts.is_empty(),
         "process start cannot fabricate a task"

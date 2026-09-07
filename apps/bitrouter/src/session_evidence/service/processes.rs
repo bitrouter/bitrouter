@@ -12,7 +12,18 @@ pub struct ProcessBinding {
     pub process_id: Option<String>,
     pub header: Option<RecordRef>,
     pub configured_by: Option<ProcessConfiguration>,
+    /// The outcome of the configuration's original lifecycle operation. This
+    /// remains historical evidence when saved parameters recreate a Query.
+    #[serde(default)]
+    pub session_response: Option<ProcessSessionResponse>,
     pub gaps: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessSessionResponse {
+    pub record: RecordRef,
+    pub acp_session_id: Option<String>,
+    pub error_code: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +53,7 @@ impl ControllerEvidence {
             process_id: None,
             header: None,
             configured_by: None,
+            session_response: None,
             gaps: BTreeSet::new(),
         };
         let header = self.process_header(&binding.source_id).await;
@@ -71,7 +83,18 @@ impl ControllerEvidence {
             return binding;
         }
         match self.process_configuration(&source, raw).await {
-            Ok(configuration) => binding.configured_by = Some(configuration),
+            Ok(configuration) => {
+                match self.process_session_response(&configuration).await {
+                    Ok(response) => binding.session_response = response,
+                    Err(error) => {
+                        tracing::warn!(%error, "native process lifecycle response could not be verified");
+                        binding
+                            .gaps
+                            .insert("native_process_lifecycle_invalid".into());
+                    }
+                }
+                binding.configured_by = Some(configuration);
+            }
             Err(error) => {
                 tracing::warn!(%error, "native process configuration could not be verified");
                 binding
@@ -80,6 +103,74 @@ impl ControllerEvidence {
             }
         }
         binding
+    }
+
+    async fn process_session_response(
+        &self,
+        configuration: &ProcessConfiguration,
+    ) -> Result<Option<ProcessSessionResponse>> {
+        let operation = self
+            .store
+            .lifecycle_operation(&configuration.controller_id, &configuration.operation_id)
+            .await?;
+        let Some(request) = operation.request else {
+            // Historical indexing can encounter the configuration's profile
+            // before the original request's profile. No response is attributed
+            // until both halves can be verified together.
+            return Ok(None);
+        };
+        ensure!(
+            RecordRef::from_record(&request.record)? == configuration.request,
+            "process configuration refers to a different lifecycle request"
+        );
+        let Some(response) = operation.response else {
+            return Ok(None);
+        };
+        self.recovered_root(&response.source).await?;
+        if response.source.id == request.source.id {
+            ensure!(
+                response.record.input.sequence > request.record.input.sequence,
+                "lifecycle response precedes its request"
+            );
+        }
+        let payload = response
+            .record
+            .input
+            .raw
+            .get("payload")
+            .context("lifecycle response payload missing")?;
+        let error_code = payload
+            .get("error_code")
+            .map(|value| {
+                value
+                    .as_i64()
+                    .context("lifecycle response error code is not an integer")
+            })
+            .transpose()?;
+        // ACP load/resume can omit the already requested id. New/fork must
+        // return their own id; copying the parent's id would conflate a fork.
+        // https://agentclientprotocol.com/protocol/v1/session-setup
+        let acp_session_id = if error_code.is_some() {
+            None
+        } else {
+            optional_id(payload, "sessionId")?.or_else(|| {
+                matches!(
+                    configuration.method.as_str(),
+                    "session/load" | "session/resume"
+                )
+                .then(|| configuration.requested_session_id.clone())
+                .flatten()
+            })
+        };
+        ensure!(
+            error_code.is_some() || acp_session_id.is_some(),
+            "lifecycle response session id missing"
+        );
+        Ok(Some(ProcessSessionResponse {
+            record: RecordRef::from_record(&response.record)?,
+            acp_session_id,
+            error_code,
+        }))
     }
 
     async fn process_header(&self, id: &str) -> Result<(RegisteredSource, StoredRecord, String)> {

@@ -173,6 +173,35 @@ and coordinate-derived identity checks and adding the binary regression.
 All 3,215 workspace tests passed with 12 skipped; Clippy, formatting, doctests,
 rustdoc and distribution checks passed.
 
+Lifecycle request and response boundaries are now indexed for both maintained
+controllers. Each half references its exact original record and is committed
+with live raw observations and source cursors; conflicting boundaries roll
+back that transaction. Historical reconciliation can recover the two halves
+from different profile journals in either order. Reads recheck both owned
+records and their controller, harness and operation identities. Recovery does
+not synthesize an outcome for an unanswered operation. A damaged derived
+lifecycle boundary remains an explicit gap without blocking intact raw history
+or later operations in the same journal; recovery never overwrites that boundary.
+
+Claude process snapshots additionally expose the original creation operation's
+verified response, including an ACP session id or rejection code. Load/resume
+may use the requested id when the response omits it; new/fork require their own
+returned id. This attachment remains tied to the original operation if saved
+configuration later starts another process. A native conversation reset can
+change the transcript id while the adapter keeps its ACP id; this attachment
+alone does not rebind live Query caches or equate those identities. Missing
+responses remain unobserved, and invalid response evidence remains a gap while
+valid process configuration evidence stays visible.
+
+Independent stage review passed after isolating historical lifecycle-index
+failures. The new database regression deletes later indexes to force raw backfill
+and verifies two controller restarts recover healthy sessions while preserving
+the rejected, damaged boundary. All 3,222 workspace tests passed with 12 skipped;
+one unrelated policy-lock test reported a nextest leak and passed an isolated
+rerun without that report. Clippy, formatting, doctests, rustdoc and distribution
+checks passed. These checks do not replace the outstanding native-runtime
+conformance matrix.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
 rebinding; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace
