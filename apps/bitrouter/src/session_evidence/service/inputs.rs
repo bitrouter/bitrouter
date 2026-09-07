@@ -5,7 +5,7 @@ use crate::session_evidence::adapter_bridge::{Event, PromptEvidence, ProvenObser
 use crate::session_evidence::native_inputs::{
     self, NativeInputBinding, NativeInputEvidence, Scanner,
 };
-use crate::session_evidence::types::{MAX_RECORDS, RegisteredSource};
+use crate::session_evidence::types::{MAX_OBJECT_BYTES, MAX_RECORDS, RegisteredSource};
 
 struct Group {
     source: RegisteredSource,
@@ -94,6 +94,7 @@ impl ControllerEvidence {
         }
         let (sources, inventory_gaps) = self.input_source_inventory(&groups).await?;
         let mut budget = MAX_RECORDS as u64;
+        let mut execution_budget = MAX_OBJECT_BYTES;
         for group in groups.values_mut() {
             group.gaps.extend(inventory_gaps.iter().cloned());
             group.gaps.extend(
@@ -111,7 +112,10 @@ impl ControllerEvidence {
             {
                 group.gaps.insert("native_input_inventory_pending".into());
             }
-            if let Err(error) = self.corroborate_inputs(group, &sources, &mut budget).await {
+            if let Err(error) = self
+                .corroborate_inputs(group, &sources, &mut budget, &mut execution_budget)
+                .await
+            {
                 tracing::warn!(%error, "native input evidence could not be verified");
                 group.gaps.insert("native_input_evidence_invalid".into());
                 group.bindings.clear();
@@ -134,6 +138,7 @@ impl ControllerEvidence {
                             selected.bindings.len() < MAX_GRAPH_ITEMS,
                             "native attempt input limit"
                         );
+                        reserve_execution(&binding.execution, &mut execution_budget)?;
                         selected.bindings.push(binding.clone());
                     }
                 }
@@ -188,6 +193,7 @@ impl ControllerEvidence {
         group: &mut Group,
         sources: &[RegisteredSource],
         budget: &mut u64,
+        execution_budget: &mut usize,
     ) -> Result<()> {
         let targets: BTreeSet<String> = group
             .prompts
@@ -373,6 +379,7 @@ impl ControllerEvidence {
                         group.bindings.len() < MAX_GRAPH_ITEMS,
                         "native input binding limit"
                     );
+                    reserve_execution(&receipt.execution, execution_budget)?;
                     group.bindings.push(NativeInputBinding {
                         origin: observation.origin.clone(),
                         producer: proven.record.clone(),
@@ -385,6 +392,7 @@ impl ControllerEvidence {
                         controller_registration: group.registration.clone(),
                         configuration: configuration.clone(),
                         session_response: session_response.clone(),
+                        execution: receipt.execution.clone(),
                     });
                 }
             }
@@ -413,6 +421,18 @@ impl ControllerEvidence {
         });
         Ok(())
     }
+}
+
+fn reserve_execution(
+    execution: &crate::session_evidence::execution::input_runs::InputRun,
+    budget: &mut usize,
+) -> Result<()> {
+    // Reserve before each clone into controller groups and the final output.
+    // The aggregate bound includes repeated producers and multiple sources.
+    let bytes = serde_json::to_vec(execution)?.len();
+    ensure!(bytes <= *budget, "native execution materialization limit");
+    *budget -= bytes;
+    Ok(())
 }
 
 fn owns(group: &Group, source: &RegisteredSource) -> bool {

@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests and acknowledgements. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests, acknowledgements and explicitly addressed execution events. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
@@ -578,6 +578,44 @@ native reset identity, process recreation, original-record loss, cross-journal
 claims, missing tails and database reopen. All 3,353 workspace tests passed with
 14 skipped; the opt-in real-binary fixture passed separately. Clippy with denied
 warnings, doctests, rustdoc, distribution, formatting and diff checks passed.
+
+Input receipts now carry execution observations selected on their original
+native connection, by Codex thread/turn or Claude conversation/command identity.
+They select explicit record references, not the full interleaved source interval.
+Codex acceptance can follow its start notification; independent title/other turns
+and another connection's terminal cannot close the input. Bound collab call sites
+retain their source and parent turn without claiming the receiver's resumed turn.
+Duplicate, reversed or pre-input bookends keep an association gap and no outcome.
+
+Claude results need an explicit matching `user_message_uuid` in the same process
+and native conversation. Command completion must follow the result; cancellation
+may precede a late result. Queued cancellation, refusal and discard remain
+distinct from started execution. The result's `is_error` is independent of its
+subtype: a success variant can describe an API failure. Terminal reasons retain
+interruptions, background/deferred work and hook stops; unknown reasons withhold
+an outcome. A folded/coalesced command without its own result remains unresolved.
+These outcomes describe one native input, not coding quality, child completion,
+all execution messages, request coverage, final artifacts or task settlement.
+
+The source scan moves execution details into unique receipts after rejecting
+same-connection input ambiguity. Materializing details into producer bindings
+and the final inspection view shares a 64 MiB budget across all groups and tasks;
+overflow remains incomplete. This bounds duplicate-producer amplification but
+does not replace task-scoped persistent paging. The observations are reconstructed
+from original records after reopen; loss of a terminal cannot preserve an earlier
+successful inspection as current evidence. The binary adapter fixture checks the
+selected native identities, original execution records and terminal observations.
+Its native transports remain deterministic fixtures.
+Adapter module pins do not pin their transitive native CLI dependencies. Native
+version/capability admission and runtime conformance must verify both separately.
+
+Independent stage review passed after correcting Claude API-error classification,
+completion/result ordering, unknown terminal reasons and execution-detail
+amplification. Ten new scanner/service regressions cover interleaving, call-site
+identity, reset, cancellation, original-record loss, closed-instance reopen and
+materialization bounds. All 3,363 workspace tests passed with 14 skipped; the
+opt-in real-binary adapter fixture passed separately. Clippy with denied warnings,
+doctests, rustdoc, distribution, formatting and diff checks passed.
 
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;

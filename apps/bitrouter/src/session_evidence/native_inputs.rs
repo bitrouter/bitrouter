@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::adapter_bridge::{Event, PromptOrigin};
+use super::execution::input_runs::{InputRun, InputRunScanner};
 use super::execution::{FactKind, extract};
 use super::service::processes::{ProcessConfiguration, ProcessSessionResponse};
 use super::types::{
@@ -36,6 +37,8 @@ pub struct NativeInputBinding {
     pub controller_registration: RecordRef,
     pub configuration: Option<ProcessConfiguration>,
     pub session_response: Option<ProcessSessionResponse>,
+    #[serde(default)]
+    pub execution: InputRun,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -51,6 +54,7 @@ pub(super) struct Receipt {
     pub native_id: String,
     pub input: RecordRef,
     pub acknowledgements: Vec<NativeAcknowledgement>,
+    pub execution: InputRun,
 }
 
 struct Request {
@@ -75,6 +79,7 @@ pub(super) struct Scanner<'a> {
     receipts: Vec<Receipt>,
     acknowledgements: usize,
     gaps: BTreeSet<String>,
+    executions: InputRunScanner,
 }
 
 impl<'a> Scanner<'a> {
@@ -89,6 +94,7 @@ impl<'a> Scanner<'a> {
             receipts: Vec::new(),
             acknowledgements: 0,
             gaps: BTreeSet::new(),
+            executions: InputRunScanner::default(),
         }
     }
 
@@ -105,6 +111,7 @@ impl<'a> Scanner<'a> {
         if raw.get("method").and_then(Value::as_str) == Some("runtime/gap") {
             self.gaps.insert("native_input_capture_gap".into());
         }
+        self.executions.push(self.source, record, self.targets)?;
         match self.source.format {
             SourceFormat::CodexAppServer => self.codex(raw, reference),
             SourceFormat::ClaudeCli => self.claude(record, reference),
@@ -186,6 +193,7 @@ impl<'a> Scanner<'a> {
                     state: "accepted".into(),
                     record: reference,
                 }],
+                execution: InputRun::default(),
             });
         }
         Ok(())
@@ -279,12 +287,39 @@ impl<'a> Scanner<'a> {
                         native_id: native_id.clone(),
                         input: input.reference.clone(),
                         acknowledgements,
+                        execution: InputRun::default(),
                     });
                 }
             }
         }
         if self.gaps.contains("native_input_capture_gap") {
             self.receipts.clear();
+        }
+        // Reject same-connection ambiguity before materializing execution
+        // details. Otherwise many acceptances can clone one large turn log.
+        let mut occurrences = BTreeMap::<(NodeKey, String), usize>::new();
+        for receipt in &self.receipts {
+            if receipt.node.harness == Harness::Codex {
+                *occurrences
+                    .entry((receipt.node.clone(), receipt.native_id.clone()))
+                    .or_default() += 1;
+            }
+        }
+        self.receipts.retain(|receipt| {
+            if occurrences
+                .get(&(receipt.node.clone(), receipt.native_id.clone()))
+                .is_some_and(|count| *count > 1)
+            {
+                self.gaps.insert("native_input_turn_ambiguous".into());
+                false
+            } else {
+                true
+            }
+        });
+        for receipt in &mut self.receipts {
+            receipt.execution =
+                self.executions
+                    .bind(&receipt.node, &receipt.native_id, &receipt.input);
         }
         (self.receipts, self.gaps)
     }

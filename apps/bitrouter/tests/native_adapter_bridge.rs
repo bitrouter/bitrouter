@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, ensure};
 use bitrouter::session_evidence::adapter_bridge::{Event, PromptEvidence};
+use bitrouter::session_evidence::execution::input_runs::InputOutcome;
 use bitrouter::session_evidence::native_inputs::NativeInputEvidence;
 use bitrouter::session_evidence::service::{EvidenceHandle, EvidenceLaunch};
 use bitrouter::session_evidence::store::EvidenceStore;
@@ -217,6 +218,46 @@ async fn read_bindings(
         "local",
     )?;
     for binding in &inputs.bindings {
+        assert!(
+            binding.execution.gaps.is_empty(),
+            "{:?}",
+            binding.execution.gaps
+        );
+        assert_eq!(binding.execution.outcome, Some(InputOutcome::Completed));
+        assert_eq!(binding.execution.starts.len(), 1);
+        assert_eq!(binding.execution.terminations.len(), 1);
+        for reference in &binding.execution.records {
+            let stored = store
+                .records(&reference.range)
+                .await?
+                .into_iter()
+                .next()
+                .context("original execution event")?;
+            assert_eq!(stored.id, reference.record_id);
+            assert_eq!(stored.digest, reference.record_digest);
+            assert_eq!(reference.range.source_id, binding.input.range.source_id);
+            let payload = &stored.input.raw["payload"];
+            if fixture.identity.harness_id == "codex-acp" {
+                assert_eq!(payload["threadId"], binding.node.native_id);
+                let turn = payload
+                    .get("turnId")
+                    .or_else(|| payload.pointer("/turn/id"));
+                assert_eq!(
+                    turn.and_then(Value::as_str),
+                    Some(binding.native_id.as_str())
+                );
+            } else {
+                assert_eq!(stored.input.raw["process_id"], binding.process_id);
+                assert_eq!(payload["session_id"], binding.node.native_id);
+                let command = payload
+                    .get("command_uuid")
+                    .or_else(|| payload.get("user_message_uuid"));
+                assert_eq!(
+                    command.and_then(Value::as_str),
+                    Some(binding.native_id.as_str())
+                );
+            }
+        }
         let request = store
             .records(&binding.input.range)
             .await?

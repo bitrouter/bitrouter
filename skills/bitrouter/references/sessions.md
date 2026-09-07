@@ -178,6 +178,15 @@ claims and known missing evidence remain explicit gaps, including after restart.
 The inspected ranges are bounded and do not establish complete task execution
 membership or settlement. An enqueue, accepted turn, input receipt or prompt
 result alone is not a completed evaluation.
+Each verified input receipt also exposes explicitly addressed execution events
+from its original native connection. Codex turn bookends and Claude command/result
+observations can identify an input's terminal outcome. Another thread, process or
+conversation cannot supply it; duplicate or inconsistent bookends remain gaps.
+Claude completion follows its result, while cancellation can precede a late result.
+API errors, deferred/background work and interruption remain distinct from an
+ordinary native completion. These observations do not establish all-task execution
+coverage or coding success. Execution-detail copies share a bounded inspection
+budget; they do not provide unlimited task history.
 An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.

@@ -3,6 +3,8 @@ use crate::eval::types::canonical_digest;
 use crate::session_evidence::types::RecordInput;
 use serde_json::json;
 
+mod executions;
+
 const PROCESS: &str = "12345678-1234-4234-8234-123456789abc";
 
 fn source(harness: Harness) -> SourceDescriptor {

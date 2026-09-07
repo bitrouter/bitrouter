@@ -2,6 +2,8 @@ use super::*;
 use crate::session_evidence::adapter_bridge::{AdapterIdentity, Observation};
 use crate::session_evidence::service::tests::{observation, write_rows};
 
+mod executions;
+
 async fn fixture(directory: &Path, harness: Harness) -> Result<EvidenceHandle> {
     let key = if harness == Harness::Codex {
         "codex"

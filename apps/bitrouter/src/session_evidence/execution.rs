@@ -14,6 +14,7 @@ use super::types::{
 use crate::eval::types::canonical_digest;
 
 mod claude;
+pub mod input_runs;
 pub mod runs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
