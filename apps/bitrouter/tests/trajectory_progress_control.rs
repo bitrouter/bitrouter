@@ -2033,7 +2033,9 @@ async fn nonstream_exact_parent_detaches_once_with_equal_body_and_response() -> 
     );
     assert_eq!(followup["object"], "response");
     assert_eq!(followup["status"], "completed");
-    assert_eq!(followup["model"], "@auto");
+    // The response identifies the concrete model selected by the routing
+    // table, rather than echoing the virtual `@auto` request alias.
+    assert_eq!(followup["model"], "balanced-model");
     assert_eq!(
         followup["output"],
         json!([{
