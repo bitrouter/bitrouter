@@ -27,7 +27,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-reporting commands are exempt: `serve` and `mcp serve` are long-running servers; `acp serve` is a stdio JSON-RPC bridge; `run`, `acp prompt`, and `spawn -p` stream NDJSON by default; `tui` and `launch` own the terminal; and `cloud api` streams the remote response body. Their stdout is a wire protocol, raw response, or terminal—not a JSON result envelope.
+> Non-reporting commands are exempt: `serve` and `mcp serve` are long-running servers; `acp serve` is a stdio JSON-RPC bridge; `run` streams NDJSON by default; `code` and `launch` own the terminal; and `cloud api` streams the remote response body.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -61,7 +61,7 @@ process starts anyway. Two places report it:
   fail validation — an ignored block is a misconfiguration, not a malformed
   config, and this command is CI-gating.
 - Every runtime surface logs one WARN per unread id on start: the daemon, and
-  `bitrouter acp serve|prompt`, `bitrouter run`, and `bitrouter tui <agent>`, none of which build the
+  `bitrouter acp serve`, `bitrouter run`, and `bitrouter code <agent>`, none of which build the
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
@@ -108,6 +108,7 @@ bitrouter context add workstation \
 bitrouter context list
 bitrouter context show workstation
 bitrouter --context workstation status
+bitrouter --context workstation requests
 bitrouter --context workstation models --provider openai
 bitrouter --context workstation route openai/gpt-5
 bitrouter context remove workstation
@@ -122,9 +123,9 @@ first action (and caches it for a long-lived TUI), follows no redirects, and
 never falls back to this computer's config, socket, or database after a remote
 error.
 
-The MVP supports `status`, `status --requests`, `models`, `route`, and the
-operations `tui`. Daemon mutations, configuration/provider/key administration,
-agent lifecycle, ACP sessions, native harness launch, and `tui <agent>` remain
+The MVP supports `status`, `requests`, `models`, `route`, and the operations
+`code` UI. Daemon mutations, configuration/provider/key administration,
+agent lifecycle, ACP sessions, native harness launch, and `code <agent>` remain
 local and reject a remote context before doing anything. Use SSH for an agent
 TUI on the server until remote ACP is implemented.
 
@@ -155,8 +156,9 @@ control:
 Set a dedicated bearer token of at least 32 bytes in
 `BITROUTER_CONTROL_TOKEN` before starting the daemon. This listener is disabled
 by default, accepts loopback addresses only, and is never affected by inference
-`server.skip_auth`. Its versioned endpoints live under `/control/v1`; remote ACP
-sessions are not part of this HTTP-only MVP. Changes under `control:` are
+`server.skip_auth`. Its typed HTTP actions live under `/control/v1`, and the
+BitRouter origin MCP service is mounted at `/mcp-control` with the same bearer
+and browser-Origin checks. Remote ACP sessions are not part of this HTTP-only MVP. Changes under `control:` are
 restart-only because they govern listener creation and binding.
 
 ### `bitrouter start`
@@ -199,8 +201,8 @@ Any provider API keys present in the current environment are forwarded to the da
 
 ```
 bitrouter status [-c <path>] [--socket <path>]
-bitrouter status --requests          # what the router has actually done
-bitrouter status --requests --human  # the same, as a table
+bitrouter requests [--limit N]       # what the router has actually done
+bitrouter requests --human           # the same, as a table
 ```
 
 Prints pid, listen address, number of routable models, the distinct providers behind them, the control socket path, and the **spend position**. Exits cleanly with "stopped" when no daemon is reachable.
@@ -218,17 +220,17 @@ The same report the origin MCP server's `status` tool returns — one shared typ
 
 The read is best-effort and never fails the command: no config, no database file, or an unreadable one gives no `spend` key at all — which is a different answer from `estimated_micro_usd: 0` over `0` requests, meaning "nothing spent today". It also works with **no daemon running**, so a `stopped` report still carries spend: what a past daemon spent is on disk and does not stop being true when it exits.
 
-The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `--requests` reports. Per-session spend is `bitrouter tui <agent>`'s cost line.
+The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `requests` reports. Per-session spend is `bitrouter code <agent>`'s cost line.
 
 `bitrouter status --json` gained `spend` additively; every pre-existing key is unchanged.
 
-`--requests` (`-r`) reports what the router has actually done instead: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running** (`mode` reads `history_only` rather than showing an empty list that looks like idleness).
+`bitrouter requests [--limit N]` reports what the router has actually done: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running**. `status --requests` remains a hidden compatibility spelling.
 
-Like every other command it honours the global format flags: JSON by default, `--human` for the table. Repeat it with `watch -n1 bitrouter status --requests --human` for a live view. Its per-row detail is what bare `bitrouter status` does not carry: `spend` there is the one rollup, not the rows behind it.
+Like every other report it uses JSON by default and `--human` for the table. Repeat it with `watch -n1 bitrouter requests --human` for a live view.
 
-The spend rollup carries a `scope` of `all callers`, and means it: these figures cover every caller of the daemon, not one session. `bitrouter tui <agent>`'s cost line is the per-session figure.
+The spend rollup covers every caller of the daemon, not one session. `bitrouter code <agent>`'s cost line is the per-session figure.
 
-**Spend is reported only where there is evidence.** Each row carries a `charge_status` — `computed` and `not_charged` are evidence, `unknown` and `legacy_unknown` are not — and only evidenced rows contribute to the total. A request the daemon recorded but could not price shows `?` in the cost column rather than `—` (which would claim it was free) or `$0.00` (which would claim it was measured). When nothing in the window has evidence, `spend_micro_usd` is `null` and the human view reads `unreported`; when only some does, the total is labelled a floor. This is the rule `bitrouter tui <agent>`'s cost line keeps: a client that cannot see a price has not observed a free turn.
+**Spend is reported only where there is evidence.** An unpriced request shows `?`, not `$0.00`; the same honesty rule applies to `code <agent>` session cost.
 
 Each row also carries `episode_id` — the trajectory episode to hand to `bitrouter trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
@@ -366,7 +368,21 @@ Prints each configured provider's id, model count, active state, and API base UR
 
 ---
 
-## MCP tool introspection
+## MCP upstream diagnostics
+
+### `bitrouter mcp check [server]`
+
+```bash
+bitrouter mcp check                 # every configured upstream
+bitrouter mcp check my-server       # one configured upstream
+```
+
+Performs one `tools/list` round trip per selected server and reports transport,
+reachability, latency, negotiated tools capability, and advertised tool names.
+This is the canonical diagnostic. The `tools` commands below are hidden
+compatibility spellings.
+
+### Hidden compatibility: `bitrouter tools`
 
 ### `bitrouter tools list`
 
@@ -398,33 +414,35 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 `bitrouter mcp serve` runs BitRouter itself as an **origin** MCP server, so an
 MCP-capable client (Claude Code, Claude Desktop, Cursor, …) can call BitRouter's
-own capabilities as tools. This is the inverse of `bitrouter tools` and the
+own capabilities as tools. This is the inverse of `bitrouter mcp check` and the
 `mcp_servers:` config block, where BitRouter is the MCP *client* proxying
 upstream servers.
 
 ### `bitrouter mcp serve`
 
 ```
-bitrouter mcp serve [--transport stdio|http] [--backend local|cloud|skills]
-                    [--local-url URL] [--cloud-url URL] [--token TOKEN]
-                    [--bind ADDR]
+bitrouter mcp serve
 ```
 
-Long-running: its stdout is the JSON-RPC wire, not a result envelope.
+Long-running: its stdout is the JSON-RPC wire, not a result envelope. Stdio is
+the canonical transport for hosts, native launchers, and plugin manifests.
+Network-capable hosts connect directly to the running daemon's authenticated
+Streamable HTTP `/mcp-control` endpoint. Standalone `--transport http` is
+retired and returns an error rather than starting a second listener.
 
-**Transports**
+**Transport**
 
-| `--transport` | Wire | Default bind |
+| Mode | Wire | Listener |
 |---|---|---|
 | `stdio` (default) | newline-delimited JSON-RPC over stdin/stdout — what an MCP client launches as a subprocess | — |
-| `http` | streamable HTTP, mounted at `/mcp-control` | `127.0.0.1:4357` |
+| Streamable HTTP | served only by the daemon at `/mcp-control`; the hidden standalone `--transport http` compatibility input returns an error | `control.listen` |
 
 **Backends**
 
 | `--backend` | Routes to | Notes |
 |---|---|---|
-| `local` (stdio default) | the local BYOK daemon at `--local-url` (default `http://127.0.0.1:4356`) | unauthenticated, so an `http` transport on this backend refuses a non-loopback `--bind` |
-| `cloud` (http default) | BitRouter Cloud at `--cloud-url` (default `https://api.bitrouter.ai`) | stdio uses `--token` / `BITROUTER_TOKEN`; http is multi-tenant and forwards each client's own `Authorization: Bearer`, so `--token` is ignored there and a missing bearer is a `401` |
+| `local` (stdio default) | the local BYOK daemon at `--local-url` (default `http://127.0.0.1:4356`) | canonical local origin profile |
+| `cloud` | BitRouter Cloud at `--cloud-url` (default `https://api.bitrouter.ai`) | hidden compatibility profile over stdio using `--token` / `BITROUTER_TOKEN`; network hosts should connect directly |
 | `skills` | the installed-skills tree under the current directory | stdio only — it serves the launching process's own skill library |
 
 **Tools**
@@ -470,7 +488,7 @@ Spend reaches an MCP client as **typed structured content** under `status`'s
 `bitrouter status` and `bitrouter cost` report from, so the surfaces cannot
 disagree about what has been spent.
 
-### `bitrouter mcp install`
+### Hidden compatibility: `bitrouter mcp install`
 
 ```
 bitrouter mcp install --client claude|cursor [--config PATH]
@@ -481,9 +499,11 @@ With `--config`, merges it into that file; without, prints it to stdout.
 
 ---
 
-## MCP registry discovery
+## Hidden compatibility: MCP registry discovery
 
-Discovery over the official MCP Registry (`https://registry.modelcontextprotocol.io`, unauthenticated v0.1 REST API) — the find-and-enable surface for `mcp_servers:`, mirroring `bitrouter agents list --remote` / `install` for the ACP registry. Only `active`, latest-version entries are surfaced; fetches carry a 10s timeout and cache for 24h under `$XDG_CACHE_HOME/bitrouter/mcp-registry/` (stale fallback when the registry is unreachable). `mcp_servers:` in `bitrouter.yaml` remains the sole source of truth for what can launch — nothing here writes config.
+These commands are hidden from normal help during the compatibility window.
+`mcp_servers:` remains the declarative source of truth; this legacy browser does
+not write config.
 
 ### `bitrouter mcp search <query>`
 
@@ -507,7 +527,7 @@ Lists registry servers with the same install-support column (default 50 rows).
 bitrouter mcp add com.pulsemcp/remote-filesystem
 ```
 
-Prints a YAML stub to review and paste under `mcp_servers:` — the same reviewed-stub flow as `bitrouter agents install` (SEP-1024-compliant by construction: the full command is visible before it ever runs). Preference order: a published `streamable-http` remote becomes a zero-install `http` entry (header `{var}` templates become `${VAR}` env references); otherwise an explicitly declared, version-pinned npm/pypi stdio package becomes an `npx -y <id>@<version>` / `uvx <id>@<version>` stub with required `environmentVariables` as `""` placeholders (optional ones listed as comments). Other package types and incomplete/unpinned package entries are refused with a manual-install pointer. The `mcp_servers:` key is derived from the registry name's last segment.
+Prints a YAML stub to review and paste under `mcp_servers:`. This legacy helper is hidden during the compatibility window; `mcp_servers:` remains the declarative source of truth.
 
 ---
 
@@ -521,21 +541,32 @@ bitrouter agents list [-c <path>]
 
 Shows the built-in agent catalog alongside which agents are configured in the loaded config.
 
+### `bitrouter agents inspect`
+
+```bash
+bitrouter agents inspect claude
+```
+
+Opens a fresh harness-native session, waits briefly for its advertised slash
+commands, and reports which source answers each command.
+
 ### `bitrouter agents check`
 
 ```
-bitrouter agents check [-c <path>]
+bitrouter agents check [agent] [-c <path>]
 ```
 
-Spawns each configured agent and verifies it responds to `initialize`. Prints latency or error per agent.
+With an agent or friendly alias, preflights that adapter and routing target.
+With no agent, spawns each configured adapter and verifies `initialize`.
 
-### `bitrouter agents install <id>`
+### `bitrouter agents scaffold <id>`
 
 ```
-bitrouter agents install claude-code
+bitrouter agents scaffold claude-code
 ```
 
-Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
+Prints a YAML stub for the named catalog or registry agent. Paste the output
+under `agents:` in `bitrouter.yaml`. `agents install` remains a hidden alias.
 
 ### `bitrouter agents conformance <id>`
 
@@ -564,11 +595,19 @@ verified, and prints no record in either case.
 ### `bitrouter run` — headless agent
 
 ```
-bitrouter run <agent> <prompt> [--format json|text|quiet] [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--result-schema JSON|@PATH] [--no-wait] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--model <id>] [--no-start] [-c <path>]
+bitrouter run <agent> [prompt|-] [--prompt-file PATH] [--load ID|--resume ID]
+              [--cwd PATH] [--format ndjson|text|quiet]
+              [--approve-all|--approve-reads|--deny-all]
+              [--permission-policy JSON|@PATH] [--result-schema JSON|@PATH]
+              [--turn-timeout <secs>] [routing flags] [-c <path>]
 ```
 
 The canonical always-headless agent surface. It opens one ACP session, sends
-one prompt, and streams NDJSON by default; text and quiet formats are explicit.
+one prompt from the positional argument, a file, or stdin, and streams NDJSON
+by default; text and quiet formats are explicit. `--load` replays a native
+session's history and `--resume` continues without replay when advertised.
+Every NDJSON event carries `version: 1` and a monotonic `seq`; `json` remains a
+temporary format-value alias for `ndjson`.
 Permissions, result validation, routing, timeouts, session identity, and exit
 codes are the same implementation used by the compatibility `acp prompt` and
 `spawn <agent> -p` forms.
@@ -576,21 +615,23 @@ codes are the same implementation used by the compatibility `acp prompt` and
 ### `bitrouter acp`
 
 ```
-bitrouter acp serve --agent <id> [-c <path>]
-bitrouter acp prompt --agent <id> [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [-c <path>] <text>
+bitrouter acp serve <agent> [-c <path>]
 ```
 
-Runs a configured ACP agent as an integration surface. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; one controller connection can carry multiple harness-native sessions. `prompt` is the compatibility spelling of the one-prompt `run` path and carries the same NDJSON/text/quiet, permission, routing, timeout, identity, and exit-code behavior. BitRouter keeps no session records.
+Exposes an ACP-compatible adapter over protocol-pure stdio until the ACP client
+disconnects; one controller connection can carry multiple
+harness-native sessions. Hidden `acp prompt` and `spawn` spellings remain only
+for migration. BitRouter keeps no session records.
 
-### `bitrouter tui` — operations dashboard
+### `bitrouter code` — operations dashboard and ACP sessions
 
 ```
-bitrouter tui [-c <path>] [--socket <path>]
-bitrouter --context <name> tui
+bitrouter code [-c <path>] [--socket <path>]
+bitrouter --context <name> code
 ```
 
 Opens a full-screen dashboard over the same status, models, recent-requests,
-and route-preview actions the headless CLI uses. `Tab` switches pages, `1`–`4`
+and route-preview actions the headless CLI uses. `Tab` switches pages, `1`–`7`
 jump directly, `r` refreshes, and `q`/`Esc`/`Ctrl-C` exits. On the Route page,
 type a model selector and press `Enter`; `Ctrl-U` clears it. Status, model, and
 request pages refresh every two seconds.
@@ -599,94 +640,45 @@ A named remote context uses authenticated HTTP only. A local dashboard uses the
 normal config, control socket, and metering database. No dashboard control
 starts or mutates a daemon.
 
-### `bitrouter tui <agent>`
+### `bitrouter code <agent>`
 
 ```
-bitrouter tui <agent> [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+bitrouter code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 ```
 
-Chat with an ACP agent in your terminal, routed through BitRouter. The interactive counterpart to `acp serve`: instead of exposing the session to a manager over stdio, it renders the session for you — streamed messages, agent reasoning, tool calls with diffs, permission prompts, and what the turn cost.
-
-The renderer draws **inline**, not on the alternate screen. Finished output is written into your terminal's real scrollback, so search, selection, and copy keep working, and `Ctrl-D` (or `Ctrl-C`) leaves the transcript behind rather than clearing it.
-
-A tool call is **one entity, repainted in place**: a call going pending → in progress → completed occupies one row that changes, not three rows that accumulate. Edits render as hunks with three lines of context around each change, naming the file's absolute path; a tool's output is capped at 40 rows with the remainder counted (`… 1,240 more lines`).
-
-**One row can go stale.** Rows are only repainted while they are still on screen. A tool call that scrolls off while still running keeps the status it had when it left, so scrolling back may show `◍ Edit src/lib.rs` on a call that has since finished. This is the price of never clearing your scrollback to fix it, which is the one thing the renderer will not do. `Ctrl-L` repaints what is on screen.
-
-The session TUI holds the terminal in **raw mode** for the whole session, so enter, `Ctrl-C` and `Ctrl-D` are handled by its own single-line editor rather than by your shell. The editor supports typing, backspace, word-delete (`Ctrl-W` or `Alt-Backspace`) and bracketed paste; there is no history and no multi-line entry yet. A redirected stdout (`bitrouter tui agent | tee log`) takes no raw mode at all and prints the session as plain text with no escape sequences. `bitrouter chat <agent>` remains a hidden compatibility alias and prints a migration note.
+Opens the same full-screen, alternate-screen shell as bare `bitrouter code`,
+initially focused on Conversation with a harness-native ACP session. `Tab`
+moves between Conversation and the Home, Agents, Sessions, Models, Requests,
+and Route operations views without ending the session or losing the draft.
+`--load` replays a native session's history and `--resume` continues without
+replay when the harness advertises the selected operation. BitRouter does not
+create a second session database.
 
 **Keys**
 
 | Key | Effect |
 |---|---|
-| `Enter` | Send the line |
-| `Esc` | Answer the open permission prompt with *no*, or close the picker; with neither open, cancel the running turn |
-| `Ctrl-C` | Cancel the running turn; end the session when idle |
-| `Ctrl-D` | End the session (when idle) |
-| `Ctrl-L` | Repaint the screen — for when something else has written to your terminal. Works with a permission prompt or the picker open, and leaves it open |
-| `Ctrl-W` | Delete the word before the cursor |
+| `Enter` | Send the composer text, or open the selected agent from Agents |
+| `Tab` | Move to the next view while preserving the active conversation |
+| `PageUp` / `PageDown` | Scroll the conversation transcript |
+| `1`–`9` | Choose an open permission option |
+| `Esc` | Deny the open permission request |
+| `Ctrl-C` | Cancel the running turn; outside a running turn, exit |
+| `Ctrl-D` | Exit from Conversation |
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
 
-Routing flags are shared verbatim with `acp serve` / `acp prompt`.
-
-**In-session commands**
-
-| Input | Effect |
-|---|---|
-| `/route` | List the daemon's suggested routes and lease one for this session mid-session. Only offered when the controller advertises route control — see below. |
-| `/route reset` | Drop this session's route lease, so the daemon's own choice applies again. The footer stops naming a route. |
-| `/status` | Whether the daemon is up, what it is serving, and what it has spent. The same report `bitrouter status --human` prints, rendered with the palette off. |
-| `/models [provider]` | The models this config can route to, optionally only those a provider declares. What `bitrouter models --human` prints. |
-| `/preview <model>` | Where that model would be routed, and through which provider chain — without sending anything. What `bitrouter route <model> --human` prints. |
-| `/commands` | List every command this session offers: BitRouter's own first, then the ones the **agent** advertises. |
-| `/help` | The same list. An alias for `/commands`. |
-
-**Your own commands.** `chat.commands` in `bitrouter.yaml` defines
-prompt-expansion commands — `/name args` sends `prompt` with `$ARGUMENTS`
-replaced by whatever followed the name:
-
-```yaml
-chat:
-  commands:
-    - name: review
-      description: review a diff
-      prompt: "Review this change and list what would break: $ARGUMENTS"
-```
-
-They expand identically in `bitrouter tui <agent>` and in `bitrouter acp prompt`.
-There is deliberately **no key that runs anything**: an entry here produces a
-prompt and nothing else, which is what lets this registry be yours and
-unreviewed while the commands that reach BitRouter's own ports stay a closed,
-guarded set. A name that collides with one of BitRouter's own — or with
-`/help` — is a configuration error, reported by `bitrouter config validate` and
-refused at launch rather than resolved by a precedence rule.
-
-`/commands` reports three outcomes for the agent's half of the list, because
-they mean different things: the commands it advertised, *"advertises no
-commands"* when it answered with an empty list, and *"had not sent its command
-list yet"* when it had not answered at all. `bitrouter acp commands --agent
-<id>` prints the same report headlessly — it opens a session of its own to ask,
-so it describes what a session with that agent **would** offer rather than one
-already running elsewhere.
-
-BitRouter's commands are listed **above** the agent's, and a name BitRouter
-answers wins: if the agent advertises a command of the same name, `/commands`
-lists it marked *shadowed* rather than dropping it, so which half of the list
-answers a name is visible rather than inferred. A command the session cannot
-run — `/route` under `--direct` — is still listed, with the reason, and typing
-it answers with that reason rather than failing.
-
-**The cost line always says whose number it is.** `chat` runs the same in-process controller as `acp prompt`, under a controller credential issued over the local daemon socket, so the controller decorates the harness's own `usage_update` with the spend BitRouter metered for this session and marks it `_meta["bitrouter.dev/cost"] = "router"`; that figure is drawn plainly. A figure the harness reported itself (no marker) is drawn as `agent USD …`, never as ours. If no figure reaches the client — `--direct`, an explicit `--base-url`, a harness on its own auth, or a session with no priced requests — the line reads `cost unreported`, never `$0.00`. The figure lags by one update: the controller answers from a cache refreshed off its forward path, so the transcript never waits on the daemon, and what is shown at the end of a turn is the spend confirmed as of the previous refresh. Daemon-wide spend is `bitrouter status --requests`.
-
-**`/route` is absent when it cannot work.** The picker is offered only when the controller advertised route control at initialize — `_meta["bitrouter.dev/controller"].routeControl` with `version: "1"`, `scope: "session"`, and both `_bitrouter/route/list` and `_bitrouter/route/set` listed — which it does only under a trusted local daemon binding. A `--direct` session or an explicit `--base-url` advertises nothing, and `chat` says so rather than offering a command that would fail. When a route is chosen, the footer shows the route the daemon **confirmed** in the set response, not the one asked for; a refused route reports the old route and the reason.
-
-On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
+Routing flags are shared with `run` and `acp serve`. The Sessions view shows
+the native identity and the lifecycle features advertised by the harness;
+unsupported lifecycle operations are not offered. `tui` and `chat` remain
+hidden compatibility aliases for the unified shell.
 
 ### `bitrouter launch`
 
 ```
-bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+bitrouter launch <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+bitrouter claude [options] -- <claude args…>
+bitrouter codex [options] -- <codex args…>
 ```
 
 Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the native-harness compatibility surface — the human drives the harness's own TUI; for a headless prompt use `bitrouter run`.
@@ -698,7 +690,7 @@ launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skil
 launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
 ```
 
-`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
+The positional agent takes any catalog harness with an interactive binary. `claude` and `codex` also have top-level shortcuts; `claude-code` aliases `claude`. The old `-a/--agent` spelling remains hidden during migration. Each harness is routed by its catalog mechanism:
 
 | Harness | How it reaches BitRouter |
 | --- | --- |
@@ -715,7 +707,7 @@ The synthesized files are throwaway, written under the working tree's self-ignor
 
 **Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
 
-`--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
+`--model <id>` pins the harness's model through whatever mechanism it has. Following `cargo run`'s convention, everything after `--` is forwarded verbatim, e.g. `bitrouter launch claude -- -p "summarize" --dangerously-skip-permissions`.
 
 **`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
 
@@ -727,25 +719,14 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 
 `bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
 
-### `bitrouter spawn`
+### Hidden `spawn` compatibility
 
-```
-bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [--approve-all|--approve-reads|--deny-all] [--permission-policy JSON|@PATH] [--format json|text|quiet] [routing/session flags]   # one prompt → NDJSON
-bitrouter spawn <agent> --serve [flags]                                      # ACP over stdio
-bitrouter spawn <agent> --check [routing flags]                              # preflight only
-```
-
-Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent or a GUI). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
-
-**Attempts to route the sub-agent's LLM traffic through the daemon by default when the headless adapter supports redirection** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch -a claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
-
-Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
-
-The permission flags and `--format` are `-p`'s only and are described under `bitrouter acp` above; `--serve` hands permissions to the manager, and passing them with it is an error.
-
-`--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
-
-In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","session_id":"…","agent_session_id":…,"agent":"…","via":"http://127.0.0.1:4356","launch_id":…}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line. `session_id` is the harness's own session id, used by every ACP method and every later line. **`launch_id` is the spend key**: metering attributes ACP traffic by the *authenticated* controller instance, and `prompt` routes with a launch token rather than a controller credential, so no controller column is populated for its rows. There is no `record_id`: session identity is harness-native.
+The old `spawn` umbrella remains parseable for one migration window but is
+absent from normal help. Its modes call the canonical implementations:
+`spawn <agent> -p TEXT` maps to `run`, `spawn <agent> --serve` maps to
+`acp serve`, and `spawn <agent> --check` maps to `agents check`. New scripts
+and integrations must use the canonical commands above; protocol-serving
+compatibility forms keep stdout reserved for ACP frames.
 
 ### `bitrouter policy`
 

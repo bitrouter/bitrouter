@@ -18,14 +18,25 @@ use ratatui::{Frame, Terminal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Overview,
+    Home,
+    Agents,
+    Conversation,
+    Sessions,
     Models,
     Requests,
     Route,
 }
 
 impl Page {
-    const ALL: [Self; 4] = [Self::Overview, Self::Models, Self::Requests, Self::Route];
+    const ALL: [Self; 7] = [
+        Self::Home,
+        Self::Agents,
+        Self::Conversation,
+        Self::Sessions,
+        Self::Models,
+        Self::Requests,
+        Self::Route,
+    ];
 
     pub fn next(self) -> Self {
         Self::ALL[(self.index() + 1) % Self::ALL.len()]
@@ -33,15 +44,18 @@ impl Page {
 
     fn index(self) -> usize {
         match self {
-            Self::Overview => 0,
-            Self::Models => 1,
-            Self::Requests => 2,
-            Self::Route => 3,
+            Self::Home => 0,
+            Self::Agents => 1,
+            Self::Conversation => 2,
+            Self::Sessions => 3,
+            Self::Models => 4,
+            Self::Requests => 5,
+            Self::Route => 6,
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Dashboard {
     pub target: String,
     pub connected: bool,
@@ -55,6 +69,101 @@ pub struct Dashboard {
     pub route_input: String,
     pub route: Option<RouteLine>,
     pub error: Option<String>,
+    pub agents: Vec<AgentLine>,
+    pub selected_agent: usize,
+    pub conversation: Conversation,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentLine {
+    pub id: String,
+    pub native: bool,
+    pub acp: bool,
+    pub configured: bool,
+    pub description: String,
+}
+
+/// Presentation state for the one controller/session the Code process owns.
+#[derive(Debug, Default)]
+pub struct Conversation {
+    pub agent: Option<String>,
+    pub native_session_id: Option<String>,
+    pub provider_session_id: Option<String>,
+    pub lifecycle: Option<String>,
+    pub route: Option<String>,
+    pub status: String,
+    pub input: String,
+    pub scroll: usize,
+    pub journal: crate::journal::Journal,
+    pub permission: Option<crate::permission::Prompt>,
+}
+
+/// Pure Code-shell state transition. Async launch/prompt effects stay in the
+/// application driver; this reducer owns selection, drafts, and scrolling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    SelectPreviousAgent,
+    SelectNextAgent,
+    ActivateSelectedAgent,
+    Type(char),
+    Paste(String),
+    Backspace,
+    SubmitPrompt,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    StartAgent(String),
+    Prompt(String),
+}
+
+pub fn step(dashboard: &mut Dashboard, action: Action) -> Option<Effect> {
+    match action {
+        Action::SelectPreviousAgent => {
+            dashboard.selected_agent = dashboard.selected_agent.saturating_sub(1);
+            None
+        }
+        Action::SelectNextAgent => {
+            dashboard.selected_agent = dashboard
+                .selected_agent
+                .saturating_add(1)
+                .min(dashboard.agents.len().saturating_sub(1));
+            None
+        }
+        Action::ActivateSelectedAgent => dashboard
+            .agents
+            .get(dashboard.selected_agent)
+            .map(|agent| Effect::StartAgent(agent.id.clone())),
+        Action::Type(character) => {
+            dashboard.conversation.input.push(character);
+            None
+        }
+        Action::Paste(text) => {
+            dashboard
+                .conversation
+                .input
+                .push_str(&text.replace(['\n', '\r'], " "));
+            None
+        }
+        Action::Backspace => {
+            dashboard.conversation.input.pop();
+            None
+        }
+        Action::SubmitPrompt => {
+            let prompt = std::mem::take(&mut dashboard.conversation.input);
+            (!prompt.trim().is_empty()).then_some(Effect::Prompt(prompt))
+        }
+        Action::ScrollUp => {
+            dashboard.conversation.scroll = dashboard.conversation.scroll.saturating_add(10);
+            None
+        }
+        Action::ScrollDown => {
+            dashboard.conversation.scroll = dashboard.conversation.scroll.saturating_sub(10);
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +193,8 @@ pub struct RouteLine {
 pub struct DashboardView {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
     page: Page,
+    conversation_cache: crate::writer::Cache,
+    conversation_registry: crate::render::Registry,
     finished: bool,
 }
 
@@ -110,7 +221,9 @@ impl DashboardView {
         };
         Ok(Self {
             terminal,
-            page: Page::Overview,
+            page: Page::Home,
+            conversation_cache: crate::writer::Cache::default(),
+            conversation_registry: crate::render::Registry::default(),
             finished: false,
         })
     }
@@ -129,8 +242,23 @@ impl DashboardView {
 
     pub fn draw(&mut self, dashboard: &Dashboard) -> io::Result<()> {
         let page = self.page;
+        let cache = &mut self.conversation_cache;
+        let registry = &self.conversation_registry;
         self.terminal
-            .draw(|frame| draw(frame, page, dashboard))
+            .draw(|frame| {
+                let conversation = (page == Page::Conversation).then(|| {
+                    cache.document(
+                        &dashboard.conversation.journal,
+                        registry,
+                        ratatui::layout::Size::new(
+                            frame.area().width.max(1),
+                            frame.area().height.max(1),
+                        ),
+                        &[],
+                    )
+                });
+                draw(frame, page, dashboard, conversation.as_deref());
+            })
             .map(|_| ())
     }
 
@@ -148,7 +276,12 @@ impl Drop for DashboardView {
     }
 }
 
-fn draw(frame: &mut Frame<'_>, page: Page, dashboard: &Dashboard) {
+fn draw(
+    frame: &mut Frame<'_>,
+    page: Page,
+    dashboard: &Dashboard,
+    conversation: Option<&[Line<'static>]>,
+) {
     let area = frame.area();
     let error_height = u16::from(dashboard.error.is_some()) * 3;
     let [header, content, error, footer] = Layout::vertical([
@@ -159,9 +292,17 @@ fn draw(frame: &mut Frame<'_>, page: Page, dashboard: &Dashboard) {
     ])
     .areas(area);
 
-    let titles = ["Overview", "Models", "Requests", "Route"]
-        .into_iter()
-        .map(Line::from);
+    let titles = [
+        "Home",
+        "Agents",
+        "Conversation",
+        "Sessions",
+        "Models",
+        "Requests",
+        "Route",
+    ]
+    .into_iter()
+    .map(Line::from);
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
@@ -178,7 +319,12 @@ fn draw(frame: &mut Frame<'_>, page: Page, dashboard: &Dashboard) {
     frame.render_widget(tabs, header);
 
     match page {
-        Page::Overview => draw_overview(frame, content, dashboard),
+        Page::Home => draw_home(frame, content, dashboard),
+        Page::Agents => draw_agents(frame, content, dashboard),
+        Page::Conversation => {
+            draw_conversation(frame, content, dashboard, conversation.unwrap_or_default())
+        }
+        Page::Sessions => draw_sessions(frame, content, dashboard),
         Page::Models => draw_models(frame, content, dashboard),
         Page::Requests => draw_requests(frame, content, dashboard),
         Page::Route => draw_route(frame, content, dashboard),
@@ -194,10 +340,13 @@ fn draw(frame: &mut Frame<'_>, page: Page, dashboard: &Dashboard) {
         );
     }
 
-    let help = if page == Page::Route {
-        "Tab pages · type model · Enter preview · Ctrl-U clear · Esc/Ctrl-C quit"
-    } else {
-        "Tab pages · r refresh · 1-4 jump · q/Esc/Ctrl-C quit"
+    let help = match page {
+        Page::Agents => "↑/↓ select · Enter connect · Tab pages · Esc/Ctrl-C quit",
+        Page::Conversation => {
+            "type prompt · Enter send · PgUp/PgDn scroll · Tab views · Ctrl-D quit"
+        }
+        Page::Route => "Tab pages · type model · Enter preview · Ctrl-U clear · Esc/Ctrl-C quit",
+        _ => "Tab pages · r refresh · 1-7 jump · q/Esc/Ctrl-C quit",
     };
     frame.render_widget(
         Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
@@ -205,7 +354,7 @@ fn draw(frame: &mut Frame<'_>, page: Page, dashboard: &Dashboard) {
     );
 }
 
-fn draw_overview(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+fn draw_home(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
     let health = if dashboard.connected {
         Span::styled("● connected", Style::default().fg(Color::Green))
     } else {
@@ -226,9 +375,149 @@ fn draw_overview(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: 
     if let Some(spend) = &dashboard.spend {
         lines.push(field("spend", spend));
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Open Agents and press Enter to start an ACP conversation, or inspect operations views.",
+    ));
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title(" Status "))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn draw_agents(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let rows = dashboard.agents.iter().enumerate().map(|(index, agent)| {
+        let row = Row::new(vec![
+            agent.id.clone(),
+            if agent.native { "yes" } else { "—" }.to_string(),
+            if agent.acp { "yes" } else { "—" }.to_string(),
+            if agent.configured {
+                "configured"
+            } else {
+                "catalog"
+            }
+            .to_string(),
+            agent.description.clone(),
+        ]);
+        if index == dashboard.selected_agent {
+            row.style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            row
+        }
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(18),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(12),
+            Constraint::Min(20),
+        ],
+    )
+    .header(
+        Row::new(["AGENT", "NATIVE", "ACP", "SOURCE", "DESCRIPTION"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Available agents "),
+    );
+    frame.render_widget(table, area);
+}
+
+fn draw_conversation(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    dashboard: &Dashboard,
+    document: &[Line<'static>],
+) {
+    let [transcript, status, input] = Layout::vertical([
+        Constraint::Min(4),
+        Constraint::Length(2),
+        Constraint::Length(3),
+    ])
+    .areas(area);
+    let visible = usize::from(transcript.height.saturating_sub(2));
+    let end = document.len().saturating_sub(dashboard.conversation.scroll);
+    let start = end.saturating_sub(visible);
+    frame.render_widget(
+        Paragraph::new(document.get(start..end).unwrap_or_default().to_vec())
+            .block(Block::default().borders(Borders::ALL).title(" Transcript "))
+            .wrap(Wrap { trim: false }),
+        transcript,
+    );
+    let session = dashboard
+        .conversation
+        .native_session_id
+        .as_deref()
+        .unwrap_or("not connected");
+    let route = dashboard.conversation.route.as_deref().unwrap_or("direct");
+    let status_line = format!(
+        "{} · session {session} · route {route}",
+        dashboard.conversation.status
+    );
+    frame.render_widget(
+        Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),
+        status,
+    );
+    let title =
+        dashboard
+            .conversation
+            .permission
+            .as_ref()
+            .map_or(" Message ".to_string(), |permission| {
+                format!(
+                    " Permission: {} · choose 1-9, Esc denies ",
+                    permission.title()
+                )
+            });
+    frame.render_widget(
+        Paragraph::new(dashboard.conversation.input.as_str())
+            .block(Block::default().borders(Borders::ALL).title(title)),
+        input,
+    );
+}
+
+fn draw_sessions(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let mut lines = Vec::new();
+    match dashboard.conversation.native_session_id.as_deref() {
+        Some(session_id) => {
+            lines.push(field(
+                "agent",
+                dashboard.conversation.agent.as_deref().unwrap_or("unknown"),
+            ));
+            lines.push(field("native id", session_id));
+            if let Some(provider_id) = dashboard.conversation.provider_session_id.as_deref() {
+                lines.push(field("provider id", provider_id));
+            }
+            lines.push(field(
+                "lifecycle",
+                dashboard.conversation.lifecycle.as_deref().unwrap_or("new"),
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "Load replays history; resume does not. Close releases resources; delete is separate.",
+            ));
+        }
+        None => lines.push(Line::from(
+            "No active native session. Select an ACP-capable agent in Agents.",
+        )),
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Native sessions "),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -340,8 +629,71 @@ mod tests {
             ..Dashboard::default()
         };
         for page in Page::ALL {
-            terminal.draw(|frame| draw(frame, page, &dashboard))?;
+            terminal.draw(|frame| draw(frame, page, &dashboard, None))?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn reducer_preserves_draft_while_agents_and_scroll_change() {
+        let mut dashboard = Dashboard {
+            agents: vec![
+                AgentLine {
+                    id: "claude".to_string(),
+                    native: true,
+                    acp: true,
+                    configured: false,
+                    description: "Claude".to_string(),
+                },
+                AgentLine {
+                    id: "codex".to_string(),
+                    native: true,
+                    acp: true,
+                    configured: false,
+                    description: "Codex".to_string(),
+                },
+            ],
+            ..Dashboard::default()
+        };
+        let _ = step(&mut dashboard, Action::Type('d'));
+        let _ = step(&mut dashboard, Action::Paste("raft\ntext".to_string()));
+        let _ = step(&mut dashboard, Action::SelectNextAgent);
+        let _ = step(&mut dashboard, Action::ScrollUp);
+        assert_eq!(dashboard.conversation.input, "draft text");
+        assert_eq!(dashboard.selected_agent, 1);
+        assert_eq!(dashboard.conversation.scroll, 10);
+        assert_eq!(
+            step(&mut dashboard, Action::ActivateSelectedAgent),
+            Some(Effect::StartAgent("codex".to_string()))
+        );
+    }
+
+    #[test]
+    fn reducer_submits_one_nonempty_prompt_and_clears_the_composer() {
+        let mut dashboard = Dashboard::default();
+        let _ = step(&mut dashboard, Action::Paste("review this".to_string()));
+        assert_eq!(
+            step(&mut dashboard, Action::SubmitPrompt),
+            Some(Effect::Prompt("review this".to_string()))
+        );
+        assert!(dashboard.conversation.input.is_empty());
+        assert_eq!(step(&mut dashboard, Action::SubmitPrompt), None);
+    }
+
+    #[test]
+    fn page_navigation_cycles_through_one_unified_shell() {
+        let mut page = Page::Home;
+        for expected in [
+            Page::Agents,
+            Page::Conversation,
+            Page::Sessions,
+            Page::Models,
+            Page::Requests,
+            Page::Route,
+            Page::Home,
+        ] {
+            page = page.next();
+            assert_eq!(page, expected);
+        }
     }
 }

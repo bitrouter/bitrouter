@@ -176,6 +176,15 @@ impl BoundControlServer {
 }
 
 fn control_router(source: ConfigSource, socket: PathBuf, token: Vec<u8>) -> Result<Router> {
+    let mcp_models = Arc::new(RoutableModels::new(source.clone(), Some(socket.clone())));
+    let mcp_status = Arc::new(DaemonStatus::new(socket.clone(), Some(source.clone())));
+    let mcp_routing = Arc::new(RouteAction::new(source.clone(), Some(socket.clone())));
+    let mcp = bitrouter_mcp::server::BitrouterMcp::builder()
+        .models(mcp_models)
+        .status(mcp_status)
+        .routing(mcp_routing)
+        .build();
+    let mcp_router = bitrouter_mcp::server::local_http_router(mcp).with_state::<ControlState>(());
     let state = ControlState { source, socket };
     let token_digest = digest_token(&token)?;
     let auth = axum::middleware::from_fn_with_state(
@@ -189,6 +198,7 @@ fn control_router(source: ConfigSource, socket: PathBuf, token: Vec<u8>) -> Resu
         .route("/control/v1/models", get(models))
         .route("/control/v1/route/preview", post(route_preview))
         .route("/control/v1/requests", get(requests))
+        .merge(mcp_router)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(auth)
@@ -214,6 +224,14 @@ async fn require_control_token(
     if !valid {
         return ControlError::unauthorized().into_response();
     }
+    if !origin_matches_host(&headers) {
+        return ControlError::new(
+            StatusCode::FORBIDDEN,
+            "origin_mismatch",
+            "request Origin must match the control endpoint Host",
+        )
+        .into_response();
+    }
 
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -221,6 +239,30 @@ async fn require_control_token(
         header::HeaderValue::from_static("no-store"),
     );
     response
+}
+
+fn origin_matches_host(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Some(host) = headers.get(header::HOST) else {
+        return false;
+    };
+    let Some(origin) = origin
+        .to_str()
+        .ok()
+        .and_then(|value| Url::parse(value).ok())
+    else {
+        return false;
+    };
+    let Ok(host) = host.to_str() else {
+        return false;
+    };
+    let Ok(expected) = Url::parse(&format!("{}://{host}/", origin.scheme())) else {
+        return false;
+    };
+    origin.host() == expected.host()
+        && origin.port_or_known_default() == expected.port_or_known_default()
 }
 
 fn digest_token(token: &[u8]) -> Result<Vec<u8>> {
@@ -697,6 +739,66 @@ providers:
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         let value: serde_json::Value = serde_json::from_slice(&bytes)?;
         assert_eq!(value["error"]["code"], "unauthorized");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_endpoint_shares_control_authentication() -> anyhow::Result<()> {
+        let (_directory, source) = default_source()?;
+        let response = test_router(source, PathBuf::from("missing.sock"))?
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp-control")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_endpoint_accepts_an_authenticated_initialize() -> anyhow::Result<()> {
+        let (_directory, source) = default_source()?;
+        let response = test_router(source, PathBuf::from("missing.sock"))?
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp-control")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::HOST, "127.0.0.1:4358")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ACCEPT, "application/json, text/event-stream")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#,
+                    ))?,
+            )
+            .await?;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "MCP initialize failed: {}",
+            String::from_utf8_lossy(&body)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn browser_origin_must_match_control_host() -> anyhow::Result<()> {
+        let (_directory, source) = default_source()?;
+        let response = test_router(source, PathBuf::from("missing.sock"))?
+            .oneshot(
+                Request::builder()
+                    .uri("/control/v1/capabilities")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::HOST, "127.0.0.1:4358")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         Ok(())
     }
 

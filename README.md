@@ -163,7 +163,7 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --requests             # settled requests + spend
+bitrouter requests                      # settled requests + spend
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys list               # manage API keys
@@ -188,14 +188,19 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 
 ### MCP
 
-Use BitRouter from any MCP client — it exposes `list_models`, `status`, `route_preview` and the skills pair as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers). Control and introspection only: completions go to the HTTP API below.
+Use BitRouter from any MCP host — it exposes `list_models`, `status`,
+`route_preview` and the skills pair as MCP tools (the *origin* server, distinct
+from the MCP gateway that proxies configured upstream servers). Control and
+introspection only: completions go to the HTTP API below.
 
 ```bash
 bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
-bitrouter mcp install --client claude  # print the Claude/Cursor mcpServers config block
+bitrouter mcp check                    # check configured upstream MCP servers
 ```
 
-Add `--transport http` to target the multi-tenant cloud backend.
+Network-capable hosts connect directly to `/mcp-control` on the daemon's
+opt-in authenticated control listener; standalone `mcp serve --transport http`
+is retired.
 
 ### API
 
@@ -247,7 +252,9 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with it out of the 
 
 Routing and gateway injection are per-harness promises, so the table calls out the maintained mechanisms instead of implying one universal redirect path.
 
-Headless ACP sub-agents use `bitrouter spawn` instead. The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Headless ACP sub-agents use `bitrouter run`; ACP clients launch
+`bitrouter acp serve <agent>`. The full provider and harness catalog lives in
+[github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
 

@@ -135,12 +135,11 @@ bitrouter reload          # re-pushes provider env vars into daemon
 ## Symptom: MCP / ACP not working
 
 ```bash
-bitrouter tools status              # MCP server liveness + latency
-bitrouter tools list                # advertised tools
+bitrouter mcp check                 # MCP server liveness, latency, capabilities, tools
 bitrouter agents check              # spawn each ACP agent, verify `initialize`
 ```
 
-`tools status` shows per-server latency or the error inline. `agents check` will exit with a non-success row when an ACP agent's stdio bridge fails — check that the `command` / `args` in your `agents:` config resolve on PATH (`npx`, `uvx`, etc.).
+`mcp check` shows per-server transport, latency, advertised tools, or the error inline. `agents check [agent]` exits non-zero when an ACP adapter preflight fails — check that the `command` / `args` in your `agents:` config resolve on PATH (`npx`, `uvx`, etc.).
 
 ## Symptom: degraded latency
 

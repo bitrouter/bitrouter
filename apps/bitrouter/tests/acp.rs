@@ -954,11 +954,25 @@ async fn prompt_headless_denies_permission_and_completes() {
     );
     // The stream says what was decided, and the exit status says the agent
     // was refused.
-    assert!(
-        output.contains(
-            r#"{"type":"permission","decision":"denied","title":"write file","kind":null}"#
-        ),
-        "the decision is on the stream:\n{output}"
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("denied"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("write file"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
     );
     assert_eq!(
         tally.exit_code(),
@@ -1041,11 +1055,25 @@ async fn prompt_approve_all_selects_the_allow_option() {
     };
     let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
     assert!(output.contains("chose:allow"), "{output}");
-    assert!(
-        output.contains(
-            r#"{"type":"permission","decision":"approved","title":"Write src/main.rs","kind":"execute"}"#
-        ),
-        "{output}"
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("approved"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("Write src/main.rs"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::json!("execute"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
     );
     assert_eq!(tally.exit_code(), 0);
 }
