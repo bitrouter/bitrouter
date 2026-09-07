@@ -15,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use super::collector::NativeRoot;
-use super::types::{Harness, MAX_RECORD_BYTES};
+use super::types::{Harness, MAX_RECORD_BYTES, RecordRef};
 
 pub const PROXY_NAME: &str = "bitrouter-claude-proxy";
 
@@ -23,6 +23,7 @@ pub const SPOOL_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_SPOOL";
 pub const UPSTREAM_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_UPSTREAM";
 pub const ADAPTER_ENTRY_ENV: &str = "BITROUTER_CLAUDE_ADAPTER_ENTRY";
 pub const NAMESPACE_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_NAMESPACE";
+pub const ORIGIN_ENV: &str = "BITROUTER_CLAUDE_EVIDENCE_ORIGIN";
 
 /// The adapter controls pathToClaudeCodeExecutable through this environment
 /// override. Only native executables can be substituted without changing how
@@ -74,7 +75,13 @@ pub fn prepare_env(
 /// Prepare only private subprocess env; ignored malformed Query options stay
 /// untouched. The proxy also verifies its actual environment before binding
 /// native output to the registered namespace.
-pub(super) fn instrument_scope(params: &mut Value, spool: &Path, namespace: &str) -> Result<()> {
+pub(super) fn instrument_scope(
+    params: &mut Value,
+    spool: &Path,
+    namespace: &str,
+    configuration: &RecordRef,
+) -> Result<()> {
+    configuration.validate()?;
     let mut prepared = params.clone();
     let mut cursor = &mut prepared;
     for key in ["_meta", "claudeCode", "options", "env"] {
@@ -91,6 +98,10 @@ pub(super) fn instrument_scope(params: &mut Value, spool: &Path, namespace: &str
         json!(spool.to_str().context("native spool must be UTF-8")?),
     );
     env.insert(NAMESPACE_ENV.into(), json!(namespace));
+    env.insert(
+        ORIGIN_ENV.into(),
+        json!(serde_json::to_string(configuration)?),
+    );
     *params = prepared;
     Ok(())
 }
@@ -133,9 +144,12 @@ pub async fn run() -> Result<i32> {
     run_with(
         program,
         args,
-        directory,
-        namespace,
-        scope_valid,
+        CaptureScope {
+            directory,
+            namespace,
+            valid: scope_valid,
+            configuration: ConfigurationRef::parse(std::env::var_os(ORIGIN_ENV)),
+        },
         tokio::io::stdin(),
         tokio::io::stdout(),
     )
@@ -172,7 +186,13 @@ fn restore_environment(command: &mut std::process::Command) -> Result<()> {
             command.env_remove("CLAUDE_CODE_EXECUTABLE");
         }
     }
-    for key in [SPOOL_ENV, UPSTREAM_ENV, ADAPTER_ENTRY_ENV, NAMESPACE_ENV] {
+    for key in [
+        SPOOL_ENV,
+        UPSTREAM_ENV,
+        ADAPTER_ENTRY_ENV,
+        NAMESPACE_ENV,
+        ORIGIN_ENV,
+    ] {
         command.env_remove(key);
     }
     Ok(())
@@ -233,19 +253,55 @@ if(!found) process.exit(1); process.stdout.write(found);"#;
     Ok(path)
 }
 
+struct CaptureScope {
+    directory: PathBuf,
+    namespace: String,
+    valid: bool,
+    configuration: ConfigurationRef,
+}
+
+struct ConfigurationRef {
+    reference: Option<RecordRef>,
+    status: &'static str,
+}
+
+impl ConfigurationRef {
+    fn parse(value: Option<OsString>) -> Self {
+        let Some(value) = value else {
+            return Self {
+                reference: None,
+                status: "missing",
+            };
+        };
+        // The private env is still untrusted input to this subprocess. Do not
+        // copy arbitrary text (possibly a credential) into lifecycle evidence.
+        let reference = value
+            .to_str()
+            .filter(|text| text.len() <= 4096)
+            .and_then(|text| serde_json::from_str::<RecordRef>(text).ok())
+            .filter(|reference| {
+                reference.range.generation == "controller/1" && reference.validate().is_ok()
+            });
+        let status = if reference.is_some() {
+            "present"
+        } else {
+            "invalid"
+        };
+        Self { reference, status }
+    }
+}
+
 async fn run_with(
     program: PathBuf,
     args: Vec<OsString>,
-    directory: PathBuf,
-    namespace: String,
-    scope_valid: bool,
+    scope: CaptureScope,
     input: impl AsyncRead + Unpin + Send,
     output: impl AsyncWrite + Unpin + Send,
 ) -> Result<i32> {
     let process_id = uuid::Uuid::new_v4().to_string();
     // The controller already creates and registers the private parent. Refuse
     // symlink redirection rather than creating an unregistered spool root.
-    let metadata = tokio::fs::symlink_metadata(&directory).await?;
+    let metadata = tokio::fs::symlink_metadata(&scope.directory).await?;
     ensure!(
         metadata.is_dir() && !metadata.file_type().is_symlink(),
         "invalid native spool directory"
@@ -255,13 +311,13 @@ async fn run_with(
     #[cfg(unix)]
     options.mode(0o600);
     let file = options
-        .open(directory.join(format!("cli-{process_id}.jsonl")))
+        .open(scope.directory.join(format!("cli-{process_id}.jsonl")))
         .await?;
     let tap = Arc::new(Mutex::new(WireTap {
         file,
         process_id: process_id.clone(),
-        namespace,
-        scope_valid,
+        namespace: scope.namespace,
+        scope_valid: scope.valid,
         sequence: 0,
         version: None,
     }));
@@ -274,20 +330,19 @@ async fn run_with(
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
     restore_environment(command.as_std_mut())?;
+    let mut header = json!({"phase":"metadata",
+        "configured_by":scope.configuration.reference,
+        "configuration_status":scope.configuration.status});
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            tap.lock()
-                .await
-                .append(json!({"method":"runtime/failed","phase":"metadata"}))
-                .await?;
+            header["method"] = json!("runtime/failed");
+            tap.lock().await.append(header).await?;
             return Err(error.into());
         }
     };
-    tap.lock()
-        .await
-        .append(json!({"method":"runtime/started","phase":"metadata"}))
-        .await?;
+    header["method"] = json!("runtime/started");
+    tap.lock().await.append(header).await?;
     let stdin = child.stdin.take().context("Claude stdin missing")?;
     let stdout = child.stdout.take().context("Claude stdout missing")?;
     let upstream = copy_protocol(input, stdin, "client", Arc::clone(&tap));

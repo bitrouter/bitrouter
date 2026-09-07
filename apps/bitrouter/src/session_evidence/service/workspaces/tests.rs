@@ -12,6 +12,8 @@ async fn repository(directory: &Path) -> Result<PathBuf> {
             "user.name=Fixture",
             "-c",
             "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "--allow-empty",
             "--quiet",

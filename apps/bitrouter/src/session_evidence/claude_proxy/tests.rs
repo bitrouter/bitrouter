@@ -1,5 +1,20 @@
 use super::*;
 
+fn configuration() -> Result<RecordRef> {
+    use crate::eval::types::canonical_digest;
+    let source_id = canonical_digest(&"fixture-source")?;
+    Ok(RecordRef {
+        range: super::super::types::SourceRange {
+            source_id: source_id.clone(),
+            generation: "controller/1".into(),
+            start: 1,
+            end: 2,
+        },
+        record_id: canonical_digest(&(source_id, "controller/1", 1u64))?,
+        record_digest: canonical_digest(&"fixture-body")?,
+    })
+}
+
 async fn tap(directory: &Path) -> Result<WireTap> {
     Ok(WireTap {
         file: tokio::fs::File::create(directory.join("events.jsonl")).await?,
@@ -76,7 +91,12 @@ fn native_and_script_overrides_keep_their_execution_semantics() -> Result<()> {
     let original =
         json!({"_meta":{"claudeCode":{"options":{"settings":"absent.json","env":{"KEY":"kept"}}}}});
     let mut params = original.clone();
-    instrument_scope(&mut params, Path::new("/new-spool"), "new-profile")?;
+    instrument_scope(
+        &mut params,
+        Path::new("/new-spool"),
+        "new-profile",
+        &configuration()?,
+    )?;
     assert_eq!(
         params.pointer("/_meta/claudeCode/options/settings"),
         original.pointer("/_meta/claudeCode/options/settings")
@@ -116,9 +136,14 @@ async fn real_child_transport_keeps_arguments_exit_code_and_distinct_processes()
             run_with(
                 executable.clone(),
                 vec!["literal ; argument".into()],
-                spool.clone(),
-                "profile".into(),
-                true,
+                CaptureScope {
+                    directory: spool.clone(),
+                    namespace: "profile".into(),
+                    valid: true,
+                    configuration: ConfigurationRef::parse(Some(
+                        serde_json::to_string(&configuration()?)?.into(),
+                    )),
+                },
                 input,
                 &mut output,
             ),
@@ -144,9 +169,45 @@ async fn real_child_transport_keeps_arguments_exit_code_and_distinct_processes()
                 .to_owned(),
         );
         assert_eq!(events.last().context("exit")?["exit_code"], 7);
+        assert_eq!(events[0]["configured_by"], json!(configuration()?));
+        assert_eq!(events[0]["configuration_status"], "present");
         assert_eq!(events.last().context("exit")?["clean"], false);
     }
     assert_eq!(ids.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn invalid_configuration_env_is_bounded_and_never_copied() -> Result<()> {
+    for input in ["credential".into(), "x".repeat(4097), "{}".into()] {
+        let captured = ConfigurationRef::parse(Some(input.into()));
+        assert_eq!(captured.status, "invalid");
+        assert!(captured.reference.is_none());
+    }
+    let mut reference = configuration()?;
+    reference.range.end += 1;
+    assert_eq!(
+        ConfigurationRef::parse(Some(serde_json::to_string(&reference)?.into())).status,
+        "invalid"
+    );
+    assert_eq!(ConfigurationRef::parse(None).status, "missing");
+    let mut reference = configuration()?;
+    reference.range.generation = "unrelated-private-text".into();
+    reference.record_id = crate::eval::types::canonical_digest(&(
+        &reference.range.source_id,
+        &reference.range.generation,
+        reference.range.start,
+    ))?;
+    reference.validate()?;
+    let filtered = ConfigurationRef::parse(Some(serde_json::to_string(&reference)?.into()));
+    assert_eq!(filtered.status, "invalid");
+    assert!(filtered.reference.is_none());
+    let mut reference = configuration()?;
+    reference.record_id = crate::eval::types::canonical_digest(&"wrong-coordinate")?;
+    assert_eq!(
+        ConfigurationRef::parse(Some(serde_json::to_string(&reference)?.into())).status,
+        "invalid"
+    );
     Ok(())
 }
 

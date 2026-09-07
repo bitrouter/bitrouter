@@ -143,11 +143,35 @@ A real BitRouter binary fixture forwards TERM to an unresponsive test CLI,
 then kills and reaps it before the SDK's five-second wrapper-kill deadline.
 This is process/transport validation, not conformance against a real Claude CLI.
 Abrupt wrapper death without a durable stop remains unknown. Correlating these
-process scopes to ACP operations, hooks, live Query caches and exact task ranges
+process scopes to prompt operations, hooks, live Query caches and exact task ranges
 still requires implementation; early ACP SDK journal records remain unbound.
 Independent stage review passed after termination, persistent-gap, identity-gate
 and ambient-field fixes. The workspace check ran 3,209 tests with 12 skipped;
 Clippy, formatting, doctests, rustdoc and distribution checks also passed.
+
+Process headers now carry a bounded reference to their committed creation
+configuration. Preparation stores that configuration and its original ACP request
+reference before forwarding; the private proxy retains only validated reference
+fields and removes the marker before launching the native CLI. The snapshot
+verifies the header, configuration, original request and both root registrations
+against owned records. Controller, profile, spool, operation, parameters and
+record digests must agree. Missing or invalid provenance leaves the process
+visible with a gap. Historical recovery retains bindings after spool deletion.
+The adapter can reuse saved creation parameters for several processes, so this
+binding proves configuration origin, not the immediate cause of a restart,
+current Query liveness, prompt execution membership or task completion.
+
+Tests cover cross-controller and cross-profile references, mismatched original
+parameters, corrupted header/configuration/request/registration records, owner
+isolation, missing origins, and several processes using one saved configuration.
+A real BitRouter binary test consumes the service's prepared environment,
+captures a test CLI's actual output and verifies its database binding, including
+removal of the private origin from the native child environment. This remains
+transport validation with a test CLI, not real Claude runtime conformance.
+Independent review passed after tightening the origin reference's generation
+and coordinate-derived identity checks and adding the binary regression.
+All 3,215 workspace tests passed with 12 skipped; Clippy, formatting, doctests,
+rustdoc and distribution checks passed.
 
 Still required: complete execution-relation parsing, native SDK lifecycle
 rebinding; complete native query-lifetime recovery;

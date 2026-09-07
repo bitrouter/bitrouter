@@ -1316,5 +1316,10 @@ fn strip_private_scope(mut params: Value) -> Result<Value> {
         .remove(super::super::claude_proxy::NAMESPACE_ENV)
         .context("private namespace")?;
     super::super::types::digest_identifier(namespace.as_str().context("namespace")?)?;
+    let reference = env
+        .remove(super::super::claude_proxy::ORIGIN_ENV)
+        .context("configuration origin")?;
+    serde_json::from_str::<RecordRef>(reference.as_str().context("configuration origin text")?)?
+        .validate()?;
     Ok(params)
 }

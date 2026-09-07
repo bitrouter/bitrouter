@@ -17,9 +17,9 @@ enum Phase {
 }
 
 #[derive(Clone)]
-struct RecoveredRoot {
-    collector: NativeCollector,
-    spool: PathBuf,
+pub(super) struct RecoveredRoot {
+    pub(super) collector: NativeCollector,
+    pub(super) spool: PathBuf,
 }
 
 #[derive(Clone)]
@@ -159,9 +159,12 @@ impl ControllerEvidence {
         Ok(())
     }
 
-    async fn recovered_root(&self, source: &RegisteredSource) -> Result<RecoveredRoot> {
+    pub(super) async fn recovered_root(&self, source: &RegisteredSource) -> Result<RecoveredRoot> {
         ensure!(
-            source.descriptor.node.is_none() && source.cursor.generation == "controller/1",
+            source.descriptor.node.is_none()
+                && source.cursor.generation == "controller/1"
+                && source.descriptor.format == SourceFormat::Acp
+                && source.descriptor.harness == self.collector.root().harness,
             "invalid historical controller source"
         );
         let controller = source
@@ -336,6 +339,10 @@ impl ControllerEvidence {
             .collector
             .root()
             .clone();
+        if replay.source.descriptor.format == SourceFormat::ClaudeCli {
+            self.remember_process_source(&replay.source.id, &mut recovery.gaps)
+                .await;
+        }
         if let Some(node) = &replay.source.descriptor.node {
             insert_node(&mut recovery.nodes, node.clone())?;
             // Native projections already validate these source records and

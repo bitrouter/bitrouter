@@ -30,11 +30,10 @@ async fn concurrent_controller_observations_are_durable_and_ordered() -> Result<
     )
     .await?;
     let (left, right) = tokio::join!(
-        journal.append(json!({"method":"session/update","block":1})),
-        journal.append(json!({"method":"session/update","block":2}))
+        journal.append_record(json!({"method":"session/update","block":1})),
+        journal.append_record(json!({"method":"session/update","block":2}))
     );
-    left?;
-    right?;
+    let returned = [left?, right?];
     let source = journal.source.lock().await.clone();
     let records = store
         .records(&SourceRange {
@@ -45,6 +44,13 @@ async fn concurrent_controller_observations_are_durable_and_ordered() -> Result<
         })
         .await?;
     assert_eq!(records.len(), 2);
+    for record in returned {
+        assert!(
+            records.contains(&record),
+            "append must return the committed body and position"
+        );
+        super::super::types::RecordRef::from_record(&record)?.validate()?;
+    }
     assert_ne!(records[0].id, records[1].id);
     assert_eq!(records[0].input.sequence, 0);
     assert_eq!(records[1].input.sequence, 1);

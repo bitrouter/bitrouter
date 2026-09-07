@@ -69,10 +69,34 @@ impl ControllerEvidence {
         // needed to prepare the potential replacement's registered scope.
         if let Ok(root) = self.configured_claude_root(&params) {
             let context = self.register_root(root).await?;
+            let request = self
+                .state
+                .lock()
+                .await
+                .pending
+                .get(operation_id)
+                .and_then(|pending| pending.request.clone());
+            // Saved creationParams can recreate a Query without another ACP
+            // lifecycle request. This stamp identifies the configuration's
+            // origin, not the RPC that caused every later process launch.
+            // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+            let configuration = context
+                .journal
+                .append_record(json!({
+                    "method":"controller/process_configured","phase":"metadata",
+                    "operation_id":operation_id,
+                    "payload":{"request":request,"method":method,
+                        "sessionId":params.get("sessionId"),"cwd":params.get("cwd"),
+                        "native_root":context.collector.root().directory,
+                        "namespace":context.collector.root().namespace,"spool":context.spool},
+                    "observed_at":chrono::Utc::now().to_rfc3339()
+                }))
+                .await?;
             super::super::claude_proxy::instrument_scope(
                 &mut params,
                 &context.spool,
                 &context.collector.root().namespace,
+                &RecordRef::from_record(&configuration)?,
             )?;
         }
         let requested_id = params.get("sessionId").and_then(Value::as_str);
@@ -241,9 +265,14 @@ impl ControllerEvidence {
                 current.additional_directories = true;
             }
         }
+        let request = state
+            .pending
+            .get(operation_id)
+            .and_then(|pending| pending.request.clone());
         state.pending.insert(
             operation_id.into(),
             PendingScope {
+                request,
                 namespace: root.namespace.clone(),
                 session_id,
                 query_fingerprint: Some(fingerprint),
@@ -343,6 +372,7 @@ impl ControllerEvidence {
         &self,
         observation: &SessionObservation,
         root: &NativeRoot,
+        record: &super::super::types::StoredRecord,
     ) -> Result<()> {
         let mut state = self.state.lock().await;
         let session_id = observation
@@ -367,6 +397,7 @@ impl ControllerEvidence {
             state.pending.insert(
                 observation.operation_id.clone(),
                 PendingScope {
+                    request: Some(RecordRef::from_record(record)?),
                     namespace: root.namespace.clone(),
                     session_id,
                     query_fingerprint: None,

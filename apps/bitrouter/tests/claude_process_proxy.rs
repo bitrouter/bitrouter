@@ -2,13 +2,16 @@
 //! model request or access to the user's native sessions.
 #![cfg(unix)]
 
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
+use bitrouter::session_evidence::service::{EvidenceHandle, EvidenceLaunch};
 use bitrouter::session_evidence::{claude_proxy, types::Harness};
-use serde_json::Value;
+use bitrouter_sdk::acp::controller::{ControllerIdentity, SessionObservation, SessionObserver};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -144,5 +147,114 @@ async fn private_alias_preserves_native_auth_probes_without_capturing_credential
         .await?;
     assert!(output.status.success());
     assert!(String::from_utf8(output.stdout)?.starts_with("bitrouter "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_proxy_header_binds_the_controllers_committed_configuration() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = std::fs::canonicalize(directory.path())?;
+    let native = root.join("claude");
+    std::fs::write(
+        &native,
+        "#!/bin/sh\n[ -z \"$BITROUTER_CLAUDE_EVIDENCE_ORIGIN\" ] || exit 93\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"native-session\",\"claude_code_version\":\"2.1.257\"}'\n",
+    )?;
+    std::fs::set_permissions(&native, std::fs::Permissions::from_mode(0o700))?;
+    let mut env = HashMap::from([
+        (
+            "CLAUDE_CONFIG_DIR".into(),
+            root.join("default-profile").to_string_lossy().into_owned(),
+        ),
+        (
+            "CLAUDE_CODE_EXECUTABLE".into(),
+            native.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let mut handle = EvidenceHandle::open(EvidenceLaunch {
+        home: &root.join("router"),
+        database_url: "sqlite:evidence.db?mode=rwc",
+        identity: &ControllerIdentity::new(
+            "claude-acp",
+            "@agentclientprotocol/claude-agent-acp",
+            "0.75.1",
+        ),
+        env: &mut env,
+        strip_inherited_env: &[],
+    })
+    .await?
+    .context("evidence service")?;
+    handle
+        .service
+        .observe(SessionObservation {
+            operation_id: "create".into(),
+            method: "session/new".into(),
+            phase: "request".into(),
+            payload: json!({"cwd":root,"mcpServers":[]}),
+        })
+        .await?;
+    let params = handle
+        .service
+        .prepare_session_request(
+            "create",
+            "session/new",
+            json!({
+                "cwd":root,"mcpServers":[],"_meta":{"claudeCode":{"options":{"env":{
+                    "CLAUDE_CONFIG_DIR":root.join("session-profile")}}}}
+            }),
+        )
+        .await?;
+    let subprocess_env = params
+        .pointer("/_meta/claudeCode/options/env")
+        .and_then(Value::as_object)
+        .context("prepared environment")?;
+    // EvidenceHandle executes inside this integration-test binary. Select the
+    // actual application binary while retaining all controller-prepared env.
+    let alias = root.join(claude_proxy::PROXY_NAME);
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bitrouter"), &alias)?;
+    let mut command = Command::new(&alias);
+    command
+        .args([
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+        ])
+        .envs(env)
+        .env("CLAUDE_CODE_EXECUTABLE", &alias)
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    for (key, value) in subprocess_env {
+        command.env(key, value.as_str().context("subprocess env string")?);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output()).await??;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout)?["session_id"],
+        "native-session"
+    );
+    let snapshot = handle.service.reconcile().await?;
+    assert_eq!(snapshot.processes.len(), 1);
+    let binding = &snapshot.processes[0];
+    assert!(binding.gaps.is_empty(), "{:?}", binding.gaps);
+    let configured = binding
+        .configured_by
+        .as_ref()
+        .context("verified process origin")?;
+    assert_eq!(configured.operation_id, "create");
+    assert_eq!(configured.method, "session/new");
+    assert_ne!(
+        configured.request.range.source_id,
+        configured.configuration.range.source_id
+    );
+    assert!(
+        snapshot.attempts.is_empty(),
+        "process start cannot fabricate a task"
+    );
+    handle.shutdown().await?;
     Ok(())
 }

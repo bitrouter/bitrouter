@@ -17,11 +17,12 @@ use super::history::{HistoryResolver, ResolvedHistory};
 use super::journal::{Journal, import_spool};
 use super::store::EvidenceStore;
 use super::types::{
-    Harness, MAX_GRAPH_ITEMS, NodeKey, RECORD_PAGE_SIZE, SourceDescriptor, SourceFormat,
+    Harness, MAX_GRAPH_ITEMS, NodeKey, RECORD_PAGE_SIZE, RecordRef, SourceDescriptor, SourceFormat,
     SourceRange,
 };
 use crate::eval::types::canonical_digest;
 
+pub mod processes;
 mod recovery;
 mod roots;
 mod workspaces;
@@ -35,6 +36,7 @@ struct RootContext {
 
 #[derive(Clone)]
 struct PendingScope {
+    request: Option<RecordRef>,
     namespace: String,
     session_id: Option<String>,
     query_fingerprint: Option<String>,
@@ -95,12 +97,15 @@ pub struct CollectionSnapshot {
     pub graph: super::execution::ExecutionGraph,
     pub attempts: Vec<super::types::Attempt>,
     pub workspace_checkpoints: BTreeMap<String, super::types::WorkspaceEvidence>,
+    #[serde(default)]
+    pub processes: Vec<processes::ProcessBinding>,
     pub gaps: BTreeSet<String>,
     pub reconciled_at: Option<String>,
 }
 
 #[derive(Default)]
 struct LiveState {
+    process_sources: BTreeSet<String>,
     nodes: BTreeSet<NodeKey>,
     replayed: BTreeMap<String, u64>,
     replay_gaps: BTreeMap<String, BTreeSet<String>>,
@@ -460,6 +465,13 @@ impl ControllerEvidence {
                 }
             }
         }
+        let process_sources = self.state.lock().await.process_sources.clone();
+        let mut processes = Vec::with_capacity(process_sources.len());
+        for source_id in process_sources {
+            let binding = self.process_binding(source_id).await;
+            gaps.extend(binding.gaps.iter().cloned());
+            processes.push(binding);
+        }
         let mut state = self.state.lock().await;
         if !state.ambiguous_sessions.is_empty() {
             gaps.insert("ambiguous_acp_session_scope".into());
@@ -472,6 +484,7 @@ impl ControllerEvidence {
             graph,
             attempts,
             workspace_checkpoints,
+            processes,
             gaps,
             reconciled_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -592,6 +605,9 @@ impl ControllerEvidence {
         .await?;
         gaps.extend(imported.gaps);
         let source = imported.source;
+        if source.descriptor.format == SourceFormat::ClaudeCli {
+            self.remember_process_source(&source.id, gaps).await;
+        }
         let mut start = self
             .state
             .lock()
@@ -814,8 +830,8 @@ impl SessionObserver for ControllerEvidence {
             }
             event["observed_at"] = json!(chrono::Utc::now().to_rfc3339());
             event["native_scope"] = json!(scope);
-            context.journal.append(event.clone()).await?;
-            self.finish_observation(&observation, context.collector.root())
+            let record = context.journal.append_record(event).await?;
+            self.finish_observation(&observation, context.collector.root(), &record)
                 .await?;
             if observation.phase == "response"
                 || observation.phase == "disconnect"

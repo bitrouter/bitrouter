@@ -13,6 +13,8 @@ async fn repository() -> Result<tempfile::TempDir> {
             "user.name=Fixture",
             "-c",
             "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "--quiet",
             "-m",

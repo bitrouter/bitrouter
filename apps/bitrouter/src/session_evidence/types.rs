@@ -177,6 +177,60 @@ pub struct StoredRecord {
     pub input: RecordInput,
 }
 
+/// An exact reference to one committed observation, independent of its file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordRef {
+    pub range: SourceRange,
+    pub record_id: String,
+    pub record_digest: String,
+}
+
+impl RecordRef {
+    pub fn from_record(record: &StoredRecord) -> Result<Self> {
+        let reference = Self {
+            range: SourceRange {
+                source_id: record.source_id.clone(),
+                generation: record.input.generation.clone(),
+                start: record.input.sequence,
+                end: record
+                    .input
+                    .sequence
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("record reference sequence overflow"))?,
+            },
+            record_id: record.id.clone(),
+            record_digest: record.digest.clone(),
+        };
+        reference.validate()?;
+        ensure!(
+            record.input.id(&record.source_id)? == record.id
+                && canonical_digest(&record.input)? == record.digest,
+            "record reference does not match its body"
+        );
+        Ok(reference)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.range.validate()?;
+        ensure!(
+            self.range.end - self.range.start == 1,
+            "reference must name one record"
+        );
+        digest_identifier(&self.record_id)?;
+        ensure!(
+            self.record_id
+                == canonical_digest(&(
+                    &self.range.source_id,
+                    &self.range.generation,
+                    self.range.start
+                ))?,
+            "record reference identity does not match its position"
+        );
+        digest_identifier(&self.record_digest)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Completeness {

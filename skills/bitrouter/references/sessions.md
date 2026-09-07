@@ -204,7 +204,10 @@ explicit override, resolution follows the adapter's own
 SDK dependency and platform-specific native package. Custom adapter launchers
 can set `BITROUTER_CLAUDE_ADAPTER_ENTRY` when their entry cannot be located on
 PATH. `BITROUTER_CLAUDE_EVIDENCE_SPOOL` and
-`BITROUTER_CLAUDE_EVIDENCE_NAMESPACE` are private subprocess wiring. Each
+`BITROUTER_CLAUDE_EVIDENCE_NAMESPACE` and `BITROUTER_CLAUDE_EVIDENCE_ORIGIN`
+are private subprocess wiring. The origin is a bounded reference to a committed
+configuration record and its original ACP request. It is removed before the
+native CLI starts. Each
 actual process gets its own `cli-<uuid>.jsonl` spool; these UUIDs are distinct
 from native conversation ids. Parameters, protocol bytes and native exit codes
 are preserved. Script executable overrides and platforms without signal
@@ -215,6 +218,13 @@ retains process-local order across conversation resets. Registered histories
 can recover these records even when the process emitted them before an ACP
 session response. That recovery does not restore a live Query or declare that
 a task finished. A missing process-stop record remains uncertainty.
+
+Application snapshots also expose verified process configuration origins. The
+reader rechecks owned raw records, controller/profile registrations and recorded
+lifecycle fields. A saved configuration may start several native processes;
+its originating operation is not proof of what triggered a later restart. These
+bindings survive deletion of imported spool files. Older or invalid references
+remain visible as gaps and do not establish task membership or completion.
 
 Claude collection adds invocation-local lifecycle hooks through the adapter's
 session settings, preserving existing hooks. `native-session-hook` and

@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use super::store::EvidenceStore;
 use super::types::{
     MAX_RECORD_BYTES, RecordInput, RegisteredSource, SourceCursor, SourceDescriptor, SourceFormat,
-    SourceRange,
+    SourceRange, StoredRecord,
 };
 use crate::eval::types::canonical_digest;
 
@@ -39,6 +39,13 @@ impl Journal {
     /// One source per controller instance. Serializing the append supplies
     /// backpressure and keeps the durable ordering ahead of ACP delivery.
     pub async fn append(&self, raw: Value) -> Result<()> {
+        self.append_record(raw).await?;
+        Ok(())
+    }
+
+    /// Return the exact committed record so subprocess configuration can refer
+    /// to its durable provenance before the adapter receives the request.
+    pub async fn append_record(&self, raw: Value) -> Result<StoredRecord> {
         let mut source = self.source.lock().await;
         // A cancelled commit may have reached the database without updating
         // this cache. Re-read the durable cursor before the next observation.
@@ -61,6 +68,12 @@ impl Journal {
             next_sequence: record.sequence + 1,
             anchor_digest: canonical_digest(&(&source.cursor.anchor_digest, &record))?,
         };
+        let committed = StoredRecord {
+            id: record.id(&source.id)?,
+            source_id: source.id.clone(),
+            digest: canonical_digest(&record)?,
+            input: record.clone(),
+        };
         *source = if source.descriptor.format == SourceFormat::Acp {
             self.store
                 .append_observation(&source, record, cursor)
@@ -68,7 +81,7 @@ impl Journal {
         } else {
             self.store.append(&source, &[record], cursor).await?
         };
-        Ok(())
+        Ok(committed)
     }
 }
 
