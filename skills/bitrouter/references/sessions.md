@@ -170,9 +170,14 @@ not acquire this binding capability; missing producer evidence remains a gap.
 These observations link an original ACP operation to Codex's accepted thread/turn
 or Claude's enqueued command UUID. Cancellation can be followed by a late
 acceptance, and a prompt can produce several native inputs. Command callbacks
-without direct acceptance proof remain unverified. The observations still need
-native execution corroboration, task membership and settlement before scoring;
-an enqueue, accepted turn or prompt result alone is not a completed evaluation.
+without direct acceptance proof remain unverified. The application collection
+snapshot also exposes native input receipts: Codex pairs connection-local RPC
+requests and acceptances, while Claude retains original process inputs and
+command acknowledgements with their native conversation identity. Conflicting
+claims and known missing evidence remain explicit gaps, including after restart.
+The inspected ranges are bounded and do not establish complete task execution
+membership or settlement. An enqueue, accepted turn, input receipt or prompt
+result alone is not a completed evaluation.
 An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.

@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, ensure};
 use bitrouter::session_evidence::adapter_bridge::{Event, PromptEvidence};
+use bitrouter::session_evidence::native_inputs::NativeInputEvidence;
 use bitrouter::session_evidence::service::{EvidenceHandle, EvidenceLaunch};
 use bitrouter::session_evidence::store::EvidenceStore;
 use bitrouter::session_evidence::types::{RECORD_PAGE_SIZE, SourceFormat, SourceRange};
@@ -123,7 +124,7 @@ async fn check_adapter(key: &str, serve: bool) -> Result<()> {
     } else {
         drive_run(&fixture, &root).await?;
     }
-    let evidence = read_bindings(&fixture, expected).await?;
+    let (evidence, inputs) = read_bindings(&fixture, expected).await?;
     let bytes = tokio::fs::read_to_string(&fixture.native_records).await?;
     assert!(
         !bytes.contains("bitrouter/native-evidence"),
@@ -139,13 +140,16 @@ async fn check_adapter(key: &str, serve: bool) -> Result<()> {
     }
     let reopened = read_bindings(&fixture, expected).await?;
     assert_eq!(
-        serde_json::to_value(evidence)?,
+        serde_json::to_value((evidence, inputs))?,
         serde_json::to_value(reopened)?
     );
     Ok(())
 }
 
-async fn read_bindings(fixture: &Fixture, expected: usize) -> Result<PromptEvidence> {
+async fn read_bindings(
+    fixture: &Fixture,
+    expected: usize,
+) -> Result<(PromptEvidence, NativeInputEvidence)> {
     let mut env = fixture.env.clone();
     let mut handle = EvidenceHandle::open(EvidenceLaunch {
         home: &fixture.home,
@@ -156,8 +160,25 @@ async fn read_bindings(fixture: &Fixture, expected: usize) -> Result<PromptEvide
     })
     .await?
     .context("evidence reader")?;
-    let snapshot = handle.service.reconcile().await?;
+    // Use the completed public shutdown boundary before manually advancing
+    // recovery. Otherwise the worker can finish a sweep between our calls and
+    // the next explicit reconcile starts another epoch instead of reading it.
     handle.shutdown().await?;
+    let mut passes = 0;
+    let snapshot = loop {
+        let snapshot = handle.service.reconcile().await?;
+        if !snapshot.gaps.contains("native_recovery_backlog")
+            && !snapshot.gaps.contains("native_spool_backlog")
+        {
+            break snapshot;
+        }
+        passes += 1;
+        ensure!(
+            passes < 256,
+            "native fixture inventory did not finish: {:?}",
+            snapshot.gaps
+        );
+    };
     assert_eq!(snapshot.attempts.len(), 1, "one application attempt");
     let attempt = snapshot.attempts.first().context("attempt")?;
     assert!(
@@ -175,7 +196,79 @@ async fn read_bindings(fixture: &Fixture, expected: usize) -> Result<PromptEvide
         fixture.identity.harness_id
     );
     assert_eq!(evidence.observations.len(), 3 * expected, "{evidence:?}");
-    Ok(evidence)
+    let inputs = snapshot
+        .native_inputs
+        .get(&attempt.id)
+        .context("corroborated native inputs")?
+        .clone();
+    assert!(
+        inputs.gaps.is_empty(),
+        "{}: {:?}",
+        fixture.identity.harness_id,
+        inputs.gaps
+    );
+    assert_eq!(inputs.bindings.len(), expected, "{:?}", inputs.gaps);
+    let store = EvidenceStore::new(
+        bitrouter::db::connect(&format!(
+            "sqlite:{}",
+            fixture.home.join("evidence.db").display()
+        ))
+        .await?,
+        "local",
+    )?;
+    for binding in &inputs.bindings {
+        let request = store
+            .records(&binding.input.range)
+            .await?
+            .into_iter()
+            .next()
+            .context("original native input")?;
+        assert_eq!(request.id, binding.input.record_id);
+        assert_eq!(request.digest, binding.input.record_digest);
+        let raw = &request.input.raw;
+        if fixture.identity.harness_id == "codex-acp" {
+            assert_eq!(raw["payload"]["threadId"], binding.node.native_id);
+            assert_eq!(binding.acknowledgements.len(), 1);
+            let acknowledgement = &binding.acknowledgements[0];
+            let reply = store
+                .records(&acknowledgement.record.range)
+                .await?
+                .into_iter()
+                .next()
+                .context("native acceptance")?;
+            assert_eq!(raw["operation_id"], reply.input.raw["operation_id"]);
+            assert_eq!(reply.input.raw["payload"]["turn"]["id"], binding.native_id);
+        } else {
+            assert_eq!(raw["payload"]["uuid"], binding.native_id);
+            assert!(binding.configuration.is_some() && binding.session_response.is_some());
+            assert_eq!(
+                binding
+                    .acknowledgements
+                    .iter()
+                    .map(|ack| ack.state.as_str())
+                    .collect::<Vec<_>>(),
+                ["started", "completed"]
+            );
+            for acknowledgement in &binding.acknowledgements {
+                let reply = store
+                    .records(&acknowledgement.record.range)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .context("native command acknowledgement")?;
+                assert_eq!(reply.input.raw["process_id"], binding.process_id);
+                assert_eq!(
+                    reply.input.raw["payload"]["command_uuid"],
+                    binding.native_id
+                );
+                assert_eq!(
+                    reply.input.raw["payload"]["session_id"],
+                    binding.node.native_id
+                );
+            }
+        }
+    }
+    Ok((evidence, inputs))
 }
 
 async fn drive_run(fixture: &Fixture, root: &Path) -> Result<()> {

@@ -48,7 +48,9 @@ for line in sys.stdin:
             continue
         send({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': message['request_id'], 'response': result}})
     elif message.get('type') == 'user':
+        send({'type': 'command_lifecycle', 'command_uuid': message['uuid'], 'state': 'started', 'session_id': session})
         send({'type': 'system', 'subtype': 'init', 'session_id': session, 'uuid': str(uuid.uuid4()), 'cwd': '.', 'tools': [], 'mcp_servers': [], 'model': 'sonnet', 'permissionMode': 'default', 'slash_commands': [], 'apiKeySource': 'environment', 'claude_code_version': '2.1.257', 'output_style': 'default', 'agents': [], 'skills': [], 'plugins': []})
         send({**message, 'session_id': session, 'parent_tool_use_id': None})
         send({'type': 'assistant', 'session_id': session, 'uuid': str(uuid.uuid4()), 'parent_tool_use_id': None, 'message': {'id': str(uuid.uuid4()), 'type': 'message', 'role': 'assistant', 'model': 'sonnet', 'content': [{'type': 'text', 'text': 'Fixture complete.'}], 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'input_tokens': 1, 'output_tokens': 1}}})
-        send({'type': 'result', 'subtype': 'success', 'session_id': session, 'uuid': str(uuid.uuid4()), 'is_error': False, 'duration_ms': 1, 'duration_api_ms': 1, 'num_turns': 1, 'result': 'Fixture complete.', 'stop_reason': 'end_turn', 'total_cost_usd': 0, 'usage': {'input_tokens': 1, 'output_tokens': 1, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0}, 'modelUsage': {}, 'permission_denials': []})
+        send({'type': 'result', 'subtype': 'success', 'session_id': session, 'uuid': str(uuid.uuid4()), 'user_message_uuid': message['uuid'], 'is_error': False, 'duration_ms': 1, 'duration_api_ms': 1, 'num_turns': 1, 'result': 'Fixture complete.', 'stop_reason': 'end_turn', 'total_cost_usd': 0, 'usage': {'input_tokens': 1, 'output_tokens': 1, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0}, 'modelUsage': {}, 'permission_denials': []})
+        send({'type': 'command_lifecycle', 'command_uuid': message['uuid'], 'state': 'completed', 'session_id': session})

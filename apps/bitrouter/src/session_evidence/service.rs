@@ -24,6 +24,7 @@ use crate::eval::types::canonical_digest;
 
 mod bridge;
 mod checkpoints;
+mod inputs;
 pub mod processes;
 mod recovery;
 mod roots;
@@ -105,6 +106,8 @@ pub struct CollectionSnapshot {
     pub native_checkpoints: BTreeMap<String, super::checkpoint::NativeCheckpointEvidence>,
     #[serde(default)]
     pub prompt_bindings: BTreeMap<String, super::adapter_bridge::PromptEvidence>,
+    #[serde(default)]
+    pub native_inputs: BTreeMap<String, super::native_inputs::NativeInputEvidence>,
     #[serde(default)]
     pub processes: Vec<processes::ProcessBinding>,
     #[serde(default)]
@@ -547,6 +550,14 @@ impl ControllerEvidence {
                 }
             }
         }
+        let native_inputs = match self.native_inputs(&prompt_bindings, &gaps).await {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                tracing::warn!(%error, "native input collection failed");
+                gaps.insert("native_input_collection_failed".into());
+                BTreeMap::new()
+            }
+        };
         let mut state = self.state.lock().await;
         if !state.ambiguous_sessions.is_empty() {
             gaps.insert("ambiguous_acp_session_scope".into());
@@ -564,6 +575,7 @@ impl ControllerEvidence {
             workspace_checkpoints,
             native_checkpoints,
             prompt_bindings,
+            native_inputs,
             processes,
             sdk_bindings,
             gaps,

@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance. | Native corroboration, execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests and acknowledgements. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
@@ -530,6 +530,54 @@ attempt isolation and derived-index failure isolation. The final workspace run
 passed all 3,338 tests with 14 skipped; the opt-in binary fixture was run
 separately and passed. Clippy with denied warnings, doctests, rustdoc,
 distribution, formatting and diff checks passed.
+
+The native-input stage now exposes `CollectionSnapshot.native_inputs`, keyed by
+attempt. Codex direct-acceptance claims are paired with the original `turn/start`
+request and response on one owned native connection. The response must identify
+the accepted turn and the request must identify its thread. Client and server
+request ids remain separate; overlapping reuse poisons that RPC id for the rest
+of the inspected connection. Several original requests accepting the same
+thread/turn remain ambiguous, including across connections.
+
+Claude receipts join the adapter's generated command UUID to an original CLI
+input and subsequent command-lifecycle acknowledgements in the same process.
+The native conversation comes from the acknowledgement, not the input's ACP
+attachment. Each process/input occurrence remains distinct across native reset
+or saved-configuration recreation. Repeated input UUIDs within one process are
+ambiguous even after a completed acknowledgement. Queued, started, completed,
+cancelled, discarded and refused are observations, not settlement decisions.
+Original configuration and lifecycle-response records verify the process's
+controller and ACP attachment. A valid failed-only process contributes no input;
+it does not invalidate a later healthy process, and cannot precede input records.
+
+Native sources must belong to the original prompt's registered controller and
+profile spool. Producer conflict inspection covers all verified profile journals
+of that controller because late notifications can change journals while their
+immutable prompt origin stays fixed. It includes archived prompt claims and
+checks original raw records rather than relying on the derived prompt index.
+Unknown producer envelopes, capture gaps, missing records, unfinished recovery,
+and unknown, corrupt or uncollected durable spool extents remain explicit gaps.
+Deleting an unimported tail or reopening the database cannot turn a known partial
+prefix into complete input evidence.
+
+The current reader records its inspected source ranges and retains bounds of
+1,024 source registrations and 100,000 raw controller/native records per pass,
+with bounded receipts and acknowledgements. This is a replaceable inspection
+view, not task-scoped convergence. Full source rescans and aggregate limits must
+still be replaced for long-lived task evaluation. Input receipts do not fill
+`attempt.members`, establish complete auxiliary/cost coverage, close a native
+execution, or admit a sample to Eval. The real-binary fixture additionally checks
+these receipts against original native input/acknowledgement records after the
+public shutdown boundary and database reopen; its native transports remain
+deterministic fixtures.
+
+Independent stage review passed after correcting cross-profile journal claim
+inspection, unknown producer envelopes, durable extent gaps and failed-only
+Claude processes. Fifteen scanner/service regressions cover RPC ambiguity,
+native reset identity, process recreation, original-record loss, cross-journal
+claims, missing tails and database reopen. All 3,353 workspace tests passed with
+14 skipped; the opt-in real-binary fixture passed separately. Clippy with denied
+warnings, doctests, rustdoc, distribution, formatting and diff checks passed.
 
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;

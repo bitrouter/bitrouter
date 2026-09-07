@@ -28,6 +28,63 @@ struct BridgeGap {
 mod tests;
 
 impl EvidenceStore {
+    /// Inspect original producer claims, including archived attempts. A derived
+    /// prompt index must not hide a competing claim for the same native input.
+    pub(crate) async fn producer_claims(
+        &self,
+        range: &SourceRange,
+        targets: &BTreeSet<String>,
+    ) -> Result<(Vec<ProvenObservation>, BTreeSet<String>)> {
+        let transaction = self.read_snapshot().await?;
+        let row = source_entity::Entity::find_by_id(&range.source_id)
+            .filter(source_entity::Column::Owner.eq(&self.owner_key))
+            .one(&transaction)
+            .await?
+            .context("producer claim source missing")?;
+        ensure!(row.owner == self.owner_key, "foreign producer claim source");
+        let source = decode_source(row)?;
+        let mut claims = Vec::new();
+        let mut gaps = BTreeSet::new();
+        let records = range_records(&transaction, &self.owner_key, range).await?;
+        ensure!(
+            records.len() as u64 == range.end - range.start,
+            "producer claim prefix has missing records"
+        );
+        for record in records {
+            if record.input.raw.get("method").and_then(Value::as_str)
+                != Some(adapter_bridge::METHOD)
+            {
+                continue;
+            }
+            let parsed = record
+                .input
+                .raw
+                .get("payload")
+                .cloned()
+                .and_then(|payload| serde_json::from_value::<Observation>(payload).ok())
+                .filter(|observation| observation.validate().is_ok());
+            let Some(parsed) = parsed else {
+                // A lossy invalid marker has no usable target. It cannot prove
+                // that an old producer claim is unrelated to the current input.
+                gaps.insert("native_input_claim_unknown".into());
+                continue;
+            };
+            let relevant = crate::session_evidence::native_inputs::target(&parsed.event)
+                .is_some_and(|id| targets.contains(id));
+            if relevant {
+                let observation = self
+                    .verify_bridge_observation(&transaction, &source, &record)
+                    .await?;
+                claims.push(ProvenObservation {
+                    record: RecordRef::from_record(&record)?,
+                    observation,
+                });
+            }
+        }
+        transaction.commit().await?;
+        Ok((claims, gaps))
+    }
+
     pub(super) async fn record_bridge_index_gap(
         &self,
         db: &impl ConnectionTrait,
