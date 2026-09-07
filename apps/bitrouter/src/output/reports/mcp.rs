@@ -7,6 +7,47 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
+#[derive(Serialize)]
+pub struct McpCheckRow {
+    pub server: String,
+    pub transport: String,
+    pub ok: bool,
+    pub latency_ms: u128,
+    pub capabilities: Vec<String>,
+    pub tools: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct McpCheckReport {
+    pub servers: Vec<McpCheckRow>,
+}
+
+impl CliReport for McpCheckReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        let mut table = Table::new(["SERVER", "STATUS", "TRANSPORT", "LATENCY", "TOOLS"]);
+        for server in &self.servers {
+            table.push([
+                server.server.clone(),
+                if server.ok {
+                    "ok".into()
+                } else {
+                    "FAIL".into()
+                },
+                server.transport.clone(),
+                format!("{}ms", server.latency_ms),
+                if server.ok {
+                    server.tools.join(", ")
+                } else {
+                    server.error.clone().unwrap_or_default()
+                },
+            ]);
+        }
+        h.table(&table)
+    }
+}
+
 /// One server in the MCP registry (`mcp list` / `mcp search`).
 #[derive(Serialize)]
 pub struct McpRegistryRow {

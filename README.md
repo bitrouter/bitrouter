@@ -163,7 +163,7 @@ Point your agent runtime at `http://localhost:4356` and any available provider i
 
 ```bash
 bitrouter start / stop / restart        # daemon lifecycle
-bitrouter status --requests             # settled requests + spend
+bitrouter requests                      # settled requests + spend
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys list               # manage API keys
@@ -188,14 +188,19 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 
 ### MCP
 
-Use BitRouter from any MCP client — it exposes `list_models`, `status`, `route_preview` and the skills pair as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers). Control and introspection only: completions go to the HTTP API below.
+Use BitRouter from any MCP host — it exposes `list_models`, `status`,
+`route_preview` and the skills pair as MCP tools (the *origin* server, distinct
+from the MCP gateway that proxies configured upstream servers). Control and
+introspection only: completions go to the HTTP API below.
 
 ```bash
 bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
-bitrouter mcp install --client claude  # print the Claude/Cursor mcpServers config block
+bitrouter mcp check                    # check configured upstream MCP servers
 ```
 
-Add `--transport http` to target the multi-tenant cloud backend.
+Network-capable hosts connect directly to `/mcp-control` on the daemon's
+opt-in authenticated control listener; standalone `mcp serve --transport http`
+is retired.
 
 ### API
 
@@ -233,24 +238,29 @@ actually resolves. Full catalog in [`registry/`](registry/).
 ## Harness integrations
 
 Run `bitrouter` to complete first-run setup and choose a default ACP harness.
-The same command then opens BitRouter's terminal UI with that saved harness.
-Codex (`codex-acp`) and Claude (`claude-acp`) are built in; no agent YAML is
-required. A compatible local CLI is discovered automatically and used behind
-its ACP adapter; otherwise the adapter uses its bundled worker.
+After setup, `bitrouter code` is the explicit full-screen home for operations
+and ACP sessions. Codex (`codex-acp`) and Claude (`claude-acp`) are built in;
+no agent YAML is required. A compatible local CLI is discovered automatically
+and used behind its ACP adapter; otherwise the adapter uses its bundled worker.
 
 ```bash
 bitrouter                              # onboarding, then the default ACP TUI
-bitrouter chat codex-acp                # choose an ACP harness for one session
-bitrouter spawn claude-acp -p "summarize this repo"
+bitrouter code                         # operations and agent picker
+bitrouter code codex                   # one interactive ACP session
+bitrouter run claude "summarize this repo"  # headless ACP turn
+bitrouter claude                       # Claude Code's native interface
 ```
 
 The built-in adapters require Node.js 22+ and `npx`. BitRouter only launches ACP
-agents; the native CLI launcher has been removed. Other API clients can still
-use `OPENAI_BASE_URL=http://localhost:4356/v1` or
+agents through `code`, `run`, and `acp serve`; `launch` and the `claude` /
+`codex` shortcuts instead start each harness's own native interface with
+per-process routing overrides. Other API clients can use
+`OPENAI_BASE_URL=http://localhost:4356/v1` or
 `ANTHROPIC_BASE_URL=http://localhost:4356` to send traffic to the daemon.
 
-The full provider and ACP agent catalog lives in
-[registry/](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Headless ACP sub-agents use `bitrouter run`; ACP clients launch
+`bitrouter acp serve <agent>`. The full provider and harness catalog lives in
+[github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
 

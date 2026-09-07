@@ -10,6 +10,7 @@
 
 pub mod commands;
 pub mod models;
+pub mod requests;
 pub mod route;
 pub mod session;
 pub mod skills;

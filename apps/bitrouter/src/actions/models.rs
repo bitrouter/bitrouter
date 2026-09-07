@@ -244,4 +244,42 @@ providers:
         );
         assert!(report.filtered(Some("nobody")).models.is_empty());
     }
+
+    #[tokio::test]
+    async fn listed_subscription_selector_is_accepted_by_route_preview() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("bitrouter.yaml");
+        std::fs::write(
+            &path,
+            r#"
+inherit_defaults: false
+providers:
+  openai-codex:
+    api_base: https://chatgpt.com/backend-api/codex
+    api_key: subscription
+    class: first-party-subscription
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+"#,
+        )?;
+        let source = ConfigSource::File(path);
+        let models = RoutableModels::new(source.clone(), None).report().await?;
+        let selector = models
+            .models
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("subscription model was not listed"))?;
+        assert_eq!(selector.id, "openai-codex:openai/gpt-5.6-sol");
+
+        let route = crate::actions::route::RouteAction::new(source, None)
+            .report(bitrouter_mcp::actions::route::RouteInput {
+                model: selector.id.clone(),
+                prompt: None,
+            })
+            .await?;
+        assert_eq!(route.provider_chain.len(), 1);
+        assert_eq!(route.provider_chain[0].provider, "openai-codex");
+        assert_eq!(route.provider_chain[0].service_id, "gpt-5.6-sol");
+        Ok(())
+    }
 }

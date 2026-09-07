@@ -1,4 +1,4 @@
-//! First-run configuration and the default ACP TUI entry point.
+//! First-run configuration and the default Code ACP entry point.
 //!
 //! Credentials alone do not complete onboarding: the selected ACP harness and
 //! optional model are saved in `chat`, then reused by every bare invocation.
@@ -188,7 +188,7 @@ pub struct Snippet {
     pub anthropic: String,
     /// `OPENAI_BASE_URL` + `OPENAI_API_KEY` export lines.
     pub openai: String,
-    /// The Codex ACP TUI command.
+    /// The Codex command for Code's ACP conversation view.
     pub codex: String,
 }
 
@@ -310,7 +310,7 @@ impl CliReport for OnboardingStatusReport {
 // Entry points
 // =====================================================================
 
-/// Bare invocation opens the saved default ACP TUI, or the first-run wizard.
+/// Bare invocation opens the saved default in Code, or the first-run wizard.
 pub async fn entry(output: &Output) -> Result<()> {
     let path = config_path(None)?;
     if path.is_file() {
@@ -370,13 +370,33 @@ async fn start_default_chat(
         model: config.chat.model.clone(),
         ..Default::default()
     };
-    crate::acp_cli::chat(crate::acp_cli::SpawnContext {
-        source,
-        config,
-        agent_id: &agent,
-        options: crate::acp_cli::launch_options(None),
-        routing,
-    })
+    // Preserve the pre-Code plain renderer for scripts and redirected output.
+    // Interactive users always enter the one full-screen Code lifecycle UI.
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return crate::acp_cli::chat(crate::acp_cli::SpawnContext {
+            source,
+            config,
+            agent_id: &agent,
+            options: crate::acp_cli::launch_options(None),
+            routing,
+        })
+        .await;
+    }
+    let config_path = match source {
+        crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+        crate::paths::ConfigSource::Default { .. } => None,
+    };
+    crate::dashboard::run(
+        None,
+        config_path,
+        None,
+        Some(crate::dashboard::SessionRequest {
+            agent,
+            selection: crate::acp_cli::SessionSelection::New,
+            turn_timeout: None,
+            routing,
+        }),
+    )
     .await
 }
 
@@ -912,8 +932,8 @@ async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Res
     if !installed.is_empty() {
         actions.push(AfterAction::Launch);
         items.push(Item::new(
-            "Open BitRouter ACP TUI now",
-            "use the selected default harness",
+            "Open BitRouter Code now",
+            "use the selected default ACP harness",
         ));
     }
     actions.extend([AfterAction::Serve, AfterAction::Exit]);
@@ -938,7 +958,7 @@ async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Res
 // Finish exits (a) launch / (b) serve+snippet
 // =====================================================================
 
-/// Open the same ACP TUI as every subsequent bare invocation.
+/// Open the same unified Code TUI as every subsequent bare invocation.
 async fn finish_launch(
     path: &std::path::Path,
     report: OnboardingReport,
@@ -966,7 +986,7 @@ async fn finish_serve(
 
 /// Build the three labeled paste-in shapes (§13 Q2). Templates the bearer by
 /// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
-/// the local `skip_auth` placeholder. The Codex example opens the ACP TUI.
+/// the local `skip_auth` placeholder. The Codex example opens Code.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::spawn::derive_base_url(listen);
     let token = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV)
@@ -982,7 +1002,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("bitrouter chat codex-acp --base-url {base_url}");
+    let codex = format!("bitrouter code codex --base-url {base_url}");
     Snippet {
         base_url,
         anthropic,
@@ -1312,7 +1332,7 @@ mod tests {
         );
         assert_eq!(
             snippet.codex,
-            "bitrouter chat codex-acp --base-url http://127.0.0.1:4356"
+            "bitrouter code codex --base-url http://127.0.0.1:4356"
         );
     }
 

@@ -318,15 +318,20 @@ fn changing_harness_preserves_routes_and_chat_commands() -> anyhow::Result<()> {
 }
 
 #[test]
-fn native_interactive_entry_points_are_rejected() -> anyhow::Result<()> {
+fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
-    for args in [
-        vec!["launch", "--agent", "codex"],
-        vec!["spawn", "--agent", "codex"],
-    ] {
-        let out = run_cli(home.path(), data.path(), &args, &[]);
-        assert!(!out.status.success());
+    let out = run_cli(home.path(), data.path(), &["--help"], &[]);
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    for command in ["launch", "claude", "codex", "run", "code", "acp"] {
+        assert!(help.contains(&format!("  {command}")), "{command}: {help}");
+    }
+    for hidden in ["spawn", "chat", "tui"] {
+        assert!(
+            !help.contains(&format!("  {hidden}")),
+            "hidden command {hidden}: {help}"
+        );
     }
     Ok(())
 }
