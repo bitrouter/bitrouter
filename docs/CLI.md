@@ -634,6 +634,14 @@ are filled from this snapshot; published metadata takes precedence. A custom
 registry URL or `registry.enabled: false` opts out. A stored subscription login
 auto-enables its provider, so no manual `providers:` entry is required.
 
+When `openai-codex` is active, Codex ACP can use its native default model
+without `chat.model` or `--model`. Requests marked by the maintained adapter
+map declared native model names to the Codex subscription at gateway ingress;
+the CLI retains its native model metadata and picker. Generic API requests do
+not opt into subscriptions this way. Explicit provider/canonical model names,
+presets and user-defined virtual models are preserved. Reloading the daemon
+updates the native-model mapping along with the active provider catalog.
+
 At session startup, BitRouter probes local CLIs with `--version` (two-second
 limit). Codex >=0.153.3 is passed to its adapter via `CODEX_PATH`; Claude Code
 >=2.1.257 is passed via `CLAUDE_CODE_EXECUTABLE`. Missing, old, failing or

@@ -22,6 +22,7 @@ mod bundled_registry;
 pub mod chat;
 pub mod claude_code;
 pub mod cloud;
+mod codex_router;
 pub mod commands;
 pub mod config_synthesis;
 pub mod conformance;
