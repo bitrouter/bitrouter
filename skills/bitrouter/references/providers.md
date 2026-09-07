@@ -286,7 +286,7 @@ mcp_servers:
       args: ["mcp-server-git"]
 ```
 
-Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bitrouter tools list` / `bitrouter tools status` / `bitrouter tools discover <name>`. To find servers without hand-writing the block: `bitrouter mcp search <query>` / `bitrouter mcp list` browse the official MCP registry (with an install-support column), and `bitrouter mcp add <name>` prints a reviewed stub to paste under `mcp_servers:`.
+Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect one server or all of them with `bitrouter mcp check [name]`; it reports transport, reachability, latency, capability negotiation, and advertised tool names.
 
 ## Server tools (router-executed)
 
@@ -389,19 +389,19 @@ The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, `opencode`,
 it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
 `@bitrouter/pi` provider so pi's own model calls route back through the daemon.
 
-`bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
+`bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry. `bitrouter agents scaffold <id>` prints a paste-ready stub. `bitrouter agents check [agent]` preflights one agent or verifies every configured adapter, and `agents inspect <agent>` reports session commands.
 
 Agents declared here are referenced by `--agent <id>` when launching an ACP
 controller. A manager (GUI, AI agent, or editor) spawns one process per harness
 connection; that connection may carry multiple harness-native sessions:
 
 ```bash
-bitrouter acp serve --agent claude [--config PATH]
+bitrouter acp serve claude [--config PATH]
 ```
 
 The manager initializes first. BitRouter relays its capabilities to the harness,
 configures a routed endpoint internally when the harness advertises custom
-providers, and masks that internal provider capability manager-side. Claude's
+providers, and masks that internal provider capability from ACP clients. Claude's
 fallback uses `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, optional
 `ANTHROPIC_MODEL`, and newline-separated `ANTHROPIC_CUSTOM_HEADERS`. Codex's
 fallback uses `CODEX_CONFIG` plus `MODEL_PROVIDER`; ACP mode does not append
@@ -412,7 +412,7 @@ does not replace the native session catalog, and it exits when the manager
 disconnects. Maintained Codex/Claude controllers retain a separate local
 evaluation evidence index, including raw native records and source checkpoints.
 For a one-shot turn on the same controller,
-`bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See
+`bitrouter run claude <text>` streams versioned NDJSON to stdout. See
 `references/sessions.md` for the complete ownership boundary.
 
 ## Apply changes

@@ -13,7 +13,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-mcp`           | crate   | The action contract plus its MCP binding — shared report types + ports in `actions/` (`status`, `list_models`, `route`), exposed over stdio + streamable HTTP alongside the skills surfaces, with its billing wire type kept local. Control and introspection only — inference stays on the daemon's HTTP API |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-tui`           | crate   | Terminal renderer for one ACP agent session (`bitrouter chat`) — transcript, tool cards, permission prompt, provider picker, cost line |
+| `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bitrouter code [<agent>]`) — operations views, ACP transcript, composer, and permission prompt |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
@@ -26,8 +26,8 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
-| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the manager-facing server, `client` the one ACP client (transport-generic, driven on the caller's runtime, and the only speaker of `_bitrouter/route/*`), `up` the agent-process transport, `translate` the typed view of `session/update` that `acp prompt`'s NDJSON publishes. There is one stack: `chat`, piped `chat` and `acp prompt` are all consumers of `client`, differing in what they do with the update stream rather than in how they speak ACP. Subcommand glue in `apps/bitrouter/src/acp_cli.rs` | `bitrouter acp serve`    |
-| **ACP (interactive)**     | `crates/bitrouter-tui` renders what the session emits; the loop and keys are `apps/bitrouter/src/chat/session.rs`; launch and routing stay in `apps/bitrouter/src/acp_cli.rs::chat` | `bitrouter chat`         |
+| **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bitrouter acp serve`; `bitrouter run` |
+| **ACP (interactive)**     | `crates/bitrouter-tui/src/dashboard.rs` renders the unified shell; `apps/bitrouter/src/dashboard.rs` drives navigation and the active ACP session through the shared `SessionHost` in `apps/bitrouter/src/acp_cli.rs`. | `bitrouter code [<agent>]` |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -83,7 +83,7 @@ The last surface short of this was `status --watch`, a self-refreshing ratatui
 table over daemon-wide request rows. It could not move to `bitrouter-tui` —
 those rows come from the metering store and cover every caller, most of which
 never speak ACP, so importing them would have put a daemon-wide model inside a
-session-scoped crate. It was removed instead, and `bitrouter status --requests`
+session-scoped crate. It was removed instead, and `bitrouter requests`
 reports the same data through the ordinary CLI report layer
 (`apps/bitrouter/src/output/reports/requests.rs`) — JSON by default, `--human`
 for the table, and no terminal code anywhere in it.
@@ -209,13 +209,17 @@ The axum server lives behind the SDK's `server` feature (`crates/bitrouter-sdk/s
 
 `GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by `bitrouter-telemetry`, and the endpoint serves a short banner pointing at `plugins.bitrouter-telemetry.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The SDK's `MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
-Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a Unix domain socket, not HTTP — see `apps/bitrouter/src/daemon.rs`.
+Daemon mutation (`stop` / `restart` / `reload`) runs over a Unix domain socket.
+When the optional authenticated HTTP control listener is enabled, its typed
+read actions and the Streamable HTTP origin MCP endpoint at `/mcp-control`
+share the same bearer gate and loopback exposure policy. See
+`apps/bitrouter/src/{daemon,remote_control}.rs`.
 
 ## CLI Surface
 
-`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `eval` / `optimize` / `trajectory` / `providers` / `agents` / `launch` / `spawn` / `cloud` / `skills` / `mcp` / `workflow-state` / `update` / `acp`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. `launch` runs a harness as an interactive native TUI; `spawn` (and its `acp serve|prompt` aliases) runs one as a headless ACP sub-agent. See `apps/bitrouter/src/main.rs`.
+`bitrouter <subcommand>` exposes lifecycle and reports plus four agent-facing entries: `launch <agent>` (native interface), `code [agent]` (BitRouter UI), `run <agent>` (headless turn), and `acp serve <agent>` (protocol-pure manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp serve` and `mcp check [server]` are the canonical MCP leaves. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
 
-### Observability surface (`bitrouter status --requests`)
+### Observability surface (`bitrouter requests`)
 
 One surface, and no module of its own. `RequestsReport`
 (`apps/bitrouter/src/output/reports/requests.rs`) is an ordinary `CliReport`:

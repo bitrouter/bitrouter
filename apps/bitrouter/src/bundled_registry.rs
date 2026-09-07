@@ -1,6 +1,6 @@
-//! Provider defaults shipped with the maintained ACP harnesses. Generated from
-//! the same registry artifacts as the binary, so fresh installs and a stale
-//! public registry can still resolve their subscription login and models.
+//! Public provider defaults from the committed registry snapshot. A fresh
+//! installation can list providers and resolve login/models without a cache;
+//! fetched metadata takes precedence when it is available.
 
 use anyhow::Result;
 use bitrouter_providers::registry::types::RegistryData;
@@ -35,7 +35,7 @@ fn enable_with_store(
 fn bundled() -> Result<RegistryData> {
     Ok(serde_json::from_str(include_str!(concat!(
         env!("OUT_DIR"),
-        "/acp_providers.json"
+        "/provider_registry.json"
     )))?)
 }
 
@@ -57,7 +57,7 @@ pub(crate) async fn load(registry: &RegistryConfig) -> Option<RegistryData> {
     match supplement(registry, remote.clone()) {
         Ok(data) => data,
         Err(error) => {
-            tracing::warn!(%error, "could not load bundled ACP provider defaults");
+            tracing::warn!(%error, "could not load bundled provider registry");
             remote
         }
     }
@@ -97,6 +97,34 @@ fn supplement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+
+    #[test]
+    fn offline_catalog_preserves_all_committed_providers() -> Result<()> {
+        let committed: serde_json::Value =
+            serde_json::from_str(include_str!("../../../dist/registry/providers.json"))?;
+        let data = supplement(&RegistryConfig::default(), None)?.context("no offline catalog")?;
+        let actual: std::collections::BTreeSet<_> = data
+            .providers
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect();
+        let expected: std::collections::BTreeSet<_> = committed["data"]
+            .as_array()
+            .context("no provider array")?
+            .iter()
+            .filter_map(|provider| provider["name"].as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        for provider in data
+            .providers
+            .iter()
+            .filter(|provider| provider.is_active() && provider.is_mergeable())
+        {
+            bitrouter_providers::builtin::entry_from_registry(provider)?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn subscription_login_defaults_are_available_without_a_cache() -> Result<()> {

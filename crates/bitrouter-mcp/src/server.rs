@@ -748,6 +748,21 @@ fn build_http_router(
     router
 }
 
+/// Mount a caller-assembled local control profile at `/mcp-control`.
+/// Authentication and origin policy belong to the enclosing daemon router;
+/// this helper only owns MCP streamable-HTTP lifecycle and dispatch.
+pub fn local_http_router(server: BitrouterMcp) -> axum::Router {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    axum::Router::new().nest_service("/mcp-control", service)
+}
+
 /// The whole HTTP tool surface, in one function so a test can assert it.
 ///
 /// `list_models` and `status`, where the backend itself can answer them (its

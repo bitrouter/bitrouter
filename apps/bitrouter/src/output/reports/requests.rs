@@ -39,10 +39,10 @@
 //! but the poll once had a launch-scoped branch it fell back out of without
 //! recording which one ran, so the figure could not be labelled at all. That
 //! branch had no reachable caller and is gone with it, which is what lets this
-//! surface keep the rule `chat`'s cost line keeps: a currency figure states
+//! surface keep the rule `tui <agent>`'s cost line keeps: a currency figure states
 //! whose spend it is.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::metering::fmt_usd;
 use crate::metering::pricing::ChargeStatus;
@@ -61,7 +61,7 @@ const HEADERS: [&str; 8] = [
 /// Derived from the data rather than stored, so it can never disagree with the
 /// rows beside it: an empty list because nothing ran and an empty list because
 /// the daemon is gone are different facts and must read differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// A daemon is answering, and history is readable.
@@ -73,7 +73,7 @@ pub enum Mode {
 }
 
 /// The running daemon, as its control socket describes it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonView {
     /// Process id.
     pub pid: u32,
@@ -88,7 +88,7 @@ pub struct DaemonView {
 /// Not [`RequestRow`] itself: that type is the metering store's display read,
 /// and serializing it here would make its field names a public JSON contract
 /// that could not then be changed without a break.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestView {
     /// Request id — also the join key into the trajectory store.
     pub request_id: String,
@@ -111,7 +111,7 @@ pub struct RequestView {
     pub charge_micro_usd: i64,
     /// How `charge_micro_usd` was arrived at — `computed`, `not_charged`,
     /// `unknown`, or `legacy_unknown`. Only the first two are evidence.
-    pub charge_status: &'static str,
+    pub charge_status: String,
     /// End-to-end latency in milliseconds.
     pub latency_ms: i64,
     /// Error string when the request failed, else `None`.
@@ -137,7 +137,7 @@ impl From<RequestRow> for RequestView {
             cache_read_tokens: row.cache_read_tokens,
             cache_write_tokens: row.cache_write_tokens,
             charge_micro_usd: row.estimated_charge_micro_usd,
-            charge_status: row.charge_status.as_str(),
+            charge_status: row.charge_status.as_str().to_string(),
             latency_ms: row.latency_ms,
             error: row.error,
             episode_id: row.episode_id,
@@ -146,18 +146,23 @@ impl From<RequestRow> for RequestView {
 }
 
 impl RequestView {
-    /// The row as the human table's cells, in [`HEADERS`] order.
-    fn cells(&self) -> [String; 8] {
+    /// The row as the human table's cells, in `HEADERS` order.
+    pub fn display_cells(&self) -> [String; 8] {
         [
             clock(&self.created_at),
             self.model.clone(),
             self.provider.clone(),
             tokens(self.prompt_tokens),
             tokens(self.completion_tokens),
-            charge(self.charge_micro_usd, self.charge_status),
+            charge(self.charge_micro_usd, &self.charge_status),
             latency(self.latency_ms),
             status(self.error.as_deref()),
         ]
+    }
+
+    #[cfg(test)]
+    fn cells(&self) -> [String; 8] {
+        self.display_cells()
     }
 }
 
@@ -166,7 +171,7 @@ impl RequestView {
 /// Deliberately not `Default`: `scope` would come back `""`, a report
 /// claiming no scope at all, which is the one thing this surface must never
 /// emit. [`RequestsReport::new`] is the only way to build one.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestsReport {
     /// Which of the three states this report represents.
     pub mode: Mode,
@@ -175,8 +180,8 @@ pub struct RequestsReport {
     /// The window the rollup and rows cover, as a label.
     pub window: String,
     /// Whose spend the rollup describes. Always every caller — stated rather
-    /// than left to be guessed, which is the rule `chat`'s cost line keeps.
-    pub scope: &'static str,
+    /// than left to be guessed, which is the rule `tui <agent>`'s cost line keeps.
+    pub scope: String,
     /// Total estimated spend over the window, in micro-USD, counting only
     /// requests that carry charge evidence.
     ///
@@ -222,7 +227,7 @@ impl RequestsReport {
             mode,
             daemon,
             window: window_label(window).to_string(),
-            scope: SCOPE,
+            scope: SCOPE.to_string(),
             // Nothing priced is not the same as nothing spent.
             spend_micro_usd: (summary.unpriced < summary.requests || summary.requests == 0)
                 .then_some(summary.spend_micro_usd),
@@ -311,7 +316,7 @@ impl CliReport for RequestsReport {
         h.blank()?;
         let mut table = Table::new(HEADERS);
         for row in &self.rows {
-            table.push(row.cells());
+            table.push(row.display_cells());
         }
         h.table(&table)
     }

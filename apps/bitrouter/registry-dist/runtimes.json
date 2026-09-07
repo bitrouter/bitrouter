@@ -1,0 +1,93 @@
+{
+  "data": [
+    {
+      "agents": [
+        {
+          "id": "claude-acp",
+          "transport": {
+            "args": [
+              "-y",
+              "@agentclientprotocol/claude-agent-acp@0.75.1"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "codex-acp",
+          "transport": {
+            "args": [
+              "-y",
+              "@agentclientprotocol/codex-acp@1.10.0"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "gemini-cli",
+          "transport": {
+            "args": [
+              "-y",
+              "--",
+              "@google/gemini-cli@latest",
+              "--experimental-acp"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "opencode",
+          "requires_binary": "opencode",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "opencode",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "pi-acp",
+          "requires_binary": "pi",
+          "transport": {
+            "args": [
+              "-y",
+              "pi-acp@latest"
+            ],
+            "command": "npx",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "hermes-acp",
+          "requires_binary": "hermes",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "hermes",
+            "type": "stdio"
+          }
+        },
+        {
+          "id": "openclaw",
+          "requires_binary": "openclaw",
+          "transport": {
+            "args": [
+              "acp"
+            ],
+            "command": "openclaw",
+            "type": "stdio"
+          }
+        }
+      ],
+      "display_name": "Local process",
+      "id": "local",
+      "kind": "local",
+      "name": "local",
+      "status": "active"
+    }
+  ]
+}

@@ -428,6 +428,23 @@ passed 3,271 tests with 13 skipped; the opt-in PostgreSQL concurrency test was
 also run successfully against an isolated instance. Clippy with denied warnings,
 doctests, rustdoc, distribution, formatting and diff checks passed.
 
+The branch has integrated main through `b657cb62` and its shared `SessionHost`
+used by `code` and `run`. The host retains the selected configuration home for
+evidence storage; opening, loading or resuming a session installs collection
+without issuing an extra native session creation. The independent `acp serve`
+path retains the same evidence observer and teardown boundary. Failed TUI agent
+replacement now retires the previous handle before awaiting shutdown, including
+when opening the terminal view fails.
+
+Independent review passed. A real subprocess fixture exercises both maintained
+harness identities across New/Load/Resume, reopens the selected database, and
+compares recorded and forwarded lifecycle method sequences. Another regression
+covers failed replacement, later recovery and repeated shutdown. These are
+deterministic launch/transport tests, not native-runtime conformance or complete
+payload equivalence. The final workspace run passed 3,320 tests with 13 skipped;
+Clippy with denied warnings, doctests, rustdoc, distribution, formatting and diff
+checks passed.
+
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace

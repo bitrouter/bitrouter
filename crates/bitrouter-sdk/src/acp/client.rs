@@ -74,11 +74,12 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification,
-    ClientCapabilities, ContentBlock, Implementation, InitializeRequest, InitializeResponse,
-    McpServer, NewSessionRequest, PermissionOption, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
-    SessionNotification, SessionUpdate, TextContent, ToolCallUpdate,
+    AgentCapabilities, AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest,
+    CancelNotification, ClientCapabilities, ContentBlock, Implementation, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, McpServer, NewSessionRequest, PermissionOption,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, ResumeSessionRequest, SessionId, SessionNotification, SessionUpdate,
+    TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcRequest, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -539,6 +540,20 @@ enum Command {
         mcp_servers: Vec<McpServer>,
         reply: oneshot::Sender<anyhow::Result<SessionIds>>,
     },
+    /// Load an existing harness-native session and replay its history.
+    LoadSession {
+        session_id: String,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+        reply: oneshot::Sender<anyhow::Result<SessionIds>>,
+    },
+    /// Resume an existing harness-native session without replaying history.
+    ResumeSession {
+        session_id: String,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+        reply: oneshot::Sender<anyhow::Result<SessionIds>>,
+    },
     /// Drive a prompt turn; reply with the typed [`PromptResponse`].
     Prompt {
         req: Box<PromptRequest>,
@@ -558,7 +573,11 @@ enum Command {
 
 /// A live ACP `Client` connection to one agent — a spawned harness child, or an
 /// in-process controller over a duplex channel.
+#[derive(Clone)]
 pub struct AcpClient {
+    /// Session lifecycle capabilities retained from initialize so every
+    /// presentation gates load/resume from the same negotiated facts.
+    agent_capabilities: AgentCapabilities,
     /// What the handshake advertised under `routeControl`, parsed once.
     ///
     /// The `initialize` response itself is **not** retained: everything this
@@ -596,7 +615,7 @@ pub struct AcpClient {
     /// Source of raw ACP [`SessionUpdate`]s; cloned per `subscribe_raw_updates`.
     raw_updates_tx: broadcast::Sender<SessionUpdate>,
     /// Single permissions receiver, handed out once by `subscribe_permissions`.
-    permissions_rx: Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>,
+    permissions_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>>,
     /// Latest context-window usage from the agent's `UsageUpdate`s.
     usage: SharedContextUsage,
     /// Outstanding permission requests, for the explicit-denial paths.
@@ -648,10 +667,12 @@ impl AcpClient {
             .await
             .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
         let route_control = RouteControlCapability::from_init(&init);
+        let agent_capabilities = init.agent_capabilities.clone();
         let auth_methods = init.auth_methods.clone();
         let protocol_version = init.protocol_version;
         let agent_info = init.agent_info.clone();
         Ok(Self {
+            agent_capabilities,
             route_control,
             auth_methods,
             protocol_version,
@@ -659,7 +680,7 @@ impl AcpClient {
             cmd_tx,
             updates_tx,
             raw_updates_tx,
-            permissions_rx: Mutex::new(Some(perm_rx)),
+            permissions_rx: Arc::new(Mutex::new(Some(perm_rx))),
             usage,
             permissions,
             turn_timeout: options.turn_timeout,
@@ -684,6 +705,67 @@ impl AcpClient {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("the agent dropped the session/new reply"))?
+    }
+
+    /// Load a harness-native session, replaying its history as session
+    /// updates. Refused locally when the initialized agent did not advertise
+    /// `loadSession`.
+    pub async fn load_session(
+        &self,
+        session_id: &str,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+    ) -> anyhow::Result<SessionIds> {
+        if !self.agent_capabilities.load_session {
+            anyhow::bail!("the agent does not advertise session/load");
+        }
+        let (reply, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(Command::LoadSession {
+                session_id: session_id.to_string(),
+                cwd,
+                mcp_servers,
+                reply,
+            })
+            .map_err(|_| anyhow::anyhow!("acp command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the agent dropped the session/load reply"))?
+    }
+
+    /// Resume a harness-native session without replaying its history. Refused
+    /// locally when the initialized agent did not advertise `session/resume`.
+    pub async fn resume_session(
+        &self,
+        session_id: &str,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+    ) -> anyhow::Result<SessionIds> {
+        if self
+            .agent_capabilities
+            .session_capabilities
+            .resume
+            .is_none()
+        {
+            anyhow::bail!("the agent does not advertise session/resume");
+        }
+        let (reply, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(Command::ResumeSession {
+                session_id: session_id.to_string(),
+                cwd,
+                mcp_servers,
+                reply,
+            })
+            .map_err(|_| anyhow::anyhow!("acp command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the agent dropped the session/resume reply"))?
+    }
+
+    /// Session lifecycle capabilities negotiated during initialize.
+    pub fn agent_capabilities(&self) -> &AgentCapabilities {
+        &self.agent_capabilities
     }
 
     /// The protocol version the agent settled on at handshake.
@@ -1189,6 +1271,52 @@ async fn drive(
                             Ok(())
                         })?;
                     }
+                    Command::LoadSession {
+                        session_id,
+                        cwd,
+                        mcp_servers,
+                        reply,
+                    } => {
+                        let session_connection = connection.clone();
+                        connection.spawn(async move {
+                            let req = LoadSessionRequest::new(session_id.clone(), cwd)
+                                .mcp_servers(mcp_servers);
+                            let result = session_connection
+                                .send_request(req)
+                                .block_task()
+                                .await
+                                .map(|_| SessionIds {
+                                    acp_session_id: session_id,
+                                    agent_session_id: None,
+                                })
+                                .map_err(anyhow::Error::from);
+                            let _ = reply.send(result);
+                            Ok(())
+                        })?;
+                    }
+                    Command::ResumeSession {
+                        session_id,
+                        cwd,
+                        mcp_servers,
+                        reply,
+                    } => {
+                        let session_connection = connection.clone();
+                        connection.spawn(async move {
+                            let req = ResumeSessionRequest::new(session_id.clone(), cwd)
+                                .mcp_servers(mcp_servers);
+                            let result = session_connection
+                                .send_request(req)
+                                .block_task()
+                                .await
+                                .map(|_| SessionIds {
+                                    acp_session_id: session_id,
+                                    agent_session_id: None,
+                                })
+                                .map_err(anyhow::Error::from);
+                            let _ = reply.send(result);
+                            Ok(())
+                        })?;
+                    }
                     Command::Authenticate { method_id, reply } => {
                         let auth_connection = connection.clone();
                         connection.spawn(async move {
@@ -1454,6 +1582,25 @@ mod tests {
             .await
             .expect("connect to the stub agent");
         (client, log)
+    }
+
+    #[tokio::test]
+    async fn session_continuation_is_gated_by_initialize_capabilities() {
+        let (client, _) =
+            connect_to_stub(PromptBehaviour::AskPermission, ClientOptions::default()).await;
+        let load = client
+            .load_session("native-1", PathBuf::from("/"), Vec::new())
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(load.is_some_and(|error| error.contains("session/load")));
+        let resume = client
+            .resume_session("native-1", PathBuf::from("/"), Vec::new())
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(resume.is_some_and(|error| error.contains("session/resume")));
+        assert!(client.shutdown().await.is_ok());
     }
 
     /// I4: the first answer wins and every later one — across clones, and from

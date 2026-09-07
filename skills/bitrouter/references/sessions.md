@@ -23,15 +23,15 @@ original ACP session envelopes, native lifecycle observations, and explicitly
 related native transcript files. This evidence index never writes to the
 harness's native session files or implements its lifecycle methods.
 
-`bitrouter acp prompt` runs the **same controller**, in-process: it launches the
+`bitrouter run` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
-duplex channel as that controller's own manager. Session identity is therefore
+duplex channel as that controller's own ACP client. Session identity is therefore
 harness-native there too — there is no `record_id` alias. What `prompt` adds on
 top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bitrouter chat` drives the same in-process controller through the same
+`bitrouter code <agent>` drives the same in-process controller through the same
 client, with two additions: it declares a route namespace over the local
 daemon socket (so its traffic meters by controller instance, and the
 controller decorates `usage_update` with attributed cost), and its `/route`
@@ -42,23 +42,23 @@ or FIFO turn queue on any path.
 ## Controller launch and initialization
 
 ```bash
-# Manager-driven, multiple native sessions on one harness connection
-bitrouter acp serve --agent <id> [--config PATH]
+# ACP-client-driven, multiple native sessions on one harness connection
+bitrouter acp serve <id> [--config PATH]
 
-# Equivalent umbrella command
-bitrouter spawn <id> --serve [routing flags]
+# One-shot client over the same controller
+bitrouter run <id> "prompt" [routing flags]
 ```
 
-Stdout is ACP JSON-RPC and logs go to stderr. The manager sends `initialize`
-first. BitRouter forwards the manager's client capabilities and `_meta` to the
+Stdout is ACP JSON-RPC and logs go to stderr. The ACP client sends `initialize`
+first. BitRouter forwards the client's capabilities and `_meta` to the
 harness, initializes the harness exactly once, configures its BitRouter model
-endpoint when supported, then returns initialize success. Manager-facing
+endpoint when supported, then returns initialize success. Client-facing
 `agentInfo` identifies `bitrouter-acp-controller`; sanitized harness and pinned
 adapter identity are under `_meta["bitrouter.dev/controller"]`.
 
 The controller passes through harness lifecycle capabilities, but removes the
 internal custom-provider capability. Standard `providers/*` configures the
-harness endpoint from controller to harness; it is not a manager-side
+harness endpoint from controller to harness; it is not a client-side
 BitRouter route picker. The connection uses stable ACP v1 wire semantics; the
 Rust runtime crate's major version is not an ACP wire-version selector.
 
@@ -78,7 +78,7 @@ returns method-not-found. `list` and `set` are daemon-confirmed; `route` accepts
 BitRouter presets, logical models, or explicit provider/model routes allowed
 by current policy. `list.available` contains live logical-model picker
 suggestions, not an exhaustive grammar for presets or explicit routes. Do not
-use manager-side `providers/*` as a compatibility alias.
+use client-side `providers/*` as a compatibility alias.
 
 The same trusted binding advertises `_meta["bitrouter.dev/controller"].usage`
 with `version: "1"`, `scope: "session"`, `fields: ["cost"]`, and
@@ -174,8 +174,8 @@ durable is entirely the harness's native behavior.
 
 ## Routing and observability boundary
 
-Native evidence collection runs on `chat`, `acp prompt`, and `acp serve`,
-including their `spawn` aliases. It uses the configured BitRouter database and
+Native evidence collection runs on `code <agent>`, `run`, and `acp serve`,
+including the compatibility `chat`, `acp prompt` and `spawn` forms. It uses the configured BitRouter database and
 private invocation spools under `<bitrouter-home>/native-evidence/controllers`.
 Codex transcript discovery follows `CODEX_HOME` (default `~/.codex`); Claude
 follows `CLAUDE_CONFIG_DIR` (default `~/.claude`). Agent environment overrides
@@ -366,23 +366,24 @@ remove it. None of these operations changes harness session storage. The normali
 identity event joins controlled capture/replay, spans, route decisions, and
 nullable metering columns by `router_request_id`; authorization, cookies, and
 credentials are excluded, and raw identifiers are never aggregate metric
-labels. The controller decorates, and never synthesizes, manager-facing
+labels. The controller decorates, and never synthesizes, client-facing
 per-session cost; see the `usage` capability above.
 
 ## One-shot NDJSON
 
-`acp prompt`/`spawn -p` emits a first `session` line carrying the
+`run` emits a first
+`session` line carrying the
 **harness-native** `session_id` (plus `agent_session_id` when the harness
 exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
 joins to spend: the daemon attributes ACP traffic by an authenticated
-controller namespace, which only `acp serve` and `chat` declare, so a prompt session's
-rows carry no controller instance to key on.
+controller namespace, which only `acp serve` and `code <agent>` declare, so a
+prompt session's rows carry no controller instance to key on.
 It no longer carries `record_id`; that alias is off the wire. Then come
 `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, and `usage`
 lines, a `permission` line for each request the headless policy answered
 (`--deny-all` by default; `--approve-reads`, `--approve-all`, or a per-tool
 `--permission-policy`; exit 5 when something was denied and nothing approved),
 and a `result` line. `--no-wait` emits `submitted`. This NDJSON presentation is
-`--format json`, the default; `--format text` and `quiet` print the transcript
+`--format ndjson`, the default (`json` remains an alias); `--format text` and `quiet` print the transcript
 or the assistant text instead. It belongs to `prompt` only; it is not the
 `acp serve` wire format.

@@ -1,32 +1,59 @@
-# Harness: Codex ACP
+# Harness: Codex
 
-BitRouter supplies the terminal UI. `codex-acp` is a built-in ACP agent and
-requires no YAML agent entry. Node.js 22+ and `npx` are required.
+Codex has two deliberate BitRouter facets:
+
+- `bitrouter code codex` drives the built-in `codex-acp` adapter inside
+  BitRouter's full-screen ACP lifecycle UI.
+- `bitrouter codex` launches Codex's own native interface with reversible
+  one-shot configuration overrides.
+
+For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
+required. A ChatGPT Codex subscription can be imported with:
 
 ```bash
-bitrouter providers login openai-codex
+bitrouter providers login openai-codex --import-existing
 bitrouter init --yes --harness codex --after exit
-bitrouter
 ```
 
-An existing vendor CLI login can be imported with
-`bitrouter providers login openai-codex --import-existing`.
-
-For an explicit session or a headless prompt:
+## ACP session
 
 ```bash
-bitrouter chat codex-acp
-bitrouter spawn codex-acp -p "summarize this repo"
+bitrouter code codex
+bitrouter run codex "summarize this repo"
+bitrouter acp serve codex
 ```
 
-The adapter uses a local Codex CLI when its version is at least 0.153.3.
-Older, missing or unresponsive local CLIs use the adapter's bundled worker.
-`CODEX_PATH` can explicitly select a worker; it does not bypass ACP.
-`--direct` keeps the adapter's own provider authentication; ordinary sessions
-route through BitRouter and auto-start the local daemon.
+The pinned `@agentclientprotocol/codex-acp@1.10.0` adapter uses a local Codex
+CLI when its version is at least 0.153.3. Older, missing, failing, or
+unresponsive CLIs use the adapter's bundled worker. `CODEX_PATH` can select a
+worker explicitly; it does not bypass ACP. `--direct` keeps the adapter's own
+provider authentication; ordinary sessions route through BitRouter and can
+auto-start the local daemon.
 
-`init --model ID` saves the default model. `chat --model ID` overrides it for
-that explicit session. No vendor CLI config file is rewritten.
+With an active `openai-codex` provider, no model pin is needed: the ACP adapter
+keeps the Codex CLI's native default and model picker. BitRouter maps its
+declared native model names to the Codex subscription at gateway ingress.
+Generic API calls still require an explicit subscription route; canonical ids,
+provider-qualified routes, presets, and user-defined virtual models retain
+their normal routing behavior. A daemon reload updates this mapping too.
 
-Use `bitrouter status --requests` to inspect settled routed requests. Session
-diagnostics live in the BitRouter home under `logs/session-*.log`.
+`init --model ID` saves the default model. `code codex --model ID` overrides it
+for one session. No vendor CLI config file is rewritten.
+
+## Native interface
+
+```bash
+bitrouter codex
+bitrouter codex -- --model openai/gpt-5-codex
+```
+
+The native launcher supplies a `bitrouter` model provider for
+`http://localhost:4356/v1` with `wire_api="responses"` through one-shot `-c`
+arguments; it does not edit `~/.codex/config.toml`. `BITROUTER_API_KEY` is used
+when set, otherwise the launcher supplies the placeholder accepted by the
+`skip_auth: true` local default. Everything after `--` is forwarded verbatim,
+and a missing local daemon is auto-started unless `--no-start` is set.
+
+Existing Codex processes must be restarted before changed provider routing
+takes effect. Inspect routed traffic with `bitrouter requests`; ACP session
+diagnostics live under the BitRouter home in `logs/session-*.log`.

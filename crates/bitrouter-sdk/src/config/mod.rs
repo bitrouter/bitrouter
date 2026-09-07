@@ -81,6 +81,8 @@ pub struct PromptCommandConfig {
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
+    /// Opt-in, read-only operator control API settings.
+    pub control: ControlConfig,
     /// The interactive session's own configuration.
     pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
@@ -141,6 +143,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            control: ControlConfig::default(),
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
@@ -160,6 +163,30 @@ impl Default for Config {
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
+        }
+    }
+}
+
+/// Read-only operator control API settings.
+///
+/// The control API is deliberately separate from the inference listener and
+/// the local control socket. It is disabled by default, may bind only to a
+/// loopback address, and always authenticates with the token held in
+/// `BITROUTER_CONTROL_TOKEN`; [`ServerConfig::skip_auth`] never applies to it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ControlConfig {
+    /// Whether to start the HTTP control listener.
+    pub enabled: bool,
+    /// Loopback `host:port` to listen on.
+    pub listen: String,
+}
+
+impl Default for ControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:4358".to_string(),
         }
     }
 }

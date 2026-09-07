@@ -71,7 +71,9 @@ pub struct RoutingPrefs {
 /// daemon control socket both carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelInfo {
-    /// The model id.
+    /// A routable model selector. Subscription-backed providers use an
+    /// explicit `provider:canonical-model` selector here because a bare
+    /// canonical request must not opt into a personal subscription.
     pub id: String,
     /// Providers that declare this model.
     pub providers: Vec<String>,
@@ -172,7 +174,7 @@ pub trait RoutingTable: Send + Sync {
         Some(model.to_owned())
     }
 
-    /// List every routable model (for `GET /v1/models`).
+    /// List every routable model selector (for `GET /v1/models`).
     fn list_models(&self) -> Vec<ModelInfo>;
 
     /// Look up one model's info.

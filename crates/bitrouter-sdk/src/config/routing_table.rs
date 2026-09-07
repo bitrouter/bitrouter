@@ -436,14 +436,7 @@ fn resolve_clean_route_chain(
         // route (including the ingress transform for genuine Claude Code traffic).
         // A bare Claude request therefore reaches the pay-as-you-go provider (or
         // 404), never the subscription.
-        if matches!(
-            provider.class,
-            Some(
-                crate::config::ProviderClass::FirstPartySubscription
-                    | crate::config::ProviderClass::GatewaySubscription
-            )
-        ) && !prefs.only.contains(provider_id)
-        {
+        if provider_requires_pin(provider) && !prefs.only.contains(provider_id) {
             continue;
         }
         if provider.models.iter().any(|m| m.id == clean) {
@@ -498,6 +491,22 @@ fn resolve_clean_route_chain(
     Ok(chain.into_iter().flat_map(|(_, _, t)| t).collect())
 }
 
+/// Whether a provider may only be selected explicitly.
+///
+/// Subscription-backed providers use the caller's personal plan, so a bare
+/// canonical selector must never choose one implicitly. Keeping this predicate
+/// shared by route resolution and model listing prevents the catalog from
+/// advertising a bare selector that routing will reject.
+fn provider_requires_pin(provider: &crate::config::ProviderConfig) -> bool {
+    matches!(
+        provider.class,
+        Some(
+            crate::config::ProviderClass::FirstPartySubscription
+                | crate::config::ProviderClass::GatewaySubscription
+        )
+    )
+}
+
 /// The auto-cascade priority rank of a provider (lower = preferred). An
 /// explicit [`ProviderConfig::priority`] wins; otherwise the provider's
 /// [`class`](crate::config::ProviderConfig::class) is ranked by its position in
@@ -533,7 +542,10 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             })
             .collect();
     }
-    // Otherwise: the de-duplicated union of every active provider's models.
+    // Otherwise: the de-duplicated union of every active provider's routable
+    // selectors. Subscription providers are explicit-route-only, so expose a
+    // `provider:canonical-model` selector for them instead of placing them
+    // behind a bare canonical selector that Strategy 3 intentionally skips.
     let mut by_model: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for (provider_id, provider) in &config.providers {
@@ -541,8 +553,13 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             continue;
         }
         for model in &provider.models {
+            let selector = if provider_requires_pin(provider) {
+                format!("{provider_id}:{}", model.id)
+            } else {
+                model.id.clone()
+            };
             by_model
-                .entry(model.id.clone())
+                .entry(selector)
                 .or_default()
                 .push(provider_id.clone());
         }
@@ -888,6 +905,78 @@ providers:
                 .collect::<Vec<_>>(),
             vec!["claude-code"]
         );
+    }
+
+    #[tokio::test]
+    async fn model_catalog_exposes_only_selectors_that_route() -> crate::Result<()> {
+        let t = table(SUBSCRIPTION_CASCADE);
+        let models = t.list_models();
+
+        assert_eq!(
+            models,
+            vec![
+                ModelInfo {
+                    id: "claude-code:shared-model".to_string(),
+                    providers: vec!["claude-code".to_string()],
+                },
+                ModelInfo {
+                    id: "shared-model".to_string(),
+                    providers: vec!["anthropic".to_string()],
+                },
+            ],
+            "the bare selector must not claim an explicit-only provider"
+        );
+
+        for model in models {
+            let chain = t
+                .route_chain(&model.id, &RoutingPrefs::default(), &CallerContext::local())
+                .await?;
+            assert_eq!(
+                chain
+                    .iter()
+                    .map(|target| target.provider_name.as_str())
+                    .collect::<Vec<_>>(),
+                model
+                    .providers
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                "listed selector {} must preview to its advertised chain",
+                model.id
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscription_selector_keeps_canonical_id_and_maps_native_id() -> crate::Result<()> {
+        let t = table(
+            r#"
+providers:
+  openai-codex:
+    api_base: https://chatgpt.com/backend-api/codex
+    api_key: subscription
+    class: first-party-subscription
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+"#,
+        );
+        let models = t.list_models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "openai-codex:openai/gpt-5.6-sol");
+
+        let chain = t
+            .route_chain(
+                &models[0].id,
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await?;
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "openai-codex");
+        assert_eq!(chain[0].service_id, "gpt-5.6-sol");
+        Ok(())
     }
 
     #[tokio::test]

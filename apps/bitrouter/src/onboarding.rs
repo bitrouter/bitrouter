@@ -1,4 +1,4 @@
-//! First-run configuration and the default ACP TUI entry point.
+//! First-run configuration and the default Code ACP entry point.
 //!
 //! Credentials alone do not complete onboarding: the selected ACP harness and
 //! optional model are saved in `chat`, then reused by every bare invocation.
@@ -188,7 +188,7 @@ pub struct Snippet {
     pub anthropic: String,
     /// `OPENAI_BASE_URL` + `OPENAI_API_KEY` export lines.
     pub openai: String,
-    /// The Codex ACP TUI command.
+    /// The Codex command for Code's ACP conversation view.
     pub codex: String,
 }
 
@@ -310,7 +310,7 @@ impl CliReport for OnboardingStatusReport {
 // Entry points
 // =====================================================================
 
-/// Bare invocation opens the saved default ACP TUI, or the first-run wizard.
+/// Bare invocation opens the saved default in Code, or the first-run wizard.
 pub async fn entry(output: &Output) -> Result<()> {
     let path = config_path(None)?;
     if path.is_file() {
@@ -370,13 +370,33 @@ async fn start_default_chat(
         model: config.chat.model.clone(),
         ..Default::default()
     };
-    crate::acp_cli::chat(crate::acp_cli::SpawnContext {
-        source,
-        config,
-        agent_id: &agent,
-        options: crate::acp_cli::launch_options(None),
-        routing,
-    })
+    // Preserve the pre-Code plain renderer for scripts and redirected output.
+    // Interactive users always enter the one full-screen Code lifecycle UI.
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return crate::acp_cli::chat(crate::acp_cli::SpawnContext {
+            source,
+            config,
+            agent_id: &agent,
+            options: crate::acp_cli::launch_options(None),
+            routing,
+        })
+        .await;
+    }
+    let config_path = match source {
+        crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+        crate::paths::ConfigSource::Default { .. } => None,
+    };
+    crate::dashboard::run(
+        None,
+        config_path,
+        None,
+        Some(crate::dashboard::SessionRequest {
+            agent,
+            selection: crate::acp_cli::SessionSelection::New,
+            turn_timeout: None,
+            routing,
+        }),
+    )
     .await
 }
 
@@ -655,6 +675,14 @@ async fn run_interactive(
     eprintln!("Welcome to BitRouter — let's get you to first value.");
     eprintln!();
 
+    if signals.is_configured() {
+        note(&format!(
+            "Detected: {}",
+            OnboardingStatusReport::from_signals(signals)
+                .signals
+                .join("; ")
+        ));
+    }
     // --- Step 1: credentials ---
     let mut configured = signals.already_configured();
     let mut skipped: Vec<String> = Vec::new();
@@ -675,14 +703,14 @@ async fn run_interactive(
         eprintln!("Step 1/3 — Credentials");
         note("using the detected credential(s)");
     } else if !seeded_from_flags {
-        interactive_credentials(signals, &mut configured, &mut skipped, manager).await?;
+        interactive_credentials(&flags, &mut configured, &mut skipped, manager).await?;
     }
 
     // --- Step 2: harness ---
     let installed = interactive_harness(&flags).await?;
 
     // --- Step 3: finish ---
-    let after = interactive_after(&flags, &installed)?;
+    let after = interactive_after(&flags, &installed).await?;
 
     let agent = installed
         .first()
@@ -703,71 +731,141 @@ async fn run_interactive(
     }
 }
 
+/// Providers offered by the OSS registry, with no special placement for Cloud.
+fn provider_choices(
+    data: &bitrouter_providers::registry::types::RegistryData,
+) -> Vec<&bitrouter_providers::registry::types::RegistryProvider> {
+    let mut providers: Vec<_> = data
+        .providers
+        .iter()
+        .filter(|provider| provider.is_active() && provider.is_mergeable())
+        .collect();
+    providers.sort_by_key(|provider| {
+        (
+            provider
+                .display_name
+                .as_deref()
+                .unwrap_or(&provider.name)
+                .to_lowercase(),
+            provider.name.clone(),
+        )
+    });
+    providers
+}
+
 async fn interactive_credentials(
-    signals: &ProbeSignals,
+    flags: &OnboardingFlags,
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
     manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    eprintln!("Step 1/3 — Credentials");
-    if signals.is_configured() {
-        eprintln!(
-            "  Detected: {}",
-            OnboardingStatusReport::from_signals(signals)
-                .signals
-                .join("; ")
-        );
+    use bitrouter_tui::select::Item;
+
+    let path = config_path(flags.config.as_deref())?;
+    let registry = if path.is_file() && !flags.force {
+        serde_saphyr::from_str::<bitrouter_sdk::config::Config>(&std::fs::read_to_string(path)?)?
+            .registry
+    } else {
+        bitrouter_sdk::config::RegistryConfig::default()
+    };
+    note("loading providers from the registry…");
+    let data = crate::bundled_registry::load(&registry).await;
+    let providers = data.as_ref().map(provider_choices).unwrap_or_default();
+    for provider in &providers {
+        if provider
+            .env_credential_var()
+            .is_some_and(|var| crate::spawn::nonempty_env(&var).is_some())
+        {
+            configured.insert(provider.name.clone());
+        }
     }
+    let mut help = if providers.is_empty() {
+        "Registry unavailable or disabled. Continue to set up an ACP harness.".to_string()
+    } else {
+        "Choose a provider to sign in. End jumps to Continue.".to_string()
+    };
+    let mut selected = if configured.is_empty() {
+        0
+    } else {
+        providers.len()
+    };
     loop {
-        eprintln!();
-        eprintln!("  How would you like to authenticate?");
-        eprintln!("    1) Sign in to BitRouter Cloud — one account, every model [default]");
-        eprintln!("    2) Log in to a specific provider (claude-code / openai-codex / …)");
-        if signals.is_configured() {
-            eprintln!("    3) Use the detected credential(s) and continue");
-        }
-        eprintln!("    0) Skip for now");
-        match prompt_line("  Choose [1]: ")?.as_str() {
-            "" | "1" => match seed_cloud_interactive(Arc::clone(&manager)).await {
-                Ok(()) => {
-                    configured.insert(PROVIDER_ID.to_string());
-                }
-                Err(e) => note(&format!("cloud sign-in did not complete: {e:#}")),
-            },
-            "2" => {
-                let id = prompt_line("  Provider id: ")?;
-                if id.is_empty() {
-                    note("no provider id entered — skipping");
+        let mut items: Vec<_> = providers
+            .iter()
+            .map(|provider| {
+                let status = if configured.contains(&provider.name) {
+                    " · configured"
                 } else {
-                    match login_provider_with_options(
-                        &id,
-                        bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
-                        ProviderLoginOptions::default(),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            configured.insert(id);
-                        }
-                        Err(e) => {
-                            note(&format!("provider '{id}' login did not complete: {e:#}"));
-                            skipped.push(id);
-                        }
-                    }
+                    ""
+                };
+                Item::new(
+                    provider.display_name.as_deref().unwrap_or(&provider.name),
+                    format!("{}{status}", provider.name),
+                )
+            })
+            .collect();
+        items.push(Item::new(
+            "Continue to harness setup",
+            if configured.is_empty() {
+                "skip provider login for now".to_string()
+            } else {
+                format!("use {} configured provider(s)", configured.len())
+            },
+        ));
+        selected = crate::prompt::select("Step 1/3 — Providers", &help, items, selected).await?;
+        let Some(provider) = providers.get(selected) else {
+            return Ok(());
+        };
+        let id = &provider.name;
+        let result = if id == PROVIDER_ID {
+            let method = crate::prompt::select(
+                &format!(
+                    "Log in to {}",
+                    provider.display_name.as_deref().unwrap_or(id)
+                ),
+                "Choose an authentication method",
+                vec![
+                    Item::new("Browser sign-in", "device-code OAuth"),
+                    Item::new("API key", "paste a static credential"),
+                ],
+                0,
+            )
+            .await?;
+            if method == 0 {
+                seed_cloud_interactive(Arc::clone(&manager)).await
+            } else {
+                let key = crate::commands::read_api_key(id)?;
+                seed_cloud_api_key(&key, Arc::clone(&manager)).await
+            }
+        } else {
+            crate::commands::login_registry_provider(provider)
+                .await
+                .map(|_| ())
+        };
+        match result {
+            Ok(()) => {
+                configured.insert(id.clone());
+                skipped.retain(|skipped_id| skipped_id != id);
+                help = format!("{id} configured. Add another provider, or Continue.");
+                selected = providers.len();
+            }
+            Err(error) => {
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::Interrupted)
+                {
+                    return Err(error);
+                }
+                note(&format!(
+                    "provider '{id}' login did not complete: {error:#}"
+                ));
+                help = format!("{id}: {error}. Select to retry, or choose another provider.");
+                if !skipped.contains(id) {
+                    skipped.push(id.clone());
                 }
             }
-            "3" if signals.is_configured() => break,
-            "0" => break,
-            other => {
-                note(&format!("'{other}' is not a choice"));
-                continue;
-            }
-        }
-        if !prompt_yes_no("  Add another provider?", false) {
-            break;
         }
     }
-    Ok(())
 }
 
 /// The cloud device-flow sign-in. Calls the Cloud login flow directly (not
@@ -801,49 +899,66 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
             .map(String::from)
             .collect());
     }
-    loop {
-        match prompt_line("  ACP harness [codex/claude] (codex): ")?
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "" | "codex" | "codex-acp" => return Ok(vec!["codex-acp".into()]),
-            "claude" | "claude-acp" => return Ok(vec!["claude-acp".into()]),
-            _ => note("choose codex or claude"),
-        }
-    }
+    let harnesses = crate::harness::CATALOG;
+    let selected = crate::prompt::select(
+        "Step 2/3 — Default ACP harness",
+        "BitRouter provides the TUI. Choose the agent it runs.",
+        harnesses
+            .iter()
+            .map(|harness| bitrouter_tui::select::Item::new(harness.id, harness.description))
+            .collect(),
+        harnesses
+            .iter()
+            .position(|harness| harness.id == "codex-acp")
+            .unwrap_or(0),
+    )
+    .await?;
+    Ok(vec![
+        harnesses
+            .get(selected)
+            .context("no ACP harness selected")?
+            .id
+            .to_string(),
+    ])
 }
 
-fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
+async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
+    use bitrouter_tui::select::Item;
     if let Some(after) = flags.after {
         return Ok(after);
     }
-    eprintln!();
-    eprintln!("Step 3/3 — Finish");
-    let can_launch = !installed.is_empty();
-    if can_launch {
-        eprintln!("    1) Open BitRouter ACP TUI now [default]");
+    let mut actions = Vec::new();
+    let mut items = Vec::new();
+    if !installed.is_empty() {
+        actions.push(AfterAction::Launch);
+        items.push(Item::new(
+            "Open BitRouter Code now",
+            "use the selected default ACP harness",
+        ));
     }
-    eprintln!("    2) Start the daemon and print a paste-in snippet");
-    eprintln!("    3) Exit");
-    let default_choice = if can_launch { "1" } else { "2" };
-    let choice = prompt_line(&format!("  Choose [{default_choice}]: "))?;
-    let choice = if choice.is_empty() {
-        default_choice.to_string()
-    } else {
-        choice
-    };
-    Ok(match choice.as_str() {
-        "1" if can_launch => AfterAction::Launch,
-        "2" => AfterAction::Serve,
-        _ => AfterAction::Exit,
-    })
+    actions.extend([AfterAction::Serve, AfterAction::Exit]);
+    items.extend([
+        Item::new("Start the daemon", "print connection instructions"),
+        Item::new("Save and exit", "run bitrouter whenever you're ready"),
+    ]);
+    let selected = crate::prompt::select(
+        "Step 3/3 — Finish",
+        "Save your setup and choose what happens next",
+        items,
+        0,
+    )
+    .await?;
+    actions
+        .get(selected)
+        .copied()
+        .context("no finish action selected")
 }
 
 // =====================================================================
 // Finish exits (a) launch / (b) serve+snippet
 // =====================================================================
 
-/// Open the same ACP TUI as every subsequent bare invocation.
+/// Open the same unified Code TUI as every subsequent bare invocation.
 async fn finish_launch(
     path: &std::path::Path,
     report: OnboardingReport,
@@ -871,7 +986,7 @@ async fn finish_serve(
 
 /// Build the three labeled paste-in shapes (§13 Q2). Templates the bearer by
 /// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
-/// the local `skip_auth` placeholder. The Codex example opens the ACP TUI.
+/// the local `skip_auth` placeholder. The Codex example opens Code.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::spawn::derive_base_url(listen);
     let token = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV)
@@ -887,7 +1002,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("bitrouter chat codex-acp --base-url {base_url}");
+    let codex = format!("bitrouter code codex --base-url {base_url}");
     Snippet {
         base_url,
         anthropic,
@@ -926,6 +1041,7 @@ async fn reset_credentials(assume_yes: bool, interactive: bool) -> Result<()> {
             ),
             false,
         )
+        .await?
     } else {
         false
     };
@@ -995,33 +1111,19 @@ fn emit(output: &Output, report: &dyn CliReport) -> Result<()> {
     Output::emit(output, report).map_err(anyhow::Error::from)
 }
 
-/// Prompt on stderr. EOF cancels the wizard before its configuration is saved.
-fn prompt_line(prompt: &str) -> Result<String> {
-    use std::io::{BufRead, Write};
-    eprint!("{prompt}");
-    std::io::stderr().flush().ok();
-    let mut line = String::new();
-    let n = std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .context("reading input from stdin")?;
-    if n == 0 {
-        anyhow::bail!("onboarding cancelled: input closed before completion");
-    }
-    Ok(line.trim().to_string())
-}
-
-/// A `[y/N]` (or `[Y/n]`) confirm. Blank accepts the default; EOF declines.
-fn prompt_yes_no(prompt: &str, default_yes: bool) -> bool {
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-    match prompt_line(&format!("{prompt} {suffix}: ")) {
-        Ok(answer) => match answer.to_ascii_lowercase().as_str() {
-            "" => default_yes,
-            "y" | "yes" => true,
-            _ => false,
-        },
-        Err(_) => false,
-    }
+/// Confirmation uses the same selector; cancellation propagates before reset.
+async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
+    let index = crate::prompt::select(
+        prompt,
+        "Choose whether to continue",
+        vec![
+            bitrouter_tui::select::Item::new("Yes", ""),
+            bitrouter_tui::select::Item::new("No", ""),
+        ],
+        usize::from(!default_yes),
+    )
+    .await?;
+    Ok(index == 0)
 }
 
 /// The multi-line onboarding hint (unconfigured, non-TTY). Mirrors the recovery
@@ -1045,6 +1147,27 @@ fn print_hint() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
+        let data: bitrouter_providers::registry::types::RegistryData =
+            serde_json::from_value(serde_json::json!({
+                "providers": [
+                    {"name": "zulu", "display_name": "Zulu", "status": "active"},
+                    {"name": "bitrouter", "display_name": "BitRouter Cloud", "status": "active"},
+                    {"name": "alpha", "display_name": "Alpha", "status": "active"},
+                    {"name": "private", "status": "active", "access": "private"},
+                    {"name": "preview", "status": "staging"},
+                    {"name": "retired", "status": "withdrawn"}
+                ], "canonical": []
+            }))?;
+        let ids: Vec<_> = provider_choices(&data)
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect();
+        assert_eq!(ids, ["alpha", "bitrouter", "zulu"]);
+        Ok(())
+    }
 
     #[test]
     fn detected_env_keys_reports_present_vars_only() {
@@ -1209,7 +1332,7 @@ mod tests {
         );
         assert_eq!(
             snippet.codex,
-            "bitrouter chat codex-acp --base-url http://127.0.0.1:4356"
+            "bitrouter code codex --base-url http://127.0.0.1:4356"
         );
     }
 

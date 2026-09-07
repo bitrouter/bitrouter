@@ -130,6 +130,395 @@ fn text_of(content: &[Content]) -> String {
         .collect()
 }
 
+/// Semantically equivalent provider-reported usage expressed in each
+/// protocol's official response shape. OpenAI's two APIs can represent every
+/// canonical bucket; Anthropic has no distinct reasoning counter; Gemini has
+/// no cache-write counter.
+///
+/// References pinned by these fixtures:
+/// - <https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create>
+/// - <https://developers.openai.com/api/reference/resources/responses/methods/create>
+/// - <https://platform.claude.com/docs/en/api/messages/create>
+/// - <https://ai.google.dev/api/generate-content#UsageMetadata>
+fn official_usage(protocol: ApiProtocol) -> Usage {
+    Usage {
+        prompt_tokens: 1_000,
+        completion_tokens: 150,
+        reasoning_tokens: if protocol == ApiProtocol::Messages {
+            0
+        } else {
+            50
+        },
+        cache_read_tokens: 600,
+        cache_write_tokens: if protocol == ApiProtocol::GenerateContent {
+            0
+        } else {
+            100
+        },
+        origin: UsageOrigin::ProviderReported,
+        ..Default::default()
+    }
+}
+
+fn official_usage_response(protocol: ApiProtocol) -> serde_json::Value {
+    match protocol {
+        ApiProtocol::ChatCompletions => serde_json::json!({
+            "id": "chatcmpl-usage",
+            "object": "chat.completion",
+            "model": "openai/gpt-test",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 150,
+                "total_tokens": 1_150,
+                "prompt_tokens_details": {
+                    "cached_tokens": 600,
+                    "cache_write_tokens": 100
+                },
+                "completion_tokens_details": {"reasoning_tokens": 50}
+            }
+        }),
+        ApiProtocol::Responses => serde_json::json!({
+            "id": "resp_usage",
+            "object": "response",
+            "status": "completed",
+            "model": "openai/gpt-test",
+            "output": [{
+                "type": "message",
+                "id": "msg_usage",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}]
+            }],
+            "usage": {
+                "input_tokens": 1_000,
+                "output_tokens": 150,
+                "total_tokens": 1_150,
+                "input_tokens_details": {
+                    "cached_tokens": 600,
+                    "cache_write_tokens": 100
+                },
+                "output_tokens_details": {"reasoning_tokens": 50}
+            }
+        }),
+        ApiProtocol::Messages => serde_json::json!({
+            "id": "msg_usage",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic/claude-test",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 300,
+                "output_tokens": 150,
+                "cache_read_input_tokens": 600,
+                "cache_creation_input_tokens": 100
+            }
+        }),
+        ApiProtocol::GenerateContent => serde_json::json!({
+            "modelVersion": "google/gemini-test",
+            "candidates": [{
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1_000,
+                "candidatesTokenCount": 100,
+                "thoughtsTokenCount": 50,
+                "cachedContentTokenCount": 600,
+                "totalTokenCount": 1_150
+            }
+        }),
+        ApiProtocol::Custom(_) => serde_json::Value::Null,
+    }
+}
+
+fn official_usage_stream(protocol: ApiProtocol) -> Vec<SseEvent> {
+    match protocol {
+        ApiProtocol::ChatCompletions => vec![
+            SseEvent {
+                event: None,
+                data: serde_json::json!({
+                    "id": "chatcmpl-usage",
+                    "object": "chat.completion.chunk",
+                    "model": "openai/gpt-test",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                })
+                .to_string(),
+            },
+            SseEvent {
+                event: None,
+                data: serde_json::json!({
+                    "id": "chatcmpl-usage",
+                    "object": "chat.completion.chunk",
+                    "model": "openai/gpt-test",
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 1_000,
+                        "completion_tokens": 150,
+                        "total_tokens": 1_150,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 600,
+                            "cache_write_tokens": 100
+                        },
+                        "completion_tokens_details": {"reasoning_tokens": 50}
+                    }
+                })
+                .to_string(),
+            },
+        ],
+        ApiProtocol::Responses => vec![SseEvent {
+            event: Some("response.completed".to_string()),
+            data: serde_json::json!({
+                "type": "response.completed",
+                "sequence_number": 9,
+                "response": {
+                    "id": "resp_usage",
+                    "object": "response",
+                    "status": "completed",
+                    "model": "openai/gpt-test",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 1_000,
+                        "output_tokens": 150,
+                        "total_tokens": 1_150,
+                        "input_tokens_details": {
+                            "cached_tokens": 600,
+                            "cache_write_tokens": 100
+                        },
+                        "output_tokens_details": {"reasoning_tokens": 50}
+                    }
+                }
+            })
+            .to_string(),
+        }],
+        ApiProtocol::Messages => vec![
+            SseEvent {
+                event: Some("message_start".to_string()),
+                data: serde_json::json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_usage",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "anthropic/claude-test",
+                        "content": [],
+                        "stop_reason": null,
+                        "usage": {
+                            "input_tokens": 300,
+                            "output_tokens": 0,
+                            "cache_read_input_tokens": 600,
+                            "cache_creation_input_tokens": 100
+                        }
+                    }
+                })
+                .to_string(),
+            },
+            SseEvent {
+                event: Some("message_delta".to_string()),
+                data: serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+                    "usage": {"output_tokens": 150}
+                })
+                .to_string(),
+            },
+            SseEvent {
+                event: Some("message_stop".to_string()),
+                data: serde_json::json!({"type": "message_stop"}).to_string(),
+            },
+        ],
+        ApiProtocol::GenerateContent => vec![SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "modelVersion": "google/gemini-test",
+                "candidates": [{
+                    "index": 0,
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 1_000,
+                    "candidatesTokenCount": 100,
+                    "thoughtsTokenCount": 50,
+                    "cachedContentTokenCount": 600,
+                    "totalTokenCount": 1_150
+                }
+            })
+            .to_string(),
+        }],
+        ApiProtocol::Custom(_) => Vec::new(),
+    }
+}
+
+fn assert_usage(actual: &Usage, expected: &Usage, context: &str) {
+    assert_eq!(
+        actual.prompt_tokens, expected.prompt_tokens,
+        "{context}: prompt"
+    );
+    assert_eq!(
+        actual.completion_tokens, expected.completion_tokens,
+        "{context}: completion"
+    );
+    assert_eq!(
+        actual.reasoning_tokens, expected.reasoning_tokens,
+        "{context}: reasoning"
+    );
+    assert_eq!(
+        actual.cache_read_tokens, expected.cache_read_tokens,
+        "{context}: cache read"
+    );
+    assert_eq!(
+        actual.cache_write_tokens, expected.cache_write_tokens,
+        "{context}: cache write"
+    );
+}
+
+fn expected_after_wire(mut usage: Usage, protocol: ApiProtocol) -> Usage {
+    if protocol == ApiProtocol::Messages {
+        usage.reasoning_tokens = 0;
+    }
+    if protocol == ApiProtocol::GenerateContent {
+        usage.cache_write_tokens = 0;
+    }
+    usage
+}
+
+fn assert_optional_counter(value: &serde_json::Value, expected: u64) {
+    if expected == 0 {
+        assert!(
+            value.is_null() || value.as_u64() == Some(0),
+            "zero-valued optional counter must be absent or zero, got {value}"
+        );
+    } else {
+        assert_eq!(value.as_u64(), Some(expected));
+    }
+}
+
+fn assert_official_usage_wire(protocol: ApiProtocol, wire: &serde_json::Value, usage: &Usage) {
+    match protocol {
+        ApiProtocol::ChatCompletions => {
+            assert_eq!(wire["prompt_tokens"], usage.prompt_tokens);
+            assert_eq!(wire["completion_tokens"], usage.completion_tokens);
+            assert_eq!(wire["total_tokens"], usage.total());
+            assert_optional_counter(
+                &wire["prompt_tokens_details"]["cached_tokens"],
+                usage.cache_read_tokens,
+            );
+            assert_optional_counter(
+                &wire["prompt_tokens_details"]["cache_write_tokens"],
+                usage.cache_write_tokens,
+            );
+            assert_optional_counter(
+                &wire["completion_tokens_details"]["reasoning_tokens"],
+                usage.reasoning_tokens,
+            );
+        }
+        ApiProtocol::Responses => {
+            assert_eq!(wire["input_tokens"], usage.prompt_tokens);
+            assert_eq!(wire["output_tokens"], usage.completion_tokens);
+            assert_eq!(wire["total_tokens"], usage.total());
+            assert_optional_counter(
+                &wire["input_tokens_details"]["cached_tokens"],
+                usage.cache_read_tokens,
+            );
+            assert_optional_counter(
+                &wire["input_tokens_details"]["cache_write_tokens"],
+                usage.cache_write_tokens,
+            );
+            assert_eq!(
+                wire["output_tokens_details"]["reasoning_tokens"],
+                usage.reasoning_tokens
+            );
+        }
+        ApiProtocol::Messages => {
+            assert_eq!(
+                wire["input_tokens"],
+                usage
+                    .prompt_tokens
+                    .saturating_sub(usage.cache_read_tokens)
+                    .saturating_sub(usage.cache_write_tokens)
+            );
+            assert_eq!(wire["output_tokens"], usage.completion_tokens);
+            assert_optional_counter(&wire["cache_read_input_tokens"], usage.cache_read_tokens);
+            assert_optional_counter(
+                &wire["cache_creation_input_tokens"],
+                usage.cache_write_tokens,
+            );
+        }
+        ApiProtocol::GenerateContent => {
+            assert_eq!(wire["promptTokenCount"], usage.prompt_tokens);
+            assert_eq!(
+                wire["candidatesTokenCount"],
+                usage
+                    .completion_tokens
+                    .saturating_sub(usage.reasoning_tokens)
+            );
+            assert_eq!(wire["thoughtsTokenCount"], usage.reasoning_tokens);
+            assert_eq!(wire["totalTokenCount"], usage.total());
+            assert_optional_counter(&wire["cachedContentTokenCount"], usage.cache_read_tokens);
+        }
+        ApiProtocol::Custom(_) => (),
+    }
+}
+
+fn usage_from_parts(parts: &[StreamPart]) -> Option<Usage> {
+    parts.iter().find_map(|part| match part {
+        StreamPart::Usage { usage } => Some(usage.clone()),
+        StreamPart::ResponseCompleted {
+            usage: Some(usage), ..
+        } => Some(usage.clone()),
+        _ => None,
+    })
+}
+
+fn decode_usage_stream(protocol: ApiProtocol, events: &[SseEvent]) -> Option<Usage> {
+    let mut decoder = adapter_for(protocol).stream_decoder();
+    let mut parts = Vec::new();
+    for event in events {
+        let decoded = decoder.decode(event);
+        assert!(decoded.is_ok(), "official stream event failed to decode");
+        let Ok(decoded) = decoded else {
+            return None;
+        };
+        parts.extend(decoded);
+    }
+    let finished = decoder.finish();
+    assert!(finished.is_ok(), "official stream failed at EOF");
+    let Ok(finished) = finished else {
+        return None;
+    };
+    parts.extend(finished);
+    usage_from_parts(&parts)
+}
+
+fn usage_wire_from_frames(protocol: ApiProtocol, frames: &[SseFrame]) -> Option<serde_json::Value> {
+    frames.iter().find_map(|frame| {
+        let SseFrame::Event { data, .. } = frame else {
+            return None;
+        };
+        let json: serde_json::Value = serde_json::from_str(data).ok()?;
+        match protocol {
+            ApiProtocol::ChatCompletions => json.get("usage").cloned(),
+            ApiProtocol::Responses => json
+                .get("response")
+                .and_then(|response| response.get("usage"))
+                .cloned(),
+            ApiProtocol::Messages => (json.get("type").and_then(|v| v.as_str())
+                == Some("message_delta"))
+            .then(|| json.get("usage").cloned())
+            .flatten(),
+            ApiProtocol::GenerateContent => json.get("usageMetadata").cloned(),
+            ApiProtocol::Custom(_) => None,
+        }
+    })
+}
+
 // ===== 4×4 conversion matrix =====
 
 /// The full inbound→outbound matrix: exercise all six conversion functions for
@@ -183,6 +572,83 @@ fn conversion_matrix_4x4_non_streaming() {
             assert!(
                 client_resp.is_object(),
                 "{inbound_proto:?}→{outbound_proto:?}: client response is a JSON object"
+            );
+        }
+    }
+}
+
+/// Decode official provider response shapes, cross-render them through every
+/// target encoder, assert the exact documented target fields, then decode the
+/// rendered target again. This is the non-streaming usage half of the 4×4
+/// protocol matrix.
+#[test]
+fn usage_conversion_matrix_4x4_non_streaming_official_wire() {
+    for source_protocol in all_protocols() {
+        let source = adapter_for(source_protocol.clone());
+        let parsed = source.parse_response(official_usage_response(source_protocol.clone()));
+        assert!(
+            parsed.is_ok(),
+            "{source_protocol:?}: official response must decode"
+        );
+        let Ok(parsed) = parsed else {
+            continue;
+        };
+        assert!(
+            parsed.usage.is_some(),
+            "{source_protocol:?}: decoded usage is missing"
+        );
+        let Some(source_usage) = parsed.usage.as_ref() else {
+            continue;
+        };
+        assert_usage(
+            source_usage,
+            &official_usage(source_protocol.clone()),
+            &format!("{source_protocol:?} official non-stream decoder"),
+        );
+
+        for target_protocol in all_protocols() {
+            let target = adapter_for(target_protocol.clone());
+            let rendered = target.render_response(&parsed, &sample_prompt(), "usage-matrix");
+            assert!(
+                rendered.is_ok(),
+                "{source_protocol:?}->{target_protocol:?}: response render failed"
+            );
+            let Ok(rendered) = rendered else {
+                continue;
+            };
+            let wire_usage = match target_protocol {
+                ApiProtocol::GenerateContent => rendered.get("usageMetadata"),
+                _ => rendered.get("usage"),
+            };
+            assert!(
+                wire_usage.is_some(),
+                "{source_protocol:?}->{target_protocol:?}: wire usage missing"
+            );
+            let Some(wire_usage) = wire_usage else {
+                continue;
+            };
+            assert_official_usage_wire(target_protocol.clone(), wire_usage, source_usage);
+
+            let reparsed = target.parse_response(rendered);
+            assert!(
+                reparsed.is_ok(),
+                "{source_protocol:?}->{target_protocol:?}: rendered response must decode"
+            );
+            let Ok(reparsed) = reparsed else {
+                continue;
+            };
+            assert!(
+                reparsed.usage.is_some(),
+                "{source_protocol:?}->{target_protocol:?}: reparsed usage missing"
+            );
+            let Some(reparsed_usage) = reparsed.usage.as_ref() else {
+                continue;
+            };
+            let expected = expected_after_wire(source_usage.clone(), target_protocol.clone());
+            assert_usage(
+                reparsed_usage,
+                &expected,
+                &format!("{source_protocol:?}->{target_protocol:?} non-stream round trip"),
             );
         }
     }
@@ -320,6 +786,203 @@ fn conversion_matrix_4x4_streaming() {
                     panic!("{inbound_proto:?} re-encode of {outbound_proto:?} stream: {e}")
                 });
             }
+        }
+    }
+}
+
+/// The streaming companion to the non-streaming matrix. Each source decoder
+/// consumes the provider's documented SSE/chunk shape. Its canonical usage is
+/// then encoded by every target protocol, checked at the exact wire path, and
+/// decoded once more to catch asymmetric encoder/decoder bugs.
+#[test]
+fn usage_conversion_matrix_4x4_streaming_official_wire() {
+    for source_protocol in all_protocols() {
+        let source_usage = decode_usage_stream(
+            source_protocol.clone(),
+            &official_usage_stream(source_protocol.clone()),
+        );
+        assert!(
+            source_usage.is_some(),
+            "{source_protocol:?}: official stream decoded no usage"
+        );
+        let Some(source_usage) = source_usage else {
+            continue;
+        };
+        assert_usage(
+            &source_usage,
+            &official_usage(source_protocol.clone()),
+            &format!("{source_protocol:?} official stream decoder"),
+        );
+
+        for target_protocol in all_protocols() {
+            let target = adapter_for(target_protocol.clone());
+            let mut encoder = target.stream_encoder("usage-stream", "provider/model");
+            let usage_part = StreamPart::Usage {
+                usage: source_usage.clone(),
+            };
+            let encoded_usage = encoder.encode(&usage_part);
+            assert!(
+                encoded_usage.is_ok(),
+                "{source_protocol:?}->{target_protocol:?}: usage encode failed"
+            );
+            let Ok(mut frames) = encoded_usage else {
+                continue;
+            };
+            let encoded_finish = encoder.encode(&StreamPart::Finish {
+                reason: FinishReason::Stop,
+            });
+            assert!(
+                encoded_finish.is_ok(),
+                "{source_protocol:?}->{target_protocol:?}: finish encode failed"
+            );
+            let Ok(encoded_finish) = encoded_finish else {
+                continue;
+            };
+            frames.extend(encoded_finish);
+            let encoded_eof = encoder.finish();
+            assert!(
+                encoded_eof.is_ok(),
+                "{source_protocol:?}->{target_protocol:?}: encoder EOF failed"
+            );
+            let Ok(encoded_eof) = encoded_eof else {
+                continue;
+            };
+            frames.extend(encoded_eof);
+
+            let wire_usage = usage_wire_from_frames(target_protocol.clone(), &frames);
+            assert!(
+                wire_usage.is_some(),
+                "{source_protocol:?}->{target_protocol:?}: stream wire usage missing"
+            );
+            let Some(wire_usage) = wire_usage else {
+                continue;
+            };
+            assert_official_usage_wire(target_protocol.clone(), &wire_usage, &source_usage);
+
+            let events: Vec<SseEvent> = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    SseFrame::Event { event, data } => Some(SseEvent {
+                        event: event.clone(),
+                        data: data.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            let reparsed_usage = decode_usage_stream(target_protocol.clone(), &events);
+            assert!(
+                reparsed_usage.is_some(),
+                "{source_protocol:?}->{target_protocol:?}: encoded stream decoded no usage"
+            );
+            let Some(reparsed_usage) = reparsed_usage else {
+                continue;
+            };
+            let expected = expected_after_wire(source_usage.clone(), target_protocol.clone());
+            assert_usage(
+                &reparsed_usage,
+                &expected,
+                &format!("{source_protocol:?}->{target_protocol:?} stream round trip"),
+            );
+        }
+    }
+}
+
+/// Read and write cache buckets are independently optional. Pin all four
+/// combinations so a renderer cannot accidentally gate one bucket on the
+/// presence of the other or overwrite the shared OpenAI details object.
+#[test]
+fn usage_cache_buckets_are_independent_non_streaming_and_streaming() {
+    for protocol in [
+        ApiProtocol::ChatCompletions,
+        ApiProtocol::Responses,
+        ApiProtocol::Messages,
+    ] {
+        for (cache_read_tokens, cache_write_tokens) in [(0, 0), (600, 0), (0, 100), (600, 100)] {
+            let usage = Usage {
+                prompt_tokens: 1_000,
+                completion_tokens: 150,
+                reasoning_tokens: 50,
+                cache_read_tokens,
+                cache_write_tokens,
+                origin: UsageOrigin::ProviderReported,
+                ..Default::default()
+            };
+            let mut result = sample_result();
+            result.usage = Some(usage.clone());
+            let adapter = adapter_for(protocol.clone());
+
+            let rendered = adapter.render_response(&result, &sample_prompt(), "cache-buckets");
+            assert!(rendered.is_ok(), "{protocol:?}: non-stream render failed");
+            let Ok(rendered) = rendered else {
+                continue;
+            };
+            let wire_usage = rendered.get("usage");
+            assert!(
+                wire_usage.is_some(),
+                "{protocol:?}: non-stream usage missing"
+            );
+            let Some(wire_usage) = wire_usage else {
+                continue;
+            };
+            assert_official_usage_wire(protocol.clone(), wire_usage, &usage);
+            let reparsed = adapter.parse_response(rendered);
+            assert!(reparsed.is_ok(), "{protocol:?}: non-stream parse failed");
+            let Ok(reparsed) = reparsed else {
+                continue;
+            };
+            let reparsed_usage = reparsed.usage.as_ref();
+            assert!(
+                reparsed_usage.is_some(),
+                "{protocol:?}: non-stream reparsed usage missing"
+            );
+            let Some(reparsed_usage) = reparsed_usage else {
+                continue;
+            };
+            assert_eq!(reparsed_usage.cache_read_tokens, cache_read_tokens);
+            assert_eq!(reparsed_usage.cache_write_tokens, cache_write_tokens);
+
+            let mut encoder = adapter.stream_encoder("cache-buckets", "provider/model");
+            let encoded_usage = encoder.encode(&StreamPart::Usage {
+                usage: usage.clone(),
+            });
+            assert!(encoded_usage.is_ok(), "{protocol:?}: stream usage failed");
+            let Ok(mut frames) = encoded_usage else {
+                continue;
+            };
+            let encoded_finish = encoder.encode(&StreamPart::Finish {
+                reason: FinishReason::Stop,
+            });
+            assert!(encoded_finish.is_ok(), "{protocol:?}: stream finish failed");
+            let Ok(encoded_finish) = encoded_finish else {
+                continue;
+            };
+            frames.extend(encoded_finish);
+            let wire_usage = usage_wire_from_frames(protocol.clone(), &frames);
+            assert!(wire_usage.is_some(), "{protocol:?}: stream usage missing");
+            let Some(wire_usage) = wire_usage else {
+                continue;
+            };
+            assert_official_usage_wire(protocol.clone(), &wire_usage, &usage);
+            let events: Vec<SseEvent> = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    SseFrame::Event { event, data } => Some(SseEvent {
+                        event: event.clone(),
+                        data: data.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            let reparsed_usage = decode_usage_stream(protocol.clone(), &events);
+            assert!(
+                reparsed_usage.is_some(),
+                "{protocol:?}: stream reparsed usage missing"
+            );
+            let Some(reparsed_usage) = reparsed_usage else {
+                continue;
+            };
+            assert_eq!(reparsed_usage.cache_read_tokens, cache_read_tokens);
+            assert_eq!(reparsed_usage.cache_write_tokens, cache_write_tokens);
         }
     }
 }

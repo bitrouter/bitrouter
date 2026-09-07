@@ -156,6 +156,8 @@ fn provider_model_rejects_malformed_reasoning_effort_capabilities() -> crate::Re
 fn defaults_are_sane() {
     let cfg = Config::default();
     assert_eq!(cfg.server.listen, "0.0.0.0:4356");
+    assert!(!cfg.control.enabled);
+    assert_eq!(cfg.control.listen, "127.0.0.1:4358");
     assert!(
         !cfg.server.skip_auth,
         "skip_auth code default must be false"
@@ -166,6 +168,20 @@ fn defaults_are_sane() {
     assert_eq!(cfg.trajectory.outbox_batch_size, 100);
     assert_eq!(cfg.continuation.retention_days, 30);
     assert_eq!(cfg.continuation.prune_batch_size, 1_000);
+}
+
+#[test]
+fn remote_control_is_explicitly_opt_in_and_keeps_loopback_default() -> crate::Result<()> {
+    let cfg = parse_with(
+        r#"
+control:
+  enabled: true
+"#,
+        |_| None,
+    )?;
+    assert!(cfg.control.enabled);
+    assert_eq!(cfg.control.listen, "127.0.0.1:4358");
+    Ok(())
 }
 
 #[test]

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.30](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.29...v1.0.0-alpha.30)
+
+
+### ⛰️ Features
+
+- *(cli)* Unify ACP lifecycle surfaces ([#885](https://github.com/bitrouter/bitrouter/pull/885)) - ([63b05b8](https://github.com/bitrouter/bitrouter/commit/63b05b874db10ba29fb73d3c923e99a5c329757d))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Deduplicate server-tool stream usage ([#895](https://github.com/bitrouter/bitrouter/pull/895)) - ([4c01593](https://github.com/bitrouter/bitrouter/commit/4c01593e82aada654e024079026797da93bce7fb))
+
+
+## [1.0.0-alpha.29](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.28...v1.0.0-alpha.29)
+
+
+### ⛰️ Features
+
+- *(cli)* Complete searchable ACP onboarding ([#888](https://github.com/bitrouter/bitrouter/pull/888)) - ([ef2c13a](https://github.com/bitrouter/bitrouter/commit/ef2c13a8185cc736f86c7837d86e2ed9bc22325a))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve routed cache usage ([#893](https://github.com/bitrouter/bitrouter/pull/893)) - ([94a5ee9](https://github.com/bitrouter/bitrouter/commit/94a5ee9855be917b1a9d839cee24d8ee41271483))
+
+
 ## [1.0.0-alpha.28](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.27...v1.0.0-alpha.28)
 
 

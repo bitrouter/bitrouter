@@ -22,35 +22,24 @@ metadata:
 ---
 
 # BitRouter
-
-BitRouter is a Rust daemon the user **self-hosts** at `http://127.0.0.1:4356`,
-routing OpenAI- or Anthropic-shaped requests to any provider, driven entirely
-from the `bitrouter` CLI. No BitRouter account is required to run it — where the
-tokens are actually bought is a *provider* choice made in §4, not a different way
-of deploying.
+BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes
+OpenAI- or Anthropic-shaped requests to providers selected in §4.
 
 ## Activate in one pass
-
-Work top to bottom, probing before asking — on a machine that has used BitRouter
-before, most of these steps are already done.
+Work top to bottom, probing before asking.
 
 ### 1. Probe
-
 ```bash
 bitrouter --version          # not found -> step 2
 bitrouter status             # liveness + `spend`; `running: false` when nothing is reachable
 bitrouter providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
-These emit **JSON by default** (`--human` renders the readable view) — parse it
-rather than scraping prose. Branch on what comes back: `command not found` → §2;
-installed but no active providers → §3; providers active but the daemon stopped
-→ `bitrouter start`, then §5; both → §5, the harness is all that is left. Do not
-open with a deployment question: self-hosted is the path, and §4 picks the
-providers.
+These emit JSON by default (`--human` is readable). Branch on the result:
+missing command → §2; no active providers → §3; stopped daemon → `start`; both
+ready → §5.
 
 ### 2. Install
-
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh
 ```
@@ -61,8 +50,9 @@ Verify with `bitrouter --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
 
-A human runs `bitrouter` to complete onboarding. After setup the same command
-opens the saved default ACP TUI. Credentials alone do not mark setup complete.
+A human runs `bitrouter` to complete onboarding using searchable Up/Down lists
+of registry providers (including BitRouter Cloud), ACP harnesses and actions.
+After setup the same command opens the saved default ACP TUI. Credentials alone do not mark setup complete.
 For scripted setup:
 
 ```bash
@@ -77,7 +67,6 @@ No hand-written provider or agent entry is needed for Codex or Claude ACP.
 See `references/cli.md` for flags, config precedence and first-run defaults.
 
 ### 4. Choose providers — subscription first
-
 These logins are interactive, so they are what `providers_skipped_interactive`
 reports. Work the order below: it buys the same tokens for less money.
 
@@ -91,14 +80,10 @@ bitrouter providers login openai-codex   # ChatGPT PKCE flow in a browser
 bitrouter providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
 
-Auth method is catalog-derived and differs per provider, so do not promise a
-browser prompt that will not appear — `references/providers.md` → *Known
-providers* lists what each login actually does.
+Auth is catalog-derived; `references/providers.md` lists each login method.
 
-**b. Hosted BitRouter for everything else — the recommended default.** Managed
-provider routing with OAuth built in, so the user collects no per-provider key.
-It is a provider, not a second deployment: signing in adds a `bitrouter`
-provider to this daemon, routable as `bitrouter:<model-id>`.
+**b. Hosted BitRouter for everything else.** Signing in adds a managed
+`bitrouter` provider to this daemon; it is not a second deployment.
 
 **c. BYOK for anything they want to own directly.** Export the key and start —
 the daemon auto-enables every provider whose key is present, and
@@ -112,24 +97,42 @@ Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not
 keys. Net effect: the subscription serves its native models; hosted BitRouter
 or BYOK supplements everything it does not cover.
 
-### 5. Start the ACP TUI
+### 5. Start the desired agent interface
+
+BitRouter's full-screen UI owns both operations and ACP sessions:
 
 ```bash
-bitrouter                         # saved default harness
-bitrouter chat codex-acp           # explicit harness for this session
-bitrouter spawn claude-acp -p "summarize this repo"
+bitrouter code                    # home, agents, sessions, and operations
+bitrouter code codex              # explicit interactive ACP session
+bitrouter run claude "summarize this repo"  # headless ACP turn
 ```
 
-BitRouter supplies the TUI and routes through the local daemon by default.
-Both built-in adapters require Node.js 22+ and `npx`; npm obtains their pinned
-packages on first use. A compatible local CLI is selected automatically behind
-the adapter. See `references/harness-codex.md` and
-`references/harness-claude-code.md` for version thresholds and overrides.
-`bitrouter launch` and `spawn --agent` are removed; agents must speak ACP.
+Both built-in adapters require Node.js 22+ and `npx`; a compatible local CLI is
+selected automatically behind the pinned adapter. For the harness's own native
+interface, use the reversible per-process launcher:
 
-For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
-`bitrouter spawn codex-acp --serve`. Stable ACP v1 on exact adapter pins,
-initializing the harness with the manager's capabilities and transparently
+```bash
+bitrouter claude
+bitrouter codex -- --search
+```
+
+`launch <agent>` accepts catalog native harnesses; `claude`, `claude-code`, and
+`codex` are shortcuts. Everything after `--` is forwarded verbatim, and user
+configuration is not edited.
+
+Leave the harness's own model on its subscription and let BitRouter carry the
+rest — subagents, bulk work, models the plan does not include. Pinning the whole
+harness off a subscription they already pay for usually costs more, so make it a
+deliberate choice rather than a default.
+
+**The restart handoff — say it every time.** Existing harness processes cannot
+be rerouted. End with: "run `bitrouter claude` (or restart the harness with the
+env override) to route this session." MCP is control/introspection only;
+inference goes to the daemon HTTP API.
+
+For an ACP client, use `bitrouter acp serve claude` or
+`bitrouter acp serve codex`. Stable ACP v1 on exact adapter pins,
+initializing the harness with the client's capabilities and transparently
 carrying multiple harness-native sessions on one connection. Native IDs and
 session storage remain harness-owned; maintained Codex/Claude controllers
 retain a separate local evidence index for evaluation. Route leases
@@ -139,20 +142,37 @@ capability-gated and need a local control binding, which an explicit remote
 wire contract are there — before reasoning about this surface.
 
 ### 6. Verify
-
 ```bash
 bitrouter route claude-sonnet-4-6   # what would actually run: read `effective_model`
 bitrouter models                    # everything routable, with every provider that serves it
-bitrouter status --requests         # settled requests + spend, JSON (--human for a table)
+bitrouter requests                  # settled requests + spend, JSON (--human for a table)
 ```
 
-`status --requests` reads the metering store directly, so it works with no
+`requests` reads the metering store directly, so it works with no
 daemon and is safe for an agent to call — a routed call appearing there, naming
 the provider that actually served it, is the proof activation worked. Do **not**
 use the cost as that proof: most rows carry no charge evidence and render `?`,
 and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
 ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 `references/diagnose.md` has the full spelling rules.
+
+For read-only control from another computer, add a named context and select it
+explicitly:
+
+```bash
+bitrouter context add workstation \
+  --endpoint https://router.example/control/v1 \
+  --token-env WORKSTATION_BITROUTER_TOKEN
+bitrouter --context workstation status
+bitrouter --context workstation requests
+bitrouter --context workstation models
+bitrouter --context workstation route openai/gpt-5
+bitrouter --context workstation code
+```
+
+The context stores only the environment-variable name. Remote errors never
+fall back to this machine. The HTTP-only MVP supports those reads; agent
+sessions and lifecycle commands remain local (use SSH for a remote native TUI).
 
 ## References — read on demand, not upfront
 
@@ -165,7 +185,7 @@ ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve\|prompt`, native sessions, NDJSON, `bitrouter chat <agent>`); `bitrouter update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve`, `run`, native sessions, NDJSON, `bitrouter code <agent>`); `bitrouter update` and channels |
 
 ## Gotchas
 
@@ -174,9 +194,14 @@ ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
 - **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
   everything else `providers login <id>`; there is no top-level `login`.
-- **`init --harness` only accepts `claude` and `codex`**; `launch -a` adds
-  `opencode` and `pi`. `hermes`, `openclaw`, `grok`, and `agy` are no longer
-  `launch`-supported — run them directly or via `spawn`; they remain providers.
+- **Remote control is separate from inference and ACP.** `control.enabled: true`
+  starts a read-only API on `127.0.0.1:4358` and requires a dedicated
+  `BITROUTER_CONTROL_TOKEN` of at least 32 bytes. Keep it loopback-only behind a
+  private tunnel or TLS reverse proxy. `server.skip_auth` never disables this
+  authentication, changes under `control:` require a daemon restart, and the
+  HTTP-only MVP does not run remote ACP sessions.
+- **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
+  accepts the native facets listed by `launch --help`.
 - **`providers add/remove/use/test/stats` and `bitrouter doctor` do not exist.**
   Manage with `providers list|login|logout` + `bitrouter.yaml`/`reload`; diagnose
   with `status`, `route <model>`, `models`, `~/.bitrouter/bitrouter.log`.
