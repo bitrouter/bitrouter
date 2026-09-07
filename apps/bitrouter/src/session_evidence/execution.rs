@@ -36,6 +36,11 @@ pub enum FactKind {
         version: String,
         capabilities: BTreeSet<String>,
     },
+    ProcessLifecycle {
+        state: String,
+        clean: Option<bool>,
+        exit_code: Option<i32>,
+    },
     NativeCommand {
         command_id: String,
         state: String,
@@ -93,6 +98,8 @@ pub struct NativeFact {
     pub record_id: String,
     pub record_digest: String,
     pub source_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
     /// The execution being described. Relations point from related_node to node.
     pub node: Option<NodeKey>,
     pub related_node: Option<NodeKey>,
@@ -110,6 +117,7 @@ struct Extractor<'a> {
     source: &'a SourceDescriptor,
     record: &'a StoredRecord,
     facts: BTreeMap<String, NativeFact>,
+    process_id: Option<String>,
 }
 
 /// Extraction failure is durable uncertainty, never a reason to discard a raw
@@ -119,6 +127,7 @@ pub fn extract(source: &SourceDescriptor, record: &StoredRecord) -> Result<Vec<N
         source,
         record,
         facts: BTreeMap::new(),
+        process_id: None,
     };
     if extractor.read().is_err() {
         extractor.facts.clear();
@@ -151,13 +160,19 @@ impl Extractor<'_> {
             self.facts.len() < MAX_GRAPH_ITEMS,
             "native lifecycle fact limit"
         );
-        let id = canonical_digest(&(
+        let base_id = canonical_digest(&(
             PARSER_VERSION,
             &self.record.id,
             &node,
             &related_node,
             &event,
         ))?;
+        // Keep legacy fact identities and serialization stable. Process-aware
+        // facts use a separate digest, even when their native session is equal.
+        let id = match &self.process_id {
+            Some(process) => canonical_digest(&(base_id, process))?,
+            None => base_id,
+        };
         self.facts.insert(
             id.clone(),
             NativeFact {
@@ -166,6 +181,7 @@ impl Extractor<'_> {
                 record_id: self.record.id.clone(),
                 record_digest: self.record.digest.clone(),
                 source_id: self.record.source_id.clone(),
+                process_id: self.process_id.clone(),
                 node,
                 related_node,
                 event,
@@ -195,6 +211,7 @@ impl Extractor<'_> {
             SourceFormat::CodexRollout => self.codex_rollout(),
             SourceFormat::CodexAppServer => self.codex_event(),
             SourceFormat::ClaudeHook => self.claude_hook(),
+            SourceFormat::ClaudeCli => self.claude_cli(),
             SourceFormat::ClaudeAgentMetadata => self.claude_metadata(),
             SourceFormat::Acp => self.claude_sdk(),
             SourceFormat::ClaudeTranscript => Ok(()),

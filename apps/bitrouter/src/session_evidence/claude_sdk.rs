@@ -100,7 +100,11 @@ pub fn notification_fields(payload: &Value) -> Option<Value> {
                 tasks
                     .iter()
                     .map(|task| {
-                        Value::Object(fields(task, &["task_id", "task_type"], &mut invalid))
+                        Value::Object(fields(
+                            task,
+                            &["task_id", "task_type", "ambient"],
+                            &mut invalid,
+                        ))
                     })
                     .collect(),
             )
@@ -139,7 +143,7 @@ fn fields(value: &Value, names: &[&str], invalid: &mut bool) -> Map<String, Valu
                         "capabilities" => value
                             .as_array()
                             .is_some_and(|values| values.iter().all(Value::is_string)),
-                        "is_error" | "is_backgrounded" => value.is_boolean(),
+                        "is_error" | "is_backgrounded" | "ambient" => value.is_boolean(),
                         "end_time" => value.is_number(),
                         _ => value.is_string(),
                     };
@@ -208,6 +212,22 @@ mod tests {
             "type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"task","description":"private"}]
         }})).context("background metadata")?;
         assert_eq!(background["message"]["tasks"], json!([{"task_id":"task"}]));
+        Ok(())
+    }
+
+    #[test]
+    fn background_replacement_preserves_ambient_changes_without_task_content() -> Result<()> {
+        // ambient may change without the task id changing. Retain this native
+        // distinction for the settlement reducer's housekeeping exclusion.
+        // https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.257
+        for ambient in [false, true] {
+            let captured = notification_fields(&json!({"message":{"type":"system","subtype":"background_tasks_changed","session_id":"s","tasks":[{"task_id":"watcher","ambient":ambient,"description":"private"}]}})).context("background metadata")?;
+            assert_eq!(captured["message"]["tasks"][0]["ambient"], ambient);
+            assert!(captured["message"]["tasks"][0].get("description").is_none());
+        }
+        let invalid = notification_fields(&json!({"message":{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"watcher","ambient":{"private":"nested"}}]}})).context("metadata")?;
+        assert_eq!(invalid["message"]["bitrouter_capture_invalid"], true);
+        assert!(!serde_json::to_string(&invalid)?.contains("nested"));
         Ok(())
     }
 

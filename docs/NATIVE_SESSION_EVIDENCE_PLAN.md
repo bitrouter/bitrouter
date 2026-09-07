@@ -114,6 +114,38 @@ An unavailable artifact keeps the valid task visible with an artifact-specific g
 Final native settlement checkpoints, baseline-to-final deltas, shared-worktree
 attribution, complete multi-root coverage and Eval manifests still require work.
 
+Claude native CLI processes now have independent observation spools on Unix.
+The maintained adapter's executable override starts a private BitRouter proxy;
+its native argv, stdin/stdout bytes and exit code are preserved. Resolution uses
+the adapter's SDK-local optional dependency, including Linux libc preference.
+Explicit script executables and platforms without signal supervision retain
+SDK ownership and expose a durable process-capture gap. Each process has a new
+UUID even when the native session id is reused; process exit is separate from
+command results, session idle and task completion.
+
+The proxy records selected native lifecycle metadata before forwarding it,
+including SDK versions, background-task ambient flags and conversation resets.
+Oversized, malformed or incomplete frames continue downstream with explicit
+capture gaps. Profile scopes are registered before creation; reused Queries
+keep their original environment, while replacements use the newly prepared
+spool. The proxy checks its actual native-root namespace before binding output.
+Node discovery and fact extraction share process-id, source-file, sequence and
+namespace validation. Invalid envelopes cannot authorize transcript collection.
+These source gaps survive repeated reconciliation and historical replay.
+
+Tests cover process-specific identities, pre-response native session discovery,
+reset transcript discovery, database reopen, malformed envelopes, metadata
+filtering, original argv/nonzero exit codes and SDK-relative Node resolution.
+A real BitRouter binary fixture forwards TERM to an unresponsive test CLI,
+then kills and reaps it before the SDK's five-second wrapper-kill deadline.
+This is process/transport validation, not conformance against a real Claude CLI.
+Abrupt wrapper death without a durable stop remains unknown. Correlating these
+process scopes to ACP operations, hooks, live Query caches and exact task ranges
+still requires implementation; early ACP SDK journal records remain unbound.
+Independent stage review passed after termination, persistent-gap, identity-gate
+and ambient-field fixes. The workspace check ran 3,208 tests with 12 skipped;
+Clippy, formatting, doctests, rustdoc and distribution checks also passed.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
 rebinding; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace

@@ -65,6 +65,7 @@ pub enum SourceFormat {
     ClaudeTranscript,
     ClaudeAgentMetadata,
     ClaudeHook,
+    ClaudeCli,
     Acp,
 }
 

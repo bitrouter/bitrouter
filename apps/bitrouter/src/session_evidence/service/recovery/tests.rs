@@ -239,7 +239,14 @@ async fn restart_recovers_registered_profiles_and_consumed_hooks_without_live_qu
     let first = resumed.service.reconcile().await?;
     assert!(first.gaps.contains("native_recovery_backlog"));
     let snapshot = finish_recovery(&resumed.service).await?;
-    assert!(snapshot.gaps.is_empty(), "{:?}", snapshot.gaps);
+    assert_eq!(
+        snapshot.gaps,
+        if cfg!(unix) {
+            BTreeSet::new()
+        } else {
+            BTreeSet::from(["native_process_capture_unavailable".into()])
+        }
+    );
     assert_eq!(
         snapshot
             .histories
@@ -859,6 +866,196 @@ async fn corrupt_opaque_cursor_at_a_full_page_boundary_does_not_stop_recovery() 
             .histories
             .iter()
             .any(|history| history.node.native_id == "root")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_processes_recover_early_sessions_and_reset_without_live_query_inference() -> Result<()>
+{
+    use crate::session_evidence::execution::FactKind;
+    let directory = tempfile::tempdir()?;
+    let native = directory.path().join("profile-cli");
+    let mut origin = claude_service(directory.path()).await?;
+    stop_worker(&mut origin).await?;
+    let params = origin.service.prepare_session_request("new-cli", "session/new", json!({"cwd":directory.path(),"_meta":{"claudeCode":{"options":{"env":{"CLAUDE_CONFIG_DIR":native}}}}})).await?;
+    let env = params
+        .pointer("/_meta/claudeCode/options/env")
+        .context("prepared env")?;
+    let namespace = env[crate::session_evidence::claude_proxy::NAMESPACE_ENV]
+        .as_str()
+        .context("profile namespace")?
+        .to_owned();
+    let spool = PathBuf::from(
+        env[crate::session_evidence::claude_proxy::SPOOL_ENV]
+            .as_str()
+            .context("spool")?,
+    );
+    for id in ["early-root", "after-reset"] {
+        transcript(&native, id).await?;
+    }
+    let mut processes = BTreeSet::new();
+    for _ in 0..2 {
+        let process = uuid::Uuid::new_v4().to_string();
+        processes.insert(process.clone());
+        let mut rows = vec![
+            json!({"method":"runtime/started","phase":"metadata"}),
+            json!({"method":"runtime/message","payload":{"type":"system","subtype":"init","session_id":"early-root","claude_code_version":"2.1.257","capabilities":["msg_lifecycle_v1"]}}),
+            json!({"method":"runtime/message","payload":{"type":"conversation_reset","session_id":"early-root","new_conversation_id":"after-reset","uuid":"reset"}}),
+            json!({"method":"runtime/message","payload":{"type":"command_lifecycle","session_id":"after-reset","command_uuid":"declined-peer","state":"refused"}}),
+            json!({"method":"runtime/stopped","phase":"metadata","clean":true,"exit_code":0}),
+        ];
+        for (sequence, row) in rows.iter_mut().enumerate() {
+            row["process_id"] = json!(process);
+            row["namespace"] = json!(namespace);
+            row["scope_valid"] = json!(true);
+            row["sequence"] = json!(sequence);
+        }
+        write_rows(&spool.join(format!("cli-{process}.jsonl")), rows).await?;
+    }
+    // No ACP lifecycle response has arrived. Native process facts independently
+    // establish session identities, not a loaded Query or an application task.
+    drop(origin);
+    let mut resumed = claude_service(directory.path()).await?;
+    stop_worker(&mut resumed).await?;
+    let snapshot = finish_recovery(&resumed.service).await?;
+    assert_eq!(
+        snapshot
+            .histories
+            .iter()
+            .map(|history| history.node.native_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["early-root", "after-reset"])
+    );
+    assert_eq!(
+        snapshot
+            .graph
+            .facts
+            .iter()
+            .filter_map(|fact| fact.process_id.clone())
+            .collect::<BTreeSet<_>>(),
+        processes
+    );
+    assert_eq!(
+        snapshot
+            .graph
+            .facts
+            .iter()
+            .filter(|fact| matches!(fact.event, FactKind::ConversationReset { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(snapshot.graph.facts.iter().filter(|fact| matches!(&fact.event, FactKind::NativeCommand { state, .. } if state == "refused")).count(), 2);
+    assert!(snapshot.graph.gaps.is_empty(), "{:?}", snapshot.graph.gaps);
+    assert!(snapshot.attempts.is_empty());
+    assert!(resumed.service.state.lock().await.loaded.is_empty());
+    assert!(resumed.service.state.lock().await.sessions.is_empty());
+    let again = finish_recovery(&resumed.service).await?;
+    assert_eq!(snapshot.graph.facts, again.graph.facts);
+    assert_eq!(std::fs::read_dir(spool)?.count(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_cli_envelopes_never_publish_transcript_nodes_live_or_after_restart() -> Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let mut origin = claude_service(directory.path()).await?;
+    stop_worker(&mut origin).await?;
+    let namespace = origin.service.collector.root().namespace.clone();
+    for fault in [
+        "wrong-process",
+        "wrong-sequence",
+        "wrong-profile",
+        "unresolved",
+    ] {
+        let process = uuid::Uuid::new_v4().to_string();
+        let mut row = json!({"method":"runtime/message","process_id":process,"namespace":namespace,"scope_valid":true,"sequence":0,
+            "payload":{"type":"system","subtype":"init","session_id":fault,"claude_code_version":"2.1.257"}});
+        match fault {
+            "wrong-process" => row["process_id"] = json!(uuid::Uuid::new_v4().to_string()),
+            "wrong-sequence" => row["sequence"] = json!(1),
+            "wrong-profile" => row["namespace"] = json!("foreign"),
+            _ => row["scope_valid"] = json!(false),
+        }
+        transcript(&directory.path().join("default"), fault).await?;
+        write_rows(
+            &origin.service.spool.join(format!("cli-{process}.jsonl")),
+            vec![row],
+        )
+        .await?;
+    }
+    let snapshot = origin.service.reconcile().await?;
+    assert!(snapshot.gaps.contains("native_lifecycle_invalid"));
+    assert!(snapshot.gaps.contains("native_process_scope_unresolved"));
+    assert!(snapshot.histories.is_empty());
+    assert!(snapshot.graph.nodes.is_empty());
+    assert!(
+        origin
+            .service
+            .reconcile()
+            .await?
+            .gaps
+            .contains("native_lifecycle_invalid")
+    );
+    drop(origin);
+    let mut resumed = claude_service(directory.path()).await?;
+    stop_worker(&mut resumed).await?;
+    let snapshot = finish_recovery(&resumed.service).await?;
+    assert!(snapshot.gaps.contains("native_lifecycle_invalid"));
+    assert!(snapshot.gaps.contains("native_process_scope_unresolved"));
+    assert!(snapshot.histories.is_empty());
+    assert!(snapshot.graph.nodes.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_process_capture_gap_survives_refresh_and_controller_restart() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut env = HashMap::from([
+        (
+            "CLAUDE_CONFIG_DIR".into(),
+            directory
+                .path()
+                .join("default")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        ("CLAUDE_CODE_EXECUTABLE".into(), "custom-cli.js".into()),
+    ]);
+    let mut origin = EvidenceHandle::open(EvidenceLaunch {
+        home: &directory.path().join("router"),
+        database_url: "sqlite:evidence.db?mode=rwc",
+        identity: &ControllerIdentity::new(
+            "claude-acp",
+            "@agentclientprotocol/claude-agent-acp",
+            "0.75.1",
+        ),
+        env: &mut env,
+        strip_inherited_env: &[],
+    })
+    .await?
+    .context("controller")?;
+    stop_worker(&mut origin).await?;
+    assert_eq!(env["CLAUDE_CODE_EXECUTABLE"], "custom-cli.js");
+    for _ in 0..2 {
+        assert!(
+            origin
+                .service
+                .reconcile()
+                .await?
+                .gaps
+                .contains("native_process_capture_unavailable")
+        );
+    }
+    drop(origin);
+    let mut resumed = claude_service(directory.path()).await?;
+    stop_worker(&mut resumed).await?;
+    assert!(
+        finish_recovery(&resumed.service)
+            .await?
+            .gaps
+            .contains("native_process_capture_unavailable")
     );
     Ok(())
 }

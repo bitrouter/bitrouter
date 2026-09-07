@@ -767,12 +767,10 @@ async fn claude_reuse_failure_and_close_follow_actual_query_lifetime() -> Result
             json!({"cwd":cwd,"sessionId":"session"}),
         ))
         .await?;
-    assert_eq!(
-        service
-            .prepare_session_request("reuse", "session/load", reuse.clone())
-            .await?,
-        reuse
-    );
+    let prepared = service
+        .prepare_session_request("reuse", "session/load", reuse.clone())
+        .await?;
+    assert_eq!(strip_private_scope(prepared)?, reuse);
     assert!(
         service
             .observe(observation(
@@ -870,12 +868,10 @@ async fn claude_reuse_failure_and_close_follow_actual_query_lifetime() -> Result
             json!({"sessionId":"session"}),
         ))
         .await?;
-    assert_eq!(
-        service
-            .prepare_session_request("opaque", "session/load", opaque.clone())
-            .await?,
-        opaque
-    );
+    let prepared = service
+        .prepare_session_request("opaque", "session/load", opaque.clone())
+        .await?;
+    assert_eq!(strip_private_scope(prepared)?, strip_private_scope(opaque)?);
     service
         .observe(observation("opaque", "session/load", "response", json!({})))
         .await?;
@@ -1032,12 +1028,10 @@ async fn idle_query_recreation_cannot_silently_rebind_a_profile() -> Result<()> 
             json!({"sessionId":"root"}),
         ))
         .await?;
-    assert_eq!(
-        service
-            .prepare_session_request("reload", "session/resume", reload.clone())
-            .await?,
-        reload
-    );
+    let prepared = service
+        .prepare_session_request("reload", "session/resume", reload.clone())
+        .await?;
+    assert_eq!(strip_private_scope(prepared)?, reload);
     service
         .observe(observation(
             "reload",
@@ -1141,7 +1135,14 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
             .await?;
         let first = handle.service.reconcile().await?;
         assert_eq!(first.histories.len(), 2);
-        assert!(first.gaps.is_empty(), "{:?}", first.gaps);
+        assert_eq!(
+            first.gaps,
+            if harness == Harness::ClaudeCode && !cfg!(unix) {
+                BTreeSet::from(["native_process_capture_unavailable".into()])
+            } else {
+                BTreeSet::new()
+            }
+        );
         assert_eq!(first.graph.nodes.len(), 2);
         assert!(first.graph.facts.iter().any(|fact| matches!(
             fact.event,
@@ -1189,7 +1190,14 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
             )
             .await?;
             let archived = handle.service.reconcile().await?;
-            assert!(archived.gaps.is_empty(), "{:?}", archived.gaps);
+            assert_eq!(
+                archived.gaps,
+                if harness == Harness::ClaudeCode && !cfg!(unix) {
+                    BTreeSet::from(["native_process_capture_unavailable".into()])
+                } else {
+                    BTreeSet::new()
+                }
+            );
             assert_eq!(
                 archived
                     .histories
@@ -1293,4 +1301,20 @@ fn creating_a_native_root_beneath_a_symlink_keeps_its_namespace() -> Result<()> 
     assert_eq!(before.directory, after.directory);
     assert_eq!(before.namespace, after.namespace);
     Ok(())
+}
+
+fn strip_private_scope(mut params: Value) -> Result<Value> {
+    let env = params
+        .pointer_mut("/_meta/claudeCode/options/env")
+        .and_then(Value::as_object_mut)
+        .context("prepared subprocess env")?;
+    let spool = env
+        .remove(super::super::claude_proxy::SPOOL_ENV)
+        .context("private process spool")?;
+    assert!(Path::new(spool.as_str().context("spool path")?).is_dir());
+    let namespace = env
+        .remove(super::super::claude_proxy::NAMESPACE_ENV)
+        .context("private namespace")?;
+    super::super::types::digest_identifier(namespace.as_str().context("namespace")?)?;
+    Ok(params)
 }

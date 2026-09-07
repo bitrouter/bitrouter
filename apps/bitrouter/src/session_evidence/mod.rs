@@ -2,12 +2,14 @@
 
 pub mod accounting;
 pub mod claude_hooks;
+pub mod claude_proxy;
 pub mod claude_sdk;
 pub mod codex_proxy;
 pub mod collector;
 pub mod execution;
 pub mod history;
 pub mod journal;
+mod native_runtime;
 pub mod projection;
 pub mod service;
 pub mod store;

@@ -2,6 +2,104 @@ use super::*;
 use crate::session_evidence::{claude_sdk, types::Harness};
 
 impl Extractor<'_> {
+    pub(super) fn claude_cli(&mut self) -> Result<()> {
+        let raw = &self.record.input.raw;
+        ensure!(
+            self.source.harness == Harness::ClaudeCode,
+            "foreign native CLI source"
+        );
+        let process = text(raw, "process_id")?;
+        let parsed = uuid::Uuid::parse_str(&process)?;
+        ensure!(
+            parsed.to_string() == process,
+            "noncanonical native process id"
+        );
+        let path = std::path::Path::new(
+            self.source
+                .locator
+                .strip_prefix("spool:")
+                .context("CLI spool locator missing")?,
+        );
+        ensure!(
+            path.file_name().and_then(|name| name.to_str())
+                == Some(format!("cli-{process}.jsonl").as_str()),
+            "native process/source mismatch"
+        );
+        ensure!(
+            raw.get("sequence").and_then(Value::as_u64) == Some(self.record.input.sequence),
+            "native process sequence mismatch"
+        );
+        self.process_id = Some(process);
+        if raw.get("scope_valid") != Some(&Value::Bool(true))
+            || raw.get("namespace").and_then(Value::as_str) != Some(self.source.namespace.as_str())
+        {
+            return self.push(
+                None,
+                None,
+                FactKind::Gap {
+                    reason: "native_process_scope_unresolved".into(),
+                },
+            );
+        }
+        match raw.get("method").and_then(Value::as_str) {
+            Some(method @ ("runtime/started" | "runtime/stopped" | "runtime/failed")) => {
+                let clean = raw
+                    .get("clean")
+                    .map(|value| value.as_bool().context("native exit clean flag"))
+                    .transpose()?;
+                let exit_code = raw
+                    .get("exit_code")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value
+                            .as_i64()
+                            .and_then(|code| i32::try_from(code).ok())
+                            .context("native exit code")
+                    })
+                    .transpose()?;
+                self.push(
+                    None,
+                    None,
+                    FactKind::ProcessLifecycle {
+                        state: method.trim_start_matches("runtime/").into(),
+                        clean,
+                        exit_code,
+                    },
+                )
+            }
+            Some("runtime/message") => {
+                let message = raw
+                    .get("payload")
+                    .context("CLI lifecycle payload missing")?;
+                let node = self.node(&text(message, "session_id")?, None)?;
+                self.claude_message(node, message)
+            }
+            Some("runtime/input") => {
+                let payload = raw.get("payload").context("native input missing")?;
+                let node = optional_text(payload, "session_id")?
+                    .filter(|id| !id.is_empty())
+                    .map(|id| self.node(&id, None))
+                    .transpose()?;
+                self.push(
+                    node,
+                    None,
+                    FactKind::Activity {
+                        activity: "native_user_input".into(),
+                        native_id: optional_text(payload, "uuid")?,
+                    },
+                )
+            }
+            Some("runtime/gap") => self.push(
+                None,
+                None,
+                FactKind::Gap {
+                    reason: text(raw, "reason")?,
+                },
+            ),
+            _ => anyhow::bail!("unknown native process record"),
+        }
+    }
+
     /// The adapter's original session envelope establishes scope. Native task
     /// ids identify SDK tasks (including shell jobs), not agent transcript ids.
     /// Result delivery, command completion, session idle and background sets
@@ -29,6 +127,10 @@ impl Extractor<'_> {
         let message = payload
             .get("message")
             .context("native SDK message missing")?;
+        self.claude_message(node, message)
+    }
+
+    fn claude_message(&mut self, node: NodeKey, message: &Value) -> Result<()> {
         ensure!(
             message.get("bitrouter_capture_invalid") != Some(&Value::Bool(true)),
             "invalid native lifecycle field shape"
@@ -43,10 +145,10 @@ impl Extractor<'_> {
             (Some("command_lifecycle"), _) => {
                 let state = text(message, "state")?;
                 ensure!(
-                    matches!(
-                        state.as_str(),
-                        "queued" | "started" | "completed" | "cancelled" | "discarded"
-                    ),
+                    matches!(state.as_str(), "queued" | "started" | "completed" | "cancelled" | "discarded")
+                        // CLI 2.1.238+ declines some peer messages before they
+                        // enter the command lane; no result need follow.
+                        || (self.source.format == SourceFormat::ClaudeCli && state == "refused"),
                     "unknown native command state"
                 );
                 FactKind::NativeCommand {

@@ -103,6 +103,7 @@ pub struct CollectionSnapshot {
 struct LiveState {
     nodes: BTreeSet<NodeKey>,
     replayed: BTreeMap<String, u64>,
+    replay_gaps: BTreeMap<String, BTreeSet<String>>,
     spool_nodes: BTreeMap<PathBuf, BTreeSet<NodeKey>>,
     spool_after: BTreeMap<PathBuf, PathBuf>,
     spool_gaps: BTreeMap<PathBuf, BTreeSet<String>>,
@@ -123,6 +124,7 @@ pub struct ControllerEvidence {
     claude_model_config: Option<String>,
     controller_id: String,
     producer_version: String,
+    process_capture: bool,
     spool: PathBuf,
     executable: PathBuf,
     workspace_exclusions: BTreeSet<PathBuf>,
@@ -183,6 +185,20 @@ impl EvidenceHandle {
             }
             super::codex_proxy::prepare_env(launch.env, &spool, &executable)?;
         }
+        let claude_process_capture = if harness == Harness::ClaudeCode {
+            if !launch.env.contains_key("CLAUDE_CODE_EXECUTABLE")
+                && let Some(original) = inherited_value(
+                    "CLAUDE_CODE_EXECUTABLE",
+                    launch.env,
+                    launch.strip_inherited_env,
+                )
+            {
+                launch.env.insert("CLAUDE_CODE_EXECUTABLE".into(), original);
+            }
+            super::claude_proxy::prepare_env(launch.env, &spool, &executable, &root)?
+        } else {
+            true
+        };
         let producer_version = format!(
             "{}@{}",
             launch.identity.adapter_package, launch.identity.adapter_version
@@ -206,6 +222,7 @@ impl EvidenceHandle {
                 json!({"method":"controller/started","phase":"metadata","payload":{
             "native_root":root.directory,"namespace":root.namespace,"spool":spool,
             "harness":harness,"adapter_version":launch.identity.adapter_version,
+            "native_process_capture":claude_process_capture,
         },"observed_at":chrono::Utc::now().to_rfc3339()}),
             )
             .await?;
@@ -229,6 +246,7 @@ impl EvidenceHandle {
             ),
             controller_id: controller,
             producer_version,
+            process_capture: claude_process_capture,
             spool,
             executable,
             workspace_exclusions,
@@ -298,6 +316,9 @@ impl ControllerEvidence {
     pub async fn reconcile(&self) -> Result<CollectionSnapshot> {
         let _guard = self.reconcile_gate.lock().await;
         let mut gaps = BTreeSet::new();
+        if !self.process_capture {
+            gaps.insert("native_process_capture_unavailable".into());
+        }
         let recovered = self.recover(&mut gaps).await;
         let roots = self.state.lock().await.roots.clone();
         let mut collectors = recovered.collectors;
@@ -547,6 +568,13 @@ impl ControllerEvidence {
     ) -> Result<()> {
         let format = match root.harness {
             Harness::Codex => SourceFormat::CodexAppServer,
+            Harness::ClaudeCode
+                if path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("cli-")) =>
+            {
+                SourceFormat::ClaudeCli
+            }
             Harness::ClaudeCode => SourceFormat::ClaudeHook,
         };
         let imported = import_spool(
@@ -572,6 +600,9 @@ impl ControllerEvidence {
             .get(&source.id)
             .copied()
             .unwrap_or(0);
+        if let Some(known) = self.state.lock().await.replay_gaps.get(&source.id) {
+            gaps.extend(known.iter().cloned());
+        }
         let replay_end = (start + 128).min(source.cursor.next_sequence);
         if replay_end < source.cursor.next_sequence {
             gaps.insert("native_spool_backlog".into());
@@ -592,8 +623,9 @@ impl ControllerEvidence {
                 "native spool records missing"
             );
             let mut page_nodes = BTreeSet::new();
+            let mut page_gaps = BTreeSet::new();
             for record in records {
-                for node in native_nodes(&record.input.raw, root)? {
+                for node in source_nodes(&source.descriptor, &record, root, &mut page_gaps)? {
                     page_nodes.insert(node);
                 }
             }
@@ -607,6 +639,14 @@ impl ControllerEvidence {
             );
             cached.extend(page_nodes.iter().cloned());
             found.extend(page_nodes);
+            if !page_gaps.is_empty() {
+                state
+                    .replay_gaps
+                    .entry(source.id.clone())
+                    .or_default()
+                    .extend(page_gaps.iter().cloned());
+                gaps.extend(page_gaps);
+            }
             start = end;
             state.replayed.insert(source.id.clone(), start);
         }
@@ -627,12 +667,57 @@ impl ControllerEvidence {
     }
 }
 
+fn source_nodes(
+    source: &SourceDescriptor,
+    record: &super::types::StoredRecord,
+    root: &NativeRoot,
+    gaps: &mut BTreeSet<String>,
+) -> Result<BTreeSet<NodeKey>> {
+    if source.format != SourceFormat::ClaudeCli {
+        return native_nodes(&record.input.raw, root);
+    }
+    // The same provenance checks gate both facts and transcript discovery.
+    // An invalid process envelope must not authorize collecting its session id.
+    let mut nodes = BTreeSet::new();
+    for fact in super::execution::extract(source, record)? {
+        if let super::execution::FactKind::Gap { reason } = &fact.event {
+            gaps.insert(reason.clone());
+            continue;
+        }
+        if matches!(&fact.event, super::execution::FactKind::Activity { activity, .. } if activity == "native_user_input")
+        {
+            continue;
+        }
+        if let super::execution::FactKind::ConversationReset {
+            new_conversation_id,
+        } = &fact.event
+        {
+            let node = NodeKey {
+                namespace: root.namespace.clone(),
+                harness: root.harness,
+                native_id: new_conversation_id.clone(),
+                agent_id: None,
+            };
+            node.validate()?;
+            nodes.insert(node);
+        }
+        nodes.extend(fact.node);
+        nodes.extend(fact.related_node);
+    }
+    Ok(nodes)
+}
+
 fn native_nodes(event: &Value, root: &NativeRoot) -> Result<BTreeSet<NodeKey>> {
     let payload = event.get("payload").unwrap_or(&Value::Null);
     let mut candidates = Vec::new();
     if root.harness == Harness::ClaudeCode {
         if let Some(id) = payload.get("session_id").and_then(Value::as_str) {
             candidates.push((id, payload.get("agent_id").and_then(Value::as_str)));
+        }
+        if payload.get("type").and_then(Value::as_str) == Some("conversation_reset")
+            && let Some(id) = payload.get("new_conversation_id").and_then(Value::as_str)
+        {
+            candidates.push((id, None));
         }
     } else {
         for pointer in ["/threadId", "/thread/id", "/item/agentThreadId"] {
@@ -788,7 +873,7 @@ fn inherited_value(
     })
 }
 
-fn native_root(
+pub(super) fn native_root(
     harness: Harness,
     env: &HashMap<String, String>,
     stripped: &[String],

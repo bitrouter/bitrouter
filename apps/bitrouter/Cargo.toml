@@ -68,6 +68,9 @@ jsonschema = { version = "0.47.0", default-features = false }
 rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 schemars.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
 

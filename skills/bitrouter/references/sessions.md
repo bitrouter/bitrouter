@@ -193,6 +193,25 @@ launcher can supply `BITROUTER_CODEX_ADAPTER_ENTRY` when its package entry is
 not discoverable from PATH. `BITROUTER_CODEX_EVIDENCE_SPOOL` is private launch
 wiring, not a user-facing model or provider setting.
 
+On Unix, Claude native executables also run through a private stdio proxy.
+The controller saves `CLAUDE_CODE_EXECUTABLE` in child-only
+`BITROUTER_CLAUDE_EVIDENCE_UPSTREAM` and temporarily points the adapter at
+BitRouter. Without an explicit override, resolution follows the adapter's own
+SDK dependency and platform-specific native package. Custom adapter launchers
+can set `BITROUTER_CLAUDE_ADAPTER_ENTRY` when their entry cannot be located on
+PATH. `BITROUTER_CLAUDE_EVIDENCE_SPOOL` and
+`BITROUTER_CLAUDE_EVIDENCE_NAMESPACE` are private subprocess wiring. Each
+actual process gets its own `cli-<uuid>.jsonl` spool; these UUIDs are distinct
+from native conversation ids. Parameters, protocol bytes and native exit codes
+are preserved. Script executable overrides and platforms without signal
+supervision retain their SDK launch path and an explicit coverage gap.
+
+The Claude proxy captures lifecycle metadata, checks the native profile and
+retains process-local order across conversation resets. Registered histories
+can recover these records even when the process emitted them before an ACP
+session response. That recovery does not restore a live Query or declare that
+a task finished. A missing process-stop record remains uncertainty.
+
 Claude collection adds invocation-local lifecycle hooks through the adapter's
 session settings, preserving existing hooks. `native-session-hook` and
 `app-server` are internal entry points; users do not run them to collect or

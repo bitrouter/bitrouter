@@ -673,6 +673,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rmcp",
+ "rustix 1.1.4",
  "schemars 1.2.1",
  "sea-orm",
  "sea-orm-migration",

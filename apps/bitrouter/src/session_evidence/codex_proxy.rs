@@ -181,7 +181,7 @@ async fn resolve_upstream(
         let program = if path.components().count() > 1 || path.is_absolute() {
             path
         } else {
-            find_executable(&path, search_path)?
+            super::native_runtime::find_executable(&path, search_path)?
         };
         return Ok(RuntimeCommand {
             program,
@@ -189,16 +189,7 @@ async fn resolve_upstream(
         });
     }
     let entry = adapter_entry(adapter, search_path.as_deref())?;
-    let node = std::env::var_os("npm_node_execpath")
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .map(Ok)
-        .unwrap_or_else(|| {
-            find_executable(
-                Path::new(if cfg!(windows) { "node.exe" } else { "node" }),
-                search_path,
-            )
-        })?;
+    let node = super::native_runtime::node(search_path)?;
     // Match the maintained adapter's createRequire(import.meta.url).resolve,
     // including global installs, nested dependency versions and pnpm symlinks.
     // https://nodejs.org/api/module.html#modulecreaterequirefilename
@@ -232,94 +223,7 @@ async fn resolve_upstream(
 }
 
 fn adapter_entry(explicit: Option<PathBuf>, search: Option<&std::ffi::OsStr>) -> Result<PathBuf> {
-    if let Some(entry) = explicit {
-        return package_entry(&entry)?
-            .context("configured Codex adapter entry is not in its package");
-    }
-    for directory in std::env::split_paths(search.context("adapter PATH is unavailable")?) {
-        for name in ["codex-acp", "codex-acp.cmd", "codex-acp.exe"] {
-            let command = directory.join(name);
-            if !command.is_file() {
-                continue;
-            }
-            if let Some(entry) = package_entry(&command)? {
-                return Ok(entry);
-            }
-            // npm's Windows/global shims and pnpm's shell shims live outside
-            // the package. Resolve its bin declaration, then let Node choose
-            // the dependency relative to the real package entry.
-            let local = directory
-                .parent()
-                .map(|parent| parent.join("@agentclientprotocol/codex-acp"));
-            for package in [
-                local,
-                Some(directory.join("node_modules/@agentclientprotocol/codex-acp")),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if let Some(entry) = declared_entry(&package)? {
-                    return Ok(entry);
-                }
-            }
-            anyhow::bail!(
-                "cannot identify the running Codex adapter package; configure BITROUTER_CODEX_ADAPTER_ENTRY"
-            );
-        }
-    }
-    anyhow::bail!("Codex adapter entry is unavailable; configure BITROUTER_CODEX_ADAPTER_ENTRY")
-}
-
-fn package_entry(command: &Path) -> Result<Option<PathBuf>> {
-    let command = std::fs::canonicalize(command)?;
-    for parent in command.ancestors().skip(1).take(8) {
-        if let Some(entry) = declared_entry(parent)? {
-            return Ok(Some(entry));
-        }
-    }
-    Ok(None)
-}
-
-fn declared_entry(package: &Path) -> Result<Option<PathBuf>> {
-    let manifest = package.join("package.json");
-    if !manifest.is_file() {
-        return Ok(None);
-    }
-    ensure!(
-        std::fs::metadata(&manifest)?.len() <= 1024 * 1024,
-        "adapter package manifest size limit"
-    );
-    let manifest: Value = serde_json::from_slice(&std::fs::read(manifest)?)?;
-    if manifest.get("name").and_then(Value::as_str) != Some("@agentclientprotocol/codex-acp") {
-        return Ok(None);
-    }
-    let bin = manifest
-        .pointer("/bin/codex-acp")
-        .or_else(|| manifest.get("bin"))
-        .and_then(Value::as_str)
-        .context("adapter package bin is missing")?;
-    Ok(Some(std::fs::canonicalize(package.join(bin))?))
-}
-
-fn find_executable(name: &Path, search_path: Option<std::ffi::OsString>) -> Result<PathBuf> {
-    for directory in std::env::split_paths(&search_path.context("adapter PATH is unavailable")?) {
-        let candidate = directory.join(name);
-        let Ok(metadata) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        if !metadata.is_file() {
-            continue;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o111 == 0 {
-                continue;
-            }
-        }
-        return Ok(candidate);
-    }
-    anyhow::bail!("Codex runtime was not found in the adapter PATH; configure CODEX_PATH")
+    super::native_runtime::adapter_entry(super::native_runtime::CODEX, explicit, search)
 }
 
 async fn copy_protocol(

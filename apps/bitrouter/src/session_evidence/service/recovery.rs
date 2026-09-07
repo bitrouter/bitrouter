@@ -306,7 +306,7 @@ impl ControllerEvidence {
         }
         match source.descriptor.format {
             SourceFormat::Acp => recovery.roots.get(&source.id),
-            SourceFormat::ClaudeHook | SourceFormat::CodexAppServer => {
+            SourceFormat::ClaudeHook | SourceFormat::ClaudeCli | SourceFormat::CodexAppServer => {
                 let path = Path::new(source.descriptor.locator.strip_prefix("spool:")?);
                 recovery.roots.values().find(|root| {
                     source.descriptor.namespace == root.collector.root().namespace
@@ -362,7 +362,7 @@ impl ControllerEvidence {
                 let nodes = if replay.source.descriptor.format == SourceFormat::Acp {
                     replay_acp(raw, &root, &mut replay.pending, &mut recovery.gaps)
                 } else {
-                    native_nodes(raw, &root)
+                    source_nodes(&replay.source.descriptor, &row, &root, &mut recovery.gaps)
                 };
                 match nodes {
                     Ok(nodes) => {
@@ -393,6 +393,11 @@ fn replay_acp(
     pending: &mut BTreeMap<String, (String, String)>,
     gaps: &mut BTreeSet<String>,
 ) -> Result<BTreeSet<NodeKey>> {
+    if raw.get("method").and_then(Value::as_str) == Some("controller/started")
+        && raw.pointer("/payload/native_process_capture") == Some(&Value::Bool(false))
+    {
+        gaps.insert("native_process_capture_unavailable".into());
+    }
     let method = raw.get("method").and_then(Value::as_str).unwrap_or("");
     let phase = raw.get("phase").and_then(Value::as_str).unwrap_or("");
     let scope = raw.get("native_scope").and_then(Value::as_str);

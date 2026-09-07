@@ -255,3 +255,26 @@ async fn malformed_lifecycle_is_durable_uncertainty_and_does_not_block_raw_curso
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn adding_process_identity_preserves_legacy_fact_bytes_and_digests() -> Result<()> {
+    let store = store().await?;
+    append(&store, descriptor(), thread("root", None, "group")).await?;
+    for fact in store.node_facts(&node("root"), None, 100).await? {
+        assert!(fact.process_id.is_none());
+        let serialized = serde_json::to_value(&fact)?;
+        assert!(serialized.get("process_id").is_none());
+        assert_eq!(serde_json::from_value::<NativeFact>(serialized)?, fact);
+        assert_eq!(
+            fact.id,
+            canonical_digest(&(
+                PARSER_VERSION,
+                &fact.record_id,
+                &fact.node,
+                &fact.related_node,
+                &fact.event
+            ))?
+        );
+    }
+    Ok(())
+}

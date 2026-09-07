@@ -61,9 +61,20 @@ impl ControllerEvidence {
         &self,
         operation_id: &str,
         method: &str,
-        params: Value,
+        mut params: Value,
     ) -> Result<Value> {
         super::super::types::identifier(operation_id)?;
+        // Only a newly spawned CLI consumes this env. A reused Query keeps its
+        // original process spool; no liveness inference or settings-file read is
+        // needed to prepare the potential replacement's registered scope.
+        if let Ok(root) = self.configured_claude_root(&params) {
+            let context = self.register_root(root).await?;
+            super::super::claude_proxy::instrument_scope(
+                &mut params,
+                &context.spool,
+                &context.collector.root().namespace,
+            )?;
+        }
         let requested_id = params.get("sessionId").and_then(Value::as_str);
         if matches!(method, "session/load" | "session/resume") {
             let state = self.state.lock().await;

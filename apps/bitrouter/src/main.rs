@@ -1359,6 +1359,15 @@ fn main() {
 
 #[tokio::main]
 async fn async_main() {
+    if bitrouter::session_evidence::claude_proxy::selected() {
+        match bitrouter::session_evidence::claude_proxy::run().await {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("error: {error:#}");
+                std::process::exit(1);
+            }
+        }
+    }
     // Parse once here so the global `--json` / `--human` flags are available to
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
