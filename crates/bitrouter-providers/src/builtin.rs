@@ -59,12 +59,17 @@ pub fn load_builtins() -> Result<Vec<ProviderEntry>, LoadError> {
 /// — the same mapping the built-ins once used, now applied to a fetched-or-
 /// cached registry entry. Used where a consumer needs the auth shape of a
 /// registry-sourced provider without it being compiled in (e.g. `bitrouter
-/// login <provider>` resolving an OAuth handler + its public params). Errors if
-/// the provider declares no `auth` block.
+/// login <provider>` resolving an OAuth handler + its public params). An omitted
+/// `auth` block uses the registry's conventional Bearer credential env var.
 pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadError> {
-    let auth = p.auth.as_ref().ok_or_else(|| LoadError::Snapshot {
-        message: format!("provider '{}' has no auth", p.name),
-    })?;
+    let auth = match &p.auth {
+        Some(auth) => map_auth(&p.name, auth)?,
+        None => AuthScheme::Bearer {
+            env: p.env_credential_var().ok_or_else(|| LoadError::Snapshot {
+                message: format!("provider '{}' has no credential env var", p.name),
+            })?,
+        },
+    };
     let api_base = p.api_base.clone().ok_or_else(|| LoadError::Snapshot {
         message: format!("provider '{}' has no fixed api_base", p.name),
     })?;
@@ -74,7 +79,7 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
         api_base,
         api_protocol: derive_protocol_mapping(p),
         protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
-        auth: map_auth(&p.name, auth)?,
+        auth,
         doc_url: p.doc_url.clone().unwrap_or_default(),
         class: Some(derive_class(p)),
     })
@@ -323,13 +328,17 @@ mod tests {
     }
 
     #[test]
-    fn entry_from_registry_rejects_provider_without_auth() {
-        let provider = reg(serde_json::json!({
-            "name": "noauth",
-            "api_base": "https://noauth.test/v1",
+    fn entry_from_registry_uses_implicit_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
+        let provider: RegistryProvider = serde_json::from_value(serde_json::json!({
+            "name": "example-provider",
+            "api_base": "https://example.test/v1",
             "status": "active",
             "models": []
-        }));
-        assert!(entry_from_registry(&provider).is_err());
+        }))?;
+        let entry = entry_from_registry(&provider)?;
+        assert!(
+            matches!(entry.auth, AuthScheme::Bearer { env } if env == "EXAMPLE_PROVIDER_API_KEY")
+        );
+        Ok(())
     }
 }
