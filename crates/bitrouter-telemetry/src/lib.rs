@@ -24,7 +24,7 @@
 //! `bitrouter::observe::*` `RUST_LOG` targets, and
 //! [`bitrouter_sdk::observe`] (the contract) keep the other word — permanently,
 //! and for reasons that have nothing to do with tidiness. See
-//! `docs/TELEMETRY_CRATE_SPEC.md` D5 and D6.
+//! `docs/decisions/telemetry-crate.md#stable-identities`.
 //!
 //! The one nested `telemetry` key — `plugins.bitrouter-telemetry.telemetry` —
 //! is not a competing scope; it is an endpoint preset that points the exporter

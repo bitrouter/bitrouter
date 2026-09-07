@@ -7,12 +7,12 @@
   `panic!`, dead code, re-exports out of a public module), the lockstep
   requirements, and the checks to run before submitting. `CLAUDE.md` is a
   symlink to it.
-- [`docs/DEVELOPMENT.md`](../docs/DEVELOPMENT.md) — workspace architecture: the
+- [`docs/architecture/overview.md`](../docs/architecture/overview.md) — workspace architecture: the
   crate table, the dependency layering and what belongs in which tier, the
   external interfaces, the SDK's pipelines and hook traits, and the feature
   flags.
-- [`docs/CLI.md`](../docs/CLI.md) — command reference, flags, config
-  resolution, and log targets.
+- [`.agents/skills/`](../.agents/skills/) — focused workflows for changing CLI
+  surfaces, registry data, and engineering documents.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — adding a provider, and the
   conventional-commit format PR titles are validated against.
 

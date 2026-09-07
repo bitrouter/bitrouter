@@ -4,7 +4,7 @@
 //! This module only *observes* that path: it lives here, rather than beside
 //! the pipeline, because `AcpSpanRecorder` stores a tracer obtained from
 //! `OtelExporter::tracer_clone()`, which stays `pub(crate)` (see
-//! `docs/OTEL_SDK_MIGRATION_SPEC.md`).
+//! `docs/decisions/telemetry-crate.md`).
 //!
 //! Maps substrate-shaped events onto the OTel GenAI *agent* semantic
 //! conventions (<https://opentelemetry.io/docs/specs/semconv/gen-ai/> —

@@ -1484,7 +1484,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
     // the rename is safe to have made because `ignored_config_warnings` reports an
     // unread `plugins.<id>` block on every daemon start, so a stale key is
-    // loud rather than silent. See `docs/TELEMETRY_CRATE_SPEC.md` D6.
+    // loud rather than silent. See
+    // `docs/decisions/telemetry-crate.md#stable-identities`.
     let telemetry = config.plugins.get("bitrouter-telemetry");
 
     // Env-var overrides are *not* applied here — `OtelExporter::new` runs

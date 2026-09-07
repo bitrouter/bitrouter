@@ -2,7 +2,7 @@
 # ACP's canonical stdio transport.
 #
 # This is the only runtime BitRouter ships today. Container and remote-sandbox
-# runtimes (E2B, Daytona) are specified in `docs/AGENT_REGISTRY_SPEC.md` §12 but
+# runtimes (E2B, Daytona) are specified in `docs/work/agent-registry.md` §12 but
 # are not implemented, so nothing here anticipates them.
 #
 # Exact pins are the security contract for this file: the catalog is fetched

@@ -1,10 +1,15 @@
 # Agent Skills
 
-This directory is the **source of truth** for BitRouter's [Agent Skills](https://agentskills.io).
-They live in the monorepo so each skill's facts (port `4356`, env var names, CLI
-subcommands, harness wiring, benchmark evidence contracts) stay in lockstep with
-the code that defines them — a skill change ships in the same PR as the change
-that motivates it.
+This directory is the **source of truth** for BitRouter's shippable
+[Agent Skills](https://agentskills.io). They live in the monorepo so each
+skill's facts (port `4356`, env var names, CLI subcommands, harness wiring,
+benchmark evidence contracts) stay in lockstep with the code that defines them
+— a skill change ships in the same PR as the change that motivates it.
+
+Repository development workflows live in [`.agents/skills/`](../.agents/skills/)
+and are not included when this directory is installed, served, or packaged.
+Client-specific `.claude/skills/` entries are discovery aliases for those
+complete development-skill folders, not additional copies.
 
 ## What's here
 

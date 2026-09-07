@@ -27,6 +27,8 @@ jobs:
             printf '%s\n' "$ignored_tracked"
             exit 1
           fi
+      - name: check engineering-doc links and skill boundaries
+        run: python3 .agents/skills/maintain-bitrouter-engineering-docs/scripts/check_local_links.py
 
   fmt:
     name: fmt
@@ -297,7 +299,7 @@ jobs:
               echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
             fi
             if cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg reached bitrouter-sdk — the OTLP renderer belongs in bitrouter-telemetry; see docs/TELEMETRY_CRATE_SPEC.md"; exit 1
+              echo "::error::$pkg reached bitrouter-sdk — the OTLP renderer belongs in bitrouter-telemetry; see docs/decisions/telemetry-crate.md"; exit 1
             fi
           done
       - name: SDK default tree stays lean
@@ -487,7 +489,7 @@ jobs:
           # names (`OpenTelemetryLayer`). `tracing_opentelemetry` contains
           # `opentelemetry`, so one pattern covers both crates.
           if hits="$(grep -niE 'opentelemetry' "$RUNNER_TEMP/public-api.txt")"; then
-            echo "::error::opentelemetry types leaked into bitrouter-sdk's public API — see docs/TELEMETRY_CRATE_SPEC.md"
+            echo "::error::opentelemetry types leaked into bitrouter-sdk's public API — see docs/decisions/telemetry-crate.md"
             printf '%s\n' "$hits"
             exit 1
           fi
@@ -507,7 +509,7 @@ jobs:
           # re-export laundered through a local alias is out of reach of any
           # lexical check. That residual is the baseline gate's job.
           if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]+(::)?(opentelemetry|tracing_opentelemetry)' crates/bitrouter-sdk/src/)"; then
-            echo "::error::bitrouter-sdk re-exports an OpenTelemetry type — see docs/TELEMETRY_CRATE_SPEC.md"
+            echo "::error::bitrouter-sdk re-exports an OpenTelemetry type — see docs/decisions/telemetry-crate.md"
             printf '%s\n' "$hits"
             exit 1
           fi

@@ -100,7 +100,7 @@ async fn ingress_emits_the_pinned_log_target_at_debug() {
             .any(|(target, level)| target == "bitrouter::observe::http"
                 && *level == tracing::Level::DEBUG),
         "ingress must emit on the pinned `bitrouter::observe::http` target at DEBUG \
-         (docs/CLI.md documents it as an operator selector); saw {events:?}"
+         (skills/bitrouter/references/cli.md documents it as an operator selector); saw {events:?}"
     );
 
     exporter.shutdown();

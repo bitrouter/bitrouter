@@ -22,7 +22,7 @@
 //! What does *not* live here is the emission of any of it. The SDK owns the
 //! contract and the [`ObserveHook`](crate::language_model::ObserveHook) seam
 //! observers plug into; rendering the observations onto a wire is optional
-//! egress and ships in its own crate. See `docs/TELEMETRY_CRATE_SPEC.md`.
+//! egress and ships in its own crate. See `docs/decisions/telemetry-crate.md`.
 
 pub mod schema;
 mod span_attributes;

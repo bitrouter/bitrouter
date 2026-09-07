@@ -438,7 +438,7 @@ impl OtelExporter {
         //    `TraceLayer` because a public multi-tenant edge must not honour
         //    caller-supplied trace context, and it would silently export
         //    orphaned `chat` roots if this arm were removed. See
-        //    `docs/OTEL_TIERING_SPEC.md` D3/D4.
+        //    `docs/decisions/telemetry-crate.md#ingress-and-tracing-interoperability`.
         // 3. The inbound `traceparent`, for a deployment with no ingress span
         //    of its own.
         let parent_context = {
@@ -970,7 +970,7 @@ impl ObserveHook for OtelExporter {
                         // DEBUG, not WARN: this is per-request and on the hot
                         // path, and a deployment that trips it trips it on
                         // every request. The pinned target is how an operator
-                        // reaches it — see `docs/CLI.md`.
+                        // reaches it — see `skills/bitrouter/references/cli.md`.
                         tracing::debug!(
                             target: "bitrouter::observe::span_attributes",
                             key = %key,

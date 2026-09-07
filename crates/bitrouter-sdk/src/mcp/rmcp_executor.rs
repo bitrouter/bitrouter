@@ -26,7 +26,7 @@
 //! pool by `(server, credential)` first: deriving headers per request without
 //! that would be silently ineffective, since the second caller would reuse the
 //! first caller's already-authenticated connection. Recorded as D7 in
-//! `docs/SKILLS_MCP_SPEC.md`.
+//! `docs/architecture/skills-mcp.md`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -701,9 +701,8 @@ fn stream_tools_call(
 ///   rounds would only produce a rejection per input request and then fail, so
 ///   we say so directly instead.
 /// - **Tasks `resultType: "task"` (SEP-2663)** hands back a task id to poll.
-///   Polling is a lifecycle this executor does not implement yet — see
-///   `docs/MCP_2026_07_28_SPEC.md` (D1) — so we surface the task id rather
-///   than stranding the caller on an opaque failure.
+///   Polling is a lifecycle this executor does not implement yet, so we surface
+///   the task id rather than stranding the caller on an opaque failure.
 ///
 /// Both follow the module's existing stance on server→client relaying: an
 /// explicit, diagnosable rejection beats a silent default.

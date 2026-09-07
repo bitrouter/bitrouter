@@ -764,7 +764,7 @@ pub enum McpUpstreamProtocol {
     /// errors fail the connection. Opting in also lets upstreams answer
     /// `tools/call` with MRTR `input_required` or a Tasks `task` handle;
     /// neither is a shape this gateway can carry, so both surface as explicit
-    /// errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
+    /// errors.
     #[serde(rename = "2026-07-28")]
     V2026_07_28,
 }
