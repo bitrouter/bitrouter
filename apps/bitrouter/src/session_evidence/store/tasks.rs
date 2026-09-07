@@ -1,0 +1,565 @@
+//! Application task identity follows confirmed native sessions. Prompt RPC
+//! boundaries are durable operation membership, never native completion proof.
+
+use sea_orm::{AccessMode, DatabaseTransaction, DbBackend, IsolationLevel};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::*;
+use crate::session_evidence::types::{NodeKey, SourceFormat};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveTask {
+    id: String,
+    revision: u64,
+    root: NodeKey,
+    attempt_id: String,
+    origin_operation: String,
+    operations: BTreeSet<String>,
+    open_operations: BTreeSet<String>,
+}
+
+impl ActiveTask {
+    fn validate(&self) -> Result<()> {
+        ensure!(self.id == self.root.id()?, "active task root mismatch");
+        digest_identifier(&self.attempt_id)?;
+        ensure!(
+            self.operations.len() <= MAX_GRAPH_ITEMS
+                && self.operations.contains(&self.origin_operation)
+                && self.open_operations.is_subset(&self.operations),
+            "invalid bounded task operation set"
+        );
+        for operation in &self.operations {
+            digest_identifier(operation)?;
+        }
+        Ok(())
+    }
+}
+
+/// An exact reference to the observation committed with the task transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Boundary {
+    range: SourceRange,
+    record_id: String,
+    record_digest: String,
+    semantic_digest: String,
+}
+
+impl Boundary {
+    fn new(source: &RegisteredSource, record: &RecordInput) -> Result<Self> {
+        Ok(Self {
+            range: SourceRange {
+                source_id: source.id.clone(),
+                generation: record.generation.clone(),
+                start: record.sequence,
+                end: record.sequence + 1,
+            },
+            record_id: record.id(&source.id)?,
+            record_digest: canonical_digest(record)?,
+            // Retransmission changes observation time and source position,
+            // but may not change the operation's method, phase or payload.
+            semantic_digest: canonical_digest(&(
+                record.raw.get("method"),
+                record.raw.get("phase"),
+                record.raw.get("payload"),
+            ))?,
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        self.range.validate()?;
+        ensure!(
+            self.range.end - self.range.start == 1
+                && self.record_id
+                    == canonical_digest(&(
+                        &self.range.source_id,
+                        &self.range.generation,
+                        self.range.start
+                    ))?,
+            "invalid task boundary record"
+        );
+        digest_identifier(&self.record_digest)?;
+        digest_identifier(&self.semantic_digest)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromptOperation {
+    id: String,
+    revision: u64,
+    controller_id: String,
+    operation_id: String,
+    root: NodeKey,
+    attempt_id: String,
+    request: Boundary,
+    response: Option<Boundary>,
+}
+
+impl PromptOperation {
+    fn key(controller: &str, operation: &str) -> Result<String> {
+        identifier(controller)?;
+        identifier(operation)?;
+        canonical_digest(&(controller, operation))
+    }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.id == Self::key(&self.controller_id, &self.operation_id)?,
+            "prompt operation identity mismatch"
+        );
+        self.root.validate()?;
+        digest_identifier(&self.attempt_id)?;
+        self.request.validate()?;
+        ensure!(
+            self.revision == u64::from(self.response.is_some()),
+            "invalid prompt operation revision"
+        );
+        if let Some(response) = &self.response {
+            response.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl EvidenceStore {
+    /// Append the raw observation, its source cursor and the task transition
+    /// in one transaction. A failed transition cannot leave a forwarded prompt
+    /// without task membership. Generic native backfill does not create tasks.
+    pub(crate) async fn append_observation(
+        &self,
+        source: &RegisteredSource,
+        record: RecordInput,
+        cursor: SourceCursor,
+    ) -> Result<RegisteredSource> {
+        ensure!(
+            source.descriptor.format == SourceFormat::Acp && source.descriptor.node.is_none(),
+            "task observations require a controller journal"
+        );
+        let transaction = self.db.begin().await?;
+        let next = self
+            .append_on(&transaction, source, std::slice::from_ref(&record), cursor)
+            .await?;
+        if record.raw.get("method").and_then(Value::as_str) == Some("session/prompt") {
+            let controller = source
+                .descriptor
+                .locator
+                .strip_prefix("controller:")
+                .context("prompt controller id missing")?;
+            let operation = record
+                .raw
+                .get("operation_id")
+                .and_then(Value::as_str)
+                .context("prompt operation id missing")?;
+            let key = PromptOperation::key(controller, operation)?;
+            let boundary = Boundary::new(source, &record)?;
+            match record.raw.get("phase").and_then(Value::as_str) {
+                Some("request")
+                    if record.raw.get("native_scope").and_then(Value::as_str)
+                        == Some("session") =>
+                {
+                    let session = record
+                        .raw
+                        .pointer("/payload/sessionId")
+                        .and_then(Value::as_str)
+                        .context("confirmed prompt session missing")?;
+                    let root = NodeKey {
+                        namespace: source.descriptor.namespace.clone(),
+                        harness: source.descriptor.harness,
+                        native_id: session.into(),
+                        agent_id: None,
+                    };
+                    root.validate()?;
+                    let started_at = record
+                        .raw
+                        .get("observed_at")
+                        .and_then(Value::as_str)
+                        .context("prompt observation time missing")?;
+                    let attempt_id = canonical_digest(&("attempt", &key))?;
+                    self.begin_prompt(
+                        &transaction,
+                        PromptOperation {
+                            id: key,
+                            revision: 0,
+                            controller_id: controller.into(),
+                            operation_id: operation.into(),
+                            root,
+                            attempt_id,
+                            request: boundary,
+                            response: None,
+                        },
+                        started_at,
+                    )
+                    .await?;
+                }
+                Some("response") => {
+                    self.finish_prompt(&transaction, &key, source, boundary)
+                        .await?;
+                }
+                // Unknown scopes remain raw evidence. Notification ids and
+                // historical imports cannot mint an application task.
+                _ => {}
+            }
+        }
+        transaction.commit().await?;
+        Ok(next)
+    }
+
+    async fn begin_prompt(
+        &self,
+        db: &impl ConnectionTrait,
+        mut operation: PromptOperation,
+        started_at: &str,
+    ) -> Result<()> {
+        if let Some(old) = self.prompt_operation(db, &operation.id).await? {
+            ensure!(
+                old.root == operation.root
+                    && old.request.semantic_digest == operation.request.semantic_digest,
+                "prompt operation was reused for different work"
+            );
+            return Ok(());
+        }
+        let key = operation.root.id()?;
+        let active = self.active_task(db, &operation.root).await?;
+        let (mut task, mut attempt) = match active {
+            Some(task) => {
+                let attempt = self.task_attempt(db, &task).await?;
+                (task, attempt)
+            }
+            None => {
+                let attempt = Attempt {
+                    id: operation.attempt_id.clone(),
+                    task_id: canonical_digest(&("task", &operation.id))?,
+                    root: operation.root.clone(),
+                    members: BTreeSet::from([operation.root.clone()]),
+                    phase: AttemptPhase::Collecting,
+                    revision: 0,
+                    latest_manifest: None,
+                    effective_manifest: None,
+                    started_at: started_at.into(),
+                };
+                attempt.validate()?;
+                let task = ActiveTask {
+                    id: key,
+                    revision: 0,
+                    root: operation.root.clone(),
+                    attempt_id: attempt.id.clone(),
+                    origin_operation: operation.id.clone(),
+                    operations: BTreeSet::from([operation.id.clone()]),
+                    open_operations: BTreeSet::from([operation.id.clone()]),
+                };
+                task.validate()?;
+                operation.validate()?;
+                self.insert_object(db, "attempt", &attempt.id, 0, &attempt)
+                    .await?;
+                self.insert_object(db, "active_task", &task.id, 0, &task)
+                    .await?;
+                self.insert_object(db, "prompt_operation", &operation.id, 0, &operation)
+                    .await?;
+                return Ok(());
+            }
+        };
+        operation.attempt_id.clone_from(&attempt.id);
+        operation.validate()?;
+        task.operations.insert(operation.id.clone());
+        task.open_operations.insert(operation.id.clone());
+        task.validate()?;
+        attempt.phase = AttemptPhase::Collecting;
+        attempt.effective_manifest = None;
+        self.advance_task(db, &mut task, &mut attempt).await?;
+        self.insert_object(db, "prompt_operation", &operation.id, 0, &operation)
+            .await
+    }
+
+    async fn finish_prompt(
+        &self,
+        db: &impl ConnectionTrait,
+        key: &str,
+        source: &RegisteredSource,
+        response: Boundary,
+    ) -> Result<()> {
+        let Some(mut operation) = self.prompt_operation(db, key).await? else {
+            // An unbound or pre-instrumentation request has no task claim.
+            return Ok(());
+        };
+        ensure!(
+            operation.root.harness == source.descriptor.harness,
+            "prompt response harness mismatch"
+        );
+        if let Some(old) = &operation.response {
+            ensure!(
+                old.semantic_digest == response.semantic_digest,
+                "prompt operation has conflicting responses"
+            );
+            return Ok(());
+        }
+        let mut task = self
+            .active_task(db, &operation.root)
+            .await?
+            .context("prompt task disappeared")?;
+        ensure!(
+            task.attempt_id == operation.attempt_id && task.open_operations.contains(&operation.id),
+            "prompt is outside the active attempt"
+        );
+        let mut attempt = self.task_attempt(db, &task).await?;
+        task.open_operations.remove(&operation.id);
+        // ACP completion only ends this RPC. Native children, background work,
+        // artifact capture and gateway settlement still decide readiness.
+        // https://agentclientprotocol.com/protocol/v1/prompt-turn
+        attempt.phase = if task.open_operations.is_empty() {
+            AttemptPhase::Settling
+        } else {
+            AttemptPhase::Collecting
+        };
+        attempt.effective_manifest = None;
+        operation.response = Some(response);
+        operation.revision = 1;
+        operation.validate()?;
+        self.advance_task(db, &mut task, &mut attempt).await?;
+        self.replace_task_object(db, "prompt_operation", &operation.id, 0, &operation)
+            .await
+    }
+
+    async fn advance_task(
+        &self,
+        db: &impl ConnectionTrait,
+        task: &mut ActiveTask,
+        attempt: &mut Attempt,
+    ) -> Result<()> {
+        let previous_task = task.revision;
+        let previous_attempt = attempt.revision;
+        task.revision = task
+            .revision
+            .checked_add(1)
+            .context("task revision overflow")?;
+        attempt.revision = attempt
+            .revision
+            .checked_add(1)
+            .context("attempt revision overflow")?;
+        task.validate()?;
+        attempt.validate()?;
+        self.replace_task_object(db, "attempt", &attempt.id, previous_attempt, attempt)
+            .await?;
+        self.replace_task_object(db, "active_task", &task.id, previous_task, task)
+            .await
+    }
+
+    async fn prompt_operation(
+        &self,
+        db: &impl ConnectionTrait,
+        id: &str,
+    ) -> Result<Option<PromptOperation>> {
+        let operation: Option<PromptOperation> = self
+            .object(db, "prompt_operation", id)
+            .await?
+            .map(decode_object)
+            .transpose()?;
+        if let Some(operation) = &operation {
+            operation.validate()?;
+            self.verify_boundary(db, operation, &operation.request, "request")
+                .await?;
+            if let Some(response) = &operation.response {
+                self.verify_boundary(db, operation, response, "response")
+                    .await?;
+            }
+        }
+        Ok(operation)
+    }
+
+    async fn verify_boundary(
+        &self,
+        db: &impl ConnectionTrait,
+        operation: &PromptOperation,
+        boundary: &Boundary,
+        phase: &str,
+    ) -> Result<()> {
+        let row = source_entity::Entity::find_by_id(&boundary.range.source_id)
+            .filter(source_entity::Column::Owner.eq(&self.owner_key))
+            .one(db)
+            .await?
+            .context("prompt boundary source missing")?;
+        ensure!(
+            row.owner == self.owner_key,
+            "foreign prompt boundary source"
+        );
+        let source = decode_source(row)?;
+        ensure!(
+            source.descriptor.format == SourceFormat::Acp
+                && source.descriptor.node.is_none()
+                && source.descriptor.harness == operation.root.harness
+                && source.descriptor.locator == format!("controller:{}", operation.controller_id),
+            "prompt boundary source mismatch"
+        );
+        let records = range_records(db, &self.owner_key, &boundary.range).await?;
+        let record = records.first().context("prompt boundary record missing")?;
+        ensure!(
+            records.len() == 1
+                && record.id == boundary.record_id
+                && record.digest == boundary.record_digest
+                && record.input.raw.get("operation_id").and_then(Value::as_str)
+                    == Some(operation.operation_id.as_str())
+                && record.input.raw.get("method").and_then(Value::as_str) == Some("session/prompt")
+                && record.input.raw.get("phase").and_then(Value::as_str) == Some(phase)
+                && Boundary::new(&source, &record.input)?.semantic_digest
+                    == boundary.semantic_digest,
+            "prompt boundary provenance mismatch"
+        );
+        if phase == "request" {
+            ensure!(
+                source.descriptor.namespace == operation.root.namespace
+                    && record.input.raw.get("native_scope").and_then(Value::as_str)
+                        == Some("session")
+                    && record
+                        .input
+                        .raw
+                        .pointer("/payload/sessionId")
+                        .and_then(Value::as_str)
+                        == Some(operation.root.native_id.as_str()),
+                "prompt boundary native identity mismatch"
+            );
+        }
+        Ok(())
+    }
+
+    async fn active_task(
+        &self,
+        db: &impl ConnectionTrait,
+        root: &NodeKey,
+    ) -> Result<Option<ActiveTask>> {
+        let task: Option<ActiveTask> = self
+            .object(db, "active_task", &root.id()?)
+            .await?
+            .map(decode_object)
+            .transpose()?;
+        if let Some(task) = &task {
+            task.validate()?;
+            ensure!(&task.root == root, "active task identity mismatch");
+        }
+        Ok(task)
+    }
+
+    async fn task_attempt(&self, db: &impl ConnectionTrait, task: &ActiveTask) -> Result<Attempt> {
+        let attempt: Attempt = decode_object(
+            self.object(db, "attempt", &task.attempt_id)
+                .await?
+                .context("active attempt missing")?,
+        )?;
+        attempt.validate()?;
+        ensure!(attempt.root == task.root, "active attempt root mismatch");
+        ensure!(
+            attempt.id == canonical_digest(&("attempt", &task.origin_operation))?
+                && attempt.task_id == canonical_digest(&("task", &task.origin_operation))?,
+            "attempt origin identity mismatch"
+        );
+        let mut open = BTreeSet::new();
+        for id in &task.operations {
+            let operation = self
+                .prompt_operation(db, id)
+                .await?
+                .context("task operation missing")?;
+            ensure!(
+                operation.attempt_id == attempt.id && operation.root == task.root,
+                "task operation membership mismatch"
+            );
+            if operation.response.is_none() {
+                open.insert(operation.id);
+            }
+        }
+        ensure!(
+            open == task.open_operations,
+            "task operation state mismatch"
+        );
+        Ok(attempt)
+    }
+
+    pub(crate) async fn active_attempt(&self, root: &NodeKey) -> Result<Option<Attempt>> {
+        let transaction = self.task_read_transaction().await?;
+        let attempt = match self.active_task(&transaction, root).await? {
+            Some(task) => self.task_attempt(&transaction, &task).await.map(Some),
+            None => Ok(None),
+        }?;
+        transaction.commit().await?;
+        Ok(attempt)
+    }
+
+    pub(crate) async fn has_unobserved_prompts(
+        &self,
+        root: &NodeKey,
+        controller: &str,
+    ) -> Result<bool> {
+        let transaction = self.task_read_transaction().await?;
+        let mut unobserved = false;
+        if let Some(task) = self.active_task(&transaction, root).await? {
+            for id in &task.open_operations {
+                let operation = self
+                    .prompt_operation(&transaction, id)
+                    .await?
+                    .context("open prompt missing")?;
+                unobserved |= operation.controller_id != controller;
+            }
+        }
+        transaction.commit().await?;
+        Ok(unobserved)
+    }
+
+    async fn task_read_transaction(&self) -> Result<DatabaseTransaction> {
+        // Every boundary and membership row must come from the same snapshot.
+        // PostgreSQL's default READ COMMITTED does not provide this across
+        // multiple SELECTs. SQLite read transactions already pin a snapshot.
+        // https://www.postgresql.org/docs/current/transaction-iso.html
+        // https://www.sqlite.org/isolation.html
+        if self.db.get_database_backend() == DbBackend::Sqlite {
+            Ok(self.db.begin().await?)
+        } else {
+            Ok(self
+                .db
+                .begin_with_config(
+                    Some(IsolationLevel::RepeatableRead),
+                    Some(AccessMode::ReadOnly),
+                )
+                .await?)
+        }
+    }
+
+    async fn replace_task_object<T: serde::Serialize>(
+        &self,
+        db: &impl ConnectionTrait,
+        kind: &str,
+        key: &str,
+        previous: u64,
+        value: &T,
+    ) -> Result<()> {
+        let json = serde_json::to_string(value)?;
+        ensure!(
+            json.len() <= MAX_OBJECT_BYTES,
+            "task object exceeds size limit"
+        );
+        let revision = previous.checked_add(1).context("task revision overflow")?;
+        let changed = object_entity::Entity::update_many()
+            .col_expr(object_entity::Column::ObjectJson, Expr::value(json))
+            .col_expr(
+                object_entity::Column::Digest,
+                Expr::value(canonical_digest(value)?),
+            )
+            .col_expr(
+                object_entity::Column::Revision,
+                Expr::value(i64::try_from(revision)?),
+            )
+            .filter(object_entity::Column::Id.eq(self.object_id(kind, key)?))
+            .filter(object_entity::Column::Owner.eq(&self.owner_key))
+            .filter(object_entity::Column::Revision.eq(i64::try_from(previous)?))
+            .exec(db)
+            .await?;
+        ensure!(
+            changed.rows_affected == 1,
+            "task changed; reload before retry"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

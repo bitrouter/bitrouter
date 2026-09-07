@@ -18,6 +18,7 @@ use crate::eval::types::canonical_digest;
 
 pub mod execution;
 pub mod forks;
+pub(crate) mod tasks;
 
 mod source_entity {
     use sea_orm::entity::prelude::*;
@@ -210,6 +211,21 @@ impl EvidenceStore {
         records: &[RecordInput],
         cursor: SourceCursor,
     ) -> Result<RegisteredSource> {
+        let transaction = self.db.begin().await?;
+        let next = self
+            .append_on(&transaction, source, records, cursor)
+            .await?;
+        transaction.commit().await?;
+        Ok(next)
+    }
+
+    async fn append_on(
+        &self,
+        db: &impl ConnectionTrait,
+        source: &RegisteredSource,
+        records: &[RecordInput],
+        cursor: SourceCursor,
+    ) -> Result<RegisteredSource> {
         ensure!(
             source.id == source.descriptor.id(&self.owner_key)?,
             "evidence source owner mismatch"
@@ -219,7 +235,6 @@ impl EvidenceStore {
             .revision
             .checked_add(1)
             .context("source revision overflow")?;
-        let transaction = self.db.begin().await?;
         let updated = source_entity::Entity::update_many()
             .col_expr(
                 source_entity::Column::CursorJson,
@@ -234,7 +249,7 @@ impl EvidenceStore {
             .filter(source_entity::Column::Owner.eq(&self.owner_key))
             .filter(source_entity::Column::Revision.eq(source.revision))
             .filter(source_entity::Column::CursorDigest.eq(canonical_digest(&source.cursor)?))
-            .exec(&transaction)
+            .exec(db)
             .await?;
         ensure!(
             updated.rows_affected == 1,
@@ -243,17 +258,14 @@ impl EvidenceStore {
         for record in records {
             let id = record.id(&source.id)?;
             let digest = canonical_digest(record)?;
-            if let Some(existing) = record_entity::Entity::find_by_id(&id)
-                .one(&transaction)
-                .await?
-            {
+            if let Some(existing) = record_entity::Entity::find_by_id(&id).one(db).await? {
                 ensure!(
                     existing.owner == self.owner_key && existing.digest == digest,
                     "native record id conflict"
                 );
                 decode_record(existing)?;
                 self.write_facts(
-                    &transaction,
+                    db,
                     &source.descriptor,
                     &StoredRecord {
                         id,
@@ -274,10 +286,10 @@ impl EvidenceStore {
                 digest: Set(digest.clone()),
                 record_json: Set(serde_json::to_string(record)?),
             }
-            .insert(&transaction)
+            .insert(db)
             .await?;
             self.write_facts(
-                &transaction,
+                db,
                 &source.descriptor,
                 &StoredRecord {
                     id,
@@ -288,7 +300,6 @@ impl EvidenceStore {
             )
             .await?;
         }
-        transaction.commit().await?;
         Ok(RegisteredSource {
             revision: next_revision,
             cursor,
@@ -805,7 +816,7 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
     );
     ensure!(
         match row.kind.as_str() {
-            "attempt" | "fork_binding" =>
+            "attempt" | "fork_binding" | "active_task" | "prompt_operation" =>
                 fields.get("id").and_then(serde_json::Value::as_str)
                     == Some(row.object_key.as_str()),
             "manifest" => row.object_key == row.digest,

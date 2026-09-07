@@ -59,16 +59,42 @@ continues. Tests cover database reopen, profile separation, retired hooks,
 concurrent controllers, cancellation, corrupt inventory cursors, and pagination.
 A completed recovery sweep is not a task settlement decision.
 
+The application now creates the first task and attempt on a prompt whose native
+session scope is confirmed. Subsequent prompts retain that identity across
+controller connections. Raw prompt observations, source cursors, operation
+membership and attempt transitions commit together. Reads verify every recorded
+prompt boundary against its owned source and original record, including completed
+operations and the attempt origin. Overlapping RPCs remain collecting until all
+recorded responses arrive; the final response only starts settling. A different
+controller's outstanding RPC adds an explicit unobserved-response gap. It is not
+declared completed, cancelled or currently executing by the replacement controller.
+This does not recover native Query liveness or resolve a request committed before
+an interrupted forward. The application snapshot exposes these attempts, but
+native execution ranges, task switching, artifact baselines and final settlement
+are still required. Operation membership is bounded per attempt; it is not an
+unlimited session-wide operation log.
+
+Task-boundary tests cover both application harness paths, transactional rollback,
+replay conflicts, corrupted original records, independent SQLite connections and
+unanswered prompts after database reopen. A concurrent-read fixture verifies
+stable snapshots on SQLite and has also been run against an isolated PostgreSQL
+instance. The PostgreSQL fixture is opt-in with `BITROUTER_TEST_POSTGRES_URL` and
+`cargo test -p bitrouter --lib --all-features
+postgres_task_reads_keep_one_snapshot_during_concurrent_completion -- --ignored`;
+the URL must name a dedicated test database. This is database concurrency
+validation, not native harness runtime conformance.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
 rebinding; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; immutable workspace
 artifacts; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
-conformance, workspace checks, final review and PR delivery. Attempt and manifest
-storage APIs exist, but the application does not yet automatically create and
-settle attempts or submit their scores. The live collection snapshot exposes
-history, candidate execution facts and gaps; it is never optimization evidence
-by itself.
+conformance, workspace checks, final review and PR delivery. Automatic first-attempt
+creation is wired; explicit task/attempt switching, immutable native source cuts,
+workspace baselines, dangling-RPC resolution, final settlement and score submission
+are not. Manifest storage exists, but no application path yet compiles a complete
+evaluation manifest. The live collection snapshot exposes history, candidate
+execution facts, attempts and gaps; it is never optimization evidence by itself.
 
 Recovery and the live candidate graph retain explicit resource limits. Task
 scoping and durable per-attempt collection still need to replace aggregate

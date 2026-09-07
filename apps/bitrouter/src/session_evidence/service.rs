@@ -61,6 +61,7 @@ pub struct EvidenceLaunch<'a> {
 pub struct CollectionSnapshot {
     pub histories: Vec<ResolvedHistory>,
     pub graph: super::execution::ExecutionGraph,
+    pub attempts: Vec<super::types::Attempt>,
     pub gaps: BTreeSet<String>,
     pub reconciled_at: Option<String>,
 }
@@ -362,6 +363,32 @@ impl ControllerEvidence {
             gaps.insert("native_graph_backlog".into());
             self.wake.notify_one();
         }
+        let mut attempts = Vec::new();
+        for node in &nodes {
+            let status = async {
+                let attempt = self.store.active_attempt(node).await?;
+                let unobserved = attempt.is_some()
+                    && self
+                        .store
+                        .has_unobserved_prompts(node, &self.controller_id)
+                        .await?;
+                anyhow::Ok((attempt, unobserved))
+            }
+            .await;
+            match status {
+                Ok((Some(attempt), unobserved)) => {
+                    if unobserved {
+                        gaps.insert("native_prompt_response_unobserved".into());
+                    }
+                    attempts.push(attempt);
+                }
+                Ok((None, _)) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "native task state could not be read");
+                    gaps.insert("native_task_state_invalid".into());
+                }
+            }
+        }
         let mut state = self.state.lock().await;
         if !state.ambiguous_sessions.is_empty() {
             gaps.insert("ambiguous_acp_session_scope".into());
@@ -372,6 +399,7 @@ impl ControllerEvidence {
         let snapshot = CollectionSnapshot {
             histories,
             graph,
+            attempts,
             gaps,
             reconciled_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -617,6 +645,7 @@ impl SessionObserver for ControllerEvidence {
                 .await?;
             if observation.phase == "response"
                 || observation.phase == "disconnect"
+                || observation.method == "session/prompt"
                 || observation.method == super::claude_sdk::METHOD
             {
                 self.wake.notify_one();

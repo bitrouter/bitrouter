@@ -152,6 +152,14 @@ temporary hook file. Historical Query state is not restored as a live session.
 Recovery failures and resource limits remain visible gaps; they do not disable
 current collection. No additional user command is needed for this recovery.
 
+A prompt in a confirmed native session automatically starts its first local
+task/attempt. Further prompts keep that identity across reconnects. The prompt
+record and its task transition commit together; an RPC result starts settlement
+but does not certify coding success or completed background work. Outstanding
+RPCs owned by another controller remain explicit uncertainty. Task state is
+currently available in the application evidence snapshot; TUI feedback and
+automatic evaluation submission are not yet wired.
+
 Claude session creation also follows `_meta.claudeCode.options.env`; relative
 native roots resolve against that session's `cwd`. Each profile has a separate
 evidence namespace and hook spool. Claude may reuse its loaded Query when

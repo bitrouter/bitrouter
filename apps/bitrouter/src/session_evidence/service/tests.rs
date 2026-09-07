@@ -54,6 +54,189 @@ pub(super) fn observation(
 }
 
 #[tokio::test]
+async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Result<()> {
+    use super::super::types::AttemptPhase;
+
+    for (harness_id, package) in [
+        ("codex-acp", "@agentclientprotocol/codex-acp"),
+        ("claude-acp", "@agentclientprotocol/claude-agent-acp"),
+    ] {
+        let directory = tempfile::tempdir()?;
+        let mut env = HashMap::from([
+            (
+                "CODEX_HOME".into(),
+                directory
+                    .path()
+                    .join("codex")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                directory
+                    .path()
+                    .join("claude")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ]);
+        let mut handle = EvidenceHandle::open(EvidenceLaunch {
+            home: &directory.path().join("router"),
+            database_url: "sqlite:evidence.db?mode=rwc",
+            identity: &ControllerIdentity::new(harness_id, package, "fixture/1"),
+            env: &mut env,
+            strip_inherited_env: &[],
+        })
+        .await?
+        .context("controlled evidence")?;
+        let service = &handle.service;
+        service
+            .observe(observation("new", "session/new", "request", json!({})))
+            .await?;
+        service
+            .observe(observation(
+                "new",
+                "session/new",
+                "response",
+                json!({"sessionId":"native-root"}),
+            ))
+            .await?;
+        let root = NodeKey {
+            namespace: service.collector.root().namespace.clone(),
+            harness: service.collector.root().harness,
+            native_id: "native-root".into(),
+            agent_id: None,
+        };
+        assert!(service.store.active_attempt(&root).await?.is_none());
+        service
+            .observe(observation(
+                "prompt",
+                "session/prompt",
+                "request",
+                json!({"sessionId":"native-root","prompt":[]}),
+            ))
+            .await?;
+        let attempt = service
+            .store
+            .active_attempt(&root)
+            .await?
+            .context("attempt before forwarding")?;
+        assert_eq!(attempt.phase, AttemptPhase::Collecting);
+        assert_eq!(attempt.members, BTreeSet::from([root.clone()]));
+        service.observe(observation("update", "session/update", "notification", json!({"sessionId":"native-root","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}))).await?;
+        assert_eq!(
+            service
+                .store
+                .active_attempt(&root)
+                .await?
+                .context("still collecting")?
+                .phase,
+            AttemptPhase::Collecting
+        );
+        service
+            .observe(observation(
+                "prompt",
+                "session/prompt",
+                "response",
+                json!({"stopReason":"end_turn"}),
+            ))
+            .await?;
+        let snapshot = service.reconcile().await?;
+        let shown = snapshot
+            .attempts
+            .iter()
+            .find(|item| item.id == attempt.id)
+            .context("visible attempt")?;
+        assert_eq!(shown.phase, AttemptPhase::Settling);
+        assert!(shown.effective_manifest.is_none());
+        service
+            .observe(observation(
+                "synthetic",
+                "session/update",
+                "notification",
+                json!({"sessionId":"child-view","update":{}}),
+            ))
+            .await?;
+        assert_eq!(service.store.attempts(None, 16).await?.len(), 1);
+        handle.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn restarted_controller_exposes_unanswered_old_prompt_as_uncertain() -> Result<()> {
+    use super::super::types::AttemptPhase;
+
+    let directory = tempfile::tempdir()?;
+    let mut first = claude_service(directory.path()).await?;
+    first
+        .service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    first
+        .service
+        .observe(observation(
+            "old",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"root","prompt":[]}),
+        ))
+        .await?;
+    let old = first.service.store.attempts(None, 16).await?.remove(0);
+    first.shutdown().await?;
+    drop(first);
+    let mut next = claude_service(directory.path()).await?;
+    next.service
+        .observe(observation(
+            "resume",
+            "session/resume",
+            "request",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    next.service
+        .observe(observation(
+            "resume",
+            "session/resume",
+            "response",
+            json!({}),
+        ))
+        .await?;
+    next.service
+        .observe(observation(
+            "new-prompt",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"root","prompt":[]}),
+        ))
+        .await?;
+    next.service
+        .observe(observation(
+            "new-prompt",
+            "session/prompt",
+            "response",
+            json!({"stopReason":"end_turn"}),
+        ))
+        .await?;
+    let snapshot = next.service.reconcile().await?;
+    assert!(snapshot.gaps.contains("native_prompt_response_unobserved"));
+    let attempt = snapshot
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id == old.id)
+        .context("resumed attempt")?;
+    assert_eq!(attempt.phase, AttemptPhase::Collecting);
+    assert!(attempt.effective_manifest.is_none());
+    next.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_sdk_lifecycle_is_durable_in_the_confirmed_session_profile() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let mut handle = claude_service(directory.path()).await?;

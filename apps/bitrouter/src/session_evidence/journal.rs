@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 
 use super::store::EvidenceStore;
 use super::types::{
-    MAX_RECORD_BYTES, RecordInput, RegisteredSource, SourceCursor, SourceDescriptor, SourceRange,
+    MAX_RECORD_BYTES, RecordInput, RegisteredSource, SourceCursor, SourceDescriptor, SourceFormat,
+    SourceRange,
 };
 use crate::eval::types::canonical_digest;
 
@@ -39,6 +40,9 @@ impl Journal {
     /// backpressure and keeps the durable ordering ahead of ACP delivery.
     pub async fn append(&self, raw: Value) -> Result<()> {
         let mut source = self.source.lock().await;
+        // A cancelled commit may have reached the database without updating
+        // this cache. Re-read the durable cursor before the next observation.
+        *source = self.store.register(source.descriptor.clone()).await?;
         ensure!(
             source.cursor.next_sequence < i64::MAX as u64,
             "controller journal sequence overflow"
@@ -57,7 +61,13 @@ impl Journal {
             next_sequence: record.sequence + 1,
             anchor_digest: canonical_digest(&(&source.cursor.anchor_digest, &record))?,
         };
-        *source = self.store.append(&source, &[record], cursor).await?;
+        *source = if source.descriptor.format == SourceFormat::Acp {
+            self.store
+                .append_observation(&source, record, cursor)
+                .await?
+        } else {
+            self.store.append(&source, &[record], cursor).await?
+        };
         Ok(())
     }
 }
