@@ -91,7 +91,7 @@
 <text class="routes" x="578.0" y="325.0" text-anchor="end">7</text>
 <rect x="612.0" y="90.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="622.0" y="109.0">OPENAI</text>
-<text class="lab-count" x="870.0" y="109.0" text-anchor="end">6</text>
+<text class="lab-count" x="870.0" y="109.0" text-anchor="end">7</text>
 <rect x="622.0" y="128.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="622.0" y="128.0" width="96.3" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="630.0" y="143.0">gpt-5.5</text>
@@ -116,6 +116,10 @@
 <rect x="622.0" y="258.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="630.0" y="273.0">gpt-5.4-mini</text>
 <text class="routes" x="870.0" y="273.0" text-anchor="end">7</text>
+<rect x="622.0" y="284.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
+<rect x="622.0" y="284.0" width="10.7" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="630.0" y="299.0">gpt-6-astra</text>
+<text class="routes" x="870.0" y="299.0" text-anchor="end">1</text>
 <rect x="904.0" y="90.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="914.0" y="109.0">XAI</text>
 <text class="lab-count" x="1162.0" y="109.0" text-anchor="end">6</text>
@@ -245,5 +249,5 @@
 <rect x="330.0" y="664.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="338.0" y="679.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="679.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="720.0">51 models · 47 providers · 434 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="720.0">52 models · 47 providers · 435 model→provider routes · 12 providers billed by subscription</text>
 </svg>
