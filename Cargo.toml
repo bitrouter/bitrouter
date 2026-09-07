@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.27"
+version = "1.0.0-alpha.28"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,22 +30,22 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", default-features = false }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
-bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.28", default-features = false }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.28" }
+bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.28" }
 # Optional telemetry egress. `default-features = false` keeps a consumer that
 # only wants the observability contract off the OpenTelemetry stack entirely.
-bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.27", default-features = false }
+bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.28", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
 rustix = { version = "1", default-features = false }
 
-# ACP SDK crates. The published 2.0.0 runtime pins schema 1.5.0 exactly, while
-# the official SDK revision below consumes schema 1.7.0. Pinning one reviewed
-# revision keeps the runtime and the schema on one ACP v1 type universe.
-agent-client-protocol = { git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345", features = ["unstable_session_fork"] }
-agent-client-protocol-conductor = { git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345" }
+# ACP SDK crates. Development pins one reviewed Git revision, whose manifests
+# consume schema 1.7.0. The compatible major-version requirement is retained
+# because Cargo strips `git` when packaging and must resolve published crates.
+agent-client-protocol = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345", features = ["unstable_session_fork"] }
+agent-client-protocol-conductor = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345" }
 # Shared by `bitrouter status --watch` (in the app) and `bitrouter-tui` (the
 # ACP session renderer), so the version lives here rather than in either.
 ratatui = { version = "0.29", features = [

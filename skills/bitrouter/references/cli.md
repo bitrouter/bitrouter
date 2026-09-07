@@ -2,7 +2,8 @@
 
 Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bitrouter doctor`, `bitrouter providers add`, `bitrouter cloud connect`, or the old auth subcommand tree (cloud identity is `bitrouter cloud whoami`, see below).
 
-Bare `bitrouter` (no subcommand) is the onboarding front door: it runs the network-free credential probe and either launches the setup wizard (unconfigured) or prints a one-line status + a `bitrouter launch` hint (configured), exit 0 either way. See `bitrouter init` under *Setup helpers*.
+Bare `bitrouter` opens first-run onboarding when no default ACP harness is saved. Credentials alone do not complete setup. The wizard saves `chat.agent` and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the daemon, or exits. Subsequent bare invocations immediately open the saved TUI.  Configuration resolves from `./bitrouter.yaml`, then `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no existing file, onboarding writes to the BitRouter home. `init -c PATH` selects an explicit destination. Existing configuration values are preserved while updating chat defaults; `--force` replaces them with the starter configuration. Writes are atomic. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`.  `init --yes` saves configuration without interactive credential prompts and exits by default. The default harness is `codex-acp`; `--harness claude` selects `claude-acp`. Repeated `--harness` flags use the first as the default. An explicit `--after launch` opens the ACP TUI even when setup itself was headless. Without a terminal, bare unconfigured invocation prints setup instructions and an inert onboarding envelope; it does not silently complete the wizard.
+
 
 Global `--context NAME` selects a named remote-control target for the read-only
 `status` (including `--requests`), `models`, and `route` commands; `local`
@@ -157,12 +158,12 @@ Two ACP execution modes share one controller and differ only in who drives it. `
 
 **Controller lifecycle**: ACP client `initialize` capabilities and `_meta` reach the harness exactly. Each `session/new` is forwarded and returns that harness response's opaque `sessionId`; repeated calls may create different sessions. Advertised `session/list|load|resume|fork|close|delete`, prompts, cancellations, callbacks, updates, errors, `_meta`, and extension payloads pass through. BitRouter neither mints a client-facing session alias nor keeps a session catalog.
 
-**Endpoint setup**: Claude uses pinned `@agentclientprotocol/claude-agent-acp@0.70.0`; Codex uses pinned `@agentclientprotocol/codex-acp@1.7.0`. Controller-to-harness `providers/*` configures the model endpoint and is removed from client-facing capabilities. Claude's fallback is `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex's is `CODEX_CONFIG` plus `MODEL_PROVIDER`, with no ACP-mode `-c` arguments.
+**Endpoint setup**: Claude uses pinned `@agentclientprotocol/claude-agent-acp@0.75.1`; Codex uses pinned `@agentclientprotocol/codex-acp@1.10.0`. Controller-to-harness `providers/*` configures the model endpoint and is removed from client-facing capabilities. Claude's fallback is `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex's is `CODEX_CONFIG` plus `MODEL_PROVIDER`, with no ACP-mode `-c` arguments.
 
 **Session route control**: a locally bound controller advertises stable-v1
 `_bitrouter/route/list|set|reset` methods under initialize response
 `_meta["bitrouter.dev/controller"].routeControl`. They operate on opaque native
-`sessionId` values and create daemon-confirmed ephemeral leases; manager-side
+`sessionId` values and create daemon-confirmed ephemeral leases; client-side
 `providers/*` remains unavailable. `--direct` and explicit remote `--base-url`
 connections do not advertise route control because hosted HTTP route control
 is not implemented yet. `route/list.available` is a logical-model suggestion list;
@@ -226,8 +227,8 @@ snapshot; BitRouter owns no transcript store or second session catalog.
 
 | Command | Effect |
 |---|---|
-| `bitrouter init [flags]` | Guided onboarding wizard: **credentials** → **harness** → **finish** (launch / serve+snippet / exit). Interactive by default; `--yes` runs it headlessly — process the flags below, never block on a human, emit the JSON result envelope (`action: onboarding`, `providers_configured`, `providers_skipped_interactive`, `harnesses_installed`, `after`, `snippet`), and scaffold the starter `bitrouter.yaml` (`skip_auth: true`, `listen: 127.0.0.1:4356`, common providers stubbed `{}`). The scaffold refuses to overwrite unless `--force`; `--reset` clears stored credentials first (cloud session always, provider creds after a confirm / unconditionally under `--yes`). Flags mirror every prompt: `--cloud-login`, `--api-key <brk_…>` (cloud), `--provider <id>` + `--provider-api-key <k>` (repeatable), `--use-detected`, `--harness claude\|codex` (repeatable), `--no-install`, `--after launch\|serve\|exit`, `--model <id>`, `--write-config`, `-c/--config PATH`. Under `--yes`, anything needing interactive OAuth (bare `--cloud-login`, a `--provider` with no key) is reported in `providers_skipped_interactive`, not attempted. |
-| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure, provider derivation, upstream-URL safety, and referenced policy locks. Exits non-zero on invalid config and reports unset variables and ignored plugin blocks. The daemon, `acp serve`, `run`, and `code <agent>` log the same ignored set on start. |
+| `bitrouter init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens BitRouter ACP TUI; `--force` resets existing configuration. |
+| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-guardrails`, `bitrouter-policy` and `bitrouter-telemetry` are the ids it reads). That does **not** fail validation: it is a misconfiguration, not a malformed config. The daemon, `bitrouter acp serve`, `bitrouter run`, and `bitrouter code <agent>` log the same set on every start. |
 | `bitrouter skills list [--global] [--json\|--human]` | List skills. Reads the project root by default; `--global` reads `~/.claude/`. Covers all three conventional layouts of that root (`<root>/SKILL.md`, `<root>/skills/<name>/`, `<root>/.claude/skills/<name>/`) — it used to read only the last. Each row carries `name`, `description`, `dir`, `skill_md`, `valid`, and a `problem` when `valid` is false (bad frontmatter, a directory name that does not match `frontmatter.name`, an out-of-bounds name/description). Invalid skills are listed *marked* here and in `skills_search`, and omitted from SEP-2640 `skills/list`, which requires a verifiable entry — so this is where you learn why a skill on disk will not load. Same report type as the `skills_search` tool. |
 | `bitrouter skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
@@ -321,6 +322,13 @@ Typed wrappers over the common Cloud management workflows. Requires either login
 | `bitrouter cloud byok list/set/delete` | BYOK provider keys. `set` takes already-sealed ciphertext (`--ciphertext-b64` + `--kek-id` matching the cloud's current X25519 public key). Scope: `byok:read` / `byok:write`. |
 
 ## Native launch and headless ACP
+
+The maintained ACP adapters are pinned to
+`@agentclientprotocol/codex-acp@1.10.0` and
+`@agentclientprotocol/claude-agent-acp@0.75.1`. Node.js 22+ and `npx` are
+required. At ACP session startup, BitRouter probes for compatible installed
+Codex and Claude CLIs behind the adapters; explicit env and transport
+overrides win, and custom adapter versions are not modified.
 
 The native shortcuts and `launch` run a harness's **interactive native TUI**;
 `run` drives an **ACP-compatible adapter as a headless sub-agent**. Both route the

@@ -5,7 +5,7 @@ description: >
   its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
   Anthropic-shaped traffic to any provider, via a coding-agent subscription,
   hosted BitRouter, or your own keys. Covers bitrouter init, provider
-  credentials, wiring a coding agent with bitrouter launch, routing, and spend.
+  credentials, starting the default ACP TUI with bitrouter, routing, and spend.
   Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
   pointing a coding agent at a proxy.
 license: Apache-2.0
@@ -48,23 +48,22 @@ macOS: `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
 Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"`.
 Verify with `bitrouter --version`; on failure read `references/diagnose.md`.
 
-### 3. Configure — drive the headless wizard
-`bitrouter init --yes` is the scriptable onboarding path: it never blocks on a
-human, scaffolds a starter `bitrouter.yaml` (`skip_auth: true`, `listen:
-127.0.0.1:4356`), and **prints a JSON result envelope** — parse it rather than
-guessing what happened.
+### 3. Configure
+
+A human runs `bitrouter` to complete onboarding. After setup the same command
+opens the saved default ACP TUI. Credentials alone do not mark setup complete.
+For scripted setup:
 
 ```bash
-bitrouter init --yes --use-detected --harness claude --after launch
+bitrouter init --yes --use-detected --harness codex --after exit
 ```
 
-Read `providers_skipped_interactive` from the envelope; those credentials need
-a human. See `references/cli.md` → *Setup helpers* for every flag.
-
-The daemon writes runtime files to `~/.bitrouter/` and merges the public provider
-registry on start. For multi-account, custom endpoints, or ACP agents, write an
-explicit `bitrouter.yaml` and check it with `bitrouter config validate -c
-./bitrouter.yaml` (CI-safe, no secrets); see `references/providers.md`.
+This saves `chat.agent: codex-acp` in the resolved config, or the BitRouter home
+when no config exists. `--model ID` persists the default model too. Existing
+settings are preserved; `--force` resets them. Read
+`providers_skipped_interactive` in the JSON report for logins needing a human.
+No hand-written provider or agent entry is needed for Codex or Claude ACP.
+See `references/cli.md` for flags, config precedence and first-run defaults.
 
 ### 4. Choose providers — subscription first
 These logins are interactive, so they are what `providers_skipped_interactive`
@@ -97,17 +96,28 @@ Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not
 keys. Net effect: the subscription serves its native models; hosted BitRouter
 or BYOK supplements everything it does not cover.
 
-### 5. Wire the coding agent
-`bitrouter launch` routes a harness's native TUI without editing its config
-files — reversible, per-process, and it auto-starts the daemon if it is down.
+### 5. Start the desired agent interface
+
+BitRouter's full-screen UI owns both operations and ACP sessions:
+
+```bash
+bitrouter code                    # home, agents, sessions, and operations
+bitrouter code codex              # explicit interactive ACP session
+bitrouter run claude "summarize this repo"  # headless ACP turn
+```
+
+Both built-in adapters require Node.js 22+ and `npx`; a compatible local CLI is
+selected automatically behind the pinned adapter. For the harness's own native
+interface, use the reversible per-process launcher:
 
 ```bash
 bitrouter claude
-bitrouter codex -- -p "summarize this repo"
+bitrouter codex -- --search
 ```
 
 `launch <agent>` accepts catalog native harnesses; `claude`, `claude-code`, and
-`codex` are shortcuts. Everything after `--` is forwarded verbatim.
+`codex` are shortcuts. Everything after `--` is forwarded verbatim, and user
+configuration is not edited.
 
 Leave the harness's own model on its subscription and let BitRouter carry the
 rest — subagents, bulk work, models the plan does not include. Pinning the whole

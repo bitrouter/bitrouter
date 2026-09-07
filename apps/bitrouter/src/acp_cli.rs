@@ -645,6 +645,10 @@ async fn apply_routing_with_cloud_credentials(
         );
     }
 
+    if let Some(agent) = config.agents.get_mut(agent_id) {
+        crate::local_cli::apply(&mut agent.transport).await;
+    }
+
     // `--model` only takes effect when the daemon route is applied; warn
     // rather than silently drop it on any path that launches direct.
     let warn_model_dropped = |why: &str| {
@@ -679,7 +683,7 @@ async fn apply_routing_with_cloud_credentials(
     if !harness.env_args_routable() {
         eprintln!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
-             (`bitrouter launch` does); launching direct",
+             in this ACP adapter; launching direct",
             harness.id
         );
         warn_model_dropped("the harness routes only in the interactive facet");
@@ -697,7 +701,7 @@ async fn apply_routing_with_cloud_credentials(
     if harness.id == "codex-acp" && !uses_maintained_adapter {
         eprintln!(
             "note: routing unavailable for '{agent_id}': Codex ACP endpoint configuration \
-             requires @agentclientprotocol/codex-acp@1.7.0; launching direct"
+             requires @agentclientprotocol/codex-acp@1.10.0; launching direct"
         );
         warn_model_dropped("the configured Codex ACP adapter is not the maintained pin");
         return Ok(Routed::default());
@@ -901,10 +905,7 @@ pub async fn spawn_check(
                 checks.push(row(
                     "agent",
                     SpawnCheckStatus::Fail,
-                    format!(
-                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter launch --agent {}`",
-                        h.interactive_binary.unwrap_or(agent_id)
-                    ),
+                    format!("'{agent_id}' has no ACP adapter and cannot be used as an agent"),
                 ));
                 (String::new(), Vec::new())
             }
@@ -3623,13 +3624,13 @@ mod controller_tests {
             "npx",
             &[
                 "-y".to_string(),
-                "@agentclientprotocol/codex-acp@1.7.0".to_string(),
+                "@agentclientprotocol/codex-acp@1.10.0".to_string(),
             ],
             None,
         );
         assert_eq!(identity.harness_id, "codex-acp");
         assert_eq!(identity.adapter_package, "@agentclientprotocol/codex-acp");
-        assert_eq!(identity.adapter_version, "1.7.0");
+        assert_eq!(identity.adapter_version, "1.10.0");
     }
 
     #[test]

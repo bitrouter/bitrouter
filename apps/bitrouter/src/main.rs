@@ -136,8 +136,7 @@ struct Cli {
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     context: Option<String>,
     /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
-    /// the wizard when unconfigured, a one-line status + `bitrouter launch`
-    /// hint when configured.
+    /// onboarding when no default ACP harness is saved, otherwise its TUI.
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -316,13 +315,12 @@ enum Command {
     /// steps to first value. Interactive by default; `--yes` (or no TTY) runs
     /// it headlessly, emitting the JSON result envelope and never blocking on a
     /// human. Every prompt has a flag equivalent (below) so an agent can drive
-    /// the whole thing. With `--yes` this also reproduces the classic
-    /// starter-`bitrouter.yaml` scaffold (refusing to overwrite unless
-    /// `--force`).
+    /// the whole thing. Saves the default ACP harness and optional model in
+    /// the resolved config or BitRouter home; `--force` resets existing settings.
     Init {
-        /// Path for the starter `bitrouter.yaml` write.
-        #[arg(short, long, default_value = "bitrouter.yaml")]
-        config: PathBuf,
+        /// Configuration to create/update; defaults to the resolved config or BitRouter home.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
         /// Run non-interactively: process the flags below, never block, emit
         /// the JSON envelope, and scaffold the starter config.
         #[arg(short = 'y', long)]
@@ -355,23 +353,15 @@ enum Command {
         /// (Step 1) Accept the auto-detected credential(s) without prompting.
         #[arg(long)]
         use_detected: bool,
-        /// (Step 2) Harness to drive: `claude` or `codex` (repeatable).
+        /// (Step 2) Built-in ACP harness: `claude` or `codex` (first is the default).
         #[arg(long = "harness", value_enum)]
         harnesses: Vec<bitrouter::spawn::SpawnAgent>,
-        /// (Step 2) Never install a missing harness.
-        #[arg(long)]
-        no_install: bool,
         /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
         #[arg(long, value_enum)]
         after: Option<bitrouter::onboarding::AfterAction>,
-        /// (Step 3) Model handed to the harness for this session only (not
-        /// persisted).
+        /// (Step 3) Default daemon-routable model, saved for subsequent TUI sessions.
         #[arg(long, value_name = "ID")]
         model: Option<String>,
-        /// (Step 3) Write a starter `bitrouter.yaml` (the one sanctioned config
-        /// write).
-        #[arg(long)]
-        write_config: bool,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -1718,18 +1708,24 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // the session file **only** (see TUI_RENDERER_SPEC §4.6).
     let is_acp = matches!(
         &cli.command,
-        Some(
+        None | Some(
             Command::Acp { .. }
                 | Command::Run { .. }
                 | Command::Spawn { .. }
                 | Command::Chat { .. }
                 | Command::Code { .. }
                 | Command::Tui { .. }
+                | Command::Init { .. }
         )
     );
     let owns_the_terminal = matches!(
         &cli.command,
-        Some(Command::Chat { .. } | Command::Code { .. } | Command::Tui { .. })
+        None | Some(
+            Command::Chat { .. }
+                | Command::Code { .. }
+                | Command::Tui { .. }
+                | Command::Init { .. }
+        )
     );
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
@@ -1757,8 +1753,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             .into());
         }
         // Bare `bitrouter` — the onboarding front door (wizard when
-        // unconfigured; status + hint when configured). Never re-onboards a
-        // configured user, never silently spawns a daemon/harness.
+        // unconfigured; saved default ACP TUI when configured).
         return bitrouter::onboarding::entry(output).await;
     };
 
@@ -1912,10 +1907,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             provider_api_keys,
             use_detected,
             harnesses,
-            no_install,
             after,
             model,
-            write_config,
         } => {
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
@@ -1928,10 +1921,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 provider_api_keys,
                 use_detected,
                 harnesses,
-                no_install,
                 after,
                 model,
-                write_config,
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -2106,7 +2097,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 };
                 return run_launch(config.as_deref(), opts, output).await;
             }
-
             let Some(agent) = agent else {
                 anyhow::bail!(
                     "spawn: provide an agent id and a mode, e.g. \
@@ -5723,7 +5713,6 @@ async fn resolve_prompt_input(
         .context("reading prompt from stdin")?;
     Ok(prompt)
 }
-
 // ===== `bitrouter acp …` (per-session ACP substrate) =====
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
@@ -7435,7 +7424,6 @@ mod tests {
             "exit",
             "--model",
             "openai/gpt-5",
-            "--write-config",
         ])
         .expect("parse");
         match cli.command {
@@ -7449,10 +7437,9 @@ mod tests {
                 harnesses,
                 after,
                 model,
-                write_config,
                 ..
             }) => {
-                assert!(yes && force && reset && write_config);
+                assert!(yes && force && reset);
                 assert_eq!(api_key.as_deref(), Some("brk_abc.secret"));
                 assert_eq!(providers, vec!["openai"]);
                 assert_eq!(provider_api_keys, vec!["sk-openai"]);

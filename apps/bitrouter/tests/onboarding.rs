@@ -27,6 +27,7 @@ fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &st
     let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .args(args)
+        .current_dir(home)
         .env("HOME", home)
         .env("XDG_DATA_HOME", data_home)
         .env_remove("BITROUTER_HOME")
@@ -62,11 +63,10 @@ fn bare_unconfigured_emits_inert_envelope_and_exits_zero() {
 }
 
 #[test]
-fn bare_configured_prints_status_not_wizard() {
+fn credentials_alone_do_not_complete_onboarding() {
     let home = TempDir::new().unwrap();
     let data = TempDir::new().unwrap();
-    // A detected BYOK env key makes the probe report "configured": bare
-    // bitrouter prints a status view (action=status), never the wizard.
+    // Provider credentials do not substitute for a saved default ACP harness.
     let out = run_cli(
         home.path(),
         data.path(),
@@ -75,9 +75,8 @@ fn bare_configured_prints_status_not_wizard() {
     );
     assert!(out.status.success());
     let v = stdout_json(&out);
-    assert_eq!(v["action"], "status");
-    assert_eq!(v["configured"], true);
-    // No config file is written as a side effect of a status view.
+    assert_eq!(v["action"], "onboarding");
+    // Non-interactive bare invocation does not silently save onboarding.
     assert!(!home.path().join("bitrouter.yaml").exists());
 }
 
@@ -127,7 +126,7 @@ fn init_yes_no_creds_reports_zero_providers_and_scaffolds() {
     let v = stdout_json(&out);
     assert_eq!(v["action"], "onboarding");
     assert_eq!(v["providers_configured"], serde_json::json!([]));
-    assert_eq!(v["harnesses_installed"], serde_json::json!([]));
+    assert_eq!(v["harnesses_installed"], serde_json::json!(["codex-acp"]));
     assert_eq!(v["after"], "exit");
     assert!(v["snippet"].is_null());
     assert!(cfg.exists(), "init --yes scaffolds the starter config");
@@ -197,33 +196,201 @@ fn init_yes_rejects_removed_workflow_optimization_before_scaffolding() -> anyhow
 }
 
 #[test]
-fn init_yes_refuses_overwrite_without_force() {
-    let home = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
+fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
     let cfg = home.path().join("bitrouter.yaml");
-    std::fs::write(&cfg, "# hand-tuned\n").unwrap();
+    std::fs::write(
+        &cfg,
+        "server: { listen: '127.0.0.1:9012', skip_auth: false }\n",
+    )?;
 
-    // Without --force, an existing config is left untouched.
+    // Without --force, existing values survive the saved chat default.
     let out = run_cli(
         home.path(),
         data.path(),
-        &["init", "--yes", "-c", cfg.to_str().unwrap()],
+        &[
+            "init",
+            "--yes",
+            "-c",
+            cfg.to_str()
+                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 test path"))?,
+        ],
         &[],
     );
     assert!(out.status.success());
-    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "# hand-tuned\n");
+    assert!(std::fs::read_to_string(&cfg)?.contains("127.0.0.1:9012"));
 
     // With --force it overwrites with the starter template.
     let out = run_cli(
         home.path(),
         data.path(),
-        &["init", "--yes", "--force", "-c", cfg.to_str().unwrap()],
+        &[
+            "init",
+            "--yes",
+            "--force",
+            "-c",
+            cfg.to_str()
+                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 test path"))?,
+        ],
         &[],
     );
     assert!(out.status.success());
-    assert!(
-        std::fs::read_to_string(&cfg)
-            .unwrap()
-            .contains("skip_auth: true")
+    assert!(std::fs::read_to_string(&cfg)?.contains("skip_auth: true"));
+    Ok(())
+}
+
+#[test]
+fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &[
+            "init",
+            "--yes",
+            "--harness",
+            "codex",
+            "--model",
+            "openai-codex:gpt-6-astra",
+        ],
+        &[],
     );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let path = home.path().join(".bitrouter/bitrouter.yaml");
+    let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
+    assert_eq!(config["chat"]["agent"], "codex-acp");
+    assert_eq!(config["chat"]["model"], "openai-codex:gpt-6-astra");
+    assert_eq!(config["server"]["listen"], "127.0.0.1:4356");
+    assert_eq!(config["server"]["skip_auth"], true);
+    assert!(!home.path().join("bitrouter.yaml").exists());
+    Ok(())
+}
+
+#[test]
+fn changing_harness_preserves_routes_and_chat_commands() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o755))?;
+    }
+    let path = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &path,
+        "server: { listen: '127.0.0.1:9012', skip_auth: false }\nchat:\n  agent: codex-acp\n  model: custom/model\n  commands: [{ name: review, prompt: 'Review $ARGUMENTS' }]\nproviders: { private: { api_base: 'https://example.invalid/v1' } }\n",
+    )?;
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &["init", "--yes", "--harness", "claude"],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(path)?)?;
+    assert_eq!(config["chat"]["agent"], "claude-acp");
+    assert_eq!(config["chat"]["model"], "custom/model");
+    assert_eq!(config["chat"]["commands"][0]["name"], "review");
+    assert_eq!(config["server"]["skip_auth"], false);
+    assert_eq!(
+        config["providers"]["private"]["api_base"],
+        "https://example.invalid/v1"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(home.path())?.permissions().mode() & 0o777,
+            0o755
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let out = run_cli(home.path(), data.path(), &["--help"], &[]);
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    for command in ["launch", "claude", "codex", "run", "code", "acp"] {
+        assert!(help.contains(&format!("  {command}")), "{command}: {help}");
+    }
+    for hidden in ["spawn", "chat", "tui"] {
+        assert!(
+            !help.contains(&format!("  {hidden}")),
+            "hidden command {hidden}: {help}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn onboarding_launch_and_next_bare_invocation_both_speak_acp() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let config_path = home.path().join("bitrouter.yaml");
+    let marker = home.path().join("acp-wire");
+    let script = r#"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$ACP_MARKER"
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+    *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"onboarding-acp"}}\n' "$id";;
+  esac
+done
+"#;
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&serde_json::json!({
+            "inherit_defaults": false,
+            "agents": { "codex-acp": { "name": "codex-acp", "transport": {
+                "type": "stdio", "command": "/bin/sh", "args": ["-c", script],
+                "env": {"ACP_MARKER": marker}
+            } } }
+        }))?,
+    )?;
+    for args in [
+        vec!["init", "--yes", "--harness", "codex", "--after", "launch"],
+        vec![],
+    ] {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
+        command
+            .args(&args)
+            .current_dir(home.path())
+            .env("HOME", home.path())
+            .env("XDG_DATA_HOME", data.path())
+            .env_remove("BITROUTER_HOME")
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        for var in PROBE_VARS {
+            command.env_remove(var);
+        }
+        let out =
+            tokio::time::timeout(std::time::Duration::from_secs(15), command.output()).await??;
+        assert!(
+            out.status.success(),
+            "args={args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let wire = std::fs::read_to_string(&marker)?;
+        assert!(wire.contains("initialize"), "{wire}");
+        assert!(wire.contains("session/new"), "{wire}");
+        std::fs::remove_file(&marker)?;
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("\"action\":\"status\""));
+    }
+    Ok(())
 }

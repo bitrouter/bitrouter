@@ -49,13 +49,13 @@ bitrouter run <id> "prompt" [routing flags]
 Stdout is ACP JSON-RPC and logs go to stderr. The ACP client sends `initialize`
 first. BitRouter forwards the client's capabilities and `_meta` to the
 harness, initializes the harness exactly once, configures its BitRouter model
-endpoint when supported, then returns initialize success. Manager-facing
+endpoint when supported, then returns initialize success. Client-facing
 `agentInfo` identifies `bitrouter-acp-controller`; sanitized harness and pinned
 adapter identity are under `_meta["bitrouter.dev/controller"]`.
 
 The controller passes through harness lifecycle capabilities, but removes the
 internal custom-provider capability. Standard `providers/*` configures the
-harness endpoint from controller to harness; it is not a manager-side
+harness endpoint from controller to harness; it is not a client-side
 BitRouter route picker. The connection uses stable ACP v1 wire semantics; the
 Rust runtime crate's major version is not an ACP wire-version selector.
 
@@ -75,7 +75,7 @@ returns method-not-found. `list` and `set` are daemon-confirmed; `route` accepts
 BitRouter presets, logical models, or explicit provider/model routes allowed
 by current policy. `list.available` contains live logical-model picker
 suggestions, not an exhaustive grammar for presets or explicit routes. Do not
-use manager-side `providers/*` as a compatibility alias.
+use client-side `providers/*` as a compatibility alias.
 
 The same trusted binding advertises `_meta["bitrouter.dev/controller"].usage`
 with `version: "1"`, `scope: "session"`, `fields: ["cost"]`, and
@@ -96,8 +96,8 @@ reports.
 The maintained catalog commands are exact pins:
 
 ```bash
-npx -y @agentclientprotocol/claude-agent-acp@0.70.0
-npx -y @agentclientprotocol/codex-acp@1.7.0
+npx -y @agentclientprotocol/claude-agent-acp@0.75.1
+npx -y @agentclientprotocol/codex-acp@1.10.0
 ```
 
 When routing is active, one endpoint plan drives both provider setup and its

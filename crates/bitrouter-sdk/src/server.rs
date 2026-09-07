@@ -817,13 +817,7 @@ async fn handle(
     req.inbound_protocol = Some(inbound.clone());
 
     if prompt.stream {
-        stream_response(
-            state.language_model.clone(),
-            req,
-            inbound.clone(),
-            &prompt.model,
-        )
-        .await
+        stream_response(state.language_model.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
@@ -835,20 +829,24 @@ async fn handle(
             .execute_detached_prepared(req)
             .await
         {
-            Ok(prepared) => match adapter.render_response(
-                &prepared.response.result,
-                &prompt,
-                &prepared.response.request_id,
-            ) {
-                Ok(json) => match prepared.delivery.deliver().await {
-                    Ok(()) => Json(json).into_response(),
-                    Err(error) => error.into_response(),
-                },
-                Err(e) => match prepared.delivery.fail(e.clone()).await {
-                    Ok(()) => e.into_response(),
-                    Err(authorization_error) => authorization_error.into_response(),
-                },
-            },
+            Ok(prepared) => {
+                let mut response_prompt = prompt.clone();
+                response_prompt.model = prepared.model_id.clone();
+                match adapter.render_response(
+                    &prepared.response.result,
+                    &response_prompt,
+                    &prepared.response.request_id,
+                ) {
+                    Ok(json) => match prepared.delivery.deliver().await {
+                        Ok(()) => Json(json).into_response(),
+                        Err(error) => error.into_response(),
+                    },
+                    Err(e) => match prepared.delivery.fail(e.clone()).await {
+                        Ok(()) => e.into_response(),
+                        Err(authorization_error) => authorization_error.into_response(),
+                    },
+                }
+            }
             Err(e) => e.into_response(),
         }
     }
@@ -888,7 +886,6 @@ async fn stream_response(
     pipeline: Arc<Pipeline>,
     req: PipelineRequest,
     inbound: ApiProtocol,
-    model: &str,
 ) -> Response {
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
@@ -900,17 +897,19 @@ async fn stream_response(
             .into_response();
         }
     };
-    let mut encoder = adapter.stream_encoder(&req.request_id, model);
+    let request_id = req.request_id.clone();
     let keepalive = pipeline.keepalive_interval();
 
     // Route resolution and the upstream HTTP handshake happen before the SSE
     // response is constructed. Pre-stream failures therefore retain their real
     // HTTP status (notably upstream 429) instead of being trapped inside an
     // already-committed HTTP 200 event stream.
-    let mut parts = match pipeline.execute_stream_prepared(req).await {
-        Ok(parts) => parts,
+    let prepared = match pipeline.execute_stream_prepared(req).await {
+        Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };
+    let mut encoder = adapter.stream_encoder(&request_id, &prepared.model_id);
+    let mut parts = prepared.parts;
 
     let frame_stream = async_stream::stream! {
         while let Some(item) = parts.next().await {

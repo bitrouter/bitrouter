@@ -291,6 +291,7 @@ providers:
         };
         let commands = |names: &[&str]| ChatConfig {
             commands: names.iter().map(|name| entry(name)).collect(),
+            ..Default::default()
         };
 
         let ok = prompt_commands(&commands(&["review", "ship"])).expect("no clash");

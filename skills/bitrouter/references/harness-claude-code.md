@@ -1,63 +1,57 @@
-# Harness: Claude Code
+# Harness: Claude
 
-Wire Anthropic's Claude Code CLI to route its model calls through BitRouter at `http://localhost:4356`.
+Claude has two deliberate BitRouter facets:
 
-> **Cloud users:** swap `http://localhost:4356` → `https://api.bitrouter.ai` (Anthropic SDK drops the `/v1`) and use a `brk_*` key instead of the placeholder. No daemon to install. See `references/cloud-setup.md`.
+- `bitrouter code claude` drives the built-in `claude-acp` adapter inside
+  BitRouter's full-screen ACP lifecycle UI.
+- `bitrouter claude` launches Claude Code's own native interface with
+  reversible per-process routing overrides.
 
-## Prerequisites
+For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
+required. A Claude Code subscription can be adopted with:
 
-- BitRouter installed (`bitrouter --version`). The daemon does **not** need to be pre-started for the native launch path — it auto-starts.
-- Claude Code installed and authenticated normally at least once.
+```bash
+bitrouter providers login claude-code
+bitrouter init --yes --harness claude --after exit
+```
 
-## Preferred launch path: `bitrouter launch`
+## ACP session
+
+```bash
+bitrouter code claude
+bitrouter run claude "summarize this repo"
+bitrouter acp serve claude
+```
+
+The pinned `@agentclientprotocol/claude-agent-acp@0.75.1` adapter uses a local
+Claude CLI when its version is at least 2.1.257. Older, missing, failing, or
+unresponsive CLIs use the adapter's bundled worker. `CLAUDE_CODE_EXECUTABLE`
+can select a worker explicitly; it does not bypass ACP. `--direct` keeps the
+adapter's own provider authentication; ordinary sessions route through
+BitRouter and can auto-start the local daemon.
+
+`init --model ID` saves the default model. `code claude --model ID` overrides
+it for one session. No vendor CLI config file is rewritten.
+
+## Native interface
 
 ```bash
 bitrouter claude
 bitrouter claude -- -p "summarize this repo"
 ```
 
-Reversible, per-process, and config-file-free: `bitrouter claude` launches Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, the launcher auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. After the session exits, the launcher prints a one-line spend summary for the wrapped run.
+The native launcher starts Claude Code with `ANTHROPIC_BASE_URL` pointed at
+BitRouter and sets `ANTHROPIC_AUTH_TOKEN`, never silently editing
+`~/.claude/settings.json`. Everything after `--` is forwarded verbatim. A
+missing local daemon is auto-started unless `--no-start` is set.
 
-## What the wiring actually is
+Use `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`, for BitRouter inbound
+authentication. Token precedence is an exported `ANTHROPIC_AUTH_TOKEN`, then
+`BITROUTER_API_KEY`, then the `bitrouter-local` placeholder used by the
+`skip_auth: true` local default.
 
-Two environment variables — these are what the native launcher injects, and what a durable setup exports:
-
-```bash
-export ANTHROPIC_BASE_URL="http://localhost:4356"
-export ANTHROPIC_AUTH_TOKEN="bitrouter-local"   # placeholder; fine under skip_auth: true
-```
-
-Facts that matter (verified against `apps/bitrouter/src/spawn.rs`):
-
-- **`ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.** Claude Code sends `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer …` — the credential BitRouter validates. `ANTHROPIC_API_KEY` would be sent as `x-api-key` instead, and in a BYOK setup that variable typically holds your *upstream* Anthropic provider key, which is not a valid BitRouter inbound credential. The launcher always sets both variables explicitly (never inherit-only) for exactly this reason.
-- **Token precedence**: an `ANTHROPIC_AUTH_TOKEN` you already exported → `BITROUTER_API_KEY` → the `bitrouter-local` placeholder. The placeholder works with the `skip_auth: true` default from `bitrouter init`; flip `skip_auth: false` and mint a `brvk_*` key (`bitrouter key sign --user <id>`) for multi-tenant setups.
-- **Durable setup:** put the two exports in your shell profile, or in the `env` block of `~/.claude/settings.json`. Show the user the diff before writing settings files — never edit them silently.
-
-## Model selection
-
-Claude Code sends bare Anthropic model ids (`claude-sonnet-4-6`, `claude-haiku-4-5`). BitRouter's routing table resolves bare ids through its fallback chain — confirm with:
-
-```bash
-bitrouter route claude-sonnet-4-6
-```
-
-If a bare id doesn't resolve in your config, alias it in `bitrouter.yaml`:
-
-```yaml
-models:
-  claude-sonnet-4-6:
-    upstream_id: "anthropic/claude-sonnet-4-6"
-```
-
-## Verify
-
-```bash
-bitrouter claude -- --version     # binary + wiring sanity
-echo "say hi" | bitrouter claude  # one-shot through the router
-tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
-```
-
-## Notes & gotchas
-
-- An env change cannot reroute a session that is already running — Claude Code reads `ANTHROPIC_BASE_URL` at startup. Wire first, then (re)launch.
-- Streaming, tool use, and subagents ride the same `/v1/messages` surface — no extra wiring beyond the two variables.
+Claude sends bare Anthropic model ids such as `claude-sonnet-4-6`; verify their
+effective route with `bitrouter route claude-sonnet-4-6`. Existing Claude Code
+processes must be restarted before changed environment routing takes effect.
+Inspect routed traffic with `bitrouter requests`; ACP session diagnostics live
+under the BitRouter home in `logs/session-*.log`.

@@ -40,15 +40,19 @@ pub fn build(root: &Path, check: bool) -> Result<()> {
         ("agents.json", &artifacts.agents),
         ("runtimes.json", &artifacts.runtimes),
     ];
+    let output_dirs = [dist_dir(root), package_registry_dir(root)];
     if check {
-        for (name, rendered) in documents {
-            let path = dist_dir(root).join(name);
-            let current =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            if &current != rendered {
-                bail!(
-                    "registry dist is stale ({name}) - run `cargo run -p dist-helper -- registry build` and commit dist/registry"
-                );
+        for output_dir in &output_dirs {
+            for (name, rendered) in documents {
+                let path = output_dir.join(name);
+                let current = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                if &current != rendered {
+                    bail!(
+                        "registry dist is stale ({}) - run `cargo run -p dist-helper -- registry build` and commit generated registry artifacts",
+                        path.display()
+                    );
+                }
             }
         }
         println!(
@@ -60,11 +64,13 @@ pub fn build(root: &Path, check: bool) -> Result<()> {
         );
         return Ok(());
     }
-    fs::create_dir_all(dist_dir(root))
-        .with_context(|| format!("creating {}", dist_dir(root).display()))?;
-    for (name, rendered) in documents {
-        let path = dist_dir(root).join(name);
-        fs::write(&path, rendered).with_context(|| format!("writing {}", path.display()))?;
+    for output_dir in &output_dirs {
+        fs::create_dir_all(output_dir)
+            .with_context(|| format!("creating {}", output_dir.display()))?;
+        for (name, rendered) in documents {
+            let path = output_dir.join(name);
+            fs::write(&path, rendered).with_context(|| format!("writing {}", path.display()))?;
+        }
     }
     println!(
         "wrote dist/registry: {} providers, {} canonical models, {} runtimes, {} agents",
@@ -74,6 +80,10 @@ pub fn build(root: &Path, check: bool) -> Result<()> {
         artifacts.agent_count
     );
     Ok(())
+}
+
+fn package_registry_dir(root: &Path) -> PathBuf {
+    root.join("apps/bitrouter/registry-dist")
 }
 
 pub async fn sync(root: &Path, write: bool) -> Result<()> {

@@ -18,7 +18,44 @@ use crate::caller::CallerContext;
 use crate::config::{Config, presets::resolve_presets};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
+use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::language_model::types::{ApiProtocol, RoutingTarget};
+
+fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
+    let base = UsagePricingBracket {
+        input_micro_usd_per_token: pricing.input_micro_usd_per_token,
+        cache_read_micro_usd_per_token: pricing.cache_read_micro_usd_per_token,
+        cache_write_micro_usd_per_token: pricing.cache_write_micro_usd_per_token,
+        output_micro_usd_per_token: pricing.output_micro_usd_per_token,
+        reasoning_output_micro_usd_per_token: None,
+    };
+    let context_tiers = pricing
+        .context_tiers
+        .iter()
+        .map(|tier| UsagePricingTier {
+            above_input_tokens: tier.above_input_tokens,
+            bracket: UsagePricingBracket {
+                input_micro_usd_per_token: tier
+                    .input_micro_usd_per_token
+                    .or(base.input_micro_usd_per_token),
+                cache_read_micro_usd_per_token: tier
+                    .cache_read_micro_usd_per_token
+                    .or(base.cache_read_micro_usd_per_token),
+                cache_write_micro_usd_per_token: tier
+                    .cache_write_micro_usd_per_token
+                    .or(base.cache_write_micro_usd_per_token),
+                output_micro_usd_per_token: tier
+                    .output_micro_usd_per_token
+                    .or(base.output_micro_usd_per_token),
+                reasoning_output_micro_usd_per_token: None,
+            },
+        })
+        .collect();
+    UsagePricing {
+        base,
+        context_tiers,
+    }
+}
 
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
 pub struct ConfigRoutingTable {
@@ -556,6 +593,34 @@ impl RoutingTable for ConfigRoutingTable {
     ) -> Result<Vec<RoutingTarget>> {
         let config = self.config.read().expect("config lock poisoned");
         resolve_clean_route_chain(&config, model, prefs)
+    }
+
+    fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
+        let config = self.config.read().expect("config lock poisoned");
+        config
+            .providers
+            .get(&target.provider_name)?
+            .model_config(&target.service_id)?
+            .pricing
+            .as_ref()
+            .map(usage_pricing)
+    }
+
+    fn canonical_model_id(&self, model: &str, target: &RoutingTarget) -> Option<String> {
+        let config = self.config.read().expect("config lock poisoned");
+        let provider = config.providers.get(&target.provider_name)?;
+        provider
+            .models
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .provider_model_id
+                    .as_deref()
+                    .unwrap_or(&candidate.id)
+                    == target.service_id
+            })
+            .map(|candidate| candidate.id.clone())
+            .or_else(|| Some(model.to_owned()))
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
@@ -1626,6 +1691,11 @@ providers:
         assert_eq!(chain[0].provider_name, "anthropic");
         // Dispatched against the upstream id, not the canonical match key.
         assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+        assert_eq!(
+            t.canonical_model_id("anthropic/claude-sonnet-4.6", &chain[0])
+                .as_deref(),
+            Some("anthropic/claude-sonnet-4.6")
+        );
     }
 
     #[tokio::test]

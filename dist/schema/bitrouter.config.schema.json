@@ -276,12 +276,28 @@
     "ChatConfig": {
       "description": "`bitrouter chat`'s own configuration.",
       "properties": {
+        "agent": {
+          "default": null,
+          "description": "Default ACP harness for bare `bitrouter` (catalog id or configured agent).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "commands": {
           "description": "Prompt-expansion commands.\n\n`/name args` in `bitrouter chat`, or `bitrouter acp prompt \"/name args\"`,\nsends `prompt` with `$ARGUMENTS` replaced by everything typed after the\nname.\n\nThere is deliberately no key that *runs* anything. A command here\nproduces a prompt and nothing else, which is what lets the registry be\nopen — user-authored, unreviewed — while the registry of commands that\nreach BitRouter's own ports stays closed and guarded.",
           "items": {
             "$ref": "#/$defs/PromptCommandConfig"
           },
           "type": "array"
+        },
+        "model": {
+          "default": null,
+          "description": "Default daemon-routable model for the chat session.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1986,7 +2002,7 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.27/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.28/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {

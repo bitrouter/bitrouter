@@ -492,7 +492,7 @@ async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
     let AcpTransport::Stdio { args, env, .. } = &entry.transport;
     assert_eq!(
         args,
-        &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
+        &["-y", "@agentclientprotocol/claude-agent-acp@0.75.1"]
     );
     assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&daemon.uri()));
     assert_eq!(

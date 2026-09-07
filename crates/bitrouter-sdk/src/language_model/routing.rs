@@ -14,6 +14,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
+use crate::language_model::stream::UsagePricing;
 use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
 
 /// How a cascade chain should be ordered.
@@ -154,6 +155,21 @@ pub trait RoutingTable: Send + Sync {
         caller: &CallerContext,
     ) -> Result<Vec<RoutingTarget>> {
         self.route_chain(model, prefs, caller).await
+    }
+
+    /// Immutable pricing for one concrete route, used only to resolve
+    /// conflicting cumulative usage snapshots conservatively. Implementations
+    /// without trustworthy pricing return `None`; stream normalization then
+    /// falls back to the provider's last usage snapshot.
+    fn usage_pricing(&self, _model: &str, _target: &RoutingTarget) -> Option<UsagePricing> {
+        None
+    }
+
+    /// Canonical model id represented by a successful concrete route.
+    /// Deployments with a registry should reverse-resolve provider wire ids;
+    /// the default preserves the resolved request model.
+    fn canonical_model_id(&self, model: &str, _target: &RoutingTarget) -> Option<String> {
+        Some(model.to_owned())
     }
 
     /// List every routable model (for `GET /v1/models`).
