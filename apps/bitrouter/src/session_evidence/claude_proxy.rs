@@ -39,37 +39,41 @@ pub fn prepare_env(
 ) -> Result<bool> {
     // A killed Windows wrapper cannot forward termination to its CLI child.
     // Keep SDK ownership until equivalent process supervision is available.
-    if !cfg!(unix) {
-        return Ok(false);
+    #[cfg(not(unix))]
+    {
+        let _ = (env, spool, executable, root);
+        Ok(false)
     }
-    if let Some(original) = env.get("CLAUDE_CODE_EXECUTABLE").cloned() {
-        if [".js", ".mjs", ".tsx", ".ts", ".jsx"]
-            .iter()
-            .any(|suffix| original.ends_with(suffix))
-        {
-            return Ok(false);
-        }
-        ensure!(!original.is_empty(), "CLAUDE_CODE_EXECUTABLE is empty");
-        env.insert(UPSTREAM_ENV.into(), original);
-    }
-    let proxy = spool.join(PROXY_NAME);
-    // A distinct argv[0] separates adapter CLI probes from ordinary BitRouter
-    // commands launched by MCP servers with the adapter's inherited env.
     #[cfg(unix)]
-    std::os::unix::fs::symlink(executable, &proxy)?;
-    env.insert(
-        "CLAUDE_CODE_EXECUTABLE".into(),
-        proxy
-            .to_str()
-            .context("proxy executable must be UTF-8")?
-            .into(),
-    );
-    env.insert(
-        SPOOL_ENV.into(),
-        spool.to_str().context("native spool must be UTF-8")?.into(),
-    );
-    env.insert(NAMESPACE_ENV.into(), root.namespace.clone());
-    Ok(true)
+    {
+        if let Some(original) = env.get("CLAUDE_CODE_EXECUTABLE").cloned() {
+            if [".js", ".mjs", ".tsx", ".ts", ".jsx"]
+                .iter()
+                .any(|suffix| original.ends_with(suffix))
+            {
+                return Ok(false);
+            }
+            ensure!(!original.is_empty(), "CLAUDE_CODE_EXECUTABLE is empty");
+            env.insert(UPSTREAM_ENV.into(), original);
+        }
+        let proxy = spool.join(PROXY_NAME);
+        // A distinct argv[0] separates adapter CLI probes from ordinary BitRouter
+        // commands launched by MCP servers with the adapter's inherited env.
+        std::os::unix::fs::symlink(executable, &proxy)?;
+        env.insert(
+            "CLAUDE_CODE_EXECUTABLE".into(),
+            proxy
+                .to_str()
+                .context("proxy executable must be UTF-8")?
+                .into(),
+        );
+        env.insert(
+            SPOOL_ENV.into(),
+            spool.to_str().context("native spool must be UTF-8")?.into(),
+        );
+        env.insert(NAMESPACE_ENV.into(), root.namespace.clone());
+        Ok(true)
+    }
 }
 
 /// Prepare only private subprocess env; ignored malformed Query options stay

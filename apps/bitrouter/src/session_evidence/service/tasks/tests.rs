@@ -240,11 +240,19 @@ async fn a_paused_task_snapshot_keeps_native_observation_and_cancel_flowing() ->
         tokio::time::timeout(Duration::from_secs(10), cancelled.notified())
             .await
             .context("second cancel forwarded")?;
+        // Cancellation delivery only means the native update was enqueued.
+        // Await its durable forwarding before closing the manager connection.
+        tokio::time::timeout(Duration::from_secs(10), updates.next())
+            .await
+            .context("second native notification persisted during task read")?
+            .context("second forwarded native update")?;
         assert!(!query.is_finished());
         probe.release.notify_one();
         query.await??;
         client.shutdown().await?;
-        worker.await??;
+        worker
+            .await?
+            .context("controller shut down after updates drained")?;
         handle.shutdown().await?;
     }
     Ok(())

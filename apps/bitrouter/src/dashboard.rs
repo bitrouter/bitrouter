@@ -815,6 +815,7 @@ pub(crate) mod tests {
 
     /// Exercise the actual key handler using a live SessionHost fixture. The
     /// caller verifies database persistence and native lifecycle forwarding.
+    #[cfg(unix)]
     pub(crate) async fn exercise_task_keys(
         handle: crate::acp_cli::SessionHandle,
     ) -> Result<crate::acp_cli::SessionHandle> {

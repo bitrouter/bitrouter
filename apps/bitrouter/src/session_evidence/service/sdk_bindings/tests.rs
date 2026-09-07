@@ -272,8 +272,7 @@ async fn frozen_checkpoint_backlog_does_not_block_later_prompts_or_sdk_inventory
         .await?;
     assert!(
         first.gaps.contains("native_spool_backlog"),
-        "{:?}",
-        first.gaps
+        "checkpoint must retain the native spool backlog gap"
     );
     handle
         .service
