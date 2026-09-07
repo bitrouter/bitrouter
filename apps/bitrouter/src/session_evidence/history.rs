@@ -254,6 +254,13 @@ impl HistoryResolver {
                 records.len() as u64 == end - start,
                 "native history record disappeared"
             );
+            self.store
+                .index_execution_range(&SourceRange {
+                    start,
+                    end,
+                    ..range.clone()
+                })
+                .await?;
             for record in &records {
                 projector.push(record)?;
             }

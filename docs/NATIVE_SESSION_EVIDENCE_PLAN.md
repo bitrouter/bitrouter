@@ -1,6 +1,7 @@
 # Native session evidence implementation plan
 
-Status: implementation in progress. Baseline: `4fcd8018`.
+Status: implementation in progress. Baseline: `61dd7733`.
+Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 
 ## Implementation checkpoint
 
@@ -24,14 +25,37 @@ a new controller connection resets the Query. A failed close is not reset
 proof; the adapter may already have evicted it. These checks do not certify the
 complete feature or the full native-runtime conformance matrix below.
 
-Still required: persistent execution relations and recovery of earlier
+The execution-facts stage additionally indexes native execution facts with their raw
+record provenance and exposes a candidate graph in the collection snapshot.
+It parses Codex turn and agent-call events, Claude prompt/stop hooks, and Claude
+agent metadata sidecars, including nested agent transcript directories. Sidecar
+binding verifies the owned transcript, file identity, stored prefix and native
+session/agent identity. Spawn conflicts and cycles remain explicit gaps; a stop
+hook or completed spawning tool never certifies child execution completion.
+This graph is not task membership or a settlement decision. Independent review
+and targeted tests cover raw/index replay, corruption, owner isolation, database
+reopen, native event semantics, and metadata recovery. This does not complete
+the full runtime conformance matrix.
+
+Still required: complete execution-relation parsing, native SDK lifecycle
+observation, and recovery of earlier
 controller spools and root bindings; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; immutable workspace
 artifacts; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
-conformance, workspace checks, final review and PR delivery. The live collection
-snapshot currently exposes history and gaps only and is never optimization
-evidence by itself.
+conformance, workspace checks, final review and PR delivery. Attempt and manifest
+storage APIs exist, but the application does not yet automatically create and
+settle attempts or submit their scores. The live collection snapshot exposes
+history, candidate execution facts and gaps; it is never optimization evidence
+by itself.
+
+The collection boundary is a BitRouter-controlled Codex or Claude Code session
+and its registered native data root. Historical backfill is limited to that
+session and explicit dependencies. It is not an automatic importer of every
+standalone native session on the machine. Missing history, ambiguous fork cuts,
+unsupported records and source replacement remain visible gaps. Supported
+projection tests do not certify arbitrary native runtime versions, complete
+Claude independent-fork UUID remapping, or filesystem rewind recovery.
 
 ## Outcome
 

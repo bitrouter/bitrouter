@@ -59,6 +59,7 @@ pub struct EvidenceLaunch<'a> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CollectionSnapshot {
     pub histories: Vec<ResolvedHistory>,
+    pub graph: super::execution::ExecutionGraph,
     pub gaps: BTreeSet<String>,
     pub reconciled_at: Option<String>,
 }
@@ -284,22 +285,45 @@ impl ControllerEvidence {
                 }
             }
         }
+        let graph = self.store.execution_graph(&nodes).await?;
+        nodes.extend(graph.nodes.iter().cloned());
         let mut histories = Vec::with_capacity(nodes.len());
-        for node in nodes {
+        for node in &nodes {
             let history = if let Some(context) = roots.get(&node.namespace) {
                 let resolver = HistoryResolver::new(self.store.clone(), context.collector.clone());
                 match resolver.resolve(node.clone()).await {
                     Ok(history) => history,
                     Err(error) => {
                         tracing::warn!(%error, "native execution source could not be reconciled");
-                        ResolvedHistory::missing(node, "native_source_failed")
+                        ResolvedHistory::missing(node.clone(), "native_source_failed")
                     }
                 }
             } else {
-                ResolvedHistory::missing(node, "native_root_unavailable")
+                ResolvedHistory::missing(node.clone(), "native_root_unavailable")
             };
+            if node.harness == Harness::ClaudeCode
+                && node.agent_id.is_some()
+                && let Some(context) = roots.get(&node.namespace)
+                && let Some(transcript) = &history.source
+            {
+                match context.collector.reconcile_agent_metadata(transcript).await {
+                    // A disappeared sidecar does not erase already stored
+                    // parent evidence. The graph checks unresolved children.
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "native agent metadata could not be collected");
+                        gaps.insert("native_agent_metadata_failed".into());
+                    }
+                }
+            }
             gaps.extend(history.gaps.iter().cloned());
             histories.push(history);
+        }
+        let graph = self.store.execution_graph(&nodes).await?;
+        gaps.extend(graph.gaps.iter().cloned());
+        if !graph.nodes.is_subset(&nodes) {
+            gaps.insert("native_graph_backlog".into());
+            self.wake.notify_one();
         }
         let mut state = self.state.lock().await;
         if !state.ambiguous_sessions.is_empty() {
@@ -310,6 +334,7 @@ impl ControllerEvidence {
         }
         let snapshot = CollectionSnapshot {
             histories,
+            graph,
             gaps,
             reconciled_at: Some(chrono::Utc::now().to_rfc3339()),
         };

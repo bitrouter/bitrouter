@@ -12,9 +12,11 @@ use super::types::MAX_RECORD_BYTES;
 const EVENTS: &[&str] = &[
     "SessionStart",
     "SessionEnd",
+    "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "StopFailure",
     "PreCompact",
     "PostCompact",
 ];
@@ -128,6 +130,10 @@ pub async fn run(spool: &Path) -> Result<()> {
         "agent_id",
         "agent_type",
         "parent_agent_id",
+        "prompt_id",
+        "stop_hook_active",
+        "background_tasks",
+        "session_crons",
         "cwd",
         "transcript_path",
         "agent_transcript_path",

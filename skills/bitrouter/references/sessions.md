@@ -170,6 +170,14 @@ session settings, preserving existing hooks. `native-session-hook` and
 `app-server` are internal entry points; users do not run them to collect or
 rate a session. Neither entry point changes the user's global native config.
 
+Claude prompt hooks retain native prompt IDs when present. Stop observations
+retain available background-work metadata; they do not certify that a task has
+finished. Child transcript collection follows nested subagent directories and
+reads adjacent `agent-*.meta.json` files for explicit parent-agent relations.
+Missing parent metadata remains an
+evidence gap. The derived execution graph retains raw record references and
+does not by itself assign task membership or settle an evaluation.
+
 Original records survive compaction and context rewind. Fork dependencies use
 native ordinal and byte cuts, and later parent work cannot enter the inherited
 prefix. Missing history, interrupted lines, unsupported dependencies and

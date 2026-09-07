@@ -16,6 +16,7 @@ use super::types::{
 };
 use crate::eval::types::canonical_digest;
 
+pub mod execution;
 pub mod forks;
 
 mod source_entity {
@@ -213,18 +214,40 @@ impl EvidenceStore {
                     "native record id conflict"
                 );
                 decode_record(existing)?;
+                self.write_facts(
+                    &transaction,
+                    &source.descriptor,
+                    &StoredRecord {
+                        id,
+                        source_id: source.id.clone(),
+                        digest,
+                        input: record.clone(),
+                    },
+                )
+                .await?;
                 continue;
             }
             record_entity::ActiveModel {
-                id: Set(id),
+                id: Set(id.clone()),
                 owner: Set(self.owner_key.clone()),
                 source_id: Set(source.id.clone()),
                 generation: Set(canonical_digest(&record.generation)?),
                 source_sequence: Set(i64::try_from(record.sequence)?),
-                digest: Set(digest),
+                digest: Set(digest.clone()),
                 record_json: Set(serde_json::to_string(record)?),
             }
             .insert(&transaction)
+            .await?;
+            self.write_facts(
+                &transaction,
+                &source.descriptor,
+                &StoredRecord {
+                    id,
+                    source_id: source.id.clone(),
+                    digest,
+                    input: record.clone(),
+                },
+            )
             .await?;
         }
         transaction.commit().await?;

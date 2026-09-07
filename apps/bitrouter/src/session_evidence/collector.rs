@@ -57,6 +57,193 @@ impl NativeCollector {
         &self.root
     }
 
+    /// Claude keeps parent-agent and spawning tool ids in a separate sidecar.
+    /// Its path is derived from an already validated child transcript, never
+    /// from a locator carried inside a message or hook.
+    /// https://code.claude.com/docs/en/agent-sdk/session-storage
+    pub async fn reconcile_agent_metadata(
+        &self,
+        transcript: &CollectedSource,
+    ) -> Result<Option<CollectedSource>> {
+        let owned = self
+            .store
+            .source(&transcript.source.id)
+            .await?
+            .context("metadata transcript source not owned")?;
+        ensure!(
+            owned.descriptor == transcript.source.descriptor
+                && owned.cursor == transcript.source.cursor
+                && owned.descriptor.format == SourceFormat::ClaudeTranscript,
+            "metadata transcript source changed"
+        );
+        let node = owned
+            .descriptor
+            .node
+            .as_ref()
+            .context("metadata transcript node missing")?;
+        ensure!(
+            node.harness == Harness::ClaudeCode
+                && node.agent_id.is_some()
+                && node.namespace == self.root.namespace,
+            "invalid metadata scope"
+        );
+        let transcript_path = transcript
+            .path
+            .as_ref()
+            .context("metadata transcript path missing")?;
+        let transcript_path = tokio::fs::canonicalize(transcript_path).await?;
+        let root = tokio::fs::canonicalize(&self.root.directory).await?;
+        let relative: Vec<_> = transcript_path.strip_prefix(&root)?.iter().collect();
+        ensure!(
+            relative.len() >= 4
+                && relative
+                    .get(1)
+                    .is_some_and(|value| *value == node.native_id.as_str())
+                && relative.get(2).is_some_and(|value| *value == "subagents")
+                && transcript_path.file_name().is_some_and(|name| {
+                    node.agent_id
+                        .as_ref()
+                        .is_some_and(|agent| name == format!("agent-{agent}.jsonl").as_str())
+                }),
+            "metadata transcript path does not identify its native child"
+        );
+        let mut transcript_file = File::open(&transcript_path).await?;
+        let transcript_metadata = transcript_file.metadata().await?;
+        ensure!(
+            transcript_metadata.is_file()
+                && owned.descriptor.locator
+                    == format!(
+                        "file:{}",
+                        file_identity(&transcript_metadata, &transcript_path)?
+                    )
+                && owned.cursor.offset > 0
+                && owned.cursor.offset <= transcript_metadata.len()
+                && owned.cursor.offset <= MAX_PREFIX_BYTES,
+            "metadata transcript file identity changed"
+        );
+        let mut prefix = Sha256::new();
+        hash_prefix(&mut transcript_file, owned.cursor.offset, &mut prefix).await?;
+        ensure!(
+            hash_digest(&prefix) == owned.cursor.anchor_digest,
+            "metadata transcript prefix changed"
+        );
+        let mut identity_observed = false;
+        let mut start = 0;
+        while start < owned.cursor.next_sequence {
+            let end = (start + super::types::RECORD_PAGE_SIZE).min(owned.cursor.next_sequence);
+            let records = self
+                .store
+                .records(&SourceRange {
+                    source_id: owned.id.clone(),
+                    generation: owned.cursor.generation.clone(),
+                    start,
+                    end,
+                })
+                .await?;
+            ensure!(
+                records.len() as u64 == end - start,
+                "metadata transcript records missing"
+            );
+            if records.iter().any(|record| {
+                record.input.raw.get("sessionId").and_then(Value::as_str)
+                    == Some(node.native_id.as_str())
+                    && record.input.raw.get("agentId").and_then(Value::as_str)
+                        == node.agent_id.as_deref()
+            }) {
+                identity_observed = true;
+                break;
+            }
+            start = end;
+        }
+        ensure!(
+            identity_observed,
+            "metadata transcript native identity unverified"
+        );
+        let path = transcript_path.with_extension("meta.json");
+        let metadata = match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "agent metadata is not a regular file"
+        );
+        let path = tokio::fs::canonicalize(path).await?;
+        ensure!(path.starts_with(&root), "agent metadata root escape");
+        let identity = file_identity(&metadata, &path)?;
+        let file = File::open(&path).await?;
+        let mut bytes = vec![];
+        file.take(MAX_RECORD_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        ensure!(bytes.len() <= MAX_RECORD_BYTES, "agent metadata size limit");
+        let after = tokio::fs::metadata(&path).await?;
+        ensure!(
+            identity == file_identity(&after, &path)?
+                && metadata.len() == after.len()
+                && metadata.modified().ok() == after.modified().ok(),
+            "agent metadata changed while reading"
+        );
+        let raw: Value = serde_json::from_slice(&bytes)?;
+        ensure!(raw.is_object(), "agent metadata must be an object");
+        let anchor = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
+        let generation = format!("{identity}/{anchor}");
+        let mut source = self
+            .store
+            .register(SourceDescriptor {
+                namespace: self.root.namespace.clone(),
+                harness: Harness::ClaudeCode,
+                format: SourceFormat::ClaudeAgentMetadata,
+                locator: format!("file:{identity}"),
+                node: Some(node.clone()),
+            })
+            .await?;
+        if source.cursor.generation != generation {
+            source = self
+                .store
+                .append(
+                    &source,
+                    &[RecordInput {
+                        generation: generation.clone(),
+                        sequence: 0,
+                        byte_start: Some(0),
+                        byte_end: Some(bytes.len() as u64),
+                        producer_version: None,
+                        raw: raw.clone(),
+                    }],
+                    SourceCursor {
+                        generation,
+                        offset: bytes.len() as u64,
+                        next_sequence: 1,
+                        anchor_digest: anchor,
+                    },
+                )
+                .await?;
+        } else {
+            ensure!(
+                source.cursor.offset == bytes.len() as u64
+                    && source.cursor.next_sequence == 1
+                    && source.cursor.anchor_digest == anchor,
+                "metadata cursor does not match its file"
+            );
+        }
+        let range = SourceRange {
+            source_id: source.id.clone(),
+            generation: source.cursor.generation.clone(),
+            start: 0,
+            end: 1,
+        };
+        self.store.index_execution_range(&range).await?;
+        Ok(Some(CollectedSource {
+            source,
+            range: Some(range),
+            path: Some(path),
+            gaps: BTreeSet::new(),
+            metadata: Some(raw),
+        }))
+    }
+
     fn directories(&self) -> Vec<PathBuf> {
         let mut directories = vec![self.root.directory.clone()];
         if self.root.harness == Harness::Codex
@@ -83,12 +270,12 @@ impl NativeCollector {
         let mut pending = vec![];
         for directory in self.directories() {
             if tokio::fs::try_exists(&directory).await? {
-                pending.push((tokio::fs::canonicalize(directory).await?, 0));
+                pending.push((tokio::fs::canonicalize(directory).await?, 0, false));
             }
         }
         let mut count = 0;
         let mut found = vec![];
-        while let Some((directory, depth)) = pending.pop() {
+        while let Some((directory, depth, child_tree)) = pending.pop() {
             ensure!(
                 depth <= MAX_SCAN_DEPTH,
                 "native source tree exceeds depth limit"
@@ -106,14 +293,17 @@ impl NativeCollector {
                 }
                 let path = entry.path();
                 if kind.is_dir() {
-                    // Claude projects are one directory deep. Only descend
-                    // into the requested session's child transcript tree.
+                    // The SDK allows nested agentRelPath directories beneath
+                    // one project's requested session/subagents directory.
+                    // https://code.claude.com/docs/en/agent-sdk/session-storage
+                    let starts_child_tree = depth == 2 && entry.file_name() == "subagents";
                     if self.root.harness == Harness::Codex
                         || depth == 0
-                        || entry.file_name() == native_id
-                        || entry.file_name() == "subagents"
+                        || (depth == 1 && entry.file_name() == native_id)
+                        || starts_child_tree
+                        || child_tree
                     {
-                        pending.push((path, depth + 1));
+                        pending.push((path, depth + 1, child_tree || starts_child_tree));
                     }
                     continue;
                 }
@@ -123,18 +313,10 @@ impl NativeCollector {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let agent_id = match self.root.harness {
                     Harness::Codex if name.ends_with(&format!("{native_id}.jsonl")) => None,
-                    Harness::ClaudeCode if name == format!("{native_id}.jsonl") => None,
-                    Harness::ClaudeCode
-                        if path
-                            .parent()
-                            .and_then(Path::file_name)
-                            .is_some_and(|name| name == "subagents")
-                            && path
-                                .parent()
-                                .and_then(Path::parent)
-                                .and_then(Path::file_name)
-                                .is_some_and(|name| name == native_id) =>
-                    {
+                    Harness::ClaudeCode if !child_tree && name == format!("{native_id}.jsonl") => {
+                        None
+                    }
+                    Harness::ClaudeCode if child_tree => {
                         let Some(agent) = name
                             .strip_prefix("agent-")
                             .and_then(|name| name.strip_suffix(".jsonl"))

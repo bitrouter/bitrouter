@@ -1418,11 +1418,14 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // use.
     if !std::io::stdout().is_terminal() {
         return chat_piped(
-            source,
-            &config,
-            agent_id,
+            SpawnContext {
+                source,
+                config,
+                agent_id,
+                options,
+                routing,
+            },
             &routed,
-            options,
             &cloud_credentials,
             binding,
             crate::actions::session::SessionSurface {
@@ -1777,18 +1780,22 @@ fn unauthenticated_message(
 }
 
 async fn chat_piped(
-    source: &ConfigSource,
-    config: &Config,
-    agent_id: &str,
+    ctx: SpawnContext<'_>,
     routed: &Routed,
-    options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
     mut surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
+    let SpawnContext {
+        source,
+        config,
+        agent_id,
+        options,
+        routing: _,
+    } = ctx;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(source, config, agent_id, routed, options, binding)
+    let mut session = launch_controlled(source, &config, agent_id, routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))
         .map_err(show_session_log)?;
@@ -1818,7 +1825,7 @@ async fn chat_piped(
         }
     };
     let observability =
-        build_observability(config, agent_id, &ids.acp_session_id, cloud_credentials).await;
+        build_observability(&config, agent_id, &ids.acp_session_id, cloud_credentials).await;
     if let Some(recorder) = observability.recorder.clone() {
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
@@ -2690,7 +2697,7 @@ pub async fn commands(
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
+    let mut session = launch_controlled(source, &config, agent_id, &routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // Subscribed before the session opens, so an agent that advertises its

@@ -63,6 +63,7 @@ pub enum SourceFormat {
     CodexRollout,
     CodexAppServer,
     ClaudeTranscript,
+    ClaudeAgentMetadata,
     ClaudeHook,
     Acp,
 }

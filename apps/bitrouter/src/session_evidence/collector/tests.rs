@@ -115,16 +115,208 @@ async fn claude_discovery_includes_all_children_but_no_unrelated_sessions() -> R
     for id in ["a1", "a2", "a3"] {
         tokio::fs::write(children.join(format!("agent-{id}.jsonl")), "").await?;
     }
+    let nested = children.join("a1/deeper");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(nested.join("agent-nested.jsonl"), "").await?;
+    tokio::fs::write(nested.join("session-1.jsonl"), "").await?;
+    let unrelated = project.join("other/subagents");
+    tokio::fs::create_dir_all(&unrelated).await?;
+    tokio::fs::write(unrelated.join("agent-other.jsonl"), "").await?;
     let found = collector.discover("session-1").await?;
-    assert_eq!(found.len(), 4);
+    assert_eq!(found.len(), 5);
     assert_eq!(
         found
             .iter()
             .filter(|(node, _)| node.agent_id.is_some())
             .count(),
-        3
+        4
     );
     assert!(collector.discover("../other").await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_reconciliation_resolves_unknown_parent_and_retains_conflicts() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let collector = collector(Harness::ClaudeCode, directory.path()).await?;
+    let path = directory
+        .path()
+        .join("project/session-1/subagents/nested/agent-child.jsonl");
+    tokio::fs::create_dir_all(path.parent().context("parent")?).await?;
+    let mut child = node(Harness::ClaudeCode);
+    child.agent_id = Some("child".into());
+    tokio::fs::write(
+        &path,
+        jsonl(json!({
+            "type":"user", "sessionId":"session-1", "agentId":"child", "uuid":"child-u"
+        }))?,
+    )
+    .await?;
+    let transcript = collector.reconcile(child.clone(), &path, None).await?;
+    assert!(
+        collector
+            .reconcile_agent_metadata(&transcript)
+            .await?
+            .is_none()
+    );
+    let metadata_path = path.with_extension("meta.json");
+    tokio::fs::write(&metadata_path, b"{}").await?;
+    let unknown = collector
+        .reconcile_agent_metadata(&transcript)
+        .await?
+        .context("metadata")?;
+    let roots = BTreeSet::from([child.clone()]);
+    assert!(
+        collector
+            .store
+            .execution_graph(&roots)
+            .await?
+            .gaps
+            .contains("native_parent_agent_unknown")
+    );
+
+    tokio::fs::write(
+        &metadata_path,
+        serde_json::to_vec(&json!({"parentAgentId":"parent","toolUseId":"spawn"}))?,
+    )
+    .await?;
+    let known = collector
+        .reconcile_agent_metadata(&transcript)
+        .await?
+        .context("metadata")?;
+    let replay = collector
+        .reconcile_agent_metadata(&transcript)
+        .await?
+        .context("replayed metadata")?;
+    assert_eq!(known.source, replay.source);
+    assert_ne!(
+        unknown.source.cursor.generation,
+        known.source.cursor.generation
+    );
+    assert!(
+        collector
+            .store
+            .execution_graph(&roots)
+            .await?
+            .gaps
+            .is_empty()
+    );
+    assert_eq!(
+        collector
+            .store
+            .records(unknown.range.as_ref().context("unknown range")?)
+            .await?[0]
+            .input
+            .raw,
+        json!({})
+    );
+
+    tokio::fs::remove_file(&metadata_path).await?;
+    assert!(
+        collector
+            .reconcile_agent_metadata(&transcript)
+            .await?
+            .is_none()
+    );
+    assert!(
+        collector
+            .store
+            .execution_graph(&roots)
+            .await?
+            .gaps
+            .is_empty()
+    );
+    tokio::fs::write(
+        &metadata_path,
+        serde_json::to_vec(&json!({"parentAgentId":null}))?,
+    )
+    .await?;
+    collector.reconcile_agent_metadata(&transcript).await?;
+    assert!(
+        collector
+            .store
+            .execution_graph(&roots)
+            .await?
+            .gaps
+            .contains("conflicting_native_parent")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_requires_owned_transcript_and_matching_file_prefix() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let collector = NativeCollector::new(
+        EvidenceStore::new(db.clone(), "local")?,
+        NativeRoot {
+            harness: Harness::ClaudeCode,
+            namespace: "profile".into(),
+            directory: directory.path().to_owned(),
+        },
+    )?;
+    let path = directory
+        .path()
+        .join("project/session-1/subagents/agent-child.jsonl");
+    tokio::fs::create_dir_all(path.parent().context("parent")?).await?;
+    let mut child = node(Harness::ClaudeCode);
+    child.agent_id = Some("child".into());
+    let raw = jsonl(json!({"type":"user","sessionId":"session-1","agentId":"child","uuid":"u"}))?;
+    tokio::fs::write(&path, &raw).await?;
+    tokio::fs::write(
+        path.with_extension("meta.json"),
+        b"{\"parentAgentId\":null}",
+    )
+    .await?;
+    let transcript = collector.reconcile(child.clone(), &path, None).await?;
+    collector
+        .reconcile_agent_metadata(&transcript)
+        .await?
+        .context("owned metadata")?;
+
+    let other = NativeCollector::new(EvidenceStore::new(db, "other")?, collector.root.clone())?;
+    assert!(other.reconcile_agent_metadata(&transcript).await.is_err());
+    let mut forged = transcript.clone();
+    forged
+        .source
+        .descriptor
+        .node
+        .as_mut()
+        .context("node")?
+        .agent_id = Some("other".into());
+    assert!(collector.reconcile_agent_metadata(&forged).await.is_err());
+    let copied = path
+        .parent()
+        .context("parent")?
+        .join("copied/agent-child.jsonl");
+    tokio::fs::create_dir_all(copied.parent().context("copy parent")?).await?;
+    tokio::fs::write(&copied, &raw).await?;
+    tokio::fs::write(
+        copied.with_extension("meta.json"),
+        b"{\"parentAgentId\":null}",
+    )
+    .await?;
+    forged = transcript.clone();
+    forged.path = Some(copied);
+    assert!(collector.reconcile_agent_metadata(&forged).await.is_err());
+    tokio::fs::write(&path, raw.replace("\"u\"", "\"v\"")).await?;
+    assert!(
+        collector
+            .reconcile_agent_metadata(&transcript)
+            .await
+            .is_err()
+    );
+    tokio::fs::write(&path, jsonl(json!({"type":"progress","uuid":"p"}))?).await?;
+    let mut unverified = collector.reconcile(child, &path, None).await?;
+    assert!(unverified.gaps.contains("native_identity_unverified"));
+    unverified.gaps.clear();
+    assert!(
+        collector
+            .reconcile_agent_metadata(&unverified)
+            .await
+            .is_err()
+    );
     Ok(())
 }
 

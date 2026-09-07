@@ -165,9 +165,34 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
             json!({"stopReason":"end_turn"}),
         ))
         .await?;
+    let missing_metadata = service.reconcile().await?;
+    assert!(
+        missing_metadata
+            .gaps
+            .contains("native_parent_agent_unknown")
+    );
+    assert_eq!(missing_metadata.histories.len(), 3);
+    tokio::fs::write(
+        first_cwd.join("profile/projects/work/first/subagents/agent-child.meta.json"),
+        serde_json::to_vec(&json!({"parentAgentId":null,"toolUseId":"spawn-child"}))?,
+    )
+    .await?;
     let snapshot = service.reconcile().await?;
     assert!(snapshot.gaps.is_empty(), "{:?}", snapshot.gaps);
     assert_eq!(snapshot.histories.len(), 3);
+    assert!(snapshot.graph.facts.iter().any(|fact| {
+        matches!(
+            fact.event,
+            super::super::execution::FactKind::Relation {
+                relation: super::super::types::EdgeKind::Spawn
+            }
+        ) && fact.node.as_ref().is_some_and(|node| {
+            node.native_id == "first" && node.agent_id.as_deref() == Some("child")
+        }) && fact
+            .related_node
+            .as_ref()
+            .is_some_and(|node| node.native_id == "first" && node.agent_id.is_none())
+    }));
     for history in snapshot.histories {
         assert_eq!(
             Some(&history.node.namespace),
@@ -580,6 +605,11 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
             Harness::ClaudeCode => {
                 write_rows(&native.join("projects/work/root.jsonl"), vec![json!({"type":"user","sessionId":"root","uuid":"u","parentUuid":null,"version":"2.1.220","message":{"content":"work"}})]).await?;
                 write_rows(&native.join("projects/work/root/subagents/agent-child.jsonl"), vec![json!({"type":"user","sessionId":"root","agentId":"child","uuid":"cu","parentUuid":null,"version":"2.1.220","message":{"content":"child work"}})]).await?;
+                tokio::fs::write(
+                    native.join("projects/work/root/subagents/agent-child.meta.json"),
+                    serde_json::to_vec(&json!({"parentAgentId":null,"toolUseId":"spawn-child"}))?,
+                )
+                .await?;
             }
         }
         let mut handle = EvidenceHandle::open(EvidenceLaunch {
@@ -599,7 +629,7 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
             );
             write_rows(&handle.service.spool.join("fixture.jsonl"), vec![
                 json!({"method":"runtime/started","version":"0.148.0"}),
-                json!({"method":"item/completed","payload":{"threadId":"root","item":{"type":"collabAgentToolCall","receiverThreadIds":["child"]}}}),
+                json!({"direction":"server","phase":"notification","method":"item/completed","payload":{"threadId":"root","turnId":"turn-root","item":{"id":"spawn-child","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","senderThreadId":"root","receiverThreadIds":["child"],"agentsStates":{}}}}),
             ]).await?;
         }
         handle
@@ -614,6 +644,17 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
         let first = handle.service.reconcile().await?;
         assert_eq!(first.histories.len(), 2);
         assert!(first.gaps.is_empty(), "{:?}", first.gaps);
+        assert_eq!(first.graph.nodes.len(), 2);
+        assert!(first.graph.facts.iter().any(|fact| matches!(
+            fact.event,
+            super::super::execution::FactKind::Relation {
+                relation: super::super::types::EdgeKind::Spawn
+            }
+        )));
+        assert!(!first.graph.facts.iter().any(|fact| matches!(
+            fact.event,
+            super::super::execution::FactKind::RunFinished { .. }
+        )));
         handle.service.observe(SessionObservation {
             operation_id: "child-view-update".into(), method: "session/update".into(), phase: "notification".into(),
             payload: json!({"sessionId":"child:generation:2","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resumed child"}}}),

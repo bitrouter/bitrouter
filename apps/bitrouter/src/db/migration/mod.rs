@@ -28,6 +28,7 @@ pub mod m20240101_000015_add_metering_launch_id;
 pub mod m20240101_000016_add_acp_metering_identity;
 pub mod m20240101_000017_add_metering_route_scope;
 pub mod m20240101_000018_native_session_evidence;
+pub mod m20240101_000019_native_execution_facts;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -56,6 +57,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000016_add_acp_metering_identity::Migration),
             Box::new(m20240101_000017_add_metering_route_scope::Migration),
             Box::new(m20240101_000018_native_session_evidence::Migration),
+            Box::new(m20240101_000019_native_execution_facts::Migration),
         ]
     }
 }

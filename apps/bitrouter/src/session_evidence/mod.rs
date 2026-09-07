@@ -4,6 +4,7 @@ pub mod accounting;
 pub mod claude_hooks;
 pub mod codex_proxy;
 pub mod collector;
+pub mod execution;
 pub mod history;
 pub mod journal;
 pub mod projection;
