@@ -63,6 +63,7 @@ pub mod permission;
 pub mod picker;
 pub mod plain;
 pub mod render;
+pub mod select;
 pub mod view;
 pub mod wrap;
 pub mod writer;

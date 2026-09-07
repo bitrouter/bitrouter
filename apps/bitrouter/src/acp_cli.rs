@@ -1458,7 +1458,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                 let choice = if authenticated {
                     AuthChoice::Declined
                 } else {
-                    choose_auth_method(agent_id, session.client.auth_methods())?
+                    choose_auth_method(agent_id, session.client.auth_methods()).await?
                 };
                 match choice {
                     // No log tail: unlike a launch that died with its reason on
@@ -1561,93 +1561,48 @@ enum AuthChoice {
     Declined,
 }
 
-/// Offer the agent's advertised authentication methods and read one choice.
-///
-/// A cooked-terminal prompt rather than a TUI modal, because this runs *before*
-/// the renderer exists: `session/new` is what reports `auth_required`, and the
-/// view is not opened until a session exists. Numbered like every other choice
-/// this CLI offers.
-///
-/// Declines rather than guesses whenever a person cannot answer — no tty, EOF,
-/// or an empty method list. An unanswered prompt must never resolve to a login
-/// attempt nobody asked for.
-fn choose_auth_method(
+/// Offer the agent's advertised methods through the shared keyboard selector.
+/// Missing terminal input and cancellation never imply a login attempt.
+async fn choose_auth_method(
     agent_id: &str,
     methods: &[agent_client_protocol::schema::v1::AuthMethod],
 ) -> Result<AuthChoice> {
-    use std::io::{BufRead, IsTerminal as _};
-
-    if methods.is_empty() || !std::io::stdin().is_terminal() {
+    use std::io::IsTerminal as _;
+    if methods.is_empty() || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Ok(AuthChoice::Declined);
     }
-    eprintln!();
-    eprintln!("  '{agent_id}' is not authenticated. How would you like to sign in?");
-    for (index, method) in methods.iter().enumerate() {
-        match method.description() {
-            Some(description) => {
-                eprintln!("    {}) {} — {description}", index + 1, method.name())
-            }
-            None => eprintln!("    {}) {}", index + 1, method.name()),
-        }
-    }
-    eprintln!("    0) cancel");
-
-    let stdin = std::io::stdin();
-    let mut handle = stdin.lock();
-    loop {
-        eprint!("  Choose [1]: ");
-        let mut line = String::new();
-        if handle
-            .read_line(&mut line)
-            .context("reading the authentication choice")?
-            == 0
+    let selected = crate::prompt::select(
+        &format!("Log in to {agent_id}"),
+        "Choose an authentication method advertised by this ACP agent",
+        methods
+            .iter()
+            .map(|method| {
+                bitrouter_tui::select::Item::new(method.name(), method.description().unwrap_or(""))
+            })
+            .collect(),
+        0,
+    )
+    .await;
+    match selected {
+        Ok(index) => Ok(auth_choice(index, methods).unwrap_or(AuthChoice::Declined)),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::Interrupted) =>
         {
-            // EOF, not a choice.
-            eprintln!();
-            return Ok(AuthChoice::Declined);
+            Ok(AuthChoice::Declined)
         }
-        match classify_choice(&line, methods) {
-            Some(choice) => return Ok(choice),
-            // Not a selection: say why, then ask again.
-            None => match line.trim().parse::<usize>() {
-                Ok(n) => eprintln!(
-                    "    choice must be between 0 and {}, got {n}",
-                    methods.len()
-                ),
-                Err(_) => eprintln!("    '{}' is not a number", line.trim()),
-            },
-        }
+        Err(error) => Err(error),
     }
 }
 
-/// Classify one typed line against the offered methods.
-///
-/// Pure, so the interesting half of the picker is testable without a terminal:
-/// `choose_auth_method` owns stdin and the menu, this owns what the answer
-/// means. The same split `Editor::apply` and `machine::step` already use.
-///
-/// `0` cancels, an empty line takes the `[1]` default, and `1..=methods.len()`
-/// selects. Anything else is `None` — not a selection, ask again. Out-of-range
-/// never wraps onto a method that was not offered.
-fn classify_choice(
-    input: &str,
+fn auth_choice(
+    index: usize,
     methods: &[agent_client_protocol::schema::v1::AuthMethod],
 ) -> Option<AuthChoice> {
     use agent_client_protocol::schema::v1::AuthMethod;
-
-    let trimmed = input.trim();
-    let index = if trimmed.is_empty() {
-        1
-    } else {
-        match trimmed.parse::<usize>() {
-            Ok(0) => return Some(AuthChoice::Declined),
-            Ok(n) if (1..=methods.len()).contains(&n) => n,
-            Ok(_) | Err(_) => return None,
-        }
-    };
-    Some(match methods.get(index - 1)? {
-        // ACP is explicit that a terminal method is never passed to
-        // `authenticate`: the interactive process is not the connection.
+    Some(match methods.get(index)? {
+        // ACP terminal methods run out of band, never through authenticate.
         AuthMethod::Terminal(terminal) => AuthChoice::Terminal(Box::new(terminal.clone())),
         other => AuthChoice::Agent(other.id().clone()),
     })
@@ -2932,10 +2887,10 @@ mod auth_report_tests {
     use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent, AuthMethodTerminal};
 
     use super::{
-        AuthChoice, LaunchOptions, choose_auth_method, classify_choice, unauthenticated_message,
+        AuthChoice, LaunchOptions, auth_choice, choose_auth_method, unauthenticated_message,
     };
 
-    /// Two `agent` methods, in the order the picker numbers them.
+    /// Two agent methods in display order.
     fn two_methods() -> Vec<AuthMethod> {
         vec![
             AuthMethod::Agent(AuthMethodAgent::new("oauth", "Sign in with Anthropic")),
@@ -2959,95 +2914,35 @@ mod auth_report_tests {
         );
     }
 
-    /// **Nobody answering is never a login** (ACP_AUTH_SPEC §6.3). With no
-    /// advertised method there is nothing to offer, and the prompt declines
-    /// rather than inventing one.
+    #[tokio::test]
+    async fn nothing_advertised_declines_without_prompting() -> anyhow::Result<()> {
+        assert!(matches!(
+            choose_auth_method("pi-acp", &[]).await?,
+            AuthChoice::Declined
+        ));
+        Ok(())
+    }
+
     #[test]
-    fn nothing_advertised_declines_without_prompting() {
-        let choice = choose_auth_method("pi-acp", &[]).expect("declining is not an error");
+    fn selection_uses_only_advertised_methods() {
         assert!(
-            matches!(choice, AuthChoice::Declined),
-            "an empty method list must decline"
+            matches!(auth_choice(0, &two_methods()), Some(AuthChoice::Agent(id)) if id.0.as_ref() == "oauth")
         );
-    }
-
-    /// **Cancelling never authenticates** (ACP_AUTH_SPEC §6.3). The typed
-    /// decline is its own branch, distinct from the EOF one that returns the
-    /// same answer — this is the branch a live terminal was needed to reach.
-    #[test]
-    fn a_typed_zero_declines() {
         assert!(
-            matches!(
-                classify_choice("0", &two_methods()),
-                Some(AuthChoice::Declined)
-            ),
-            "'0' is the cancel entry the menu prints"
+            matches!(auth_choice(1, &two_methods()), Some(AuthChoice::Agent(id)) if id.0.as_ref() == "api-key")
         );
+        assert!(auth_choice(2, &two_methods()).is_none());
     }
 
-    /// A bare enter takes the `[1]` the prompt shows as the default — the
-    /// offer on screen and the answer must not disagree.
-    #[test]
-    fn a_bare_enter_takes_the_advertised_default() {
-        let Some(AuthChoice::Agent(id)) = classify_choice("\n", &two_methods()) else {
-            panic!("an empty line selects the first method")
-        };
-        assert_eq!(
-            id.to_string(),
-            "oauth",
-            "the default is the '[1]' on screen"
-        );
-    }
-
-    /// The numbering is the menu's, one-based.
-    #[test]
-    fn a_digit_selects_that_numbered_method() {
-        let Some(AuthChoice::Agent(id)) = classify_choice("2", &two_methods()) else {
-            panic!("'2' selects the second method")
-        };
-        assert_eq!(id.to_string(), "api-key", "numbering starts at one");
-    }
-
-    /// Out of range is not a selection. Nothing wraps onto an index the
-    /// harness never offered — the alternative is authenticating with a method
-    /// nobody was shown.
-    #[test]
-    fn an_unoffered_index_is_not_a_selection() {
-        assert!(
-            classify_choice("9", &two_methods()).is_none(),
-            "'9' against two methods must re-prompt, not wrap"
-        );
-    }
-
-    /// Anything that is not a number re-prompts rather than resolving.
-    #[test]
-    fn a_non_number_is_not_a_selection() {
-        assert!(
-            classify_choice("x", &two_methods()).is_none(),
-            "'x' must re-prompt"
-        );
-    }
-
-    /// A `terminal` method is routed to the out-of-band flow, never to
-    /// `authenticate` — ACP forbids passing it there because the interactive
-    /// process is not the ACP connection.
     #[test]
     fn a_terminal_method_never_becomes_an_authenticate_call() {
         let methods = vec![AuthMethod::Terminal(
             AuthMethodTerminal::new("login", "Log in from the terminal")
                 .args(vec!["--login".to_string()]),
         )];
-        let Some(AuthChoice::Terminal(descriptor)) = classify_choice("1", &methods) else {
-            panic!("a terminal method classifies to the out-of-band branch")
-        };
-        assert_eq!(
-            descriptor.args,
-            vec!["--login".to_string()],
-            "the descriptor's args are what the login appends"
-        );
         assert!(
-            descriptor.env.is_empty(),
-            "an unset env overlays nothing onto the base configuration"
+            matches!(auth_choice(0, &methods), Some(AuthChoice::Terminal(descriptor))
+            if descriptor.args == ["--login"] && descriptor.env.is_empty())
         );
     }
 

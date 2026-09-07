@@ -207,6 +207,21 @@ saved. Credentials alone do not complete setup. The wizard saves `chat.agent`
 and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the
 daemon, or exits. Subsequent bare invocations immediately open the saved TUI.
 
+Interactive setup lists every active, public provider from the registry in one
+alphabetical list. BitRouter Cloud (`bitrouter`) is an ordinary provider row.
+The fetched/cached registry is supplemented by the binary's committed snapshot,
+so a fresh installation also has a catalog offline. A custom or disabled registry
+remains authoritative. Configured credentials are marked; select additional
+providers to sign in, then choose **Continue to harness setup** (End jumps there).
+
+Every setup choice uses the same searchable, eight-row scrolling selector:
+Up/Down moves the pointer, Enter selects, typing filters by label or provider id,
+Backspace edits, Ctrl-U clears, and Home/End or Page Up/Down navigates long lists.
+The list fits smaller terminals. Digits are search text, never choice shortcuts.
+This includes provider/ACP login methods, the registry-derived ACP harness list,
+the finish action and reset confirmation. Esc or Ctrl-C cancels before setup is
+saved; credentials from already completed logins remain available.
+
 Configuration resolves from `./bitrouter.yaml`, then
 `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no
 existing file, onboarding writes to the BitRouter home. `init -c PATH` selects

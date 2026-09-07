@@ -11,8 +11,8 @@
 //! also means a malformed artifact is a build error rather than a startup
 //! failure.
 //!
-//! The Codex and Claude subscription provider defaults are bundled from the
-//! same dist snapshot so their login and model catalog need no user config.
+//! The provider registry is bundled from the same dist snapshot so first-run
+//! selection, login and model discovery also work without a registry cache.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -63,22 +63,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let models_path = root.join("models.json");
     println!("cargo::rerun-if-changed={}", providers_path.display());
     println!("cargo::rerun-if-changed={}", models_path.display());
-    let providers: Vec<_> = read_data(&providers_path)?
-        .into_iter()
-        .filter(|p| matches!(p["name"].as_str(), Some("openai-codex" | "claude-code")))
-        .collect();
-    let model_ids: std::collections::BTreeSet<_> = providers
-        .iter()
-        .flat_map(|p| p["models"].as_array().into_iter().flatten())
-        .filter_map(|m| m["id"].as_str())
-        .collect();
-    let canonical: Vec<_> = read_data(&models_path)?
-        .into_iter()
-        .filter(|m| m["id"].as_str().is_some_and(|id| model_ids.contains(id)))
-        .collect();
+    let providers = read_data(&providers_path)?;
+    let canonical = read_data(&models_path)?;
     let bundled = serde_json::json!({"providers": providers, "canonical": canonical});
     std::fs::write(
-        dest.with_file_name("acp_providers.json"),
+        dest.with_file_name("provider_registry.json"),
         serde_json::to_vec(&bundled)?,
     )?;
     Ok(())

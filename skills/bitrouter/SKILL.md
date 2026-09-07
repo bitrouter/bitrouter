@@ -61,8 +61,9 @@ Verify with `bitrouter --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
 
-A human runs `bitrouter` to complete onboarding. After setup the same command
-opens the saved default ACP TUI. Credentials alone do not mark setup complete.
+A human runs `bitrouter` to complete onboarding using searchable Up/Down lists
+of registry providers (including BitRouter Cloud), ACP harnesses and actions.
+After setup the same command opens the saved default ACP TUI. Credentials alone do not mark setup complete.
 For scripted setup:
 
 ```bash

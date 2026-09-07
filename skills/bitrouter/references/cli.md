@@ -4,6 +4,17 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 
 Bare `bitrouter` opens first-run onboarding when no default ACP harness is saved. Credentials alone do not complete setup. The wizard saves `chat.agent` and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the daemon, or exits. Subsequent bare invocations immediately open the saved TUI.  Configuration resolves from `./bitrouter.yaml`, then `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no existing file, onboarding writes to the BitRouter home. `init -c PATH` selects an explicit destination. Existing configuration values are preserved while updating chat defaults; `--force` replaces them with the starter configuration. Writes are atomic. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`.  `init --yes` saves configuration without interactive credential prompts and exits by default. The default harness is `codex-acp`; `--harness claude` selects `claude-acp`. Repeated `--harness` flags use the first as the default. An explicit `--after launch` opens the ACP TUI even when setup itself was headless. Without a terminal, bare unconfigured invocation prints setup instructions and an inert onboarding envelope; it does not silently complete the wizard.
 
+Interactive onboarding offers every active public registry provider in one
+alphabetical, searchable list; BitRouter Cloud (`bitrouter`) is a normal row.
+The binary includes a registry snapshot for uncached/offline setup. Custom or
+disabled registries remain authoritative. Configured providers are marked; add
+providers, then select **Continue to harness setup**. All setup and login choices
+use Up/Down + Enter, with eight visible rows, typing to search, Backspace/Ctrl-U
+to edit/clear, and Home/End or Page Up/Down to scroll. Digits filter rather than
+select. Esc/Ctrl-C cancels without completing setup. The harness list comes from
+the ACP registry; the headless `--harness` aliases remain `codex` and `claude`.
+
+
 
 ## Daemon lifecycle
 
