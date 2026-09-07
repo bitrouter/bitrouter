@@ -253,9 +253,18 @@ native command states, session idle/running states, task transitions, background
 task sets and runtime capabilities as separate observations. Task IDs are not
 assumed to be agent transcript IDs. Original notifications still reach the
 manager; configuration fields, result text and cumulative cost counters are
-excluded from this lifecycle view. Early notifications without a confirmed
-session/profile binding remain unbound and do not acquire the default profile's
-identity.
+excluded from this lifecycle view. The message's native `session_id` is separate
+from its ACP attachment after a conversation reset. Early notifications retain
+their original unbound scope; application snapshots can attach individual
+observations to a verified process/profile using an identical native event UUID
+and lifecycle metadata from the CLI transport. Conflicting processes, missing
+UUIDs, invalid fields and incomplete inventory remain gaps. The snapshot rotates
+through bounded raw-record windows and reports its next cursor and inspected
+observation/process ranges. Each scan fixes its SDK observation boundary before
+reading native spools; later notifications wait for another scan so newly started
+processes are not omitted from their candidate set. If a partly imported spool
+disappears, collection continues but its known missing tail remains incomplete,
+including after a restart. It does not recover a live Query cache or settle a task.
 
 Original records survive compaction and context rewind. Fork dependencies use
 native ordinal and byte cuts, and later parent work cannot enter the inherited

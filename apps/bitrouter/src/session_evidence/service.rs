@@ -25,6 +25,7 @@ use crate::eval::types::canonical_digest;
 pub mod processes;
 mod recovery;
 mod roots;
+pub mod sdk_bindings;
 mod workspaces;
 
 #[derive(Clone)]
@@ -99,13 +100,23 @@ pub struct CollectionSnapshot {
     pub workspace_checkpoints: BTreeMap<String, super::types::WorkspaceEvidence>,
     #[serde(default)]
     pub processes: Vec<processes::ProcessBinding>,
+    #[serde(default)]
+    pub sdk_bindings: sdk_bindings::SdkBindingPage,
     pub gaps: BTreeSet<String>,
     pub reconciled_at: Option<String>,
 }
 
 #[derive(Default)]
 struct LiveState {
+    inventory_epoch: u64,
+    inventory_cycle_active: bool,
+    completed_spools: BTreeSet<PathBuf>,
     process_sources: BTreeSet<String>,
+    process_source_limit: bool,
+    sdk_sources: BTreeSet<String>,
+    sdk_source_limit: bool,
+    sdk_cursor: Option<sdk_bindings::SdkBindingCursor>,
+    sdk_inventory: sdk_bindings::SdkInventory,
     nodes: BTreeSet<NodeKey>,
     replayed: BTreeMap<String, u64>,
     replay_gaps: BTreeMap<String, BTreeSet<String>>,
@@ -320,11 +331,12 @@ impl ControllerEvidence {
 
     pub async fn reconcile(&self) -> Result<CollectionSnapshot> {
         let _guard = self.reconcile_gate.lock().await;
+        let epoch = self.begin_inventory().await?;
         let mut gaps = BTreeSet::new();
         if !self.process_capture {
             gaps.insert("native_process_capture_unavailable".into());
         }
-        let recovered = self.recover(&mut gaps).await;
+        let recovered = self.recover(&mut gaps, epoch).await;
         let roots = self.state.lock().await.roots.clone();
         let mut collectors = recovered.collectors;
         for context in roots.values() {
@@ -361,6 +373,23 @@ impl ControllerEvidence {
                 nodes.insert(node);
             } else {
                 gaps.insert("native_recovery_node_limit".into());
+            }
+        }
+        let process_sources = self.state.lock().await.process_sources.clone();
+        let mut processes = Vec::with_capacity(process_sources.len());
+        for source_id in process_sources {
+            let binding = self.process_binding(source_id).await;
+            gaps.extend(binding.gaps.iter().cloned());
+            processes.push(binding);
+        }
+        let sdk_bindings = self.sdk_bindings(&processes, &mut gaps).await;
+        for binding in &sdk_bindings.observations {
+            if let Some(node) = &binding.node {
+                if nodes.contains(node) || nodes.len() < MAX_GRAPH_ITEMS {
+                    nodes.insert(node.clone());
+                } else {
+                    gaps.insert("native_execution_node_limit".into());
+                }
             }
         }
         for node in nodes.clone() {
@@ -465,13 +494,6 @@ impl ControllerEvidence {
                 }
             }
         }
-        let process_sources = self.state.lock().await.process_sources.clone();
-        let mut processes = Vec::with_capacity(process_sources.len());
-        for source_id in process_sources {
-            let binding = self.process_binding(source_id).await;
-            gaps.extend(binding.gaps.iter().cloned());
-            processes.push(binding);
-        }
         let mut state = self.state.lock().await;
         if !state.ambiguous_sessions.is_empty() {
             gaps.insert("ambiguous_acp_session_scope".into());
@@ -479,12 +501,16 @@ impl ControllerEvidence {
         if !state.uncertain_queries.is_empty() {
             gaps.insert("native_query_scope_unknown".into());
         }
+        state.sdk_cursor = sdk_bindings.next.clone();
+        state.inventory_cycle_active =
+            gaps.contains("native_recovery_backlog") || gaps.contains("native_spool_backlog");
         let snapshot = CollectionSnapshot {
             histories,
             graph,
             attempts,
             workspace_checkpoints,
             processes,
+            sdk_bindings,
             gaps,
             reconciled_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -511,6 +537,19 @@ impl ControllerEvidence {
                 found.insert(node.clone());
             }
         }
+        {
+            let state = self.state.lock().await;
+            if state.inventory_cycle_active && state.completed_spools.contains(spool) {
+                // Preserve this directory's completed cut while other roots or
+                // registration pages catch up in the same inventory epoch.
+                for (path, file_gaps) in &state.spool_gaps {
+                    if path.parent() == Some(spool) {
+                        gaps.extend(file_gaps.iter().cloned());
+                    }
+                }
+                return Ok(());
+            }
+        }
         // Scan the directory with bounded memory, then advance in lexical
         // pages. Retained proxy and historical hook files must not permanently
         // occupy the first page and starve later invocations.
@@ -535,6 +574,29 @@ impl ControllerEvidence {
                     files.pop_last();
                     more = true;
                 }
+            }
+        }
+        let unfinished: Vec<_> = self
+            .state
+            .lock()
+            .await
+            .spool_gaps
+            .iter()
+            .filter(|(path, file_gaps)| {
+                path.parent() == Some(spool) && file_gaps.contains("native_spool_backlog")
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in unfinished {
+            if !tokio::fs::symlink_metadata(&path)
+                .await
+                .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+                && let Some(file_gaps) = self.state.lock().await.spool_gaps.get_mut(&path)
+            {
+                // A vanished pending file cannot make further import progress.
+                // Its durable extent keeps the missing tail visible on reopen.
+                file_gaps.remove("native_spool_backlog");
+                file_gaps.insert("native_spool_tail_unavailable".into());
             }
         }
         let last = files.last().cloned();
@@ -568,6 +630,14 @@ impl ControllerEvidence {
                 gaps.extend(file_gaps.iter().cloned());
             }
         }
+        if state.inventory_cycle_active
+            && !more
+            && !state.spool_gaps.iter().any(|(path, file_gaps)| {
+                path.parent() == Some(spool) && file_gaps.contains("native_spool_backlog")
+            })
+        {
+            state.completed_spools.insert(spool.into());
+        }
         Ok(())
     }
 
@@ -590,24 +660,28 @@ impl ControllerEvidence {
             }
             Harness::ClaudeCode => SourceFormat::ClaudeHook,
         };
+        let descriptor = SourceDescriptor {
+            namespace: root.namespace.clone(),
+            harness: root.harness,
+            format,
+            locator: format!("spool:{}", path.to_string_lossy()),
+            node: None,
+        };
+        if format == SourceFormat::ClaudeCli {
+            // A cancelled import may commit its extent before its first raw
+            // record. Keep that unknown process in the candidate inventory.
+            self.remember_process_source(&self.store.source_id(&descriptor)?, gaps)
+                .await;
+        }
         let imported = import_spool(
             &self.store,
             path.parent().context("spool directory missing")?,
             path,
-            SourceDescriptor {
-                namespace: root.namespace.clone(),
-                harness: root.harness,
-                format,
-                locator: format!("spool:{}", path.to_string_lossy()),
-                node: None,
-            },
+            descriptor,
         )
         .await?;
         gaps.extend(imported.gaps);
         let source = imported.source;
-        if source.descriptor.format == SourceFormat::ClaudeCli {
-            self.remember_process_source(&source.id, gaps).await;
-        }
         let mut start = self
             .state
             .lock()
@@ -831,6 +905,10 @@ impl SessionObserver for ControllerEvidence {
             event["observed_at"] = json!(chrono::Utc::now().to_rfc3339());
             event["native_scope"] = json!(scope);
             let record = context.journal.append_record(event).await?;
+            if observation.method == super::claude_sdk::METHOD {
+                let mut gaps = BTreeSet::new();
+                self.remember_sdk_source(&record.source_id, &mut gaps).await;
+            }
             self.finish_observation(&observation, context.collector.root(), &record)
                 .await?;
             if observation.phase == "response"

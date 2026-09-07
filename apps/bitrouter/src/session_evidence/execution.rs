@@ -100,6 +100,10 @@ pub struct NativeFact {
     pub source_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<String>,
+    /// ACP attachment of this specific SDK observation, separate from the
+    /// native conversation node (which can change after a reset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_session_id: Option<String>,
     /// The execution being described. Relations point from related_node to node.
     pub node: Option<NodeKey>,
     pub related_node: Option<NodeKey>,
@@ -118,6 +122,7 @@ struct Extractor<'a> {
     record: &'a StoredRecord,
     facts: BTreeMap<String, NativeFact>,
     process_id: Option<String>,
+    acp_session_id: Option<String>,
 }
 
 /// Extraction failure is durable uncertainty, never a reason to discard a raw
@@ -128,6 +133,7 @@ pub fn extract(source: &SourceDescriptor, record: &StoredRecord) -> Result<Vec<N
         record,
         facts: BTreeMap::new(),
         process_id: None,
+        acp_session_id: None,
     };
     if extractor.read().is_err() {
         extractor.facts.clear();
@@ -140,6 +146,24 @@ pub fn extract(source: &SourceDescriptor, record: &StoredRecord) -> Result<Vec<N
         )?;
     }
     Ok(extractor.facts.into_values().collect())
+}
+
+pub(crate) fn validate_claude_message(
+    source: &SourceDescriptor,
+    record: &StoredRecord,
+    message: &Value,
+) -> Result<()> {
+    let mut extractor = Extractor {
+        source,
+        record,
+        facts: BTreeMap::new(),
+        process_id: None,
+        acp_session_id: None,
+    };
+    let node = extractor.node(&text(message, "session_id")?, None)?;
+    extractor.claude_message(node, message)?;
+    ensure!(!extractor.facts.is_empty(), "unsupported native message");
+    Ok(())
 }
 
 impl Extractor<'_> {
@@ -173,6 +197,10 @@ impl Extractor<'_> {
             Some(process) => canonical_digest(&(base_id, process))?,
             None => base_id,
         };
+        let id = match &self.acp_session_id {
+            Some(session) => canonical_digest(&(id, session))?,
+            None => id,
+        };
         self.facts.insert(
             id.clone(),
             NativeFact {
@@ -182,6 +210,7 @@ impl Extractor<'_> {
                 record_digest: self.record.digest.clone(),
                 source_id: self.record.source_id.clone(),
                 process_id: self.process_id.clone(),
+                acp_session_id: self.acp_session_id.clone(),
                 node,
                 related_node,
                 event,

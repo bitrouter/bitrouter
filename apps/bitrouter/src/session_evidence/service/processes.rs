@@ -43,6 +43,7 @@ impl ControllerEvidence {
         if state.process_sources.contains(id) || state.process_sources.len() < MAX_GRAPH_ITEMS {
             state.process_sources.insert(id.into());
         } else {
+            state.process_source_limit = true;
             gaps.insert("native_process_source_limit".into());
         }
     }

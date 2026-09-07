@@ -598,7 +598,7 @@ async fn recovery_rejects_foreign_and_misbound_root_registrations() -> Result<()
 }
 
 #[test]
-fn acp_recovery_requires_correlated_operations_and_never_binds_sdk_notifications() -> Result<()> {
+fn acp_recovery_requires_correlated_operations_and_leaves_unscoped_sdk_to_binding() -> Result<()> {
     let root = NativeRoot {
         harness: Harness::ClaudeCode,
         namespace: "fixture".into(),
@@ -640,7 +640,9 @@ fn acp_recovery_requires_correlated_operations_and_never_binds_sdk_notifications
         &mut gaps,
     )?;
     assert!(notification.is_empty());
-    assert!(gaps.contains("native_sdk_scope_unresolved"));
+    // SDK binding inspects the owned source and raw record separately; this
+    // lifecycle replay cannot promote the envelope's synthetic ACP id.
+    assert!(!gaps.contains("native_sdk_scope_unresolved"));
     Ok(())
 }
 

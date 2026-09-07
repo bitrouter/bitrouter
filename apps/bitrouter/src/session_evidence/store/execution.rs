@@ -191,7 +191,17 @@ impl EvidenceStore {
             graph.nodes.insert(node.clone());
             let mut after = None;
             loop {
-                let page = self.node_facts(&node, after.as_deref(), 128).await?;
+                let page = match self.node_facts(&node, after.as_deref(), 128).await {
+                    Ok(page) => page,
+                    Err(error) => {
+                        // This is a replaceable candidate view. Strict fact
+                        // reads still reject corruption, while other histories
+                        // and SDK observations must remain inspectable.
+                        tracing::warn!(%error, "native candidate graph evidence is invalid");
+                        graph.gaps.insert("native_graph_evidence_invalid".into());
+                        break;
+                    }
+                };
                 if page.is_empty() {
                     break;
                 }

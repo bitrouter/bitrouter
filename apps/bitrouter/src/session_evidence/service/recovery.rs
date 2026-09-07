@@ -32,6 +32,7 @@ struct Replay {
 
 #[derive(Default)]
 pub(super) struct RecoveryState {
+    epoch: u64,
     phase: Phase,
     after: Option<String>,
     roots: BTreeMap<String, RecoveredRoot>,
@@ -46,14 +47,17 @@ pub(super) struct Recovered {
 }
 
 impl ControllerEvidence {
-    pub(super) async fn recover(&self, gaps: &mut BTreeSet<String>) -> Recovered {
+    pub(super) async fn recover(&self, gaps: &mut BTreeSet<String>, epoch: u64) -> Recovered {
         let mut recovery = self.recovery.lock().await;
-        if matches!(recovery.phase, Phase::Complete) {
-            // A different live controller can commit and retire a hook after
-            // our previous sweep. Continuously rotate the registry as well as
-            // the filesystem, including source ids before the previous cursor.
-            recovery.phase = Phase::Roots;
-            recovery.after = None;
+        if recovery.epoch != epoch {
+            recovery.epoch = epoch;
+            if matches!(recovery.phase, Phase::Complete) {
+                // A different live controller can commit and retire a hook after
+                // our previous sweep. Continuously rotate the registry as well as
+                // the filesystem, including source ids before the previous cursor.
+                recovery.phase = Phase::Roots;
+                recovery.after = None;
+            }
         }
         let result = match recovery.phase {
             Phase::Roots => self.recover_roots(&mut recovery).await,
@@ -282,7 +286,8 @@ impl ControllerEvidence {
                 }
             };
             if self.historical_source_root(recovery, &source).is_some()
-                && source.cursor.next_sequence > 0
+                && (source.cursor.next_sequence > 0
+                    || source.descriptor.format == SourceFormat::ClaudeCli)
             {
                 recovery.replay = Some(Replay {
                     source,
@@ -343,6 +348,12 @@ impl ControllerEvidence {
             self.remember_process_source(&replay.source.id, &mut recovery.gaps)
                 .await;
         }
+        if replay.source.descriptor.format == SourceFormat::Acp
+            && replay.source.descriptor.harness == Harness::ClaudeCode
+        {
+            self.remember_sdk_source(&replay.source.id, &mut recovery.gaps)
+                .await;
+        }
         if let Some(node) = &replay.source.descriptor.node {
             insert_node(&mut recovery.nodes, node.clone())?;
             // Native projections already validate these source records and
@@ -369,6 +380,20 @@ impl ControllerEvidence {
                 .extend(self.store.index_lifecycle_range(&range).await?);
             for row in rows {
                 let raw = &row.input.raw;
+                if replay.source.descriptor.format == SourceFormat::Acp
+                    && raw.get("method").and_then(Value::as_str)
+                        == Some(super::super::claude_sdk::METHOD)
+                    && !matches!(
+                        raw.get("native_scope").and_then(Value::as_str),
+                        Some("operation" | "session")
+                    )
+                    && !super::super::store::sdk_messages::has_message_identity(
+                        &replay.source.descriptor,
+                        &row,
+                    )
+                {
+                    recovery.gaps.insert("native_sdk_scope_unresolved".into());
+                }
                 let nodes = if replay.source.descriptor.format == SourceFormat::Acp {
                     replay_acp(raw, &root, &mut replay.pending, &mut recovery.gaps)
                 } else {
@@ -413,9 +438,16 @@ fn replay_acp(
     let scope = raw.get("native_scope").and_then(Value::as_str);
     if method == super::super::claude_sdk::METHOD
         && phase == "notification"
-        && !matches!(scope, Some("operation" | "session"))
+        && matches!(scope, Some("operation" | "session"))
     {
-        gaps.insert("native_sdk_scope_unresolved".into());
+        let message = raw
+            .pointer("/payload/message")
+            .context("SDK message missing")?;
+        ensure!(
+            message.get("bitrouter_capture_invalid") != Some(&Value::Bool(true)),
+            "invalid SDK message fields"
+        );
+        return native_nodes(&json!({"payload":message}), root);
     }
     if !matches!(
         method,

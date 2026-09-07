@@ -74,13 +74,17 @@ async fn capture(
         row["sequence"] = json!(sequence);
     }
     write_rows(&path, rows).await?;
-    let snapshot = service.reconcile().await?;
-    let binding = snapshot
-        .processes
-        .into_iter()
-        .find(|binding| binding.process_id.as_deref() == Some(process_id.as_str()))
-        .context("captured process")?;
-    Ok((binding, path))
+    for _ in 0..256 {
+        let snapshot = service.reconcile().await?;
+        if let Some(binding) = snapshot
+            .processes
+            .into_iter()
+            .find(|binding| binding.process_id.as_deref() == Some(process_id.as_str()))
+        {
+            return Ok((binding, path));
+        }
+    }
+    anyhow::bail!("captured process did not reach a completed inventory")
 }
 
 async fn recover(service: &ControllerEvidence) -> Result<CollectionSnapshot> {

@@ -205,7 +205,7 @@ fn sdk_facts(message: Value) -> Result<Vec<NativeFact>> {
 #[test]
 fn claude_sdk_keeps_command_result_idle_and_background_observations_separate() -> Result<()> {
     let command = sdk_facts(
-        json!({"type":"command_lifecycle","command_uuid":"command","state":"completed"}),
+        json!({"type":"command_lifecycle","command_uuid":"command","session_id":"root","state":"completed"}),
     )?;
     assert_eq!(
         command[0].event,
@@ -276,11 +276,25 @@ fn claude_sdk_task_ids_do_not_invent_agent_nodes_and_unknown_scope_stays_unbound
         "payload":{"sessionId":"root","message":message}}),
     )?;
     assert!(unbound.is_empty());
-    let wrong_session = sdk_facts(
+    let reset_session = sdk_facts(
         json!({"type":"system","subtype":"session_state_changed","session_id":"other","state":"idle"}),
     )?;
-    assert_eq!(wrong_session.len(), 1);
-    assert!(matches!(wrong_session[0].event, FactKind::Gap { .. }));
+    assert_eq!(reset_session.len(), 1);
+    assert!(matches!(
+        reset_session[0].event,
+        FactKind::SessionState { .. }
+    ));
+    assert_eq!(
+        reset_session[0]
+            .node
+            .as_ref()
+            .map(|node| node.native_id.as_str()),
+        Some("other")
+    );
+    assert_eq!(reset_session[0].acp_session_id.as_deref(), Some("root"));
+    let missing_native_id =
+        sdk_facts(json!({"type":"system","subtype":"session_state_changed","state":"idle"}))?;
+    assert!(matches!(missing_native_id[0].event, FactKind::Gap { .. }));
     let captured = crate::session_evidence::claude_sdk::notification_fields(&json!({"sessionId":"root","message":{
         "type":"system","subtype":"task_started","task_id":"task","tool_use_id":{"prompt":"private"}
     }})).context("selected malformed event")?;

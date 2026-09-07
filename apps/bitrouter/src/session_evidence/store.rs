@@ -19,6 +19,8 @@ use crate::eval::types::canonical_digest;
 pub mod execution;
 pub mod forks;
 pub(crate) mod lifecycle;
+pub(crate) mod sdk_messages;
+mod spools;
 pub(crate) mod tasks;
 mod workspace;
 
@@ -103,8 +105,12 @@ impl EvidenceStore {
         &self.owner
     }
 
+    pub(crate) fn source_id(&self, descriptor: &SourceDescriptor) -> Result<String> {
+        descriptor.id(&self.owner_key)
+    }
+
     pub async fn register(&self, descriptor: SourceDescriptor) -> Result<RegisteredSource> {
-        let id = descriptor.id(&self.owner_key)?;
+        let id = self.source_id(&descriptor)?;
         source_entity::Entity::insert(source_entity::ActiveModel {
             id: Set(id.clone()),
             owner: Set(self.owner_key.clone()),
@@ -819,7 +825,8 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
     ensure!(
         match row.kind.as_str() {
             "attempt" | "fork_binding" | "active_task" | "prompt_operation"
-            | "workspace_artifact" | "lifecycle_request" | "lifecycle_response" =>
+            | "workspace_artifact" | "lifecycle_request" | "lifecycle_response"
+            | "spool_extent" =>
                 fields.get("id").and_then(serde_json::Value::as_str)
                     == Some(row.object_key.as_str()),
             "manifest" => row.object_key == row.digest,

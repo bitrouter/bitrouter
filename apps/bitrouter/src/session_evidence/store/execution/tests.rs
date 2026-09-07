@@ -278,3 +278,125 @@ async fn adding_process_identity_preserves_legacy_fact_bytes_and_digests() -> Re
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn parser_v2_rebuilds_reset_identity_after_reopen_without_overwriting_v1() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let url = format!(
+        "sqlite:{}?mode=rwc",
+        directory.path().join("evidence.db").display()
+    );
+    let db = crate::db::connect(&url).await?;
+    crate::db::run_migrations(&db).await?;
+    let store = EvidenceStore::new(db.clone(), "alice")?;
+    let descriptor = SourceDescriptor {
+        namespace: "native-profile".into(),
+        harness: Harness::ClaudeCode,
+        format: SourceFormat::Acp,
+        locator: "controller:fixture".into(),
+        node: None,
+    };
+    let source = append(&store, descriptor, json!({"method":"_claude/sdkMessage","phase":"notification","native_scope":"session","payload":{"sessionId":"acp-root","message":{"type":"system","subtype":"session_state_changed","session_id":"fresh-native","uuid":"native-event","state":"idle"}}})).await?;
+    let record = store
+        .records(&range(&source))
+        .await?
+        .into_iter()
+        .next()
+        .context("original SDK record")?;
+    fact_entity::Entity::delete_many().exec(&db).await?;
+    // Parser v1 rejected a valid post-reset native id that differed from ACP.
+    let event = FactKind::Gap {
+        reason: "native_lifecycle_invalid".into(),
+    };
+    let old = NativeFact {
+        id: canonical_digest(&(
+            "native-evidence/1",
+            &record.id,
+            Option::<NodeKey>::None,
+            Option::<NodeKey>::None,
+            &event,
+        ))?,
+        parser_version: "native-evidence/1".into(),
+        record_id: record.id.clone(),
+        record_digest: record.digest,
+        source_id: source.id.clone(),
+        process_id: None,
+        acp_session_id: None,
+        node: None,
+        related_node: None,
+        event,
+    };
+    let old_json = serde_json::to_string(&old)?;
+    let old_id = canonical_digest(&(&store.owner_key, &old.id))?;
+    fact_entity::Entity::insert(fact_entity::ActiveModel {
+        id: Set(old_id.clone()),
+        owner: Set(store.owner_key.clone()),
+        namespace: Set(canonical_digest(&(Harness::ClaudeCode, "native-profile"))?),
+        parser_version: Set(canonical_digest(&"native-evidence/1")?),
+        record_id: Set(record.id),
+        digest: Set(canonical_digest(&old)?),
+        node_id: Set(None),
+        related_node_id: Set(None),
+        fact_json: Set(old_json.clone()),
+    })
+    .exec(&db)
+    .await?;
+    drop(store);
+    drop(db);
+    let db = crate::db::connect(&url).await?;
+    let reopened = EvidenceStore::new(db.clone(), "alice")?;
+    reopened.index_execution_range(&range(&source)).await?;
+    let target = NodeKey {
+        namespace: "native-profile".into(),
+        harness: Harness::ClaudeCode,
+        native_id: "fresh-native".into(),
+        agent_id: None,
+    };
+    let facts = reopened.node_facts(&target, None, 100).await?;
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].parser_version, "native-evidence/2");
+    assert_eq!(facts[0].acp_session_id.as_deref(), Some("acp-root"));
+    assert_eq!(facts[0].node.as_ref(), Some(&target));
+    assert_eq!(
+        fact_entity::Entity::find_by_id(old_id)
+            .one(&db)
+            .await?
+            .context("retained v1 fact")?
+            .fact_json,
+        old_json
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn candidate_graph_keeps_healthy_nodes_while_strict_reads_reject_a_bad_record() -> Result<()>
+{
+    let store = store().await?;
+    let broken = append(&store, descriptor(), thread("broken", None, "group")).await?;
+    let mut healthy = descriptor();
+    healthy.locator = "healthy-source".into();
+    append(&store, healthy, thread("healthy", None, "group")).await?;
+    record_entity::Entity::update_many()
+        .col_expr(record_entity::Column::Digest, Expr::value("damaged"))
+        .filter(record_entity::Column::SourceId.eq(broken.id))
+        .exec(&store.db)
+        .await?;
+    assert!(store.node_facts(&node("broken"), None, 100).await.is_err());
+    let graph = store
+        .execution_graph(&BTreeSet::from([node("broken"), node("healthy")]))
+        .await?;
+    assert!(graph.gaps.contains("native_graph_evidence_invalid"));
+    assert!(
+        graph
+            .facts
+            .iter()
+            .any(|fact| fact.node.as_ref() == Some(&node("healthy")))
+    );
+    assert!(
+        !graph
+            .facts
+            .iter()
+            .any(|fact| fact.node.as_ref() == Some(&node("broken")))
+    );
+    Ok(())
+}

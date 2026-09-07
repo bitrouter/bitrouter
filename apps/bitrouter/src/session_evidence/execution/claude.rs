@@ -123,14 +123,19 @@ impl Extractor<'_> {
             return Ok(());
         }
         let payload = raw.get("payload").context("native SDK envelope missing")?;
-        let node = self.node(&text(payload, "sessionId")?, None)?;
+        self.acp_session_id = Some(text(payload, "sessionId")?);
         let message = payload
             .get("message")
             .context("native SDK message missing")?;
+        // The adapter retains params.sessionId across conversation_reset while
+        // the SDK mounts another native transcript. Only session_id identifies
+        // the execution described by this message; neither id implies liveness.
+        // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+        let node = self.node(&text(message, "session_id")?, None)?;
         self.claude_message(node, message)
     }
 
-    fn claude_message(&mut self, node: NodeKey, message: &Value) -> Result<()> {
+    pub(super) fn claude_message(&mut self, node: NodeKey, message: &Value) -> Result<()> {
         ensure!(
             message.get("bitrouter_capture_invalid") != Some(&Value::Bool(true)),
             "invalid native lifecycle field shape"
@@ -145,10 +150,12 @@ impl Extractor<'_> {
             (Some("command_lifecycle"), _) => {
                 let state = text(message, "state")?;
                 ensure!(
-                    matches!(state.as_str(), "queued" | "started" | "completed" | "cancelled" | "discarded")
-                        // CLI 2.1.238+ declines some peer messages before they
-                        // enter the command lane; no result need follow.
-                        || (self.source.format == SourceFormat::ClaudeCli && state == "refused"),
+                    // Refused commands never enter the execution lane and need
+                    // not have a result. Both transports carry the same frame.
+                    matches!(
+                        state.as_str(),
+                        "queued" | "started" | "completed" | "cancelled" | "discarded" | "refused"
+                    ),
                     "unknown native command state"
                 );
                 FactKind::NativeCommand {

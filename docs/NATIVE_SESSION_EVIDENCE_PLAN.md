@@ -3,6 +3,21 @@
 Status: implementation in progress. Baseline: `61dd7733`.
 Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 
+## Current scope
+
+| Layer | Implemented boundary | Remaining boundary |
+|---|---|---|
+| Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
+| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
+| Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
+| Task boundaries | A confirmed first prompt creates a task/attempt; original prompt and response records commit with operation membership. | Explicit task/attempt switching, native execution membership and immutable per-attempt source cuts. |
+| Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
+| Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
+| TUI | Collection state is available in an application snapshot. | User-facing evaluation status, checkpoint feedback and task/attempt actions. |
+
+These are feature-branch capabilities. A live collection snapshot is not a
+complete evaluation sample, and an ACP response is not task-completion proof.
+
 ## Implementation checkpoint
 
 Storage, source-local projection, recursive Codex history dependencies, native
@@ -44,8 +59,9 @@ states, background task sets, results, runtime capabilities and conversation
 resets separately. The original notification is forwarded after persistence;
 the evidence view excludes configuration fields, result text and overlapping
 cumulative cost counters. SDK task IDs are not agent transcript IDs. Early
-notifications stay in their unbound raw journal until their profile can be
-established; durable rebinding/recovery is still required.
+notifications stay in their unbound raw journal. Individual observations can
+subsequently acquire a verified native-process attachment as described below;
+this does not rewrite their original scope or restore a live Query cache.
 
 Controller recovery now continuously pages through owned source registrations
 and their durable records. Original controller metadata verifies each historical
@@ -144,7 +160,8 @@ then kills and reaps it before the SDK's five-second wrapper-kill deadline.
 This is process/transport validation, not conformance against a real Claude CLI.
 Abrupt wrapper death without a durable stop remains unknown. Correlating these
 process scopes to prompt operations, hooks, live Query caches and exact task ranges
-still requires implementation; early ACP SDK journal records remain unbound.
+still requires implementation; early ACP SDK records without a matching native
+event remain unbound.
 Independent stage review passed after termination, persistent-gap, identity-gate
 and ambient-field fixes. The workspace check ran 3,209 tests with 12 skipped;
 Clippy, formatting, doctests, rustdoc and distribution checks also passed.
@@ -202,8 +219,64 @@ rerun without that report. Clippy, formatting, doctests, rustdoc and distributio
 checks passed. These checks do not replace the outstanding native-runtime
 conformance matrix.
 
-Still required: complete execution-relation parsing, native SDK lifecycle
-rebinding; complete native query-lifetime recovery;
+The execution parser is now `native-evidence/2`. SDK facts retain the adapter's
+ACP attachment separately from the message's native `session_id`, including
+after a conversation reset. Missing native identity remains a gap. Versioned
+fact ids permit replay into v2 without changing old v1 fact bytes or frozen
+evidence objects. Both SDK and CLI command observations recognize `refused`.
+
+SDK observations have a bounded, rotating application window, with an original
+source-sequence cursor, inspected observation ranges and raw process ranges.
+Early observations can bind to a
+verified process/profile only when their native event UUID and all selected
+metadata match a CLI record from the same controller. The process's original
+configuration and available lifecycle response must agree. Multiple matching
+processes remain ambiguous. Raw record validation supplies the candidate set;
+missing derived indexes cannot make another process disappear. The original
+invalid-field marker is checked before metadata reselection, and unmatched,
+malformed or UUID-less observations stay explicit gaps.
+
+Each window reads at most 128 ACP raw records and materializes one raw body at
+a time. Candidate collection scans at most 100,000 raw process records and
+retains the exact committed ranges. Verified origins exclude other controllers;
+unknown origins remain in the inventory. Missing records, process/source limits
+and unfinished recovery prevent a unique-process claim. Each collection epoch
+captures SDK journal cuts before scanning any native spool. Completed registration
+and directory sweeps remain at those cuts until all components finish, so their
+different page lengths cannot permanently starve an observation. Late SDK records
+wait for the next epoch and cannot bind against an older directory scan. A new
+epoch starts directory enumeration from the beginning, including after failures.
+Current journals come from registered roots even when an observer was cancelled
+after committing raw evidence but before updating its source cache.
+
+Spool import persists a monotonic observed byte extent before committing a
+bounded record prefix. A pending file that disappears or becomes a non-regular
+file no longer holds every SDK page in backlog. Its uncollected extent remains
+an explicit inventory gap after database reopen; a missing or damaged extent
+cannot certify a complete process candidate set. Later successful import may
+cover that extent, but a shorter or replaced file never lowers the watermark.
+
+Cursor advancement and snapshot publication occur together; later sweeps revisit
+old observations for late or conflicting native copies. These windows are
+replaceable status, not frozen attempt membership or Query-liveness evidence.
+Durable per-attempt cuts still need to replace aggregate inventory budgets and
+bound the cost of long-lived collection.
+
+Independent stage review passed after tightening raw-candidate validation,
+coordinated inventory cuts, cancellation recovery and durable missing-tail
+coverage. A registered process with an observed extent but no imported raw
+records remains an unknown candidate across restart; a process-source limit
+remains visible after the excluded spool disappears. Regression tests cover
+those cases, real multi-page spool inventories, late conflicting copies and
+observer cancellation after raw commit. All 3,240 workspace tests passed with
+12 skipped in the final low-concurrency run. Clippy, formatting, doctests,
+rustdoc and distribution checks passed. The cancellation fixture uses an
+independent read-only SQLite connection to inspect committed state while the
+import future is paused. These tests do not certify real native-runtime
+conformance, complete Query recovery, task membership or evaluation readiness.
+
+Still required: complete execution-relation parsing, remaining native SDK
+rebinding cases without matching native events; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace
 checkpoints and deltas; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete

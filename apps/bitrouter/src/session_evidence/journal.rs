@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -116,6 +116,10 @@ pub async fn import_spool(
     let start_sequence = source.cursor.next_sequence;
     let mut gaps = BTreeSet::new();
     let file = tokio::fs::File::open(path).await?;
+    // Commit the known extent before any bounded-prefix import. If collection
+    // is cancelled or the file disappears, its uncollected tail stays visible.
+    let mut observed_end = file.metadata().await?.len();
+    store.observe_spool_extent(&source, observed_end).await?;
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     let mut remaining = source.cursor.offset;
@@ -164,6 +168,13 @@ pub async fn import_spool(
             .await?;
         if count == 0 {
             break;
+        }
+        let read_end = offset
+            .checked_add(count as u64)
+            .context("spool byte extent overflow")?;
+        if read_end > observed_end {
+            store.observe_spool_extent(&source, read_end).await?;
+            observed_end = read_end;
         }
         if count > MAX_RECORD_BYTES {
             gaps.insert("native_spool_record_limit".into());
