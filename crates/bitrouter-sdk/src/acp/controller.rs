@@ -41,6 +41,12 @@ pub struct SessionObservation {
 /// observed operation visibly; an implementation must not silently drop data.
 #[async_trait]
 pub trait SessionObserver: Send + Sync {
+    /// Opt into selected adapter capability metadata. The default keeps
+    /// initialization extensions out of durable application observations.
+    fn initialization_metadata(&self, _metadata: Option<&Meta>) -> Option<serde_json::Value> {
+        None
+    }
+
     /// Whether this application implements the task status/selection contract.
     fn task_control_enabled(&self) -> bool {
         false
@@ -81,6 +87,8 @@ pub trait SessionObserver: Send + Sync {
     ) -> Result<(), agent_client_protocol::Error>;
 
     /// Attach application-owned native instrumentation to a session request.
+    /// Called for new/load/resume/fork and prompt after observing the original
+    /// request, before forwarding it to the adapter.
     /// Implementations preserve the manager's options; the default is a pass-through.
     async fn prepare_session_request(
         &self,
@@ -594,9 +602,13 @@ impl ConnectTo<Conductor> for ControllerProxy {
                             };
                             if let Some(observer) = observer {
                                 let info = response.agent_info.as_ref().map(|info| serde_json::json!({"name":info.name,"version":info.version}));
+                                let mut payload = serde_json::json!({"agentInfo":info,"loadSession":response.agent_capabilities.load_session});
+                                if let Some(metadata) = observer.initialization_metadata(response.meta.as_ref()) {
+                                    payload["_meta"] = metadata;
+                                }
                                 if let Err(error) = observer.observe(SessionObservation {
                                     operation_id: uuid::Uuid::new_v4().to_string(), method: "initialize".into(), phase: "response".into(),
-                                    payload: serde_json::json!({"agentInfo":info,"loadSession":response.agent_capabilities.load_session}),
+                                    payload,
                                 }).await {
                                     initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
                                     return responder.respond_with_error(error);
@@ -1069,16 +1081,14 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
                             return Ok(Handled::Yes);
                         }
                         let observer = observer.clone();
-                        if matches!(method.as_str(), "session/new" | "session/load" | "session/resume" | "session/fork") {
-                            match observer.prepare_session_request(&operation_id, &method, request.params.clone()).await {
-                                Ok(params) => request.params = params,
-                                Err(error) => {
-                                    let terminal = observer.observe(SessionObservation {
-                                        operation_id, method, phase: "response".into(),
-                                        payload: serde_json::json!({"error_code":error.code}),
-                                    }).await;
-                                    return responder.respond_with_error(terminal.err().unwrap_or(error)).map(|()| Handled::Yes);
-                                }
+                        match observer.prepare_session_request(&operation_id, &method, request.params.clone()).await {
+                            Ok(params) => request.params = params,
+                            Err(error) => {
+                                let terminal = observer.observe(SessionObservation {
+                                    operation_id, method, phase: "response".into(),
+                                    payload: serde_json::json!({"error_code":error.code}),
+                                }).await;
+                                return responder.respond_with_error(terminal.err().unwrap_or(error)).map(|()| Handled::Yes);
                             }
                         }
                         // Keep ACP's per-hop cancellation propagation while

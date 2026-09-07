@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::*;
 use crate::session_evidence::types::{AcpSessionKey, Harness, NodeKey, SourceFormat};
 
+mod bridge;
 mod selections;
 
 /// A checked admission conflict before a new selection can be committed.
@@ -312,6 +313,26 @@ impl EvidenceStore {
             .await?;
         self.index_lifecycle_record(&transaction, source, &record)
             .await?;
+        if record.raw.get("method").and_then(Value::as_str)
+            == Some(crate::session_evidence::adapter_bridge::METHOD)
+        {
+            // A damaged derived bridge index must not roll back the original
+            // native notification. A savepoint also isolates SQL errors on
+            // databases that abort a transaction after a failed statement.
+            let index_transaction = transaction.begin().await?;
+            match self
+                .index_bridge_record(&index_transaction, source, &record)
+                .await
+            {
+                Ok(()) => index_transaction.commit().await?,
+                Err(error) => {
+                    index_transaction.rollback().await?;
+                    tracing::warn!(%error, "native bridge index failed; retaining original observation");
+                    self.record_bridge_index_gap(&transaction, source, &record)
+                        .await?;
+                }
+            }
+        }
         if record.raw.get("method").and_then(Value::as_str) == Some("_bitrouter/task/select") {
             self.queue_task_selection(&transaction, source, &record)
                 .await?;

@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. | Native execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance. | Native corroboration, execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
@@ -299,7 +299,7 @@ must check run, graph and history gaps, and still require task membership and
 settlement evidence before evaluation. Exact attribution of local fork rollout
 segments without direct events remains required.
 
-ACP prompt-to-native input correlation is also still required. The inspected
+At this checkpoint, ACP prompt-to-native input correlation was still required. The inspected
 Claude adapter 0.75.1 creates its own prompt UUID and its prompt response does
 not carry that UUID. Session identity, input text and response timing do not
 establish this link. The controller's operation boundary cannot yet select a
@@ -480,6 +480,56 @@ rejection and service error mapping with ACP client/driver handling. Native
 processes in these tests are deterministic fixtures, not pinned-runtime
 conformance. All 3,331 workspace tests passed with 13 skipped; Clippy with denied
 warnings, doctests, rustdoc, distribution, formatting and diff checks passed.
+
+The producer-bridge stage now connects canonical pinned npm invocations through a
+private Node entry that hashes the actual loaded adapter module before inserting
+observations in memory. Original package files, import URLs, native input and
+global Node options remain unchanged. Initialization opts into selected capability
+metadata; installing the entry alone does not authorize prompt origins. Unsupported
+launch shapes, runtimes or module bytes retain missing producer coverage.
+
+Confirmed prompts carry their exact original record reference, controller
+operation and ACP conversation key. The controller always removes an inbound
+reserved claim before considering a new one. The runtime removes its private
+field before calling the original prompt handler and preserves other metadata.
+Codex ordinary and implementation turns report direct acceptance identifiers;
+command callbacks with weaker causal proof are separately marked unverified.
+Claude reports its generated command UUID only after enqueue. Per-invocation
+closures retain late acceptance after cancellation and allow several native
+inputs per ACP operation. Neither acceptance nor enqueue proves execution.
+
+Typed observations and their original raw references are indexed per prompt.
+Reads verify the owned original prompt and producer module, detect missing or
+conflicting sequences and delivery failures, and pin the expected active attempt
+to reject concurrent selection races. A damaged derived index does not roll back
+the raw observation: a savepoint isolates its failure and retains a durable gap.
+The transport and indexed views are bounded; overflow stays incomplete. Prompt
+outcomes and native execution settlement remain separate, and this stage does
+not fill attempt membership or admit evaluation samples.
+An empty producer gap set certifies only the selected observation sequence;
+auxiliary title generation, file audits and other native paths still require
+causal attribution and cost coverage. The fixed Codex adapter's title generator
+creates a separate ephemeral turn after the first ordinary prompt. Its raw
+observations must survive without entering ordinary prompt bindings.
+
+Seven targeted tests passed, including database reopen and raw corruption,
+foreign/stale origins, attempt switching, index failure isolation, capability
+gating, cancellation and bounded notification delivery. Direct ordinary-prompt
+checks against both pinned adapters with deterministic native transports also
+passed. The real-binary fixture in `tests/native_adapter_bridge.rs` also passed
+both adapters through `acp serve` and `run`, the controller, native proxies and
+database reopen. It connects each Codex acceptance to the original native request
+by JSON-RPC id, verifies thread identity and unchanged ordinary input, and checks
+that auxiliary title turns remain in raw storage without entering prompt bindings.
+The fixture requires Node 22.15 or newer, Python 3 and npm access and never calls
+a model API. Run it with `cargo test -p bitrouter --test native_adapter_bridge
+--all-features -- --ignored`. This is producer conformance, not complete native
+CLI/trajectory conformance. Independent stage review passed after correcting
+SDK prompt preparation, runtime capability admission, stale-origin stripping,
+attempt isolation and derived-index failure isolation. The final workspace run
+passed all 3,338 tests with 14 skipped; the opt-in binary fixture was run
+separately and passed. Clippy with denied warnings, doctests, rustdoc,
+distribution, formatting and diff checks passed.
 
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;

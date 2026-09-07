@@ -1,6 +1,7 @@
 //! App-owned native execution evidence, independent of harness session storage.
 
 pub mod accounting;
+pub mod adapter_bridge;
 pub mod checkpoint;
 pub mod claude_hooks;
 pub mod claude_proxy;

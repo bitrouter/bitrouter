@@ -648,6 +648,14 @@ let clients reserve a new task or retry for the next prompt; see
 [task selection](../skills/bitrouter/references/sessions.md#application-task-selection)
 for cursor, idempotency and scope semantics.
 
+Canonical pinned Codex and Claude adapter commands also use an invocation-local
+Node entry to associate prompt records with producer-reported native identifiers.
+This requires Node 22.15 or newer and a matching loaded module digest. The
+controller supplies private provenance automatically; no extra user command is
+needed. Unsupported producer coverage stays a gap. These observations are not
+complete native task membership or a settled evaluation; see the
+[adapter evidence contract](../skills/bitrouter/references/sessions.md#pinned-claude-and-codex-adapters).
+
 ### `bitrouter code` — operations dashboard and ACP sessions
 
 ```

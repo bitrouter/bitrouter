@@ -158,6 +158,25 @@ npx -y @agentclientprotocol/claude-agent-acp@0.75.1
 npx -y @agentclientprotocol/codex-acp@1.10.0
 ```
 
+Evidence-enabled controllers launch these canonical commands through a private
+Node entry under their invocation spool. On Node 22.15 or newer, the entry checks
+the actual loaded adapter module against its pinned digest and adds producer
+observations in memory. Package files, native prompt content and global Node
+options are unchanged. An initialization capability confirms the supported
+module loaded before the controller supplies a prompt's original record reference.
+Other adapter commands, unsupported Node versions and changed module bytes do
+not acquire this binding capability; missing producer evidence remains a gap.
+
+These observations link an original ACP operation to Codex's accepted thread/turn
+or Claude's enqueued command UUID. Cancellation can be followed by a late
+acceptance, and a prompt can produce several native inputs. Command callbacks
+without direct acceptance proof remain unverified. The observations still need
+native execution corroboration, task membership and settlement before scoring;
+an enqueue, accepted turn or prompt result alone is not a completed evaluation.
+An observation sequence without gaps does not cover all native work: auxiliary
+Codex title generation and file audits, among other paths, still need their own
+causal attribution and cost coverage.
+
 When routing is active, one endpoint plan drives both provider setup and its
 launch fallback:
 
@@ -188,6 +207,13 @@ pass through without a BitRouter session alias. On manager disconnect the
 harness child is terminated and live controller state is discarded; the
 controller does not close or delete harness sessions. Whether a session is
 durable is entirely the harness's native behavior.
+
+The controller reserves `_meta["bitrouter/native-evidence"]` for its private
+prompt provenance. It removes client-supplied values and supplies a fresh
+reference only for a durably observed prompt with a confirmed bridge capability.
+The adapter consumes this field before its original prompt handler runs. Clients
+must not set or replay it. `_bitrouter/nativeBinding` notifications carry selected
+producer observations and are retained before forwarding to the manager.
 
 ## Routing and observability boundary
 

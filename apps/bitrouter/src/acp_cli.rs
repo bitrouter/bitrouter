@@ -1897,9 +1897,12 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
              the ACP client controls prompt deadlines"
         );
     }
-    let process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(host.options.strip_inherited_env);
+    let args = match &evidence {
+        Some(evidence) => evidence.service.adapter_arguments(command, args).await?,
+        None => args.clone(),
+    };
+    let process = bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args, env.clone())
+        .strip_inherited_env(host.options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
     if let Some(evidence) = &evidence {
@@ -2714,9 +2717,12 @@ async fn launch_controlled(
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let mut process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(options.strip_inherited_env);
+    let args = match &evidence {
+        Some(evidence) => evidence.service.adapter_arguments(command, args).await?,
+        None => args.clone(),
+    };
+    let mut process = bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args, env.clone())
+        .strip_inherited_env(options.strip_inherited_env);
     let reaped = process.reaped();
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);

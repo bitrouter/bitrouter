@@ -834,6 +834,8 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
             | "fork_binding"
             | "active_task"
             | "prompt_operation"
+            | "prompt_bridge"
+            | "prompt_bridge_gap"
             | "workspace_artifact"
             | "lifecycle_request"
             | "lifecycle_response"

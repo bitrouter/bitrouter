@@ -22,6 +22,7 @@ use super::types::{
 };
 use crate::eval::types::canonical_digest;
 
+mod bridge;
 mod checkpoints;
 pub mod processes;
 mod recovery;
@@ -103,6 +104,8 @@ pub struct CollectionSnapshot {
     #[serde(default)]
     pub native_checkpoints: BTreeMap<String, super::checkpoint::NativeCheckpointEvidence>,
     #[serde(default)]
+    pub prompt_bindings: BTreeMap<String, super::adapter_bridge::PromptEvidence>,
+    #[serde(default)]
     pub processes: Vec<processes::ProcessBinding>,
     #[serde(default)]
     pub sdk_bindings: sdk_bindings::SdkBindingPage,
@@ -112,6 +115,7 @@ pub struct CollectionSnapshot {
 
 #[derive(Default)]
 struct LiveState {
+    bridge_capable: bool,
     inventory_epoch: u64,
     inventory_cycle_active: bool,
     completed_spools: BTreeSet<PathBuf>,
@@ -462,6 +466,7 @@ impl ControllerEvidence {
         let mut attempts = Vec::new();
         let mut workspace_checkpoints = BTreeMap::new();
         let mut native_checkpoints = BTreeMap::new();
+        let mut prompt_bindings = BTreeMap::new();
         let namespaces = collectors.keys().cloned().collect();
         let (task_sessions, task_gaps) = self
             .store
@@ -491,6 +496,21 @@ impl ControllerEvidence {
             .await;
             match status {
                 Ok((Some(attempt), unobserved, workspace)) => {
+                    let bindings = match self
+                        .store
+                        .prompt_bridge_evidence(session, &attempt.id)
+                        .await
+                    {
+                        Ok(bindings) => bindings,
+                        Err(error) => {
+                            tracing::warn!(%error, "adapter prompt bindings could not be verified");
+                            super::adapter_bridge::PromptEvidence {
+                                gaps: BTreeSet::from(["native_bridge_invalid".into()]),
+                                ..Default::default()
+                            }
+                        }
+                    };
+                    prompt_bindings.insert(attempt.id.clone(), bindings);
                     if attempt.members.is_empty() {
                         gaps.insert("native_attempt_membership_unavailable".into());
                     }
@@ -543,6 +563,7 @@ impl ControllerEvidence {
             attempts,
             workspace_checkpoints,
             native_checkpoints,
+            prompt_bindings,
             processes,
             sdk_bindings,
             gaps,
@@ -878,6 +899,19 @@ fn native_nodes(event: &Value, root: &NativeRoot) -> Result<BTreeSet<NodeKey>> {
 
 #[async_trait]
 impl SessionObserver for ControllerEvidence {
+    fn initialization_metadata(
+        &self,
+        metadata: Option<&agent_client_protocol::schema::v1::Meta>,
+    ) -> Option<Value> {
+        let capability = super::adapter_bridge::capability(
+            metadata?.get(super::adapter_bridge::META_KEY)?,
+            self.collector.root().harness,
+        )?;
+        let mut selected = json!({});
+        selected[super::adapter_bridge::META_KEY] = capability;
+        Some(selected)
+    }
+
     fn task_control_enabled(&self) -> bool {
         true
     }
@@ -907,7 +941,9 @@ impl SessionObserver for ControllerEvidence {
     }
 
     fn notification_fields(&self, method: &str, params: &Value) -> Option<Value> {
-        if method == "session/update" {
+        if method == super::adapter_bridge::METHOD {
+            Some(super::adapter_bridge::notification_fields(params))
+        } else if method == "session/update" {
             Some(params.clone())
         } else if self.collector.root().harness == Harness::ClaudeCode
             && method == super::claude_sdk::METHOD
@@ -991,6 +1027,16 @@ impl SessionObserver for ControllerEvidence {
             event["observed_at"] = json!(chrono::Utc::now().to_rfc3339());
             event["native_scope"] = json!(scope);
             let record = context.journal.append_record(event).await?;
+            if observation.method == "initialize" && observation.phase == "response" {
+                self.state.lock().await.bridge_capable = observation
+                    .payload
+                    .get("_meta")
+                    .and_then(|metadata| metadata.get(super::adapter_bridge::META_KEY))
+                    .and_then(|capability| {
+                        super::adapter_bridge::capability(capability, self.collector.root().harness)
+                    })
+                    .is_some();
+            }
             if observation.method == super::claude_sdk::METHOD {
                 let mut gaps = BTreeSet::new();
                 self.remember_sdk_source(&record.source_id, &mut gaps).await;
@@ -1001,6 +1047,7 @@ impl SessionObserver for ControllerEvidence {
                 || observation.phase == "disconnect"
                 || observation.method == "session/prompt"
                 || observation.method == super::claude_sdk::METHOD
+                || observation.method == super::adapter_bridge::METHOD
             {
                 self.wake.notify_one();
             }
@@ -1021,6 +1068,19 @@ impl SessionObserver for ControllerEvidence {
         method: &str,
         params: Value,
     ) -> Result<Value, agent_client_protocol::Error> {
+        if method == "session/prompt" {
+            // Prompt metadata does not configure a Query or replace its saved
+            // working directory. Its provenance is prepared independently.
+            return self
+                .prepare_prompt_origin(operation_id, params)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "native prompt origin could not be prepared");
+                    agent_client_protocol::util::internal_error(
+                        "native prompt provenance unavailable",
+                    )
+                });
+        }
         if self.collector.root().harness != Harness::ClaudeCode {
             // The SDK's generic observer filters _meta. Use the full original
             // request here to account for the adapter's additional-root options.
