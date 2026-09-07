@@ -1,3 +1,11 @@
+# Codex's published model catalog advertises GPT-6-Astra. API availability and
+# per-token pricing are not inferred from subscription access.
+- id: openai/gpt-6-astra
+  name: 'OpenAI: GPT-6 Astra'
+  input_modalities: [text, image]
+  output_modalities: [text]
+  open_weights: false
+  family: gpt
 # GPT-5.6 family (Sol/Terra/Luna) — preview from 2026-06-25, general release
 # ~2026-07-09. Pricing is confirmed from OpenAI's launch catalog (see
 # providers/openai.yaml). OpenAI has not published an official spec sheet, so the

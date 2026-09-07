@@ -119,8 +119,7 @@ struct Cli {
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
     /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
-    /// the wizard when unconfigured, a one-line status + `bitrouter launch`
-    /// hint when configured.
+    /// onboarding when no default ACP harness is saved, otherwise its TUI.
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -229,13 +228,12 @@ enum Command {
     /// steps to first value. Interactive by default; `--yes` (or no TTY) runs
     /// it headlessly, emitting the JSON result envelope and never blocking on a
     /// human. Every prompt has a flag equivalent (below) so an agent can drive
-    /// the whole thing. With `--yes` this also reproduces the classic
-    /// starter-`bitrouter.yaml` scaffold (refusing to overwrite unless
-    /// `--force`).
+    /// the whole thing. Saves the default ACP harness and optional model in
+    /// the resolved config or BitRouter home; `--force` resets existing settings.
     Init {
-        /// Path for the starter `bitrouter.yaml` write.
-        #[arg(short, long, default_value = "bitrouter.yaml")]
-        config: PathBuf,
+        /// Configuration to create/update; defaults to the resolved config or BitRouter home.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
         /// Run non-interactively: process the flags below, never block, emit
         /// the JSON envelope, and scaffold the starter config.
         #[arg(short = 'y', long)]
@@ -268,23 +266,15 @@ enum Command {
         /// (Step 1) Accept the auto-detected credential(s) without prompting.
         #[arg(long)]
         use_detected: bool,
-        /// (Step 2) Harness to drive: `claude` or `codex` (repeatable).
+        /// (Step 2) Built-in ACP harness: `claude` or `codex` (first is the default).
         #[arg(long = "harness", value_enum)]
         harnesses: Vec<bitrouter::spawn::SpawnAgent>,
-        /// (Step 2) Never install a missing harness.
-        #[arg(long)]
-        no_install: bool,
         /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
         #[arg(long, value_enum)]
         after: Option<bitrouter::onboarding::AfterAction>,
-        /// (Step 3) Model handed to the harness for this session only (not
-        /// persisted).
+        /// (Step 3) Default daemon-routable model, saved for subsequent TUI sessions.
         #[arg(long, value_name = "ID")]
         model: Option<String>,
-        /// (Step 3) Write a starter `bitrouter.yaml` (the one sanctioned config
-        /// write).
-        #[arg(long)]
-        write_config: bool,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -360,76 +350,13 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness as an interactive native-TUI child. Routed
-    /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
-    /// launch directly and are not redirected. The human drives the harness's
-    /// own TUI directly (use `bitrouter spawn` for headless ACP sub-agents).
-    /// Follows `cargo run`'s separator convention: bitrouter options come
-    /// before `--`, everything after `--` is forwarded to the agent verbatim,
-    /// e.g. `bitrouter launch -a codex -- --search`.
-    ///
-    /// Harnesses that route by env/args (claude, codex) are launched without
-    /// touching any config file. Those that route by synthesized config
-    /// (opencode, pi, hermes, openclaw) get it under `.bitrouter/launch/` —
-    /// your own agent config is still never modified.
-    ///
-    /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
-    /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bitrouter init`). A missing `claude` / `codex`
-    /// binary is offered for install via its official native installer; other
-    /// harnesses report their own install command instead.
-    Launch {
-        /// Which agent harness to launch: any catalog harness with an
-        /// interactive binary (`claude`, `codex`, `opencode`, `pi`, `hermes`,
-        /// `openclaw`, `grok`, or `agy`; catalog ids such as `claude-acp`,
-        /// `codex-acp`, `pi-acp`, and `hermes-acp` also resolve). Own-auth
-        /// harnesses such as `grok` and `agy` launch direct and are not
-        /// redirected.
-        #[arg(short, long, value_name = "ID")]
-        agent: String,
-        /// Pin the harness's model to a daemon-routable id (e.g. the explicit
-        /// `provider/model` form). Applied through whatever mechanism the
-        /// harness has — a model env var, a `-c model=` override, the
-        /// synthesized config's default, or the harness's own flag for the
-        /// own-auth clients (grok, agy).
-        #[arg(long, value_name = "ID")]
-        model: Option<String>,
-        /// Path to `bitrouter.yaml` (used to derive the daemon base URL).
-        /// When omitted, the binary resolves in this order: `./bitrouter.yaml`
-        /// → `$BITROUTER_HOME/bitrouter.yaml` → `~/.bitrouter/bitrouter.yaml`
-        /// → zero-config in-memory defaults.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Override the BitRouter daemon base URL used by routed harnesses
-        /// instead of deriving it from `server.listen`. Own-auth harnesses are
-        /// not redirected.
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Never offer to install a missing agent — fail with the install
-        /// command instead. (Auto-implied when stdin is not a TTY.)
-        #[arg(long)]
-        no_install: bool,
-        /// Never auto-start a local BitRouter daemon when none is running —
-        /// just warn. (A `--base-url` or non-local target is never auto-started
-        /// regardless.)
-        #[arg(long)]
-        no_start: bool,
-        /// Check the agent binary, BitRouter base URL, and route compatibility
-        /// without launching the agent.
-        #[arg(long)]
-        check: bool,
-        /// Arguments forwarded verbatim to the agent binary. Everything after
-        /// `--` lands here.
-        #[arg(last = true, allow_hyphen_values = true)]
-        agent_args: Vec<String>,
-    },
     /// Spawn an ACP-compatible harness as a headless *sub-agent*. Routing is
     /// attempted by default when the harness supports headless redirection;
     /// config-synthesis-only catalog agents warn and run direct. Pick a mode:
     /// `-p "<text>"` streams one prompt as NDJSON then exits; `--serve`
     /// speaks ACP over stdio for a GUI/manager; `--check` preflights the route.
-    /// Pass `--direct` to bypass daemon routing. (For an interactive native TUI
-    /// use `bitrouter launch`.)
+    /// Pass `--direct` to bypass daemon routing. For the ACP TUI, use
+    /// `bitrouter chat <agent>` or bare `bitrouter` after onboarding.
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
@@ -484,17 +411,6 @@ enum Command {
         /// omitted.
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Deprecated: the interactive form `spawn --agent <claude|codex>`
-        /// (also `-a`) moved to `bitrouter launch`. Kept as a migration alias.
-        #[arg(long = "agent", short = 'a', hide = true, value_enum)]
-        legacy_agent: Option<bitrouter::spawn::SpawnAgent>,
-        /// Deprecated (`--agent` path only): forwarded to `launch`.
-        #[arg(long, hide = true)]
-        no_install: bool,
-        /// Forwarded verbatim to the interactive agent in the deprecated
-        /// `--agent` path (everything after `--`).
-        #[arg(last = true, allow_hyphen_values = true)]
-        agent_args: Vec<String>,
     },
     /// Manage your BitRouter Cloud account — sign in/out, namespaces, keys,
     /// usage, requests, billing, policies, budgets, presets, and BYOK. Start
@@ -1500,9 +1416,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // the session file **only** (see TUI_RENDERER_SPEC §4.6).
     let is_acp = matches!(
         &cli.command,
-        Some(Command::Acp { .. } | Command::Chat { .. })
+        None | Some(Command::Acp { .. } | Command::Chat { .. } | Command::Init { .. })
     );
-    let owns_the_terminal = matches!(&cli.command, Some(Command::Chat { .. }));
+    let owns_the_terminal = matches!(
+        &cli.command,
+        None | Some(Command::Chat { .. } | Command::Init { .. })
+    );
     if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
@@ -1522,8 +1441,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
     let Some(command) = cli.command else {
         // Bare `bitrouter` — the onboarding front door (wizard when
-        // unconfigured; status + hint when configured). Never re-onboards a
-        // configured user, never silently spawns a daemon/harness.
+        // unconfigured; saved default ACP TUI when configured).
         return bitrouter::onboarding::entry(output).await;
     };
 
@@ -1594,10 +1512,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             provider_api_keys,
             use_detected,
             harnesses,
-            no_install,
             after,
             model,
-            write_config,
         } => {
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
@@ -1610,10 +1526,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 provider_api_keys,
                 use_detected,
                 harnesses,
-                no_install,
                 after,
                 model,
-                write_config,
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -1645,27 +1559,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
-        Command::Launch {
-            agent,
-            model,
-            config,
-            base_url,
-            no_install,
-            no_start,
-            check,
-            agent_args,
-        } => {
-            let opts = bitrouter::spawn::SpawnOptions {
-                agent: bitrouter::spawn::resolve_launch_agent(&agent)?,
-                model,
-                agent_args,
-                base_url,
-                no_install,
-                no_start,
-                check,
-            };
-            run_launch(config.as_deref(), opts, output).await
-        }
         Command::Spawn {
             agent,
             prompt,
@@ -1680,42 +1573,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             result_schema,
             headless,
             config,
-            legacy_agent,
-            no_install,
-            agent_args,
         } => {
-            // Deprecated interactive alias: `spawn --agent <claude|codex>` (or
-            // `-a`) → `launch`. Kept working for one or two alpha releases.
-            if let Some(legacy) = legacy_agent {
-                // The interactive alias and the ACP sub-agent modes are
-                // mutually exclusive — reject the mix rather than silently
-                // dropping the ACP args and launching an interactive TUI.
-                if agent.is_some() || prompt.is_some() || serve {
-                    anyhow::bail!(
-                        "`--agent` selects the deprecated interactive launcher; it cannot be \
-                         combined with a positional agent id, `-p`, or `--serve`. Use \
-                         `bitrouter launch --agent {}` for the TUI, or drop `--agent` to spawn \
-                         an ACP sub-agent.",
-                        legacy.spec().id
-                    );
-                }
-                eprintln!(
-                    "note: `bitrouter spawn --agent` is deprecated — use \
-                     `bitrouter launch --agent {}` (this alias will be removed).",
-                    legacy.spec().id
-                );
-                let opts = bitrouter::spawn::SpawnOptions {
-                    agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
-                    model: model.clone(),
-                    agent_args,
-                    base_url,
-                    no_install,
-                    no_start,
-                    check,
-                };
-                return run_launch(config.as_deref(), opts, output).await;
-            }
-
             let Some(agent) = agent else {
                 anyhow::bail!(
                     "spawn: provide an agent id and a mode, e.g. \
@@ -5043,29 +4901,6 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     }
 }
 
-/// Shared body for `bitrouter launch` and the deprecated `spawn --agent`
-/// alias: resolve config, then either preflight (`--check`) or exec the
-/// interactive harness with its traffic routed through the daemon.
-async fn run_launch(
-    config: Option<&std::path::Path>,
-    opts: bitrouter::spawn::SpawnOptions,
-    output: &bitrouter::output::Output,
-) -> Result<()> {
-    let source = bitrouter::paths::resolve_config(config)?;
-    let cfg = bitrouter::paths::load_config(&source).await?;
-    if opts.check {
-        let report = bitrouter::spawn::check(&cfg, &opts).await?;
-        output.emit(&report)?;
-        if report.exit_code() == 0 {
-            Ok(())
-        } else {
-            std::process::exit(report.exit_code());
-        }
-    } else {
-        bitrouter::spawn::run(&source, &cfg, opts).await
-    }
-}
-
 // ===== `bitrouter acp …` (per-session ACP substrate) =====
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
@@ -6581,7 +6416,6 @@ mod tests {
             "exit",
             "--model",
             "openai/gpt-5",
-            "--write-config",
         ])
         .expect("parse");
         match cli.command {
@@ -6595,10 +6429,9 @@ mod tests {
                 harnesses,
                 after,
                 model,
-                write_config,
                 ..
             }) => {
-                assert!(yes && force && reset && write_config);
+                assert!(yes && force && reset);
                 assert_eq!(api_key.as_deref(), Some("brk_abc.secret"));
                 assert_eq!(providers, vec!["openai"]);
                 assert_eq!(provider_api_keys, vec!["sk-openai"]);

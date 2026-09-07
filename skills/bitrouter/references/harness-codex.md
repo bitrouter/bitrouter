@@ -1,66 +1,32 @@
-# Harness: Codex CLI
+# Harness: Codex ACP
 
-Wire OpenAI's Codex CLI to route its model calls through BitRouter.
-
-> **Cloud users:** swap `http://localhost:4356/v1` -> `https://api.bitrouter.ai/v1` and export `BITROUTER_API_KEY=brk_*`. No daemon to install. See `references/cloud-setup.md`.
-
-## Prerequisites
-
-- BitRouter installed and running (`bitrouter status` shows green), unless using Cloud.
-- Codex CLI installed (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`).
-- A BitRouter model id to use, such as `openai/gpt-5-codex`, `openai/gpt-5.1`, or any configured alias.
-
-## Preferred launch path
-
-Use `bitrouter launch` when you want a reversible, per-process setup:
+BitRouter supplies the terminal UI. `codex-acp` is a built-in ACP agent and
+requires no YAML agent entry. Node.js 22+ and `npx` are required.
 
 ```bash
-bitrouter launch --agent codex
-bitrouter launch --agent codex -- --model openai/gpt-5-codex
+bitrouter providers login openai-codex
+bitrouter init --yes --harness codex --after exit
+bitrouter
 ```
 
-The wrapper does not edit `~/.codex/config.toml`. It injects one-shot Codex `-c` overrides:
+An existing vendor CLI login can be imported with
+`bitrouter providers login openai-codex --import-existing`.
 
-```text
-model_provider="bitrouter"
-model_providers.bitrouter.name="BitRouter"
-model_providers.bitrouter.base_url="http://localhost:4356/v1"
-model_providers.bitrouter.wire_api="responses"
-```
-
-If `BITROUTER_API_KEY` is set, `spawn` forwards it with `env_key="BITROUTER_API_KEY"`. Otherwise it injects a local placeholder bearer token, which works with the `skip_auth: true` default from `bitrouter init`.
-
-## Permanent Codex config
-
-For a durable setup, add a user-level provider to `~/.codex/config.toml`:
-
-```toml
-model_provider = "bitrouter"
-
-[model_providers.bitrouter]
-name = "BitRouter"
-base_url = "http://localhost:4356/v1"
-wire_api = "responses"
-# env_key = "BITROUTER_API_KEY"  # Cloud or authenticated local daemon
-```
-
-Codex appends `/responses` to the provider base URL. Do not use `wire_api = "chat"` with current Codex builds.
-
-## Model selection
-
-Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter launch --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
+For an explicit session or a headless prompt:
 
 ```bash
-codex --model openai/gpt-5-codex
-bitrouter launch --agent codex -- --model anthropic/claude-sonnet-4-6
+bitrouter chat codex-acp
+bitrouter spawn codex-acp -p "summarize this repo"
 ```
 
-## Verify
+The adapter uses a local Codex CLI when its version is at least 0.153.3.
+Older, missing or unresponsive local CLIs use the adapter's bundled worker.
+`CODEX_PATH` can explicitly select a worker; it does not bypass ACP.
+`--direct` keeps the adapter's own provider authentication; ordinary sessions
+route through BitRouter and auto-start the local daemon.
 
-```bash
-codex --version
-bitrouter launch --agent codex -- --version
-tail -n 20 ~/.bitrouter/bitrouter.log
-```
+`init --model ID` saves the default model. `chat --model ID` overrides it for
+that explicit session. No vendor CLI config file is rewritten.
 
-For live requests, check the BitRouter request logs — the `request finished` line records the `provider`, `model`, and `account` that answered — to confirm which upstream served the request.
+Use `bitrouter status --requests` to inspect settled routed requests. Session
+diagnostics live in the BitRouter home under `logs/session-*.log`.
