@@ -160,6 +160,18 @@ RPCs owned by another controller remain explicit uncertainty. Task state is
 currently available in the application evidence snapshot; TUI feedback and
 automatic evaluation submission are not yet wired.
 
+Confirmed prompt boundaries also save local workspace checkpoints. The first
+prompt preserves the actual dirty baseline; response checkpoints preserve later
+file contents even after further edits or workspace removal. Capture covers Git
+tracked files and unignored new files in the repository containing the session
+cwd, including shell-produced edits. Runtime directories and the evidence
+database are excluded. Additional workspace roots, sparse checkout, non-Git
+directories, unsupported file modes and failed or oversized reads remain explicit
+coverage gaps. Limits are 8 MiB per file, 16 MiB total raw content, 32 MiB per
+serialized artifact and 30 seconds per capture. A prompt response checkpoint is
+not the final result of background work or proof that the task passed; final
+settlement, evaluation submission and TUI feedback are still pending.
+
 Claude session creation also follows `_meta.claudeCode.options.env`; relative
 native roots resolve against that session's `cwd`. Each profile has a separate
 evidence namespace and hook spool. Claude may reuse its loaded Query when

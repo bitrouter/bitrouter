@@ -236,6 +236,110 @@ async fn restarted_controller_exposes_unanswered_old_prompt_as_uncertain() -> Re
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn prompt_workspace_checkpoints_keep_the_original_baseline_and_result_after_later_edits()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let code = directory.path().join("code");
+    tokio::fs::create_dir(&code).await?;
+    for args in [
+        vec!["init", "--quiet"],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "baseline",
+        ],
+    ] {
+        ensure!(
+            tokio::process::Command::new("git")
+                .current_dir(&code)
+                .args(args)
+                .status()
+                .await?
+                .success(),
+            "Git fixture failed"
+        );
+    }
+    tokio::fs::write(code.join("main.rs"), "// preexisting dirty file\n").await?;
+    let mut handle = claude_service(directory.path()).await?;
+    let service = &handle.service;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "request",
+            json!({"cwd":code}),
+        ))
+        .await?;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    let exclusions = service.exclusions_for(service.collector.root());
+    let expected =
+        super::super::workspace::capture(Some(code.clone()), exclusions, BTreeSet::new()).await?;
+    service
+        .observe(observation(
+            "prompt",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"root","prompt":[]}),
+        ))
+        .await?;
+    let attempt = service.store.attempts(None, 16).await?.remove(0);
+    let before = service.store.workspace_evidence(&attempt.root).await?;
+    assert_eq!(before.baseline.as_deref(), Some(expected.digest.as_str()));
+    assert!(before.latest_prompt_result.is_none());
+    // The collector observes ordinary filesystem effects, including shell
+    // writes that never pass through ACP's optional filesystem callbacks.
+    ensure!(
+        tokio::process::Command::new("sh")
+            .current_dir(&code)
+            .args(["-c", "printf 'changed by shell\\n' > main.rs"])
+            .status()
+            .await?
+            .success(),
+        "shell fixture failed"
+    );
+    service
+        .observe(observation(
+            "prompt",
+            "session/prompt",
+            "response",
+            json!({"stopReason":"end_turn"}),
+        ))
+        .await?;
+    let result = service.store.workspace_evidence(&attempt.root).await?;
+    assert_eq!(result.baseline, before.baseline);
+    assert!(result.latest_prompt_result.is_some());
+    assert_ne!(result.latest_prompt_result, result.baseline);
+    assert!(result.gaps.is_empty());
+    tokio::fs::write(code.join("main.rs"), "// later unrelated edit\n").await?;
+    let shown = service.reconcile().await?;
+    assert_eq!(shown.workspace_checkpoints.get(&attempt.id), Some(&result));
+    handle.shutdown().await?;
+    tokio::fs::remove_dir_all(&code).await?;
+    let db = crate::db::connect(&crate::db::anchor_url(
+        "sqlite:evidence.db?mode=rwc",
+        &directory.path().join("router"),
+    ))
+    .await?;
+    let reopened = EvidenceStore::new(db, "local")?;
+    assert_eq!(reopened.workspace_evidence(&attempt.root).await?, result);
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_sdk_lifecycle_is_durable_in_the_confirmed_session_profile() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -568,7 +672,11 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
     )
     .await?;
     let snapshot = service.reconcile().await?;
-    assert!(snapshot.gaps.is_empty(), "{:?}", snapshot.gaps);
+    // These profile directories are transcript fixtures, not Git workspaces.
+    assert_eq!(
+        snapshot.gaps,
+        BTreeSet::from(["workspace_capture_failed".into()])
+    );
     assert_eq!(snapshot.histories.len(), 3);
     assert!(snapshot.graph.facts.iter().any(|fact| {
         matches!(

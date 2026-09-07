@@ -24,6 +24,7 @@ use crate::eval::types::canonical_digest;
 
 mod recovery;
 mod roots;
+mod workspaces;
 
 #[derive(Clone)]
 struct RootContext {
@@ -39,6 +40,37 @@ struct PendingScope {
     query_fingerprint: Option<String>,
     method: String,
     query_reused: bool,
+    workspace: Option<WorkspaceScope>,
+}
+
+#[derive(Clone)]
+struct WorkspaceScope {
+    cwd: PathBuf,
+    additional_directories: bool,
+    exclusions: BTreeSet<PathBuf>,
+}
+
+fn workspace_scope(params: &Value, exclusions: BTreeSet<PathBuf>) -> Option<WorkspaceScope> {
+    // The maintained adapters prefer the ACP field, then the legacy extension.
+    // Claude also merges the SDK option. Only the coverage flag is retained;
+    // unrelated SDK/provider configuration never enters artifact metadata.
+    // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+    // https://github.com/agentclientprotocol/codex-acp
+    let acp_directories = params
+        .get("additionalDirectories")
+        .filter(|value| !value.is_null())
+        .or_else(|| params.pointer("/_meta/additionalRoots"));
+    Some(WorkspaceScope {
+        cwd: PathBuf::from(params.get("cwd")?.as_str()?),
+        additional_directories: [
+            acp_directories,
+            params.pointer("/_meta/claudeCode/options/additionalDirectories"),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|dirs| !dirs.is_null() && !dirs.as_array().is_some_and(Vec::is_empty)),
+        exclusions,
+    })
 }
 
 #[derive(Clone)]
@@ -62,6 +94,7 @@ pub struct CollectionSnapshot {
     pub histories: Vec<ResolvedHistory>,
     pub graph: super::execution::ExecutionGraph,
     pub attempts: Vec<super::types::Attempt>,
+    pub workspace_checkpoints: BTreeMap<String, super::types::WorkspaceEvidence>,
     pub gaps: BTreeSet<String>,
     pub reconciled_at: Option<String>,
 }
@@ -80,6 +113,7 @@ struct LiveState {
     ambiguous_sessions: BTreeSet<String>,
     uncertain_queries: BTreeSet<String>,
     pending: BTreeMap<String, PendingScope>,
+    workspaces: BTreeMap<String, WorkspaceScope>,
 }
 
 pub struct ControllerEvidence {
@@ -91,6 +125,7 @@ pub struct ControllerEvidence {
     producer_version: String,
     spool: PathBuf,
     executable: PathBuf,
+    workspace_exclusions: BTreeSet<PathBuf>,
     state: Mutex<LiveState>,
     recovery: Mutex<recovery::RecoveryState>,
     reconcile_gate: Mutex<()>,
@@ -128,6 +163,7 @@ impl EvidenceHandle {
         let db =
             crate::db::connect(&crate::db::anchor_url(launch.database_url, launch.home)).await?;
         crate::db::run_migrations(&db).await?;
+        let workspace_exclusions = workspaces::runtime_exclusions(&db, launch.home).await?;
         let store = EvidenceStore::new(db, "local")?;
         let controller = uuid::Uuid::new_v4().to_string();
         let spool = launch
@@ -195,6 +231,7 @@ impl EvidenceHandle {
             producer_version,
             spool,
             executable,
+            workspace_exclusions,
             state: Mutex::new(LiveState {
                 roots,
                 ..LiveState::default()
@@ -364,6 +401,7 @@ impl ControllerEvidence {
             self.wake.notify_one();
         }
         let mut attempts = Vec::new();
+        let mut workspace_checkpoints = BTreeMap::new();
         for node in &nodes {
             let status = async {
                 let attempt = self.store.active_attempt(node).await?;
@@ -372,17 +410,29 @@ impl ControllerEvidence {
                         .store
                         .has_unobserved_prompts(node, &self.controller_id)
                         .await?;
-                anyhow::Ok((attempt, unobserved))
+                let workspace = match self.store.workspace_evidence(node).await {
+                    Ok(workspace) => workspace,
+                    Err(error) => {
+                        tracing::warn!(%error, "workspace checkpoint could not be read");
+                        super::types::WorkspaceEvidence {
+                            gaps: BTreeSet::from(["workspace_checkpoint_invalid".into()]),
+                            ..super::types::WorkspaceEvidence::default()
+                        }
+                    }
+                };
+                anyhow::Ok((attempt, unobserved, workspace))
             }
             .await;
             match status {
-                Ok((Some(attempt), unobserved)) => {
+                Ok((Some(attempt), unobserved, workspace)) => {
                     if unobserved {
                         gaps.insert("native_prompt_response_unobserved".into());
                     }
+                    gaps.extend(workspace.gaps.iter().cloned());
+                    workspace_checkpoints.insert(attempt.id.clone(), workspace);
                     attempts.push(attempt);
                 }
-                Ok((None, _)) => {}
+                Ok((None, _, _)) => {}
                 Err(error) => {
                     tracing::warn!(%error, "native task state could not be read");
                     gaps.insert("native_task_state_invalid".into());
@@ -400,6 +450,7 @@ impl ControllerEvidence {
             histories,
             graph,
             attempts,
+            workspace_checkpoints,
             gaps,
             reconciled_at: Some(chrono::Utc::now().to_rfc3339()),
         };
@@ -638,6 +689,44 @@ impl SessionObserver for ControllerEvidence {
             let _guard = self.observation_gate.lock().await;
             let (context, scope) = self.observation_context(&observation).await?;
             let mut event = serde_json::to_value(&observation)?;
+            if observation.method == "session/prompt"
+                && matches!(observation.phase.as_str(), "request" | "response")
+            {
+                let state = self.state.lock().await;
+                let workspace = if observation.phase == "request" && scope == "session" {
+                    observation
+                        .payload
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .and_then(|id| state.workspaces.get(id))
+                        .cloned()
+                } else if observation.phase == "response" {
+                    state
+                        .pending
+                        .get(&observation.operation_id)
+                        .and_then(|pending| pending.workspace.clone())
+                } else {
+                    None
+                };
+                drop(state);
+                let mut gaps = BTreeSet::new();
+                if workspace
+                    .as_ref()
+                    .is_some_and(|scope| scope.additional_directories)
+                {
+                    gaps.insert("workspace_additional_directories_unavailable".into());
+                }
+                // PendingScope owns the original capture authority even when a
+                // later native error makes the response's Query profile unknown.
+                let exclusions = workspace.as_ref().map_or_else(
+                    || self.workspace_exclusions.clone(),
+                    |scope| scope.exclusions.clone(),
+                );
+                let artifact =
+                    super::workspace::capture(workspace.map(|scope| scope.cwd), exclusions, gaps)
+                        .await?;
+                event["workspace_artifact"] = json!(self.store.save_workspace(artifact).await?);
+            }
             event["observed_at"] = json!(chrono::Utc::now().to_rfc3339());
             event["native_scope"] = json!(scope);
             context.journal.append(event.clone()).await?;
@@ -668,6 +757,12 @@ impl SessionObserver for ControllerEvidence {
         params: Value,
     ) -> Result<Value, agent_client_protocol::Error> {
         if self.collector.root().harness != Harness::ClaudeCode {
+            // The SDK's generic observer filters _meta. Use the full original
+            // request here to account for the adapter's additional-root options.
+            if let Some(pending) = self.state.lock().await.pending.get_mut(operation_id) {
+                pending.workspace =
+                    workspace_scope(&params, self.exclusions_for(self.collector.root()));
+            }
             return Ok(params);
         }
         self.prepare_claude_session(operation_id, method, params)

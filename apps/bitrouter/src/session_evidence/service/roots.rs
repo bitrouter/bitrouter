@@ -217,6 +217,19 @@ impl ControllerEvidence {
             state.pending.contains_key(operation_id) || state.pending.len() < MAX_GRAPH_ITEMS,
             "pending native operation limit"
         );
+        let mut workspace = workspace_scope(params, self.exclusions_for(root));
+        if reused && let Some(current) = workspace.as_mut() {
+            // A cached Query can ignore the new options, or may have died and
+            // been recreated. Preserve uncovered roots from either possibility.
+            if let Some(previous) = session_id.as_ref().and_then(|id| state.workspaces.get(id)) {
+                current.additional_directories |= previous.additional_directories;
+                current
+                    .exclusions
+                    .extend(previous.exclusions.iter().cloned());
+            } else {
+                current.additional_directories = true;
+            }
+        }
         state.pending.insert(
             operation_id.into(),
             PendingScope {
@@ -225,6 +238,7 @@ impl ControllerEvidence {
                 query_fingerprint: Some(fingerprint),
                 method: method.into(),
                 query_reused: reused,
+                workspace,
             },
         );
         Ok(())
@@ -326,6 +340,14 @@ impl ControllerEvidence {
             .and_then(Value::as_str)
             .map(str::to_owned);
         if observation.phase == "request" {
+            let workspace = if observation.method == "session/prompt" {
+                session_id
+                    .as_ref()
+                    .and_then(|id| state.workspaces.get(id))
+                    .cloned()
+            } else {
+                workspace_scope(&observation.payload, self.exclusions_for(root))
+            };
             ensure!(
                 state.pending.contains_key(&observation.operation_id)
                     || state.pending.len() < MAX_GRAPH_ITEMS,
@@ -339,6 +361,7 @@ impl ControllerEvidence {
                     query_fingerprint: None,
                     method: observation.method.clone(),
                     query_reused: false,
+                    workspace,
                 },
             );
         } else if observation.phase == "response" {
@@ -384,6 +407,7 @@ impl ControllerEvidence {
                     state.sessions.remove(&id);
                     state.ambiguous_sessions.remove(&id);
                     state.uncertain_queries.remove(&id);
+                    state.workspaces.remove(&id);
                 }
                 return Ok(());
             }
@@ -441,6 +465,12 @@ impl ControllerEvidence {
                         .sessions
                         .insert(session_id.clone(), root.namespace.clone());
                     state.ambiguous_sessions.remove(&session_id);
+                }
+                if let Some(workspace) = pending.as_ref().and_then(|scope| scope.workspace.clone())
+                {
+                    state.workspaces.insert(session_id.clone(), workspace);
+                } else {
+                    state.workspaces.remove(&session_id);
                 }
                 if let Some(fingerprint) = pending.and_then(|scope| scope.query_fingerprint) {
                     state.loaded.insert(

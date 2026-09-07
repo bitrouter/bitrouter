@@ -12,3 +12,4 @@ pub mod projection;
 pub mod service;
 pub mod store;
 pub mod types;
+pub(crate) mod workspace;

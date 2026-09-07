@@ -18,6 +18,8 @@ struct ActiveTask {
     origin_operation: String,
     operations: BTreeSet<String>,
     open_operations: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_response: Option<String>,
 }
 
 impl ActiveTask {
@@ -30,6 +32,7 @@ impl ActiveTask {
                 && self.open_operations.is_subset(&self.operations),
             "invalid bounded task operation set"
         );
+        ensure!(self.last_response.as_ref().is_none_or(|id| self.operations.contains(id) && !self.open_operations.contains(id)), "invalid last prompt response");
         for operation in &self.operations {
             digest_identifier(operation)?;
         }
@@ -143,6 +146,15 @@ impl EvidenceStore {
         let next = self
             .append_on(&transaction, source, std::slice::from_ref(&record), cursor)
             .await?;
+        // append_on acquires SQLite's writer lock before any reads. Starting
+        // with artifact SELECTs would introduce a read-to-write upgrade race.
+        if let Some(workspace) = record.raw.get("workspace_artifact") {
+            self.workspace_on(
+                &transaction,
+                workspace.as_str().context("invalid workspace reference")?,
+            )
+            .await?;
+        }
         if record.raw.get("method").and_then(Value::as_str) == Some("session/prompt") {
             let controller = source
                 .descriptor
@@ -250,6 +262,7 @@ impl EvidenceStore {
                     origin_operation: operation.id.clone(),
                     operations: BTreeSet::from([operation.id.clone()]),
                     open_operations: BTreeSet::from([operation.id.clone()]),
+                    last_response: None,
                 };
                 task.validate()?;
                 operation.validate()?;
@@ -306,6 +319,7 @@ impl EvidenceStore {
         );
         let mut attempt = self.task_attempt(db, &task).await?;
         task.open_operations.remove(&operation.id);
+        task.last_response = Some(operation.id.clone());
         // ACP completion only ends this RPC. Native children, background work,
         // artifact capture and gateway settlement still decide readiness.
         // https://agentclientprotocol.com/protocol/v1/prompt-turn
@@ -421,6 +435,12 @@ impl EvidenceStore {
                 "prompt boundary native identity mismatch"
             );
         }
+        if let Some(workspace) = record.input.raw.get("workspace_artifact") {
+            // The immutable reference was admitted with this raw record. Read
+            // and verify artifact bodies when selecting a checkpoint, rather
+            // than loading every historical filesystem image on every prompt.
+            digest_identifier(workspace.as_str().context("invalid workspace reference")?)?;
+        }
         Ok(())
     }
 
@@ -522,6 +542,85 @@ impl EvidenceStore {
                 )
                 .await?)
         }
+    }
+
+    pub(crate) async fn workspace_evidence(
+        &self,
+        root: &NodeKey,
+    ) -> Result<crate::session_evidence::types::WorkspaceEvidence> {
+        use crate::session_evidence::types::WorkspaceEvidence;
+
+        let transaction = self.task_read_transaction().await?;
+        let mut evidence = WorkspaceEvidence::default();
+        if let Some(task) = self.active_task(&transaction, root).await? {
+            self.task_attempt(&transaction, &task).await?;
+            let origin = self
+                .prompt_operation(&transaction, &task.origin_operation)
+                .await?
+                .context("workspace task origin missing")?;
+            let baseline = self
+                .boundary_workspace(&transaction, &origin.request)
+                .await?;
+            evidence.baseline = baseline.as_ref().map(|(id, _)| id.clone());
+            if let Some((_, workspace)) = &baseline {
+                evidence.gaps.extend(workspace.gaps.iter().cloned());
+            } else {
+                evidence
+                    .gaps
+                    .insert("workspace_baseline_unavailable".into());
+            }
+            if let Some(id) = &task.last_response {
+                let operation = self
+                    .prompt_operation(&transaction, id)
+                    .await?
+                    .context("workspace prompt result missing")?;
+                let boundary = operation
+                    .response
+                    .as_ref()
+                    .context("workspace result boundary missing")?;
+                if let Some((id, workspace)) =
+                    self.boundary_workspace(&transaction, boundary).await?
+                {
+                    evidence.latest_prompt_result = Some(id);
+                    evidence.gaps.extend(workspace.gaps.iter().cloned());
+                    if baseline
+                        .as_ref()
+                        .is_some_and(|(_, before)| before.repository != workspace.repository)
+                    {
+                        evidence.gaps.insert("workspace_repository_changed".into());
+                    }
+                }
+            }
+            if evidence.latest_prompt_result.is_none() {
+                evidence.gaps.insert("workspace_result_unavailable".into());
+            }
+        }
+        transaction.commit().await?;
+        Ok(evidence)
+    }
+
+    async fn boundary_workspace(
+        &self,
+        db: &impl ConnectionTrait,
+        boundary: &Boundary,
+    ) -> Result<Option<(String, crate::session_evidence::workspace::Workspace)>> {
+        let records = range_records(db, &self.owner_key, &boundary.range).await?;
+        let raw = &records
+            .first()
+            .context("workspace boundary record missing")?
+            .input
+            .raw;
+        let Some(id) = raw.get("workspace_artifact") else {
+            return Ok(None);
+        };
+        let id = id
+            .as_str()
+            .context("invalid workspace artifact reference")?;
+        let artifact = self.workspace_on(db, id).await?;
+        Ok(Some((
+            id.into(),
+            crate::session_evidence::workspace::Workspace::from_artifact(&artifact)?,
+        )))
     }
 
     async fn replace_task_object<T: serde::Serialize>(

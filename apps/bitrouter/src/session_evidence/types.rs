@@ -415,6 +415,16 @@ pub struct Artifact {
     pub attributes: BTreeMap<String, String>,
 }
 
+/// Prompt-boundary workspace observations. The latest result may precede
+/// background work and does not claim to be a settled evaluation checkpoint.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceEvidence {
+    pub baseline: Option<String>,
+    pub latest_prompt_result: Option<String>,
+    pub gaps: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceManifest {

@@ -29,6 +29,60 @@ async fn stale_journals_refresh_the_cursor_and_preserve_all_task_boundaries() ->
 }
 
 #[tokio::test]
+async fn tasks_stored_before_workspace_checkpoints_remain_readable_and_writable() -> Result<()> {
+    let store = store().await?;
+    let node = root("session");
+    let journal = journal(&store, "controller", &node).await?;
+    journal.append(request("origin", "session")).await?;
+    journal.append(response("origin")).await?;
+    let original = active(&store, &node).await?;
+    let task = store.active_task(&store.db, &node).await?.context("task")?;
+    // Frozen e46946a4 object shape, with an actual pre-field digest. A round
+    // trip of today's type would not exercise compatibility with this row.
+    let legacy = json!({"id":task.id,"revision":task.revision,"root":task.root,
+        "attempt_id":task.attempt_id,"origin_operation":task.origin_operation,
+        "operations":task.operations,"open_operations":task.open_operations});
+    let row = store
+        .object(&store.db, "active_task", &task.id)
+        .await?
+        .context("stored task")?;
+    object_entity::Entity::update_many()
+        .col_expr(
+            object_entity::Column::ObjectJson,
+            Expr::value(serde_json::to_string(&legacy)?),
+        )
+        .col_expr(
+            object_entity::Column::Digest,
+            Expr::value(canonical_digest(&legacy)?),
+        )
+        .filter(object_entity::Column::Id.eq(row.id))
+        .exec(&store.db)
+        .await?;
+    assert_eq!(active(&store, &node).await?, original);
+    assert!(
+        store
+            .workspace_evidence(&node)
+            .await?
+            .gaps
+            .contains("workspace_baseline_unavailable")
+    );
+    journal.append(request("continued", "session")).await?;
+    journal.append(response("continued")).await?;
+    let continued = active(&store, &node).await?;
+    assert_eq!(continued.id, original.id);
+    assert_eq!(continued.phase, AttemptPhase::Settling);
+    assert_eq!(
+        store
+            .active_task(&store.db, &node)
+            .await?
+            .context("continued task")?
+            .last_response,
+        Some(PromptOperation::key("controller", "continued")?)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn missing_or_corrupt_boundaries_including_completed_prompts_invalidate_task_state()
 -> Result<()> {
     for completed in [false, true] {
@@ -74,6 +128,13 @@ async fn missing_or_corrupt_boundaries_including_completed_prompts_invalidate_ta
 #[tokio::test]
 async fn two_controllers_on_separate_connections_share_task_without_losing_open_operations()
 -> Result<()> {
+    for workspace in [false, true] {
+        concurrent_prompts(workspace).await?;
+    }
+    Ok(())
+}
+
+async fn concurrent_prompts(workspace: bool) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let url = format!(
         "sqlite:{}?mode=rwc",
@@ -86,15 +147,22 @@ async fn two_controllers_on_separate_connections_share_task_without_losing_open_
     let node = root("session");
     let first = journal(&first_store, "first", &node).await?;
     let second = journal(&second_store, "second", &node).await?;
-    let (a, b) = tokio::join!(
-        first.append(request("one", "session")),
-        second.append(request("one", "session"))
-    );
+    let mut event = request("one", "session");
+    let mut result = response("one");
+    if workspace {
+        let artifact =
+            crate::session_evidence::workspace::capture(None, BTreeSet::new(), BTreeSet::new())
+                .await?;
+        let id = first_store.save_workspace(artifact).await?;
+        event["workspace_artifact"] = json!(id);
+        result["workspace_artifact"] = json!(id);
+    }
+    let (a, b) = tokio::join!(first.append(event.clone()), second.append(event));
     a?;
     b?;
     assert_eq!(first_store.attempts(None, 16).await?.len(), 1);
     assert!(second_store.has_unobserved_prompts(&node, "second").await?);
-    second.append(response("one")).await?;
+    second.append(result.clone()).await?;
     assert_eq!(
         active(&second_store, &node).await?.phase,
         AttemptPhase::Collecting
@@ -102,7 +170,7 @@ async fn two_controllers_on_separate_connections_share_task_without_losing_open_
     assert!(second_store.has_unobserved_prompts(&node, "second").await?);
     // The origin can still finish its RPC; another controller never invents
     // that response merely because its own prompt ended.
-    first.append(response("one")).await?;
+    first.append(result).await?;
     assert_eq!(
         active(&second_store, &node).await?.phase,
         AttemptPhase::Settling

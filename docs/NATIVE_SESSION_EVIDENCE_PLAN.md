@@ -70,7 +70,7 @@ controller's outstanding RPC adds an explicit unobserved-response gap. It is not
 declared completed, cancelled or currently executing by the replacement controller.
 This does not recover native Query liveness or resolve a request committed before
 an interrupted forward. The application snapshot exposes these attempts, but
-native execution ranges, task switching, artifact baselines and final settlement
+native execution ranges, task switching and final settlement
 are still required. Operation membership is bounded per attempt; it is not an
 unlimited session-wide operation log.
 
@@ -84,14 +84,44 @@ postgres_task_reads_keep_one_snapshot_during_concurrent_completion -- --ignored`
 the URL must name a dedicated test database. This is database concurrency
 validation, not native harness runtime conformance.
 
+Prompt boundaries now also bind content-addressed workspace artifacts. A confirmed
+session's first prompt captures its actual working-file baseline, including dirty
+tracked files and unignored new files. Later prompt responses capture candidate
+result checkpoints; later edits or filesystem removal cannot mutate those stored
+contents. Files are scoped to the Git repository containing the requested cwd.
+The collector preserves binary bytes, tracked deletions and Unix executable modes;
+symlinks store their target string without reading the target. These are filesystem
+observations, not proof of exclusive authorship or final task completion.
+
+Capture scope and native runtime exclusions are fixed to the original operation.
+The actual connected SQLite filename and its sidecars are excluded even outside
+BitRouter home. Both adapters' additional-root options are recognized as uncovered
+scope, including possible Claude Query reuse. Missing cwd, non-Git workspaces,
+submodules, sparse checkout, unsupported platform modes, unreadable files and
+changed reads retain explicit gaps. Collection has a 30-second timeout, an 8 MiB
+per-file limit, 16 MiB total raw content limit and 32 MiB serialized artifact limit.
+Oversized serialization produces a partial artifact rather than rejecting a prompt.
+These limits and two filesystem passes bound capture; they do not provide an
+atomic filesystem snapshot. Ignored, untracked files are outside the file boundary.
+
+Workspace objects are immutable and owner-scoped. New references are verified in
+the raw-observation transaction; selecting a checkpoint rechecks its stored body.
+Historical prompt validation retains exact raw boundaries without rereading every
+old filesystem image. Tests cover old task serialization compatibility, concurrent
+controllers with artifact references, profile uncertainty, external SQLite files,
+additional roots, database reopen after workspace removal and corrupt artifacts.
+An unavailable artifact keeps the valid task visible with an artifact-specific gap.
+Final native settlement checkpoints, baseline-to-final deltas, shared-worktree
+attribution, complete multi-root coverage and Eval manifests still require work.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
 rebinding; complete native query-lifetime recovery;
-capability/version gates; task membership and settlement; immutable workspace
-artifacts; authoritative
+capability/version gates; task membership and settlement; final workspace
+checkpoints and deltas; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
 conformance, workspace checks, final review and PR delivery. Automatic first-attempt
 creation is wired; explicit task/attempt switching, immutable native source cuts,
-workspace baselines, dangling-RPC resolution, final settlement and score submission
+final artifact selection, dangling-RPC resolution, final settlement and score submission
 are not. Manifest storage exists, but no application path yet compiles a complete
 evaluation manifest. The live collection snapshot exposes history, candidate
 execution facts, attempts and gaps; it is never optimization evidence by itself.

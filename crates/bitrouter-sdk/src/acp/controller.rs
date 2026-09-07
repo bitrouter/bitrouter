@@ -1084,7 +1084,10 @@ fn observed_session_method(method: &str) -> bool {
 }
 
 fn session_request_fields(params: &serde_json::Value) -> serde_json::Value {
-    selected_fields(params, &["sessionId", "cwd", "prompt"])
+    selected_fields(
+        params,
+        &["sessionId", "cwd", "additionalDirectories", "prompt"],
+    )
 }
 
 fn session_result_fields(params: &serde_json::Value) -> serde_json::Value {

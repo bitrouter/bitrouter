@@ -19,6 +19,7 @@ use crate::eval::types::canonical_digest;
 pub mod execution;
 pub mod forks;
 pub(crate) mod tasks;
+mod workspace;
 
 mod source_entity {
     use sea_orm::entity::prelude::*;
@@ -816,7 +817,8 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
     );
     ensure!(
         match row.kind.as_str() {
-            "attempt" | "fork_binding" | "active_task" | "prompt_operation" =>
+            "attempt" | "fork_binding" | "active_task" | "prompt_operation"
+            | "workspace_artifact" =>
                 fields.get("id").and_then(serde_json::Value::as_str)
                     == Some(row.object_key.as_str()),
             "manifest" => row.object_key == row.digest,
