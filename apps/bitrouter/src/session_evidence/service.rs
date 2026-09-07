@@ -22,6 +22,7 @@ use super::types::{
 };
 use crate::eval::types::canonical_digest;
 
+mod recovery;
 mod roots;
 
 #[derive(Clone)]
@@ -68,6 +69,9 @@ pub struct CollectionSnapshot {
 struct LiveState {
     nodes: BTreeSet<NodeKey>,
     replayed: BTreeMap<String, u64>,
+    spool_nodes: BTreeMap<PathBuf, BTreeSet<NodeKey>>,
+    spool_after: BTreeMap<PathBuf, PathBuf>,
+    spool_gaps: BTreeMap<PathBuf, BTreeSet<String>>,
     snapshot: CollectionSnapshot,
     roots: BTreeMap<String, RootContext>,
     sessions: BTreeMap<String, String>,
@@ -87,6 +91,7 @@ pub struct ControllerEvidence {
     spool: PathBuf,
     executable: PathBuf,
     state: Mutex<LiveState>,
+    recovery: Mutex<recovery::RecoveryState>,
     reconcile_gate: Mutex<()>,
     root_gate: Mutex<()>,
     observation_gate: Mutex<()>,
@@ -193,6 +198,7 @@ impl EvidenceHandle {
                 roots,
                 ..LiveState::default()
             }),
+            recovery: Mutex::new(recovery::RecoveryState::default()),
             reconcile_gate: Mutex::new(()),
             root_gate: Mutex::new(()),
             observation_gate: Mutex::new(()),
@@ -254,21 +260,52 @@ impl ControllerEvidence {
     pub async fn reconcile(&self) -> Result<CollectionSnapshot> {
         let _guard = self.reconcile_gate.lock().await;
         let mut gaps = BTreeSet::new();
+        let recovered = self.recover(&mut gaps).await;
         let roots = self.state.lock().await.roots.clone();
+        let mut collectors = recovered.collectors;
         for context in roots.values() {
-            if let Err(error) = self.reconcile_spool(context, &mut gaps).await {
+            collectors.insert(
+                context.collector.root().namespace.clone(),
+                context.collector.clone(),
+            );
+            let mut found = BTreeSet::new();
+            if let Err(error) = self
+                .reconcile_spool(
+                    context.collector.root(),
+                    &context.spool,
+                    true,
+                    &mut found,
+                    &mut gaps,
+                )
+                .await
+            {
                 tracing::warn!(%error, "native root spool could not be reconciled");
                 gaps.insert("native_spool_failed".into());
             }
+            let mut state = self.state.lock().await;
+            for node in found {
+                if state.nodes.contains(&node) || state.nodes.len() < MAX_GRAPH_ITEMS {
+                    state.nodes.insert(node);
+                } else {
+                    gaps.insert("native_execution_node_limit".into());
+                }
+            }
         }
         let mut nodes = self.state.lock().await.nodes.clone();
+        for node in recovered.nodes {
+            if nodes.contains(&node) || nodes.len() < MAX_GRAPH_ITEMS {
+                nodes.insert(node);
+            } else {
+                gaps.insert("native_recovery_node_limit".into());
+            }
+        }
         for node in nodes.clone() {
-            let Some(context) = roots.get(&node.namespace) else {
+            let Some(collector) = collectors.get(&node.namespace) else {
                 gaps.insert("native_root_unavailable".into());
                 continue;
             };
             if node.harness == Harness::ClaudeCode && node.agent_id.is_none() {
-                match context.collector.discover(&node.native_id).await {
+                match collector.discover(&node.native_id).await {
                     Ok(children) => {
                         for (child, _) in children {
                             ensure!(
@@ -289,8 +326,8 @@ impl ControllerEvidence {
         nodes.extend(graph.nodes.iter().cloned());
         let mut histories = Vec::with_capacity(nodes.len());
         for node in &nodes {
-            let history = if let Some(context) = roots.get(&node.namespace) {
-                let resolver = HistoryResolver::new(self.store.clone(), context.collector.clone());
+            let history = if let Some(collector) = collectors.get(&node.namespace) {
+                let resolver = HistoryResolver::new(self.store.clone(), collector.clone());
                 match resolver.resolve(node.clone()).await {
                     Ok(history) => history,
                     Err(error) => {
@@ -303,10 +340,10 @@ impl ControllerEvidence {
             };
             if node.harness == Harness::ClaudeCode
                 && node.agent_id.is_some()
-                && let Some(context) = roots.get(&node.namespace)
+                && let Some(collector) = collectors.get(&node.namespace)
                 && let Some(transcript) = &history.source
             {
-                match context.collector.reconcile_agent_metadata(transcript).await {
+                match collector.reconcile_agent_metadata(transcript).await {
                     // A disappeared sidecar does not erase already stored
                     // parent evidence. The graph checks unresolved children.
                     Ok(_) => {}
@@ -344,141 +381,211 @@ impl ControllerEvidence {
 
     async fn reconcile_spool(
         &self,
-        context: &RootContext,
+        root: &NativeRoot,
+        spool: &Path,
+        retire_hooks: bool,
+        found: &mut BTreeSet<NodeKey>,
         gaps: &mut BTreeSet<String>,
     ) -> Result<()> {
-        let root = context.collector.root();
-        let mut entries = tokio::fs::read_dir(&context.spool).await?;
-        let mut files = vec![];
-        while let Some(entry) = entries.next_entry().await? {
-            if files.len() == 128 {
-                gaps.insert("native_spool_backlog".into());
-                break;
-            }
-            if entry.file_type().await?.is_file()
-                && entry.path().extension().is_some_and(|ext| ext == "jsonl")
-            {
-                files.push(entry.path());
+        // Node publication and replay watermarks share one state transaction.
+        // Restore them even if a cancelled pass already retired its hook.
+        if let Some(nodes) = self.state.lock().await.spool_nodes.get(spool) {
+            for node in nodes {
+                ensure!(
+                    found.contains(node) || found.len() < MAX_GRAPH_ITEMS,
+                    "native spool node limit"
+                );
+                found.insert(node.clone());
             }
         }
-        files.sort();
-        for path in files {
-            let format = match root.harness {
-                Harness::Codex => SourceFormat::CodexAppServer,
-                Harness::ClaudeCode => SourceFormat::ClaudeHook,
-            };
-            let imported = import_spool(
-                &self.store,
-                &context.spool,
-                &path,
-                SourceDescriptor {
-                    namespace: root.namespace.clone(),
-                    harness: root.harness,
-                    format,
-                    locator: format!("spool:{}", path.to_string_lossy()),
-                    node: None,
-                },
-            )
-            .await?;
-            gaps.extend(imported.gaps);
-            let source = imported.source;
-            let mut start = self
-                .state
-                .lock()
-                .await
-                .replayed
-                .get(&source.id)
-                .copied()
-                .unwrap_or(0);
-            let replay_end = (start + 128).min(source.cursor.next_sequence);
-            if replay_end < source.cursor.next_sequence {
-                gaps.insert("native_spool_backlog".into());
-            }
-            while start < replay_end {
-                let end = (start + RECORD_PAGE_SIZE).min(replay_end);
-                let records = self
-                    .store
-                    .records(&SourceRange {
-                        source_id: source.id.clone(),
-                        generation: source.cursor.generation.clone(),
-                        start,
-                        end,
-                    })
-                    .await?;
-                ensure!(
-                    records.len() as u64 == end - start,
-                    "native spool records missing"
-                );
-                for record in records {
-                    self.observe_nodes(&record.input.raw, root).await?;
-                }
-                start = end;
-                self.state
-                    .lock()
-                    .await
-                    .replayed
-                    .insert(source.id.clone(), start);
-            }
-            // Hooks publish one newline-terminated event per private file.
-            // Once that event is durable, retire its transient spool entry so
-            // long-lived controllers do not accumulate a permanent file cap.
-            if format == SourceFormat::ClaudeHook
-                && source.cursor.next_sequence == 1
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("hook-"))
-                && tokio::fs::metadata(&path).await?.len() == source.cursor.offset
+        // Scan the directory with bounded memory, then advance in lexical
+        // pages. Retained proxy and historical hook files must not permanently
+        // occupy the first page and starve later invocations.
+        ensure!(
+            tokio::fs::canonicalize(spool).await? == spool,
+            "native spool directory identity changed"
+        );
+        let after = self.state.lock().await.spool_after.get(spool).cloned();
+        let mut entries = tokio::fs::read_dir(spool).await?;
+        let mut files = BTreeSet::new();
+        let mut more = false;
+        let mut scanned = 0;
+        while let Some(entry) = entries.next_entry().await? {
+            scanned += 1;
+            ensure!(scanned <= 100_000, "native spool directory entry limit");
+            if entry.file_type().await?.is_file()
+                && entry.path().extension().is_some_and(|ext| ext == "jsonl")
+                && after.as_ref().is_none_or(|after| entry.path() > *after)
             {
-                tokio::fs::remove_file(&path).await?;
-                self.state.lock().await.replayed.remove(&source.id);
+                files.insert(entry.path());
+                if files.len() > 128 {
+                    files.pop_last();
+                    more = true;
+                }
+            }
+        }
+        let last = files.last().cloned();
+        for path in files {
+            let mut file_gaps = BTreeSet::new();
+            if let Err(error) = self
+                .reconcile_spool_file(root, &path, retire_hooks, found, &mut file_gaps)
+                .await
+            {
+                tracing::warn!(%error, "native spool file could not be reconciled");
+                file_gaps.insert("native_spool_failed".into());
+            }
+            let mut state = self.state.lock().await;
+            if file_gaps.is_empty() {
+                state.spool_gaps.remove(&path);
+            } else {
+                state.spool_gaps.insert(path, file_gaps);
+            }
+        }
+        let mut state = self.state.lock().await;
+        if more {
+            if let Some(last) = last {
+                state.spool_after.insert(spool.into(), last);
+            }
+            gaps.insert("native_spool_backlog".into());
+        } else {
+            state.spool_after.remove(spool);
+        }
+        for (path, file_gaps) in &state.spool_gaps {
+            if path.parent() == Some(spool) {
+                gaps.extend(file_gaps.iter().cloned());
             }
         }
         Ok(())
     }
 
-    async fn observe_nodes(&self, event: &Value, root: &NativeRoot) -> Result<()> {
-        let payload = event.get("payload").unwrap_or(&Value::Null);
-        let mut candidates = Vec::new();
-        if root.harness == Harness::ClaudeCode {
-            if let Some(id) = payload.get("session_id").and_then(Value::as_str) {
-                candidates.push((id, payload.get("agent_id").and_then(Value::as_str)));
-            }
-        } else {
-            for pointer in ["/threadId", "/thread/id", "/item/agentThreadId"] {
-                if let Some(id) = payload.pointer(pointer).and_then(Value::as_str) {
-                    candidates.push((id, None));
-                }
-            }
-            if let Some(children) = payload
-                .pointer("/item/receiverThreadIds")
-                .and_then(Value::as_array)
-            {
-                ensure!(children.len() <= MAX_GRAPH_ITEMS, "native child limit");
-                candidates.extend(
-                    children
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(|id| (id, None)),
-                );
-            }
-        }
-        let mut state = self.state.lock().await;
-        for (native_id, agent_id) in candidates {
-            let node = NodeKey {
+    async fn reconcile_spool_file(
+        &self,
+        root: &NativeRoot,
+        path: &Path,
+        retire_hooks: bool,
+        found: &mut BTreeSet<NodeKey>,
+        gaps: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let format = match root.harness {
+            Harness::Codex => SourceFormat::CodexAppServer,
+            Harness::ClaudeCode => SourceFormat::ClaudeHook,
+        };
+        let imported = import_spool(
+            &self.store,
+            path.parent().context("spool directory missing")?,
+            path,
+            SourceDescriptor {
                 namespace: root.namespace.clone(),
                 harness: root.harness,
-                native_id: native_id.into(),
-                agent_id: agent_id.map(str::to_owned),
-            };
-            node.validate()?;
+                format,
+                locator: format!("spool:{}", path.to_string_lossy()),
+                node: None,
+            },
+        )
+        .await?;
+        gaps.extend(imported.gaps);
+        let source = imported.source;
+        let mut start = self
+            .state
+            .lock()
+            .await
+            .replayed
+            .get(&source.id)
+            .copied()
+            .unwrap_or(0);
+        let replay_end = (start + 128).min(source.cursor.next_sequence);
+        if replay_end < source.cursor.next_sequence {
+            gaps.insert("native_spool_backlog".into());
+        }
+        while start < replay_end {
+            let end = (start + RECORD_PAGE_SIZE).min(replay_end);
+            let records = self
+                .store
+                .records(&SourceRange {
+                    source_id: source.id.clone(),
+                    generation: source.cursor.generation.clone(),
+                    start,
+                    end,
+                })
+                .await?;
             ensure!(
-                state.nodes.contains(&node) || state.nodes.len() < MAX_GRAPH_ITEMS,
-                "native execution node limit"
+                records.len() as u64 == end - start,
+                "native spool records missing"
             );
-            state.nodes.insert(node);
+            let mut page_nodes = BTreeSet::new();
+            for record in records {
+                for node in native_nodes(&record.input.raw, root)? {
+                    page_nodes.insert(node);
+                }
+            }
+            let directory = path.parent().context("spool directory missing")?;
+            let mut state = self.state.lock().await;
+            let cached = state.spool_nodes.entry(directory.into()).or_default();
+            ensure!(
+                cached.union(&page_nodes).count() <= MAX_GRAPH_ITEMS
+                    && found.union(&page_nodes).count() <= MAX_GRAPH_ITEMS,
+                "native spool node limit"
+            );
+            cached.extend(page_nodes.iter().cloned());
+            found.extend(page_nodes);
+            start = end;
+            state.replayed.insert(source.id.clone(), start);
+        }
+        // Only the originating controller retires a hook after durable replay.
+        if retire_hooks
+            && format == SourceFormat::ClaudeHook
+            && source.cursor.next_sequence == 1
+            && gaps.is_empty()
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("hook-"))
+            && tokio::fs::metadata(path).await?.len() == source.cursor.offset
+        {
+            tokio::fs::remove_file(path).await?;
+            self.state.lock().await.replayed.remove(&source.id);
         }
         Ok(())
     }
+}
+
+fn native_nodes(event: &Value, root: &NativeRoot) -> Result<BTreeSet<NodeKey>> {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    let mut candidates = Vec::new();
+    if root.harness == Harness::ClaudeCode {
+        if let Some(id) = payload.get("session_id").and_then(Value::as_str) {
+            candidates.push((id, payload.get("agent_id").and_then(Value::as_str)));
+        }
+    } else {
+        for pointer in ["/threadId", "/thread/id", "/item/agentThreadId"] {
+            if let Some(id) = payload.pointer(pointer).and_then(Value::as_str) {
+                candidates.push((id, None));
+            }
+        }
+        if let Some(children) = payload
+            .pointer("/item/receiverThreadIds")
+            .and_then(Value::as_array)
+        {
+            ensure!(children.len() <= MAX_GRAPH_ITEMS, "native child limit");
+            candidates.extend(
+                children
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|id| (id, None)),
+            );
+        }
+    }
+    let mut nodes = BTreeSet::new();
+    for (native_id, agent_id) in candidates {
+        let node = NodeKey {
+            namespace: root.namespace.clone(),
+            harness: root.harness,
+            native_id: native_id.into(),
+            agent_id: agent_id.map(str::to_owned),
+        };
+        node.validate()?;
+        nodes.insert(node);
+    }
+    Ok(nodes)
 }
 
 #[async_trait]

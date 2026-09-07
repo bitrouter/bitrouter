@@ -23,8 +23,8 @@ const EVENTS: &[&str] = &[
 
 /// Claude SDK accepts a JSON settings object, including CLI command hooks.
 /// This adds invocation-local hooks and preserves all existing settings.
-/// https://code.claude.com/docs/en/agent-sdk/typescript
-/// https://code.claude.com/docs/en/hooks
+/// <https://code.claude.com/docs/en/agent-sdk/typescript>
+/// <https://code.claude.com/docs/en/hooks>
 pub async fn instrument(
     mut params: Value,
     spool: &Path,

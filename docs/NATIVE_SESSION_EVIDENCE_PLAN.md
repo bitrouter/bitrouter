@@ -47,9 +47,20 @@ cumulative cost counters. SDK task IDs are not agent transcript IDs. Early
 notifications stay in their unbound raw journal until their profile can be
 established; durable rebinding/recovery is still required.
 
+Controller recovery now continuously pages through owned source registrations
+and their durable records. Original controller metadata verifies each historical
+profile and spool; recovery does not reopen old journals for writing or restore
+their live Query/session caches. It imports late spool records and recovers
+identities from hooks already committed and retired by another controller.
+Retained files rotate through bounded pages, and failures stay visible across
+pages. Node publication and replay cursors survive cancellation together.
+Corrupt registrations and recovery limits remain gaps while live collection
+continues. Tests cover database reopen, profile separation, retired hooks,
+concurrent controllers, cancellation, corrupt inventory cursors, and pagination.
+A completed recovery sweep is not a task settlement decision.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
-rebinding, and recovery of earlier
-controller spools and root bindings; complete native query-lifetime recovery;
+rebinding; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; immutable workspace
 artifacts; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
@@ -58,6 +69,10 @@ storage APIs exist, but the application does not yet automatically create and
 settle attempts or submit their scores. The live collection snapshot exposes
 history, candidate execution facts and gaps; it is never optimization evidence
 by itself.
+
+Recovery and the live candidate graph retain explicit resource limits. Task
+scoping and durable per-attempt collection still need to replace aggregate
+controller-lifetime candidate budgets before long-lived evaluation is complete.
 
 The collection boundary is a BitRouter-controlled Codex or Claude Code session
 and its registered native data root. Historical backfill is limited to that

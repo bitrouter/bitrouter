@@ -60,7 +60,7 @@ impl NativeCollector {
     /// Claude keeps parent-agent and spawning tool ids in a separate sidecar.
     /// Its path is derived from an already validated child transcript, never
     /// from a locator carried inside a message or hook.
-    /// https://code.claude.com/docs/en/agent-sdk/session-storage
+    /// <https://code.claude.com/docs/en/agent-sdk/session-storage>
     pub async fn reconcile_agent_metadata(
         &self,
         transcript: &CollectedSource,

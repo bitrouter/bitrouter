@@ -163,6 +163,44 @@ impl EvidenceStore {
             .collect()
     }
 
+    /// Recovery must be able to advance past one corrupt registration without
+    /// treating it as valid or disabling collection for healthy live sources.
+    /// Keep the opaque database cursor separate from a decoded source id.
+    pub(crate) async fn source_inventory(
+        &self,
+        after: Option<&str>,
+        limit: u64,
+    ) -> Result<Vec<(String, Result<RegisteredSource>)>> {
+        ensure!(
+            (1..=MAX_GRAPH_ITEMS as u64).contains(&limit),
+            "invalid inventory page limit"
+        );
+        let mut query = source_entity::Entity::find()
+            .filter(source_entity::Column::Owner.eq(&self.owner_key))
+            .order_by_asc(source_entity::Column::Id)
+            .limit(limit);
+        if let Some(id) = after {
+            // This is an exact cursor returned by the database, not an input
+            // evidence identifier. Even a corrupt primary key must be passed
+            // back unchanged so recovery can advance beyond that row.
+            query = query.filter(source_entity::Column::Id.gt(id));
+        }
+        Ok(query
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let id = row.id.clone();
+                let source = if row.owner == self.owner_key {
+                    decode_source(row)
+                } else {
+                    Err(anyhow::anyhow!("foreign evidence source"))
+                };
+                (id, source)
+            })
+            .collect())
+    }
+
     /// Commit a complete, contiguous batch and its cursor as one transaction.
     /// The source revision detects competing collectors. Replaying an existing
     /// sequence is allowed only when the entire immutable record is identical.

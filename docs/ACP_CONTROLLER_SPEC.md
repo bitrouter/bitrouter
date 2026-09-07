@@ -265,6 +265,10 @@ These are review gates, not preferences.
   fields for durable evidence. Default observation remains ACP session updates;
   selecting evidence fields must not change the notification forwarded to the
   manager. Persistence completes before forwarding the original notification.
+- Historical evidence recovery uses owned controller/root registrations and
+  immutable records. It must not restore old Query liveness or configuration
+  into the current controller. Recovery failures remain evidence gaps while
+  healthy live collection continues.
 - The controller does not set `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or an
   equivalent home override unless the user explicitly requests an isolated
   harness environment. Test probes may use temporary homes.

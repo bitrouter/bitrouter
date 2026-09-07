@@ -20,7 +20,7 @@ const OTHER_EVENTS: &[&str] = &["command_lifecycle", "result", "conversation_res
 /// Raw SDK forwarding is an adapter setting, outside its SDK options object.
 /// Preserve existing raw filters while requesting the lifecycle signals used
 /// by evidence collection. This does not change model or permission settings.
-/// https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+/// <https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts>
 pub fn instrument(meta: &mut Map<String, Value>) -> Result<()> {
     let configured = meta
         .entry("emitRawSDKMessages")
@@ -49,7 +49,7 @@ pub fn instrument(meta: &mut Map<String, Value>) -> Result<()> {
 /// Capture only lifecycle fields. SDK init/configuration and evaluator content
 /// can contain unrelated sensitive data; the original extension is forwarded
 /// to the manager unchanged and the local evidence journal receives this view.
-/// https://code.claude.com/docs/en/agent-sdk/typescript
+/// <https://code.claude.com/docs/en/agent-sdk/typescript>
 pub fn notification_fields(payload: &Value) -> Option<Value> {
     let message = payload.get("message")?;
     let kind = message.get("type")?.as_str()?;

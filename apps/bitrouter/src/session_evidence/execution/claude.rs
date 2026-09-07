@@ -6,8 +6,8 @@ impl Extractor<'_> {
     /// ids identify SDK tasks (including shell jobs), not agent transcript ids.
     /// Result delivery, command completion, session idle and background sets
     /// remain separate observations for the settlement reducer.
-    /// https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
-    /// https://code.claude.com/docs/en/agent-sdk/typescript
+    /// <https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts>
+    /// <https://code.claude.com/docs/en/agent-sdk/typescript>
     pub(super) fn claude_sdk(&mut self) -> Result<()> {
         let raw = &self.record.input.raw;
         if self.source.harness != Harness::ClaudeCode

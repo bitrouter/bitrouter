@@ -23,7 +23,7 @@ pub const ADAPTER_ENTRY_ENV: &str = "BITROUTER_CODEX_ADAPTER_ENTRY";
 /// Runs in the adapter's process environment, where npm has prepended the
 /// bundled dependency's bin directory. An explicit CODEX_PATH remains the
 /// selected runtime. This hook is implemented by the published ACP adapter:
-/// https://github.com/zed-industries/codex-acp
+/// <https://github.com/zed-industries/codex-acp>
 pub fn prepare_env(
     env: &mut HashMap<String, String>,
     spool: &Path,

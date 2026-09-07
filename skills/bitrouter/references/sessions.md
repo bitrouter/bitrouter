@@ -144,6 +144,14 @@ follows `CLAUDE_CONFIG_DIR` (default `~/.claude`). Agent environment overrides
 take precedence over inherited values. The collector reads only named sessions
 and their explicit dependencies under those roots.
 
+New controllers also recover evidence registered by earlier controllers in the
+same BitRouter database and home. Recovery verifies stored profile/spool
+registrations, continuously pages through durable records and remaining files,
+and can recover hook identities after the originating controller removed the
+temporary hook file. Historical Query state is not restored as a live session.
+Recovery failures and resource limits remain visible gaps; they do not disable
+current collection. No additional user command is needed for this recovery.
+
 Claude session creation also follows `_meta.claudeCode.options.env`; relative
 native roots resolve against that session's `cwd`. Each profile has a separate
 evidence namespace and hook spool. Claude may reuse its loaded Query when

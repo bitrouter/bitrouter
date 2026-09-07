@@ -1,6 +1,6 @@
 use super::*;
 
-async fn write_rows(path: &Path, rows: Vec<Value>) -> Result<()> {
+pub(super) async fn write_rows(path: &Path, rows: Vec<Value>) -> Result<()> {
     tokio::fs::create_dir_all(path.parent().context("fixture parent")?).await?;
     let mut bytes = vec![];
     for row in rows {
@@ -11,7 +11,7 @@ async fn write_rows(path: &Path, rows: Vec<Value>) -> Result<()> {
     Ok(())
 }
 
-async fn claude_service(directory: &Path) -> Result<EvidenceHandle> {
+pub(super) async fn claude_service(directory: &Path) -> Result<EvidenceHandle> {
     let mut env = HashMap::from([
         (
             "CLAUDE_CONFIG_DIR".into(),
@@ -39,7 +39,12 @@ async fn claude_service(directory: &Path) -> Result<EvidenceHandle> {
     .context("Claude service")
 }
 
-fn observation(operation: &str, method: &str, phase: &str, payload: Value) -> SessionObservation {
+pub(super) fn observation(
+    operation: &str,
+    method: &str,
+    phase: &str,
+    payload: Value,
+) -> SessionObservation {
     SessionObservation {
         operation_id: operation.into(),
         method: method.into(),
