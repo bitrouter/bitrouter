@@ -10,6 +10,22 @@ use crate::session_evidence::types::{AcpSessionKey, Harness, NodeKey, SourceForm
 
 mod selections;
 
+/// A checked admission conflict before a new selection can be committed.
+/// Database, integrity and replay failures do not establish this outcome.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct TaskSelectionRejected(pub(crate) &'static str);
+
+/// Pause one task read at its database boundary, before acquiring a pooled
+/// connection. This also injects a failure after a prior selection committed.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TaskReadProbe {
+    pub(crate) entered: tokio::sync::Notify,
+    pub(crate) release: tokio::sync::Notify,
+    pub(crate) fail: bool,
+}
+
 /// Read the pre-separation mutable task objects without carrying their assumed
 /// native membership forward. Their raw boundaries are still verified by the
 /// task reader. Immutable manifests and their serialized bytes are untouched.
@@ -718,8 +734,7 @@ impl EvidenceStore {
         let mut visited = BTreeSet::new();
         loop {
             ensure!(
-                visited.len().saturating_add(new_attempts) < MAX_GRAPH_ITEMS
-                    && visited.insert(current.attempt_id.clone()),
+                visited.len() < MAX_GRAPH_ITEMS && visited.insert(current.attempt_id.clone()),
                 "task archive chain is cyclic or exceeds its limit"
             );
             // Each state independently bounds its operation set. There is no
@@ -733,7 +748,12 @@ impl EvidenceStore {
             }
             match previous {
                 Some(previous) => current = previous,
-                None => return first.context("task proof has no attempt"),
+                None => {
+                    if visited.len().saturating_add(new_attempts) > MAX_GRAPH_ITEMS {
+                        return Err(TaskSelectionRejected("This session has reached its task history limit. Continue the current task or open another session.").into());
+                    }
+                    return first.context("task proof has no attempt");
+                }
             }
         }
     }

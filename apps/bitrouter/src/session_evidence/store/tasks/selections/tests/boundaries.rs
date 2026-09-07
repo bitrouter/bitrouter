@@ -179,7 +179,7 @@ async fn the_last_supported_switch_stays_readable_and_overflow_rolls_back() -> R
         .await?;
     journal.append(request("last", "public")).await?;
     journal.append(response("last")).await?;
-    let full = store
+    let mut full = store
         .task_status(&session)
         .await?
         .current
@@ -188,17 +188,39 @@ async fn the_last_supported_switch_stays_readable_and_overflow_rolls_back() -> R
     assert_eq!(full.task_id, expected.task_id);
     let mut source = store.sources(None, 1).await?.remove(0);
     for mode in [TaskSelectionMode::Retry, TaskSelectionMode::NewTask] {
-        assert!(
-            journal
-                .append(select("overflow", full.clone(), mode))
-                .await
-                .is_err()
-        );
+        let failure = journal
+            .append(select("overflow", full.clone(), mode))
+            .await
+            .err()
+            .context("capacity rejection")?;
+        assert!(failure.downcast_ref::<TaskSelectionRejected>().is_some());
         assert_eq!(store.source(&source.id).await?.context("source")?, source);
         let status = store.task_status(&session).await?;
         assert_eq!(status.current, Some(full.clone()));
         assert!(status.pending.is_none());
+        crate::dashboard::tasks::tests::rejected_selection_keeps_the_current_task_usable(
+            crate::session_evidence::service::tasks::selection_error(failure),
+            status,
+        )
+        .await?;
     }
+
+    // Refusing another attempt does not prevent more work in this attempt.
+    journal
+        .append(request("continue-current", "public"))
+        .await?;
+    journal.append(response("continue-current")).await?;
+    let continued = store
+        .task_status(&session)
+        .await?
+        .current
+        .context("continued task")?;
+    assert_eq!(continued.attempt_id, full.attempt_id);
+    full = continued;
+    source = store
+        .source(&source.id)
+        .await?
+        .context("continued source")?;
 
     // An older writer could have accepted an over-capacity reservation. The
     // consuming prompt must still reject it atomically, without an orphaned
@@ -264,6 +286,24 @@ async fn the_last_supported_switch_stays_readable_and_overflow_rolls_back() -> R
             .attempt(&canonical_digest(&("attempt", &operation))?)
             .await?
             .is_none()
+    );
+    let oldest = store
+        .prompt_operation(&store.db, &PromptOperation::key("fixture", "prompt-0")?)
+        .await?
+        .context("oldest operation")?;
+    record_entity::Entity::delete_by_id(oldest.request.record_id)
+        .exec(&store.db)
+        .await?;
+    let damaged = journal
+        .append(select("damaged-full-chain", full, TaskSelectionMode::Retry))
+        .await
+        .err()
+        .context("damaged proof")?;
+    assert!(damaged.downcast_ref::<TaskSelectionRejected>().is_none());
+    let classified = crate::session_evidence::service::tasks::selection_error(damaged);
+    assert_eq!(
+        classified.data.context("unknown outcome")?["outcome"],
+        "unknown"
     );
     Ok(())
 }

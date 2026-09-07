@@ -10,10 +10,10 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections reserve a new task or retry for the next prompt. | TUI task/attempt actions, native execution membership and exact per-attempt execution ranges. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. | Native execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
-| TUI | Collection state is available in an application snapshot. | User-facing evaluation status, checkpoint feedback and task/attempt actions. |
+| TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
 
 These are feature-branch capabilities. A live collection snapshot is not a
 complete evaluation sample, and an ACP response is not task-completion proof.
@@ -86,7 +86,7 @@ controller's outstanding RPC adds an explicit unobserved-response gap. It is not
 declared completed, cancelled or currently executing by the replacement controller.
 This does not recover native Query liveness or resolve a request committed before
 an interrupted forward. The application snapshot exposes these attempts, but
-native execution ranges, TUI task switching and final settlement
+native execution ranges and final settlement
 are still required. Operation membership is bounded per attempt; it is not an
 unlimited session-wide operation log.
 
@@ -412,7 +412,7 @@ task row; a repeated key is rechecked after acquiring that lock. A different
 pending selection, stale cursor or outstanding prompt prevents selection. A chain
 supports at most 1,024 attempts, each with up to 1,024 prompt operations. Queueing
 and consumption reserve capacity before changing state, including recovery from
-an older over-capacity reservation. TUI actions, cancellation/replacement of a
+an older over-capacity reservation. Cancellation/replacement of a
 pending reservation and long-lived paged task history remain unfinished.
 
 Tests cover multi-generation retries and new tasks, archive corruption, atomic
@@ -445,13 +445,49 @@ payload equivalence. The final workspace run passed 3,320 tests with 13 skipped;
 Clippy with denied warnings, doctests, rustdoc, distribution, formatting and diff
 checks passed.
 
+The Code conversation now consumes negotiated controller task status and
+selection through the shared ACP client. F2 reserves a new task and F3 reserves
+another attempt of the current task; neither clears native context nor reruns
+a prompt. Confirmed task/attempt ids, collection phase and pending reservation
+are visible in Conversation and Sessions. Submission retains the draft while
+task identity or a selection is unconfirmed. F4 refreshes task state. Native
+session lifecycle and task identity remain separate in both views.
+
+One task-control receiver slot prevents older status responses from replacing
+newer selections, including when the cursor revision is unchanged. Prompt
+boundaries invalidate older reads and session replacement discards the previous
+driver. A timeout or unclassified error retains the entire selection request
+for an explicit same-key retry. Confirmed admission rejections require a fresh
+status and a new user action; a verified full archive refuses another attempt
+without preventing ordinary prompts in its current attempt. Corrupt histories,
+commit errors and status-read failures after commit remain unknown outcomes.
+An ordinary status refresh cannot prove an unknown selection was never consumed.
+
+Client abandonment cancels the underlying ACP request, and controller handlers
+observe request cancellation. Their asynchronous work does not retain the
+connection dispatch loop. Task status and post-commit reads release the native
+observation gate before querying the database; selection writes keep the
+existing durable observation backpressure. In-process uncertain-intent recovery
+does not yet survive a Code process restart. Final evidence settlement, coding
+evaluation and human feedback are not implemented by these task controls.
+
+Independent review passed after fixing underlying RPC cancellation, checked
+capacity rejection and stale error display after refresh. Regressions exercise
+real ACP channels, controller cancellation, committed selections followed by
+failed status reads, late replies, and both harness identities across the shared
+host's New/Load/Resume paths. Capacity recovery combines the actual storage
+rejection and service error mapping with ACP client/driver handling. Native
+processes in these tests are deterministic fixtures, not pinned-runtime
+conformance. All 3,331 workspace tests passed with 13 skipped; Clippy with denied
+warnings, doctests, rustdoc, distribution, formatting and diff checks passed.
+
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace
 checkpoints and deltas; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
 conformance, workspace checks, final review and PR delivery. Automatic first-attempt
-creation and backend task/attempt selection are wired; TUI actions, exact native execution ranges,
+creation, backend task/attempt selection and Code actions are wired; exact native execution ranges,
 final artifact selection, dangling-RPC resolution, final settlement and score submission
 are not. Manifest storage exists, but no application path yet compiles a complete
 evaluation manifest. The live collection snapshot exposes history, candidate

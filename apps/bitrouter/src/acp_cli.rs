@@ -358,6 +358,7 @@ done
                 assert_eq!(snapshot.attempts.len(), 1);
                 assert_eq!(snapshot.attempts[0].session.session_id, "native-1");
                 assert_eq!(snapshot.native_checkpoints.len(), 1);
+                handle = crate::dashboard::tests::exercise_task_keys(handle).await?;
                 assert!(handle.shutdown().await);
                 let database = home.join("host-evidence.db");
                 assert!(database.is_file());
@@ -365,7 +366,7 @@ done
                     crate::db::connect(&format!("sqlite:{}", database.display())).await?,
                     "local",
                 )?;
-                assert_eq!(store.attempts(None, 2).await?.len(), 1);
+                assert_eq!(store.attempts(None, 8).await?.len(), 3);
                 let mut recorded_openings = Vec::new();
                 for source in store.sources(None, 16).await? {
                     if source.descriptor.format != crate::session_evidence::types::SourceFormat::Acp

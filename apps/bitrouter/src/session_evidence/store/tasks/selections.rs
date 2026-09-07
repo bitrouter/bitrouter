@@ -201,7 +201,9 @@ impl EvidenceStore {
         let task = self
             .lock_active_task(db, &session)
             .await?
-            .context("task selection needs an existing task")?;
+            .ok_or(TaskSelectionRejected(
+                "Send a prompt before selecting another task or attempt.",
+            ))?;
         if let Some(old) = self.selection_on(db, &id).await? {
             ensure!(
                 old.request == request,
@@ -210,18 +212,20 @@ impl EvidenceStore {
             return Ok(());
         }
         let attempt = self.task_attempt_with_capacity(db, &task, 1).await?;
-        ensure!(
-            cursor(&task, &attempt) == request.expected,
-            "task changed; refresh before selecting"
-        );
-        ensure!(
-            task.open_operations.is_empty(),
-            "a prompt is still outstanding"
-        );
-        ensure!(
-            self.pending_selection(db, &session).await?.is_none(),
-            "a task selection is already pending"
-        );
+        if cursor(&task, &attempt) != request.expected {
+            return Err(
+                TaskSelectionRejected("The task changed. Refresh before selecting again.").into(),
+            );
+        }
+        if !task.open_operations.is_empty() {
+            return Err(TaskSelectionRejected(
+                "A prompt is still outstanding. Wait for its response.",
+            )
+            .into());
+        }
+        if self.pending_selection(db, &session).await?.is_some() {
+            return Err(TaskSelectionRejected("Another task selection is already pending.").into());
+        }
         let raw = StoredRecord {
             id: record.id(&source.id)?,
             source_id: source.id.clone(),
@@ -403,6 +407,15 @@ impl EvidenceStore {
     }
 
     pub(crate) async fn task_status(&self, session: &AcpSessionKey) -> Result<TaskStatusResponse> {
+        #[cfg(test)]
+        {
+            let probe = self.task_read_probe.lock().await.take();
+            if let Some(probe) = probe {
+                probe.entered.notify_one();
+                probe.release.notified().await;
+                ensure!(!probe.fail, "injected task snapshot read failure");
+            }
+        }
         let transaction = self.read_snapshot().await?;
         let current = match self.active_task(&transaction, session).await? {
             Some(task) => Some((task.clone(), self.task_attempt(&transaction, &task).await?)),

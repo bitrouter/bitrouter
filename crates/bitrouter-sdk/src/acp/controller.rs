@@ -836,7 +836,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
             )
             .on_receive_request_from(
                 Client,
-                move |request: tasks::TaskStatusRequest, responder: Responder<tasks::TaskStatusResponse>, _connection| {
+                move |request: tasks::TaskStatusRequest, responder: Responder<tasks::TaskStatusResponse>, connection: ConnectionTo<Conductor>| {
                     let observer = task_status_observer.clone();
                     let state = task_status_state.clone();
                     async move {
@@ -846,16 +846,19 @@ impl ConnectTo<Conductor> for ControllerProxy {
                         let Some(observer) = observer.filter(|observer| observer.task_control_enabled()) else {
                             return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                         };
-                        match observer.task_status(request).await {
-                            Ok(status) => responder.respond(status),
-                            Err(error) => responder.respond_with_error(error),
-                        }
+                        connection.spawn(async move {
+                            match responder.cancellation().run_until_cancelled(observer.task_status(request)).await {
+                                Ok(status) => responder.respond(status),
+                                Err(error) => responder.respond_with_error(error),
+                            }
+                        })?;
+                        Ok(())
                     }
                 }, agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request_from(
                 Client,
-                move |request: tasks::TaskSelectRequest, responder: Responder<tasks::TaskStatusResponse>, _connection| {
+                move |request: tasks::TaskSelectRequest, responder: Responder<tasks::TaskStatusResponse>, connection: ConnectionTo<Conductor>| {
                     let observer = task_select_observer.clone();
                     let state = task_select_state.clone();
                     async move {
@@ -865,10 +868,15 @@ impl ConnectTo<Conductor> for ControllerProxy {
                         let Some(observer) = observer.filter(|observer| observer.task_control_enabled()) else {
                             return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                         };
-                        match observer.task_select(request).await {
-                            Ok(status) => responder.respond(status),
-                            Err(error) => responder.respond_with_error(error),
-                        }
+                        connection.spawn(async move {
+                            // Cancellation can race a database commit. It is
+                            // an unknown selection outcome, never a rejection.
+                            match responder.cancellation().run_until_cancelled(observer.task_select(request)).await {
+                                Ok(status) => responder.respond(status),
+                                Err(error) => responder.respond_with_error(error),
+                            }
+                        })?;
+                        Ok(())
                     }
                 }, agent_client_protocol::on_receive_request!(),
             )

@@ -107,6 +107,10 @@ bitrouter code codex              # explicit interactive ACP session
 bitrouter run claude "summarize this repo"  # headless ACP turn
 ```
 
+In Conversation, F2 reserves a new task, F3 a retry, and F4 refreshes supported
+task state. The next message consumes the selection, retaining native context
+without replaying a prompt. See [task selection](references/sessions.md#application-task-selection).
+
 Both built-in adapters require Node.js 22+ and `npx`; a compatible local CLI is
 selected automatically behind the pinned adapter. For the harness's own native
 interface, use the reversible per-process launcher:
@@ -130,16 +134,14 @@ be rerouted. End with: "run `bitrouter claude` (or restart the harness with the
 env override) to route this session." MCP is control/introspection only;
 inference goes to the daemon HTTP API.
 
-For an ACP client, use `bitrouter acp serve claude` or
-`bitrouter acp serve codex`. Stable ACP v1 on exact adapter pins,
-initializing the harness with the client's capabilities and transparently
-carrying multiple harness-native sessions on one connection. Native IDs and
-session storage remain harness-owned; maintained Codex/Claude controllers
-retain a separate local evidence index for evaluation. Route leases
-(`_bitrouter/route/list|set|reset`) and session-attributed cost are
-capability-gated and need a local control binding, which an explicit remote
-`--base-url` does not provide. Read `references/sessions.md` — the pins and the
-wire contract are there — before reasoning about this surface.
+ACP clients use `bitrouter acp serve claude` or `bitrouter acp serve codex`:
+stable ACP v1 on exact adapter pins, initialized with client capabilities and
+carrying multiple native sessions per connection. Native IDs and storage remain
+harness-owned; Codex/Claude controllers retain a local evaluation evidence index.
+Route leases (`_bitrouter/route/list|set|reset`) and session-attributed cost are
+capability-gated and require a local control binding; an explicit remote
+`--base-url` does not provide one. Read `references/sessions.md` for adapter pins
+and the wire contract before reasoning about this surface.
 
 ### 6. Verify
 ```bash
@@ -156,23 +158,11 @@ and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
 ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 `references/diagnose.md` has the full spelling rules.
 
-For read-only control from another computer, add a named context and select it
-explicitly:
-
-```bash
-bitrouter context add workstation \
-  --endpoint https://router.example/control/v1 \
-  --token-env WORKSTATION_BITROUTER_TOKEN
-bitrouter --context workstation status
-bitrouter --context workstation requests
-bitrouter --context workstation models
-bitrouter --context workstation route openai/gpt-5
-bitrouter --context workstation code
-```
-
-The context stores only the environment-variable name. Remote errors never
-fall back to this machine. The HTTP-only MVP supports those reads; agent
-sessions and lifecycle commands remain local (use SSH for a remote native TUI).
+For read-only control from another computer, use `context add NAME --endpoint
+URL --token-env VAR`, then `--context NAME` with status, requests, models, route
+or code. Only the token variable's name is saved; remote errors never fall back
+locally. Agent sessions and lifecycle remain local; use SSH for a remote native
+TUI. See `references/cli.md` for the remote-control contract.
 
 ## References — read on demand, not upfront
 

@@ -687,6 +687,9 @@ a separate local evidence index for task/attempt evaluation.
 | `Enter` | Send the composer text, or open the selected agent from Agents |
 | `Tab` | Move to the next view while preserving the active conversation |
 | `PageUp` / `PageDown` | Scroll the conversation transcript |
+| `F2` | Reserve a new application task for the next message |
+| `F3` | Reserve another attempt of the current task for the next message |
+| `F4` | Refresh application task state |
 | `1`–`9` | Choose an open permission option |
 | `Esc` | Deny the open permission request |
 | `Ctrl-C` | Cancel the running turn; outside a running turn, exit |
@@ -694,8 +697,20 @@ a separate local evidence index for task/attempt evaluation.
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
 
+Task controls appear when the controller advertises them. The first message
+automatically starts a task; F2/F3 subsequently change its next-message identity
+without clearing native context or automatically sending another prompt. The
+conversation shows the confirmed task, attempt, evidence state and any pending
+selection. Selection confirmation temporarily holds message submission while
+preserving the draft. If the outcome is unknown, the displayed F2/F3 retry keeps
+the original request and does not silently select a different task. A confirmed
+conflict requires fresh state and another explicit choice. A pending reservation
+currently cannot be cancelled or replaced. Evidence reconciliation is not a
+coding score; evaluator feedback remains unfinished.
+
 Routing flags are shared with `run` and `acp serve`. The Sessions view shows
-the native identity and the lifecycle features advertised by the harness;
+the harness-returned ACP identity, any separately reported agent identity,
+application task/attempt ids, and the advertised lifecycle features;
 unsupported lifecycle operations are not offered. `tui` and `chat` remain
 hidden compatibility aliases for the unified shell.
 

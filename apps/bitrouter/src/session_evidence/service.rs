@@ -27,7 +27,7 @@ pub mod processes;
 mod recovery;
 mod roots;
 pub mod sdk_bindings;
-mod tasks;
+pub(crate) mod tasks;
 mod workspaces;
 
 #[derive(Clone)]
@@ -903,7 +903,7 @@ impl SessionObserver for ControllerEvidence {
     > {
         self.control_task_select(request)
             .await
-            .map_err(tasks::control_error)
+            .map_err(tasks::selection_error)
     }
 
     fn notification_fields(&self, method: &str, params: &Value) -> Option<Value> {

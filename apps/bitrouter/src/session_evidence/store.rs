@@ -88,6 +88,9 @@ pub struct EvidenceStore {
     db: DatabaseConnection,
     owner: String,
     owner_key: String,
+    #[cfg(test)]
+    pub(crate) task_read_probe:
+        std::sync::Arc<tokio::sync::Mutex<Option<std::sync::Arc<tasks::TaskReadProbe>>>>,
 }
 
 impl EvidenceStore {
@@ -99,6 +102,8 @@ impl EvidenceStore {
             db,
             owner,
             owner_key,
+            #[cfg(test)]
+            task_read_probe: Default::default(),
         })
     }
 

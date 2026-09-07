@@ -161,6 +161,109 @@ mod tests {
         finish_initialize: Arc<tokio::sync::Notify>,
     }
 
+    struct BlockedObserver {
+        entered: Arc<tokio::sync::Notify>,
+        released: Arc<tokio::sync::Notify>,
+    }
+
+    struct ReleaseOnDrop(Arc<tokio::sync::Notify>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.notify_one();
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SessionObserver for BlockedObserver {
+        fn task_control_enabled(&self) -> bool {
+            true
+        }
+        async fn observe(&self, _: SessionObservation) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+        async fn task_status(
+            &self,
+            _: TaskStatusRequest,
+        ) -> Result<TaskStatusResponse, agent_client_protocol::Error> {
+            let _release = ReleaseOnDrop(self.released.clone());
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+        async fn task_select(
+            &self,
+            _: TaskSelectRequest,
+        ) -> Result<TaskStatusResponse, agent_client_protocol::Error> {
+            self.task_status(TaskStatusRequest {
+                session_id: "public".into(),
+            })
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn abandoned_task_calls_cancel_controller_work_before_another_request()
+    -> anyhow::Result<()> {
+        use crate::acp::client::{AcpClient, ClientOptions};
+        let observer = Arc::new(BlockedObserver {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            released: Arc::new(tokio::sync::Notify::new()),
+        });
+        let finish_initialize = Arc::new(tokio::sync::Notify::new());
+        finish_initialize.notify_one();
+        let forwarded = Arc::new(AtomicUsize::new(0));
+        let controller = Controller::new(
+            Canary {
+                forwarded: forwarded.clone(),
+                initializing: Arc::new(tokio::sync::Notify::new()),
+                finish_initialize,
+            },
+            ControllerConfig::new(ControllerIdentity::new("fixture", "fixture", "test")),
+        )
+        .session_observer(observer.clone());
+        let (manager, transport) = agent_client_protocol::Channel::duplex();
+        let worker = tokio::spawn(controller.run(transport));
+        let client = AcpClient::connect(manager, ClientOptions::default()).await?;
+        for selection in [false, true, false, true] {
+            let mut call = Box::pin(async {
+                if selection {
+                    client
+                        .task_select(TaskSelectRequest {
+                            session_id: "public".into(),
+                            request_id: "selection".into(),
+                            expected: status().current.ok_or_else(|| {
+                                crate::acp::client::tasks::TaskControlError::Unknown(
+                                    anyhow::anyhow!("fixture cursor"),
+                                )
+                            })?,
+                            mode: TaskSelectionMode::Retry,
+                        })
+                        .await
+                } else {
+                    client.task_status("public").await
+                }
+            });
+            tokio::select! {
+                _ = observer.entered.notified() => {}
+                result = &mut call => { result?; anyhow::bail!("blocked observer returned early"); }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => anyhow::bail!("observer did not start"),
+            }
+            assert!(
+                tokio::time::timeout(std::time::Duration::ZERO, call)
+                    .await
+                    .is_err()
+            );
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                observer.released.notified(),
+            )
+            .await?;
+        }
+        client.shutdown().await?;
+        worker.await??;
+        assert_eq!(forwarded.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
     impl ConnectTo<Client> for Canary {
         async fn connect_to(
             self,
@@ -205,6 +308,80 @@ mod tests {
                 .connect_to(client)
                 .await
         }
+    }
+
+    #[tokio::test]
+    async fn task_client_negotiates_methods_without_sending_unadvertised_calls()
+    -> anyhow::Result<()> {
+        use crate::acp::client::{
+            AcpClient, ClientOptions,
+            tasks::{TaskControlError, TaskMethod},
+        };
+        for enabled in [false, true] {
+            let observer = Arc::new(Observer {
+                enabled,
+                calls: AtomicUsize::new(0),
+            });
+            let forwarded = Arc::new(AtomicUsize::new(0));
+            let finish_initialize = Arc::new(tokio::sync::Notify::new());
+            finish_initialize.notify_one();
+            let native = Canary {
+                forwarded: forwarded.clone(),
+                initializing: Arc::new(tokio::sync::Notify::new()),
+                finish_initialize,
+            };
+            let mut worker = None;
+            let client = if enabled {
+                let controller = Controller::new(
+                    native,
+                    ControllerConfig::new(ControllerIdentity::new("fixture", "adapter", "test")),
+                )
+                .session_observer(observer.clone());
+                let (manager, transport) = agent_client_protocol::Channel::duplex();
+                worker = Some(tokio::spawn(controller.run(transport)));
+                AcpClient::connect(manager, ClientOptions::default()).await?
+            } else {
+                // This native peer would accept both methods if the client
+                // sent them, so its counter detects a missing local gate.
+                AcpClient::connect(native, ClientOptions::default()).await?
+            };
+            assert_eq!(client.task_control().allows(TaskMethod::Status), enabled);
+            assert_eq!(client.task_control().allows(TaskMethod::Select), enabled);
+            let read = client.task_status("public").await;
+            let selected = client
+                .task_select(TaskSelectRequest {
+                    session_id: "public".into(),
+                    request_id: "selection".into(),
+                    expected: status()
+                        .current
+                        .ok_or_else(|| anyhow::anyhow!("fixture cursor"))?,
+                    mode: TaskSelectionMode::Retry,
+                })
+                .await;
+            if enabled {
+                read?;
+                assert_eq!(
+                    selected?
+                        .pending
+                        .ok_or_else(|| anyhow::anyhow!("reservation"))?
+                        .request_id,
+                    "selection"
+                );
+            } else {
+                assert!(matches!(read, Err(TaskControlError::Unavailable(_))));
+                assert!(matches!(selected, Err(TaskControlError::Unavailable(_))));
+            }
+            client.shutdown().await?;
+            if let Some(worker) = worker {
+                worker.await??;
+            }
+            assert_eq!(forwarded.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                observer.calls.load(Ordering::SeqCst),
+                if enabled { 2 } else { 0 }
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]

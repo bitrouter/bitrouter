@@ -129,8 +129,25 @@ or cancellation method for a pending selection. All controllers sharing this
 owner and native-root profile serialize selection and prompt transitions on the
 same task. History verification covers up to 1,024 attempts per ACP conversation
 and 1,024 prompt operations per attempt; exceeding either bound rejects the
-write without advancing its journal. TUI task controls and feedback are not yet
-wired to these methods.
+write without advancing its journal.
+
+`code <agent>` negotiates these methods through the shared ACP client. Its
+Conversation view shows confirmed task/attempt state, with F2 for a new task,
+F3 for another attempt and F4 to refresh. F2/F3 reserve the next message; they
+do not clear native context or automatically replay a prompt. Submission keeps
+the draft while a selection is unconfirmed. A definitive conflict refreshes
+state but never reapplies the old intent to a new cursor automatically.
+
+Only an error with JSON-RPC `invalid_request`,
+`data.code = "task_control_conflict"` and `data.outcome = "not_applied"`
+certifies a rejected selection. The application emits it for checked admission
+conflicts before writing a new selection. A commit error, a status-read error
+after commit, or an older unqualified conflict leaves the result unknown.
+Keep the exact original request when retrying. The Code process retains that
+uncertain intent while connected and offers the same F2/F3 retry; an ordinary
+status refresh cannot prove it was never applied. Confirmed reservations are
+durable in the controller store. Client intent recovery after a Code process
+restart remains unfinished, as do feedback and automatic coding evaluation.
 
 ## Pinned Claude and Codex adapters
 
@@ -200,7 +217,7 @@ Further prompts keep the task identity across reconnects. The prompt
 record and its task transition commit together; an RPC result starts settlement
 but does not certify coding success or completed background work. Outstanding
 RPCs owned by another controller remain explicit uncertainty. Task state is
-currently available in the application evidence snapshot; TUI feedback and
+available in the application evidence snapshot and Code task controls; TUI feedback and
 automatic evaluation submission are not yet wired.
 
 Confirmed prompt requests and their original responses also pin immutable native
