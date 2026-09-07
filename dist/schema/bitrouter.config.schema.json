@@ -1986,7 +1986,7 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.27/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.28/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {
