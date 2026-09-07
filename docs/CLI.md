@@ -207,6 +207,21 @@ saved. Credentials alone do not complete setup. The wizard saves `chat.agent`
 and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the
 daemon, or exits. Subsequent bare invocations immediately open the saved TUI.
 
+Interactive setup lists every active, public provider from the registry in one
+alphabetical list. BitRouter Cloud (`bitrouter`) is an ordinary provider row.
+The fetched/cached registry is supplemented by the binary's committed snapshot,
+so a fresh installation also has a catalog offline. A custom or disabled registry
+remains authoritative. Configured credentials are marked; select additional
+providers to sign in, then choose **Continue to harness setup** (End jumps there).
+
+Every setup choice uses the same searchable, eight-row scrolling selector:
+Up/Down moves the pointer, Enter selects, typing filters by label or provider id,
+Backspace edits, Ctrl-U clears, and Home/End or Page Up/Down navigates long lists.
+The list fits smaller terminals. Digits are search text, never choice shortcuts.
+This includes provider/ACP login methods, the registry-derived ACP harness list,
+the finish action and reset confirmation. Esc or Ctrl-C cancels before setup is
+saved; credentials from already completed logins remain available.
+
 Configuration resolves from `./bitrouter.yaml`, then
 `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no
 existing file, onboarding writes to the BitRouter home. `init -c PATH` selects
@@ -618,6 +633,14 @@ the binary. With the default public registry, missing provider/model entries
 are filled from this snapshot; published metadata takes precedence. A custom
 registry URL or `registry.enabled: false` opts out. A stored subscription login
 auto-enables its provider, so no manual `providers:` entry is required.
+
+When `openai-codex` is active, Codex ACP can use its native default model
+without `chat.model` or `--model`. Requests marked by the maintained adapter
+map declared native model names to the Codex subscription at gateway ingress;
+the CLI retains its native model metadata and picker. Generic API requests do
+not opt into subscriptions this way. Explicit provider/canonical model names,
+presets and user-defined virtual models are preserved. Reloading the daemon
+updates the native-model mapping along with the active provider catalog.
 
 At session startup, BitRouter probes local CLIs with `--version` (two-second
 limit). Codex >=0.153.3 is passed to its adapter via `CODEX_PATH`; Claude Code

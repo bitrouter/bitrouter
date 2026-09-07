@@ -438,61 +438,22 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     methods
 }
 
-/// Prompt for an integer choice between `[1, options.len()]`. Empty
-/// input (or just <enter>) picks option 1. Invalid input (non-number,
-/// out-of-range) prints a one-line error and re-prompts; a true EOF on
-/// stdin (read_line returns 0 bytes) bails so the caller doesn't loop
-/// forever in non-interactive contexts.
-fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
-    use std::io::BufRead;
-    eprintln!();
-    eprintln!("How would you like to authenticate to {provider}?");
-    for (i, m) in options.iter().enumerate() {
-        eprintln!("  {}) {}", i + 1, m.label());
-    }
-    let stdin = std::io::stdin();
-    let mut handle = stdin.lock();
-    loop {
-        eprint!("Choose [1]: ");
-        let mut line = String::new();
-        let n_bytes = handle
-            .read_line(&mut line)
-            .context("reading method choice from stdin")?;
-        if n_bytes == 0 {
-            anyhow::bail!("stdin closed before a choice was made");
-        }
-        match classify_method_choice(&line, options) {
-            Some(method) => return Ok(method),
-            // Not a selection: say why, then ask again.
-            None => match line.trim().parse::<usize>() {
-                Ok(n) => eprintln!("  choice must be between 1 and {}, got {n}", options.len()),
-                Err(_) => eprintln!("  '{}' is not a number", line.trim()),
-            },
-        }
-    }
-}
-
-/// Classify one typed line against the offered methods.
-///
-/// Pure, so the interesting half of the picker is testable without a terminal:
-/// `prompt_method_choice` owns stdin and the menu, this owns what the answer
-/// means. The same split `classify_choice` gives the ACP picker, and the one
-/// `Editor::apply` and `machine::step` are built on.
-///
-/// An empty line takes the `[1]` default and `1..=options.len()` selects.
-/// Anything else is `None` — not a selection, ask again. Out-of-range never
-/// wraps onto a method that was not offered, and this menu has no cancel entry,
-/// so `0` is out of range like any other unoffered index. Callers offer at
-/// least one method; an empty slice selects nothing.
-fn classify_method_choice(input: &str, options: &[AuthMethod]) -> Option<AuthMethod> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return options.first().copied();
-    }
-    match trimmed.parse::<usize>() {
-        Ok(n) if (1..=options.len()).contains(&n) => options.get(n - 1).copied(),
-        Ok(_) | Err(_) => None,
-    }
+/// Use the same searchable keyboard selector as onboarding.
+async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
+    let index = crate::prompt::select(
+        &format!("Log in to {provider}"),
+        "Choose an authentication method",
+        options
+            .iter()
+            .map(|method| bitrouter_tui::select::Item::new(method.label(), ""))
+            .collect(),
+        0,
+    )
+    .await?;
+    options
+        .get(index)
+        .copied()
+        .context("no authentication method selected")
 }
 
 /// `bitrouter providers login <provider> [--label <name>]` — interactive
@@ -545,16 +506,15 @@ pub async fn login_provider_with_options(
     {
         Some(e) => e,
         None => {
-            let data = bitrouter_providers::registry::apply::load_or_cached(
-                &bitrouter_sdk::config::RegistryConfig::default(),
-            )
-            .await
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "could not load the provider registry (offline, and nothing cached) \
+            let data =
+                crate::bundled_registry::load(&bitrouter_sdk::config::RegistryConfig::default())
+                    .await
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "could not load the provider registry (offline, and nothing cached) \
                      to resolve '{provider_id}'"
-                )
-            })?;
+                        )
+                    })?;
             let provider = data
                 .providers
                 .iter()
@@ -569,7 +529,29 @@ pub async fn login_provider_with_options(
                 .with_context(|| format!("resolving the auth shape for '{provider_id}'"))?
         }
     };
-    let methods = available_methods(&entry);
+    login_entry(&entry, label, options).await
+}
+
+/// Onboarding uses the exact registry entry shown in its provider list.
+pub(crate) async fn login_registry_provider(
+    provider: &bitrouter_providers::registry::types::RegistryProvider,
+) -> Result<LoginOutcome> {
+    let entry = bitrouter_providers::builtin::entry_from_registry(provider)?;
+    login_entry(
+        &entry,
+        bitrouter_providers::oauth::credential_store::DEFAULT_LABEL,
+        ProviderLoginOptions::default(),
+    )
+    .await
+}
+
+async fn login_entry(
+    entry: &bitrouter_providers::ProviderEntry,
+    label: &str,
+    options: ProviderLoginOptions,
+) -> Result<LoginOutcome> {
+    let provider_id = entry.id.as_str();
+    let methods = available_methods(entry);
     if methods.is_empty() {
         anyhow::bail!(
             "provider '{provider_id}' has no interactive login path \
@@ -577,7 +559,7 @@ pub async fn login_provider_with_options(
             std::mem::discriminant(&entry.auth)
         );
     }
-    let chosen = choose_auth_method(&entry, &methods, &options)?;
+    let chosen = choose_auth_method(entry, &methods, &options).await?;
     eprintln!();
     eprintln!(
         "  Logging in to {} via {}",
@@ -589,7 +571,7 @@ pub async fn login_provider_with_options(
         AuthMethod::ClaudeCodeSession => run_claude_code_session().await?,
         AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
         AuthMethod::ImportFromCli => run_cli_import(provider_id)?,
-        AuthMethod::DeviceCode => run_device_code(provider_id, &entry).await?,
+        AuthMethod::DeviceCode => run_device_code(provider_id, entry).await?,
         // A flag-supplied key (`--api-key` / `--key-stdin` / the wizard) skips
         // the interactive stdin paste; otherwise prompt for it.
         AuthMethod::ApiKey => match options.api_key.as_deref() {
@@ -623,7 +605,7 @@ pub async fn login_provider_with_options(
     })
 }
 
-fn choose_auth_method(
+async fn choose_auth_method(
     entry: &bitrouter_providers::ProviderEntry,
     methods: &[AuthMethod],
     options: &ProviderLoginOptions,
@@ -670,7 +652,7 @@ fn choose_auth_method(
     if selectable.len() == 1 || options.no_browser {
         Ok(selectable[0])
     } else {
-        prompt_method_choice(&entry.display_name, &selectable)
+        prompt_method_choice(&entry.display_name, &selectable).await
     }
 }
 
@@ -945,6 +927,14 @@ fn run_cli_import(
 fn run_api_key_paste(
     display_name: &str,
 ) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
+    Ok(
+        bitrouter_providers::oauth::credential_store::Credential::api_key(read_api_key(
+            display_name,
+        )?),
+    )
+}
+
+pub(crate) fn read_api_key(display_name: &str) -> Result<String> {
     use std::io::BufRead;
     eprintln!();
     eprintln!("  Paste your {display_name} API key, then press enter:");
@@ -959,7 +949,7 @@ fn run_api_key_paste(
     if key.is_empty() {
         anyhow::bail!("no API key entered — aborting login");
     }
-    Ok(bitrouter_providers::oauth::credential_store::Credential::api_key(key))
+    Ok(key.to_string())
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
@@ -1303,65 +1293,8 @@ mod tests {
         assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
     }
 
-    /// The picker's two offered methods, in the order it numbers them.
-    fn two_methods() -> Vec<AuthMethod> {
-        vec![AuthMethod::ImportFromCli, AuthMethod::PkceSubscription]
-    }
-
-    /// A bare enter takes the `[1]` the prompt shows as the default — the offer
-    /// on screen and the answer must not disagree.
-    #[test]
-    fn a_bare_enter_takes_the_advertised_default() {
-        assert_eq!(
-            classify_method_choice("\n", &two_methods()),
-            Some(AuthMethod::ImportFromCli),
-            "the default is the '[1]' on screen"
-        );
-    }
-
-    /// The numbering is the menu's, one-based.
-    #[test]
-    fn a_digit_selects_that_numbered_method() {
-        assert_eq!(
-            classify_method_choice("2", &two_methods()),
-            Some(AuthMethod::PkceSubscription),
-            "numbering starts at one"
-        );
-    }
-
-    /// Out of range is not a selection. Nothing wraps onto an index the
-    /// provider never offered — the alternative is running a login flow nobody
-    /// was shown.
-    #[test]
-    fn an_unoffered_index_is_not_a_selection() {
-        assert!(
-            classify_method_choice("9", &two_methods()).is_none(),
-            "'9' against two methods must re-prompt, not wrap"
-        );
-    }
-
-    /// Unlike the ACP auth picker, this menu prints no `0) cancel` entry, so
-    /// zero is an unoffered index like any other and re-prompts. Aborting here
-    /// is Ctrl-C, not a hidden entry.
-    #[test]
-    fn zero_is_out_of_range_because_this_menu_offers_no_cancel() {
-        assert!(
-            classify_method_choice("0", &two_methods()).is_none(),
-            "'0' selects nothing on a menu that starts at one"
-        );
-    }
-
-    /// Anything that is not a number re-prompts rather than resolving.
-    #[test]
-    fn a_non_number_is_not_a_selection() {
-        assert!(
-            classify_method_choice("x", &two_methods()).is_none(),
-            "'x' must re-prompt"
-        );
-    }
-
-    #[test]
-    fn import_existing_selects_vendor_cli_import_without_prompting() {
+    #[tokio::test]
+    async fn import_existing_selects_vendor_cli_import_without_prompting() -> Result<()> {
         let entry = entry_for(serde_json::json!({
             "name": "openai-codex",
             "api_base": "https://chatgpt.com/backend-api/codex",
@@ -1379,12 +1312,13 @@ mod tests {
                 api_key: None,
             },
         )
-        .unwrap();
+        .await?;
         assert_eq!(chosen, AuthMethod::ImportFromCli);
+        Ok(())
     }
 
-    #[test]
-    fn api_key_option_selects_api_key_method_without_prompting() {
+    #[tokio::test]
+    async fn api_key_option_selects_api_key_method_without_prompting() -> Result<()> {
         // A `--api-key`/`--key-stdin`-supplied key drives the non-interactive
         // BYOK path: `anthropic` offers the API-key method, so it's chosen.
         let entry = entry_for(serde_json::json!({
@@ -1404,12 +1338,13 @@ mod tests {
                 api_key: Some("sk-ant-test".to_string()),
             },
         )
-        .unwrap();
+        .await?;
         assert_eq!(chosen, AuthMethod::ApiKey);
+        Ok(())
     }
 
-    #[test]
-    fn api_key_option_rejects_oauth_only_providers() {
+    #[tokio::test]
+    async fn api_key_option_rejects_oauth_only_providers() -> Result<()> {
         // `openai-codex` is OAuth-only (no API-key method); a supplied key is a
         // clear error rather than a silently-ignored flag.
         let entry = entry_for(serde_json::json!({
@@ -1429,12 +1364,15 @@ mod tests {
                 api_key: Some("sk-whatever".to_string()),
             },
         )
-        .unwrap_err();
+        .await
+        .err()
+        .context("login flags must be rejected")?;
         assert!(format!("{err:#}").contains("does not accept a pasted API key"));
+        Ok(())
     }
 
-    #[test]
-    fn import_existing_rejects_providers_without_vendor_cli_import() {
+    #[tokio::test]
+    async fn import_existing_rejects_providers_without_vendor_cli_import() -> Result<()> {
         let entry = entry_for(serde_json::json!({
             "name": "anthropic",
             "api_base": "https://api.anthropic.com/v1",
@@ -1452,8 +1390,11 @@ mod tests {
                 api_key: None,
             },
         )
-        .unwrap_err();
+        .await
+        .err()
+        .context("login flags must be rejected")?;
         assert!(format!("{err:#}").contains("cannot import"));
+        Ok(())
     }
 
     fn sample_config() -> Config {

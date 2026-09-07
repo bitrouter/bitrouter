@@ -870,6 +870,12 @@ pub async fn build_app_with_path(
     let app = app.prompt_transform(
         Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
     );
+    // Codex ACP keeps its native default/model picker. Qualify known native
+    // names at ingress when the Codex subscription is active, without making
+    // personal subscriptions part of the generic API auto-cascade.
+    let app = app.prompt_transform(Arc::new(crate::codex_router::CodexRouter::new(Arc::clone(
+        &routing_table_for_reload,
+    ))) as Arc<dyn PromptTransform>);
     // Config-driven per-request model routing (`policy_table:`): an ingress
     // transform that fingerprints the agent-loop step and rewrites `prompt.model`
     // to the tier the policy table assigns, enforcing the tool-use guardrail.
